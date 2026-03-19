@@ -232,6 +232,33 @@ def clear_log_file(path: str, first_line: str) -> None:
         f.write(first_line + "\n")
 
 
+def validate_tree_runtime_config(cfg: Dict[str, Any], use_local: bool) -> Optional[str]:
+    if use_local:
+        return None
+    if not str(cfg.get("alist_url", "")).strip():
+        return "AList/OpenList 访问链接未填写"
+    if not str(cfg.get("alist_token", "")).strip():
+        return "AList/OpenList Token 未填写"
+    if not str(cfg.get("mount_path", "")).strip():
+        return "挂载根路径未填写"
+    trees = [t for t in cfg.get("trees", []) if str((t or {}).get("url", "")).strip()]
+    if not trees:
+        return "未配置任何有效的目录树 URL"
+    return None
+
+
+def validate_monitor_runtime_config(cfg: Dict[str, Any], task: Dict[str, Any]) -> Optional[str]:
+    if not str(cfg.get("alist_url", "")).strip():
+        return "AList/OpenList 访问链接未填写"
+    if not str(cfg.get("alist_token", "")).strip():
+        return "AList/OpenList Token 未填写"
+    if not str(task.get("scan_path", "")).strip():
+        return "扫描路径未填写"
+    if not str(task.get("target_path", "")).strip():
+        return "目标路径未填写"
+    return None
+
+
 task_status = {
     "running": False,
     "next_run": None,
@@ -450,9 +477,12 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
     ensure_db()
 
     try:
+        config_error = validate_tree_runtime_config(cfg, use_local)
+        if config_error:
+            raise RuntimeError(config_error)
+
         trees = [t for t in cfg.get("trees", []) if t.get("url")]
-        if not trees and not use_local:
-            raise RuntimeError("未配置任何有效的目录树 URL")
+        downloaded_tree_count = 0
 
         scan_results: List[str] = []
         user_exts = get_user_extensions(cfg)
@@ -464,6 +494,7 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
             if not use_local:
                 await update_progress("正在下载", (idx / max(len(trees), 1) * 15), f"获取第 {idx + 1} 个目录树...")
                 await download_tree(tree["url"], raw_path, cfg)
+                downloaded_tree_count += 1
 
             if os.path.exists(raw_path):
                 await update_progress("正在转码", 15 + (idx / max(len(trees), 1) * 5), f"转码目录树 {idx + 1}...")
@@ -500,6 +531,12 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
 
         total_files = len(scan_results)
         await write_log(f"解析完成，共发现 {total_files} 个有效文件")
+        if total_files == 0:
+            if downloaded_tree_count > 0 or use_local:
+                await write_log("⚠ 目录树下载成功，但未匹配到可生成文件；本次按成功结束并跳过清理")
+                await update_progress("任务完成", 100, "目录树下载成功，但未匹配可生成文件")
+                return
+            raise RuntimeError("扫描结果为空，且未成功下载目录树")
 
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
@@ -607,6 +644,11 @@ async def run_monitor_task(task_name: str, trigger: str = "manual", payload: Opt
     if not task:
         await write_monitor_log(f"任务不存在: {task_name}", "error")
         return
+    config_error = validate_monitor_runtime_config(cfg, task)
+    if config_error:
+        await write_monitor_log(f"任务配置错误: {config_error}", "error")
+        update_monitor_summary("任务失败", config_error)
+        return
 
     if monitor_status["running"]:
         return
@@ -632,6 +674,7 @@ async def run_monitor_task(task_name: str, trigger: str = "manual", payload: Opt
         "failed_dirs": 0,
         "deleted_files": 0,
         "deleted_dirs": 0,
+        "success_dirs": 0,
     }
 
     await write_monitor_log(f"开始任务: {task_name}", "info")
@@ -689,6 +732,7 @@ async def run_monitor_task(task_name: str, trigger: str = "manual", payload: Opt
 
             try:
                 modified, items = await list_remote_dir(cfg, remote_dir, do_refresh, task)
+                stats["success_dirs"] += 1
             except Exception as exc:
                 stats["failed_dirs"] += 1
                 await write_monitor_log(f"读取目录失败: {remote_dir} ({exc})", "error")
@@ -761,8 +805,10 @@ async def run_monitor_task(task_name: str, trigger: str = "manual", payload: Opt
 
         await write_monitor_log(">>> 开始清理", "info")
         await write_monitor_log(f"检查目录: {task['scan_path']}", "info")
+        if stats["success_dirs"] == 0:
+            raise RuntimeError("未成功读取任何目录，已停止并跳过清理（避免误删本地文件）")
 
-        if not task["incremental"]:
+        if not task["incremental"] and stats["failed_dirs"] == 0:
             if start_local_rel == task_root:
                 cursor.execute(
                     """
@@ -807,6 +853,8 @@ async def run_monitor_task(task_name: str, trigger: str = "manual", payload: Opt
                 )
 
         else:
+            if not task["incremental"] and stats["failed_dirs"] > 0:
+                await write_monitor_log("检测到目录读取失败，已自动跳过清理阶段以防误删", "warn")
             cursor.execute(
                 """
                 DELETE FROM monitor_files
