@@ -94,7 +94,7 @@ http://你的IP:容器端口/webhook/任务名
 ```yaml
 services:
   115-strm-web:
-    image: your-image:latest
+    image: xianer235/115-strm-web:latest
     container_name: 115-strm-web
     restart: always
     ports:
@@ -103,6 +103,7 @@ services:
       - ./strm:/app/strm
       - ./config:/app/config
       - ./log:/app/log
+    environment:
       - TZ=Asia/Shanghai
 ```
 
