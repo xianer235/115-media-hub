@@ -1,0 +1,17 @@
+# 忽略日志
+logs/
+*.log
+
+# 忽略缓存
+__pycache__/
+*.pyc
+
+# 忽略数据/临时文件
+strm/
+
+# 忽略敏感配置 (如果 config 目录下全是私密信息)
+# 如果只想忽略特定文件，可以写 config/auth.json 等
+config/
+
+# 忽略 Docker 构建过程中的临时文件
+.dockerignore

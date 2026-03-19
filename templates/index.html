@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>115-STRM 管理</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .prog-glow { box-shadow: 0 0 15px rgba(14, 165, 233, 0.4); }
+        .transition-width { transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
+        #log-box::-webkit-scrollbar, #monitor-log-box::-webkit-scrollbar { width: 6px; }
+        #log-box::-webkit-scrollbar-thumb, #monitor-log-box::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
+        .btn-disabled { opacity: 0.5; cursor: not-allowed; pointer-events: none; filter: grayscale(1); }
+        .group-card { background: linear-gradient(180deg, rgba(30,41,59,0.96), rgba(15,23,42,0.96)); border: 1px solid #334155; border-radius: 1.5rem; padding: 1.5rem; box-shadow: 0 10px 28px rgba(2, 6, 23, 0.35); }
+        .group-title { color: #38bdf8; font-weight: 800; font-size: 0.875rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 1.25rem; border-left: 4px solid #38bdf8; padding-left: 0.75rem; }
+        .footer-text { text-align: center; padding: 2.5rem 0 1.5rem 0; color: #64748b; font-size: 0.75rem; letter-spacing: 0.05em; }
+        .tab-active { color: #38bdf8; border-bottom: 2px solid #38bdf8; padding-bottom: 0.25rem; }
+        .tab-inactive { color: #94a3b8; padding-bottom: 0.25rem; }
+        .tab-inactive:hover { color: #fff; }
+        .log-success { color: #4ade80; }
+        .log-error { color: #f87171; }
+        .log-warn { color: #fbbf24; }
+        .log-info { color: #cbd5e1; }
+        .log-divider { color: #64748b; }
+        .info-dot {
+            width: 18px;
+            height: 18px;
+            border-radius: 9999px;
+            border: 1px solid #475569;
+            color: #93c5fd;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 700;
+            background: rgba(15, 23, 42, 0.85);
+        }
+        .help-text { white-space: pre-wrap; line-height: 1.7; }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-200 font-sans">
+    <nav class="bg-slate-800/80 backdrop-blur-md border-b border-slate-700 p-4 sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto flex flex-col md:flex-row justify-between md:items-center gap-3">
+            <h1 class="text-xl font-bold bg-gradient-to-r from-sky-400 to-emerald-400 bg-clip-text text-transparent">115-strm-web</h1>
+            <div class="flex flex-col md:flex-row md:items-center gap-3 md:gap-8">
+                <div class="flex flex-wrap gap-4 text-sm font-bold">
+                    <button onclick="switchTab('monitor')" id="tab-monitor" class="tab-active uppercase">文件夹监控任务</button>
+                    <button onclick="switchTab('task')" id="tab-task" class="tab-inactive uppercase">目录树任务</button>
+                    <button onclick="switchTab('settings')" id="tab-settings" class="tab-inactive uppercase">参数配置</button>
+                </div>
+                <a href="/logout" class="text-xs bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white px-3 py-1 rounded-lg border border-red-500/20 transition-all font-bold">退出登录</a>
+            </div>
+        </div>
+    </nav>
+
+    <main class="max-w-7xl mx-auto p-4 md:p-6">
+        <div id="page-task" class="hidden space-y-6">
+            <div class="bg-slate-800 p-6 rounded-3xl border border-slate-700 shadow-2xl">
+                <div class="flex justify-between items-end mb-4">
+                    <div>
+                        <span id="prog-step" class="text-2xl font-black text-white">就绪</span>
+                        <div id="next-run-container" class="hidden text-xs text-emerald-400 mt-1 font-bold">⏱ 下次自动同步: <span id="next-run-time">--:--:--</span></div>
+                        <div id="prog-detail" class="text-xs text-slate-400 mt-1 italic">等待指令...</div>
+                    </div>
+                    <div class="text-right"><span id="prog-percent" class="text-3xl font-mono font-black text-sky-500">0%</span></div>
+                </div>
+                <div class="w-full bg-slate-950 rounded-full h-4 p-1 overflow-hidden shadow-inner">
+                    <div id="prog-bar" class="bg-gradient-to-r from-sky-600 to-sky-400 h-full rounded-full transition-width prog-glow" style="width: 0%"></div>
+                </div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <button onclick="triggerTask(false, false)" class="btn-ctrl bg-sky-600 hover:bg-sky-500 p-5 rounded-2xl font-bold transition-all active:scale-95 shadow-lg text-white">🌐 联网同步更新</button>
+                <button onclick="triggerTask(true, false)" class="btn-ctrl bg-slate-700 hover:bg-slate-600 p-5 rounded-2xl font-bold transition-all active:scale-95 shadow-lg text-white">🛠 本地调试解析</button>
+                <button onclick="triggerTask(false, true)" class="btn-ctrl border-2 border-red-500/50 text-red-400 hover:bg-red-500/10 p-5 rounded-2xl font-bold transition-all active:scale-95 shadow-lg">🔥 强制全量重刷</button>
+            </div>
+            <div class="bg-slate-950/80 rounded-3xl border border-slate-800 p-4 shadow-inner">
+                <div class="flex justify-end mb-2">
+                    <button onclick="clearMainLogs()" class="px-3 py-1 text-xs rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300">清空日志</button>
+                </div>
+                <div id="log-box" class="h-[400px] overflow-y-auto font-mono text-[13px] text-emerald-500/80 p-2 scroll-smooth"></div>
+            </div>
+        </div>
+
+        <div id="page-settings" class="hidden space-y-6">
+            <div class="group-card">
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                        <div class="text-base font-black text-white">参数配置中心</div>
+                        <div class="text-xs text-slate-400 mt-1">目录树任务与文件夹监控任务共享此处的 AList/OpenList 连接与认证参数。</div>
+                    </div>
+                    <div class="text-[11px] text-slate-400 px-3 py-2 rounded-xl border border-slate-700 bg-slate-900/80">建议修改后统一点击“保存全部配置”</div>
+                </div>
+            </div>
+            <div class="grid grid-cols-1 xl:grid-cols-12 gap-6">
+                <div class="group-card xl:col-span-5">
+                    <h3 class="group-title">1. AList/OpenList 播放链接基础配置</h3>
+                    <div class="space-y-4">
+                        <label class="block"><span class="text-xs text-slate-500">AList/OpenList 访问链接前缀 (如 http://192.168.1.5:5244)</span><input id="alist_url" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none focus:border-sky-500 transition-colors"></label>
+                        <label class="block">
+                            <span class="text-xs text-slate-500 inline-flex items-center gap-2">
+                                AList/OpenList Token (目录树下载与 API 统一使用)
+                                <button type="button" class="info-dot" onclick="showHelp('AList/OpenList Token：在 OpenList 或 AList 后台创建的令牌。目录树下载、文件夹监控 API、Webhook 触发后的刷新都依赖它，建议使用最小权限。')">i</button>
+                            </span>
+                            <input id="alist_token" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none focus:border-sky-500 transition-colors" placeholder="AList/OpenList 后台生成的令牌">
+                        </label>
+                        <label class="block"><span class="text-xs text-slate-500">115 在 AList/OpenList 中的挂载根路径 (如 /115)</span><input id="mount_path" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1"></label>
+                        <label class="block">
+                            <div class="flex justify-between items-center mb-1">
+                                <span class="text-xs text-slate-500">扫描后缀名 (逗号分隔)</span>
+                                <button onclick="resetExtensions()" class="text-[10px] text-sky-400 hover:text-sky-300 transition-colors font-bold uppercase tracking-tighter">一键恢复默认</button>
+                            </div>
+                            <input id="extensions" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none focus:border-sky-500 transition-colors">
+                        </label>
+                    </div>
+                </div>
+
+                <div class="group-card xl:col-span-7">
+                    <div class="flex flex-wrap justify-between items-center gap-3 mb-4">
+                        <h3 class="group-title">2. 目录树多源配置 (分块解析增强版)</h3>
+                        <button onclick="addTreeRow()" class="text-xs bg-sky-500/20 text-sky-400 hover:bg-sky-500 hover:text-white px-3 py-1 rounded-lg border border-sky-500/40 transition-all font-bold">+ 添加目录树链接</button>
+                    </div>
+                    <div id="trees-container" class="space-y-3"></div>
+                    <div class="mt-6 pt-4 border-t border-slate-700/50 text-xs text-slate-400 leading-6">
+                        原有目录树模式完整保留，只有认证方式改为 Token。目录树下载 URL 仍然支持多源拆分解析。<br>
+                        由于 115 网盘目录树规则，排除层级建议最小为 1；如果路径需要补全，请优先填写“父文件夹路径前缀”。
+                    </div>
+                </div>
+
+                <div class="group-card xl:col-span-6">
+                    <h3 class="group-title">3. 同步策略与任务模式</h3>
+                    <div class="space-y-4">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <label class="block"><span class="text-xs text-slate-500">写入模式</span>
+                                <select id="sync_mode" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none">
+                                    <option value="incremental">增量模式</option>
+                                    <option value="full">全量模式</option>
+                                </select>
+                            </label>
+                            <label class="block"><span class="text-xs text-slate-500">定时频率 (分钟)</span><input id="cron_hour" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1"></label>
+                        </div>
+                        <div class="space-y-3 pt-1">
+                            <label class="flex items-center gap-2 cursor-pointer text-sm hover:text-white transition-colors">
+                                <input type="checkbox" id="check_hash" class="w-5 h-5 rounded-lg accent-sky-500"> 开启 MD5 校验 (无变动跳过解析)
+                            </label>
+                            <label class="flex items-center gap-2 cursor-pointer text-sm hover:text-white transition-colors">
+                                <input type="checkbox" id="sync_clean" class="w-5 h-5 rounded-lg accent-sky-500"> 自动清理模式 (本地同步删除)
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="group-card xl:col-span-6">
+                    <h3 class="group-title">4. 后台安全管理</h3>
+                    <div class="space-y-4">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <label class="block"><span class="text-xs text-slate-500">管理账号</span><input id="username" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1"></label>
+                            <label class="block"><span class="text-xs text-slate-500">管理密码</span><input id="password" type="password" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1"></label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex justify-center pt-4">
+                <button onclick="saveSettings()" class="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 px-24 py-5 rounded-2xl font-black text-lg transition-all active:scale-95 shadow-2xl text-white">💾 保存全部配置</button>
+            </div>
+        </div>
+
+        <div id="page-monitor" class="space-y-6">
+            <div class="group-card">
+                <div class="flex flex-wrap justify-between gap-3 items-center">
+                    <div>
+                        <h3 class="group-title mb-2">文件夹监控任务列表</h3>
+                        <div class="text-xs text-slate-400">执行前会先触发 `reload(refresh=true)`。Webhook 优先尝试定位变动子目录，只刷新对应目录。</div>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <button onclick="openNewMonitorTask()" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">+ 新增任务</button>
+                        <div class="text-xs px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-300">
+                            当前状态：<span id="monitor-summary-step" class="text-sky-400 font-bold">空闲</span>
+                            <span class="text-slate-500"> / </span>
+                            <span id="monitor-summary-detail">等待监控任务</span>
+                        </div>
+                    </div>
+                </div>
+                <div id="monitor-task-list" class="space-y-3 mt-5"></div>
+            </div>
+
+            <div class="group-card">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="group-title mb-0">监控日志</h3>
+                    <div class="flex items-center gap-2">
+                        <div class="text-xs text-slate-400">绿色为生成成功，红色为失败或中断</div>
+                        <button onclick="clearMonitorLogs()" class="px-3 py-1 text-xs rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300">清空日志</button>
+                    </div>
+                </div>
+                <div class="bg-slate-950/80 rounded-3xl border border-slate-800 p-4 shadow-inner">
+                    <div id="monitor-log-box" class="h-[380px] overflow-y-auto font-mono text-[13px] p-2 scroll-smooth"></div>
+                </div>
+            </div>
+        </div>
+
+        <div id="monitor-modal" class="hidden fixed inset-0 bg-black/60 z-50 p-4">
+            <div class="max-w-2xl mx-auto mt-[4vh] max-h-[92vh] overflow-y-auto group-card">
+                <div class="flex items-center justify-between">
+                    <h3 id="monitor-modal-title" class="group-title mb-0">新增监控任务</h3>
+                    <button onclick="closeMonitorModal()" class="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm">关闭</button>
+                </div>
+                <div class="space-y-4 mt-4">
+                    <label class="block">
+                        <span class="text-xs text-slate-500 inline-flex items-center gap-2">
+                            任务名 (同时作为 webhook 路径和 strmtask)
+                            <button type="button" class="info-dot" onclick="showHelp('任务名会用于：1) webhook 地址 /webhook/任务名；2) CloudSaver 的 strmtask 对应匹配。建议用中文短名，且保持唯一。')">i</button>
+                        </span>
+                        <input id="monitor_name" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：自存影视">
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer text-sm">
+                        <input type="checkbox" id="monitor_webhook_enabled" class="w-5 h-5 rounded-lg accent-sky-500" onchange="refreshWebhookHint()">
+                        开启 webhook
+                        <button type="button" class="info-dot" onclick="showHelp('CloudSaver Webhook 配置说明：\\n1) 接口地址填写：http://你的IP:容器端口/webhook/任务名\\n2) 请求类型固定 POST，请求体格式 JSON\\n3) 推荐 headers：Content-Type: application/json\\n4) data 推荐字段：delayTime、event、strmtask、savepath、xlist_path_fix、title\\n5) strmtask 建议与本任务名一致；savepath 建议传转存目录；xlist_path_fix 推荐如 /115:/全部文件；title 建议传 /{title}\\n6) 系统收到后会优先根据这些字段定位变动子目录做局部刷新，减少大目录全刷风险。')">i</button>
+                    </label>
+                    <div id="webhook-hint" class="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3 leading-5">
+                        webhook 地址：IP:容器端口/webhook/任务名
+                    </div>
+                    <label class="block">
+                        <span class="text-xs text-slate-500 inline-flex items-center gap-2">
+                            扫描路径 (AList/OpenList 中监控的源路径)
+                            <button type="button" class="info-dot" onclick="showHelp('手动运行会从该路径开始递归。Webhook 触发时会根据 savepath/path 自动定位这个路径下的变动子目录，优先局部刷新。')">i</button>
+                        </span>
+                        <input id="monitor_scan_path" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="/115/自存影视/115自存电视剧">
+                    </label>
+                    <label class="block">
+                        <span class="text-xs text-slate-500 inline-flex items-center gap-2">
+                            目标路径 (追加到 /strm 下的父路径)
+                            <button type="button" class="info-dot" onclick="showHelp('最终路径是 /strm/目标路径/扫描路径末级/...。系统会自动去重末级目录，避免出现 /自存影视/自存影视 这种重复嵌套。')">i</button>
+                        </span>
+                        <input id="monitor_target_path" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="自存影视">
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer text-sm">
+                        <input type="checkbox" id="monitor_skip_by_dir_mtime" class="w-5 h-5 rounded-lg accent-sky-500">
+                        文件夹修改时间校验跳过更新
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer text-sm">
+                        <input type="checkbox" id="monitor_incremental" class="w-5 h-5 rounded-lg accent-sky-500">
+                        增量模式 (开启后不删除本地多余文件)
+                    </label>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <label class="block">
+                            <span class="text-xs text-slate-500">读取失败尝试次数</span>
+                            <input id="monitor_retries" type="number" min="1" max="5" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="3">
+                        </label>
+                        <label class="block">
+                            <span class="text-xs text-slate-500">目录列出后延时 (毫秒)</span>
+                            <input id="monitor_list_delay_ms" type="number" min="0" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
+                        </label>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <label class="block">
+                            <span class="text-xs text-slate-500">文件大小过滤 (MB)</span>
+                            <input id="monitor_min_file_size_mb" type="number" min="0" step="0.1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
+                        </label>
+                        <label class="block">
+                            <span class="text-xs text-slate-500">任务执行延时 (秒)</span>
+                            <input id="monitor_delay_seconds" type="number" min="0" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
+                        </label>
+                    </div>
+                    <label class="block">
+                        <span class="text-xs text-slate-500 inline-flex items-center gap-2">
+                            定时执行 (分钟，0 为关闭)
+                            <button type="button" class="info-dot" onclick="showHelp('按分钟周期自动运行文件夹监控任务。0 表示不自动执行，仅手动或 webhook 触发。')">i</button>
+                        </span>
+                        <input id="monitor_cron_minutes" type="number" min="0" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
+                    </label>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                        <button onclick="saveMonitorTask()" class="bg-sky-600 hover:bg-sky-500 rounded-xl py-3 font-bold text-white">保存任务</button>
+                        <button onclick="closeMonitorModal()" class="bg-slate-700 hover:bg-slate-600 rounded-xl py-3 font-bold text-white">取消</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="help-modal" class="hidden fixed inset-0 bg-black/60 z-[60] p-4">
+            <div class="max-w-xl mx-auto mt-[12vh] group-card">
+                <div class="flex items-center justify-between mb-3">
+                    <div class="text-lg font-black text-white">参数说明</div>
+                    <button onclick="closeHelpModal()" class="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm">关闭</button>
+                </div>
+                <div id="help-modal-body" class="help-text text-sm text-slate-200 bg-slate-900/70 border border-slate-700 rounded-xl p-4"></div>
+            </div>
+        </div>
+    </main>
+
+    <footer class="footer-text">
+        <div class="flex items-center justify-center gap-3">
+            <span class="w-8 h-px bg-slate-800"></span>
+            <span>© 2026 Powered by <b class="text-slate-400">Gemini</b> / <b class="text-slate-400">GPT</b> & <b class="text-slate-400">仙儿</b></span>
+            <span class="w-8 h-px bg-slate-800"></span>
+        </div>
+    </footer>
+
+    <script>
+        let isRunning = false;
+        let monitorState = { running: false, current_task: '', tasks: [], logs: [], summary: { step: '空闲', detail: '等待监控任务' }, queued: [], next_runs: {} };
+        let editingMonitorName = null;
+        let lastLogLen = 0;
+        let lastMonitorLogLen = 0;
+        const btnTexts = ["🌐 联网同步更新", "🛠 本地调试解析", "🔥 强制全量重刷"];
+        const DEFAULT_EXTENSIONS = "mp4,mkv,avi,mov,wmv,flv,webm,vob,mpg,mpeg,ts,m2ts,mts,rmvb,rm,asf,3gp,m4v,f4v,iso";
+
+        function switchTab(tab) {
+            ['task', 'settings', 'monitor'].forEach(name => {
+                document.getElementById(`page-${name}`).classList.toggle('hidden', tab !== name);
+                document.getElementById(`tab-${name}`).className = tab === name ? 'tab-active uppercase' : 'tab-inactive uppercase';
+            });
+        }
+
+        function escapeHtml(str) {
+            return String(str || '')
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;')
+                .replaceAll("'", '&#39;');
+        }
+
+        function showHelp(text) {
+            const normalized = String(text || '').replace(/\\n/g, '\n');
+            document.getElementById('help-modal-body').textContent = normalized;
+            document.getElementById('help-modal').classList.remove('hidden');
+        }
+
+        function closeHelpModal() {
+            document.getElementById('help-modal').classList.add('hidden');
+        }
+
+        function addTreeRow(data = {url: '', prefix: '', exclude: 1}) {
+            const container = document.getElementById('trees-container');
+            const row = document.createElement('div');
+            row.className = "tree-row grid grid-cols-12 gap-3 items-end bg-slate-900/50 p-4 rounded-2xl border border-slate-800 hover:border-slate-700 transition-colors";
+            row.innerHTML = `
+                <div class="col-span-12 md:col-span-5">
+                    <span class="text-[10px] text-slate-500 ml-1 font-bold uppercase">目录树下载 URL</span>
+                    <input class="t-url w-full bg-slate-950 border-slate-700 rounded-lg p-2.5 text-xs mt-1 outline-none focus:border-sky-500" value="${escapeHtml(data.url)}" placeholder="AList/OpenList 中的 tree.txt 下载链接">
+                </div>
+                <div class="col-span-7 md:col-span-4">
+                    <span class="text-[10px] text-slate-500 ml-1 font-bold uppercase">父文件夹路径前缀 (选填)</span>
+                    <input class="t-prefix w-full bg-slate-950 border-slate-700 rounded-lg p-2.5 text-xs mt-1 outline-none focus:border-sky-500" value="${escapeHtml(data.prefix)}" placeholder="补全丢失的路径，如: 电影/漫威">
+                </div>
+                <div class="col-span-3 md:col-span-2">
+                    <span class="text-[10px] text-slate-500 ml-1 font-bold uppercase">排除层级</span>
+                    <input type="number" min="1" class="t-exclude w-full bg-slate-950 border-slate-700 rounded-lg p-2.5 text-xs mt-1 outline-none focus:border-sky-500" value="${Number(data.exclude || 1)}">
+                </div>
+                <div class="col-span-2 md:col-span-1">
+                    <button onclick="this.parentElement.parentElement.remove()" class="w-full bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white p-2.5 rounded-lg transition-colors text-xs font-bold">✕</button>
+                </div>
+            `;
+            container.appendChild(row);
+        }
+
+        function resetExtensions() {
+            if (confirm("确定要恢复默认扫描后缀名吗？\n(恢复后请手动点击下方的保存全部配置)")) {
+                document.getElementById('extensions').value = DEFAULT_EXTENSIONS;
+            }
+        }
+
+        async function triggerTask(local, full) {
+            if (isRunning) return;
+            const res = await fetch('/start', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({use_local: local, force_full: full})
+            });
+            if ((await res.json()).status === 'started') updateButtonState(true);
+        }
+
+        function updateButtonState(running) {
+            isRunning = running;
+            document.querySelectorAll('.btn-ctrl').forEach((btn, i) => {
+                btn.classList.toggle('btn-disabled', running);
+                btn.innerText = running ? "⏳ 任务运行中..." : btnTexts[i];
+            });
+        }
+
+        async function saveSettings() {
+            const cfg = {};
+            const standardIds = ['alist_url', 'alist_token', 'mount_path', 'cron_hour', 'sync_mode', 'extensions', 'username', 'password'];
+            standardIds.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) cfg[id] = el.value;
+            });
+
+            cfg.check_hash = document.getElementById('check_hash').checked;
+            cfg.sync_clean = document.getElementById('sync_clean').checked;
+            cfg.monitor_tasks = monitorState.tasks || [];
+            cfg.trees = [];
+
+            document.querySelectorAll('.tree-row').forEach(row => {
+                const url = row.querySelector('.t-url').value.trim();
+                if (url) {
+                    cfg.trees.push({
+                        url,
+                        prefix: row.querySelector('.t-prefix').value.trim(),
+                        exclude: parseInt(row.querySelector('.t-exclude').value || '1', 10) || 1
+                    });
+                }
+            });
+
+            const res = await fetch('/save_settings', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(cfg)
+            });
+
+            if (res.ok) {
+                alert('✅ 配置已保存');
+            } else {
+                alert('❌ 保存失败');
+            }
+        }
+
+        async function clearMainLogs() {
+            const res = await fetch('/logs/clear', { method: 'POST' });
+            if (res.ok) {
+                lastLogLen = 0;
+                await refreshMainLogs();
+            }
+        }
+
+        async function clearMonitorLogs() {
+            const res = await fetch('/monitor/logs/clear', { method: 'POST' });
+            if (res.ok) {
+                lastMonitorLogLen = 0;
+                await refreshMonitorState();
+            }
+        }
+
+        function currentMonitorFormData() {
+            return {
+                name: document.getElementById('monitor_name').value.trim(),
+                webhook_enabled: document.getElementById('monitor_webhook_enabled').checked,
+                scan_path: document.getElementById('monitor_scan_path').value.trim(),
+                target_path: document.getElementById('monitor_target_path').value.trim(),
+                skip_by_dir_mtime: document.getElementById('monitor_skip_by_dir_mtime').checked,
+                incremental: document.getElementById('monitor_incremental').checked,
+                retries: parseInt(document.getElementById('monitor_retries').value || '3', 10) || 3,
+                list_delay_ms: parseInt(document.getElementById('monitor_list_delay_ms').value || '0', 10) || 0,
+                min_file_size_mb: parseFloat(document.getElementById('monitor_min_file_size_mb').value || '0') || 0,
+                delay_seconds: parseInt(document.getElementById('monitor_delay_seconds').value || '0', 10) || 0,
+                cron_minutes: parseInt(document.getElementById('monitor_cron_minutes').value || '0', 10) || 0
+            };
+        }
+
+        function resetMonitorForm() {
+            editingMonitorName = null;
+            document.getElementById('monitor-modal-title').innerText = '新增监控任务';
+            document.getElementById('monitor_name').value = '';
+            document.getElementById('monitor_webhook_enabled').checked = false;
+            document.getElementById('monitor_scan_path').value = '';
+            document.getElementById('monitor_target_path').value = '';
+            document.getElementById('monitor_skip_by_dir_mtime').checked = false;
+            document.getElementById('monitor_incremental').checked = false;
+            document.getElementById('monitor_retries').value = 3;
+            document.getElementById('monitor_list_delay_ms').value = 0;
+            document.getElementById('monitor_min_file_size_mb').value = 0;
+            document.getElementById('monitor_delay_seconds').value = 0;
+            document.getElementById('monitor_cron_minutes').value = 0;
+            refreshWebhookHint();
+        }
+
+        function openNewMonitorTask() {
+            resetMonitorForm();
+            document.getElementById('monitor-modal').classList.remove('hidden');
+        }
+
+        function closeMonitorModal() {
+            document.getElementById('monitor-modal').classList.add('hidden');
+        }
+
+        function refreshWebhookHint() {
+            const name = document.getElementById('monitor_name').value.trim() || '任务名';
+            document.getElementById('webhook-hint').innerText = `webhook 地址：IP:容器端口/webhook/${name}`;
+        }
+
+        async function persistMonitorTasks(tasks) {
+            const res = await fetch('/monitor/save', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ tasks })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.ok) {
+                throw new Error(data.msg || '保存监控任务失败');
+            }
+            monitorState.tasks = data.tasks || [];
+            renderMonitorTasks();
+        }
+
+        async function saveMonitorTask() {
+            const task = currentMonitorFormData();
+            if (!task.name) return alert('任务名不能为空');
+            if (!task.scan_path) return alert('扫描路径不能为空');
+            if (!task.target_path) return alert('目标路径不能为空');
+            if (task.retries < 1 || task.retries > 5) return alert('读取失败尝试次数只能在 1 到 5 之间');
+            if (task.cron_minutes < 0) return alert('定时执行分钟不能小于 0');
+
+            const tasks = [...(monitorState.tasks || [])];
+            const dup = tasks.find(item => item.name === task.name && item.name !== editingMonitorName);
+            if (dup) return alert('任务名重复，请修改后再保存');
+
+            const idx = tasks.findIndex(item => item.name === editingMonitorName);
+            if (idx >= 0) tasks[idx] = task;
+            else tasks.push(task);
+
+            try {
+                await persistMonitorTasks(tasks);
+                resetMonitorForm();
+                closeMonitorModal();
+                alert('✅ 监控任务已保存');
+            } catch (e) {
+                alert(`❌ ${e.message}`);
+            }
+        }
+
+        function editMonitorTask(name) {
+            const task = (monitorState.tasks || []).find(item => item.name === name);
+            if (!task) return;
+            editingMonitorName = task.name;
+            document.getElementById('monitor-modal-title').innerText = `编辑监控任务：${task.name}`;
+            document.getElementById('monitor_name').value = task.name || '';
+            document.getElementById('monitor_webhook_enabled').checked = !!task.webhook_enabled;
+            document.getElementById('monitor_scan_path').value = task.scan_path || '';
+            document.getElementById('monitor_target_path').value = task.target_path || '';
+            document.getElementById('monitor_skip_by_dir_mtime').checked = !!task.skip_by_dir_mtime;
+            document.getElementById('monitor_incremental').checked = !!task.incremental;
+            document.getElementById('monitor_retries').value = task.retries ?? 3;
+            document.getElementById('monitor_list_delay_ms').value = task.list_delay_ms ?? 0;
+            document.getElementById('monitor_min_file_size_mb').value = task.min_file_size_mb ?? 0;
+            document.getElementById('monitor_delay_seconds').value = task.delay_seconds ?? 0;
+            document.getElementById('monitor_cron_minutes').value = task.cron_minutes ?? 0;
+            refreshWebhookHint();
+            document.getElementById('monitor-modal').classList.remove('hidden');
+            switchTab('monitor');
+        }
+
+        async function deleteMonitorTask(name) {
+            if (!confirm(`确定删除监控任务“${name}”吗？`)) return;
+            const res = await fetch('/monitor/delete', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ name })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.ok) {
+                return alert(`❌ ${data.msg || '删除失败'}`);
+            }
+            monitorState.tasks = (monitorState.tasks || []).filter(item => item.name !== name);
+            renderMonitorTasks();
+            if (editingMonitorName === name) resetMonitorForm();
+        }
+
+        async function startMonitorTask(name) {
+            const res = await fetch('/monitor/start', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ name })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.ok) {
+                return alert(`❌ ${data.msg || '启动失败'}`);
+            }
+        }
+
+        async function stopMonitorTask(name) {
+            const res = await fetch('/monitor/stop', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ name })
+            });
+            const data = await res.json();
+            if (!data.ok) {
+                alert('当前没有这个任务在运行');
+            }
+        }
+
+        function renderMonitorTasks() {
+            const container = document.getElementById('monitor-task-list');
+            const tasks = monitorState.tasks || [];
+            if (!tasks.length) {
+                container.innerHTML = `<div class="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">还没有文件夹监控任务，点击“新增任务”即可创建。</div>`;
+                return;
+            }
+
+            container.innerHTML = tasks.map(task => {
+                const taskKey = encodeURIComponent(task.name || '');
+                const running = monitorState.running && monitorState.current_task === task.name;
+                const queued = (monitorState.queued || []).includes(task.name);
+                const badge = running
+                    ? '<span class="text-[10px] px-3 py-1 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/20">运行中</span>'
+                    : queued
+                        ? '<span class="text-[10px] px-3 py-1 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/20">已排队</span>'
+                        : '<span class="text-[10px] px-3 py-1 rounded-full bg-slate-700 text-slate-300">待命</span>';
+                const nextRun = (monitorState.next_runs || {})[task.name];
+                return `
+                    <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4">
+                        <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+                            <div class="space-y-2">
+                                <div class="flex items-center gap-3 flex-wrap">
+                                    <div class="text-lg font-black text-white">${escapeHtml(task.name)}</div>
+                                    ${badge}
+                                    ${task.webhook_enabled ? '<span class="text-[10px] px-3 py-1 rounded-full bg-sky-500/15 text-sky-300 border border-sky-500/20">Webhook</span>' : ''}
+                                    ${task.incremental ? '<span class="text-[10px] px-3 py-1 rounded-full bg-violet-500/15 text-violet-300 border border-violet-500/20">增量</span>' : '<span class="text-[10px] px-3 py-1 rounded-full bg-red-500/10 text-red-300 border border-red-500/20">全量</span>'}
+                                </div>
+                                <div class="text-xs text-slate-400 leading-6">
+                                    <div>扫描路径：${escapeHtml(task.scan_path)}</div>
+                                    <div>目标路径：/strm/${escapeHtml(task.target_path)}</div>
+                                    <div>参数：重试 ${task.retries} 次 / 列目录延时 ${task.list_delay_ms}ms / 体积过滤 ${task.min_file_size_mb}MB / 执行延时 ${task.delay_seconds}s / 定时 ${task.cron_minutes || 0} 分钟</div>
+                                    <div>下次定时：${nextRun ? escapeHtml(nextRun) : '未开启'}</div>
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-2 md:grid-cols-4 gap-2 shrink-0">
+                                <button onclick="startMonitorTask(decodeURIComponent('${taskKey}'))" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold ${monitorState.running ? 'btn-disabled' : ''}">运行</button>
+                                <button onclick="stopMonitorTask(decodeURIComponent('${taskKey}'))" class="px-4 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 text-sm font-bold ${running ? '' : 'btn-disabled'}">中断</button>
+                                <button onclick="editMonitorTask(decodeURIComponent('${taskKey}'))" class="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">编辑</button>
+                                <button onclick="deleteMonitorTask(decodeURIComponent('${taskKey}'))" class="px-4 py-2 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-300 text-sm font-bold ${running ? 'btn-disabled' : ''}">删除</button>
+                            </div>
+                        </div>
+                        ${task.webhook_enabled ? `<div class="mt-3 text-xs text-emerald-400">Webhook：IP:容器端口/webhook/${escapeHtml(task.name)}</div>` : ''}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderMonitorLogs() {
+            const box = document.getElementById('monitor-log-box');
+            const logs = monitorState.logs || [];
+            if (logs.length === lastMonitorLogLen) return;
+            box.innerHTML = logs.map(item => `<div class="log-${item.level || 'info'}">${escapeHtml(item.text)}</div>`).join('');
+            box.scrollTop = box.scrollHeight;
+            lastMonitorLogLen = logs.length;
+        }
+
+        async function refreshMainLogs() {
+            try {
+                const res = await fetch('/logs');
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data.running !== isRunning) updateButtonState(data.running);
+
+                const logBox = document.getElementById('log-box');
+                if (data.logs.length !== lastLogLen) {
+                    logBox.innerHTML = data.logs.map(line => escapeHtml(line)).join('<br>');
+                    logBox.scrollTop = logBox.scrollHeight;
+                    lastLogLen = data.logs.length;
+                }
+                const p = data.progress;
+                document.getElementById('prog-step').innerText = p.step;
+                document.getElementById('prog-percent').innerText = `${p.percent}%`;
+                document.getElementById('prog-bar').style.width = `${p.percent}%`;
+                document.getElementById('prog-detail').innerText = p.detail;
+
+                if (data.next_run) {
+                    document.getElementById('next-run-container').classList.remove('hidden');
+                    document.getElementById('next-run-time').innerText = data.next_run;
+                } else {
+                    document.getElementById('next-run-container').classList.add('hidden');
+                }
+            } catch (e) {}
+        }
+
+        async function refreshMonitorState() {
+            try {
+                const res = await fetch('/monitor/status');
+                if (!res.ok) return;
+                monitorState = await res.json();
+                document.getElementById('monitor-summary-step').innerText = monitorState.summary?.step || '空闲';
+                document.getElementById('monitor-summary-detail').innerText = monitorState.summary?.detail || '等待监控任务';
+                renderMonitorTasks();
+                renderMonitorLogs();
+            } catch (e) {}
+        }
+
+        async function init() {
+            try {
+                const res = await fetch('/get_settings');
+                if (!res.ok) return;
+                const cfg = await res.json();
+
+                Object.keys(cfg).forEach(k => {
+                    const el = document.getElementById(k);
+                    if (el && k !== 'trees') {
+                        if (el.type === 'checkbox') el.checked = cfg[k];
+                        else el.value = cfg[k];
+                    }
+                });
+
+                const container = document.getElementById('trees-container');
+                container.innerHTML = '';
+                if (cfg.trees && cfg.trees.length > 0) cfg.trees.forEach(t => addTreeRow(t));
+                else addTreeRow();
+
+                monitorState.tasks = cfg.monitor_tasks || [];
+                renderMonitorTasks();
+                resetMonitorForm();
+                refreshWebhookHint();
+            } catch (e) {}
+        }
+
+        document.getElementById('monitor_name').addEventListener('input', refreshWebhookHint);
+        document.getElementById('help-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'help-modal') closeHelpModal();
+        });
+        init();
+        refreshMainLogs();
+        refreshMonitorState();
+        setInterval(refreshMainLogs, 1000);
+        setInterval(refreshMonitorState, 1000);
+    </script>
+</body>
+</html>

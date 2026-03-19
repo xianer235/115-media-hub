@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  115-strm-web-test:
+    
+    build: .
+    container_name: 115-strm-web-test
+    volumes:
+      - /Users/xianer/Documents/docker/115strmxianer/strm:/app/strm
+      - /Users/xianer/Documents/docker/115strmxianer/logs:/app/logs
+      - /Users/xianer/Documents/docker/115strmxianer/config:/app/config
+
+    ports:
+      - "18080:18080"
+    environment:
+      - TZ=Asia/Shanghai
+    restart: always
