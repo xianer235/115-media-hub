@@ -1,22 +1,11 @@
-FROM python:3.12-slim
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/python:3.12-slim
 
 WORKDIR /app
 
-# 安装转码和下载必须的工具
-RUN apt-get update && apt-get install -y \
-    curl \
-    libc-bin \
-    && rm -rf /var/lib/apt/lists/*
-
-
-
-# 安装依赖（itsdangerous 是 SessionMiddleware 必需的）
+# 安装运行依赖（itsdangerous 是 SessionMiddleware 必需）
 RUN pip install --no-cache-dir \
     fastapi \
     uvicorn \
-    pydantic \
-    python-multipart \
-    starlette \
     itsdangerous
 # 复制当前目录下所有文件
 COPY . .
