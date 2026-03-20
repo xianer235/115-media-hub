@@ -2,13 +2,19 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>115-STRM 管理</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>115-strm-web</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
+        body { min-height: 100dvh; }
         .prog-glow { box-shadow: 0 0 15px rgba(14, 165, 233, 0.4); }
         .transition-width { transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
+        .nav-scroll { -ms-overflow-style: none; scrollbar-width: none; }
+        .nav-scroll::-webkit-scrollbar { display: none; }
         #log-box::-webkit-scrollbar, #monitor-log-box::-webkit-scrollbar { width: 6px; }
         #log-box::-webkit-scrollbar-thumb, #monitor-log-box::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
+        #log-box { height: min(48vh, 420px) !important; }
+        #monitor-log-box { height: min(46vh, 390px) !important; }
         .btn-disabled { opacity: 0.5; cursor: not-allowed; pointer-events: none; filter: grayscale(1); }
         .group-card { background: linear-gradient(180deg, rgba(30,41,59,0.96), rgba(15,23,42,0.96)); border: 1px solid #334155; border-radius: 1.5rem; padding: 1.5rem; box-shadow: 0 10px 28px rgba(2, 6, 23, 0.35); }
         .group-title { color: #38bdf8; font-weight: 800; font-size: 0.875rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 1.25rem; border-left: 4px solid #38bdf8; padding-left: 0.75rem; }
@@ -36,10 +42,76 @@
         }
         .help-text { white-space: pre-wrap; line-height: 1.7; }
 
+        @media (max-width: 1024px) {
+            #main-nav-actions { width: 100%; justify-content: flex-end; }
+            .footer-text { padding: 1.8rem 0 1.2rem; }
+        }
+
+        @media (max-width: 768px) {
+            body { font-size: 15px; }
+            nav { padding: 0.9rem !important; }
+            main { padding-left: 0.75rem !important; padding-right: 0.75rem !important; }
+            .group-card { padding: 1rem; border-radius: 1rem; }
+            .group-title { font-size: 0.98rem; margin-bottom: 0.9rem; }
+            .nav-title { font-size: 1.05rem !important; }
+            #tab-row { gap: 0.35rem; }
+            .tab-active, .tab-inactive {
+                font-size: 0.93rem;
+                padding: 0.58rem 0.5rem;
+                white-space: nowrap;
+            }
+            .btn-ctrl {
+                min-height: 54px;
+                font-size: 0.98rem;
+                padding: 0.9rem 1rem !important;
+            }
+            input, select, textarea {
+                font-size: 16px !important;
+                min-height: 46px;
+                padding-top: 0.7rem !important;
+                padding-bottom: 0.7rem !important;
+            }
+            #theme-toggle,
+            a[href="/logout"] {
+                min-height: 38px;
+                display: inline-flex;
+                align-items: center;
+            }
+            #page-settings .text-xs,
+            #page-monitor .text-xs,
+            #monitor-modal .text-xs { font-size: 0.82rem !important; }
+            #page-settings .text-sm,
+            #page-monitor .text-sm,
+            #monitor-modal .text-sm { font-size: 0.95rem !important; }
+            #page-monitor .grid.grid-cols-1.sm\:grid-cols-2.md\:grid-cols-4 { grid-template-columns: 1fr 1fr; }
+            #page-monitor .grid.grid-cols-1.sm\:grid-cols-2.md\:grid-cols-4 button { min-height: 42px; }
+            #log-box, #monitor-log-box {
+                font-size: 13px !important;
+                line-height: 1.55;
+            }
+        }
+
         @media (max-width: 640px) {
-            main { padding-left: 0.5rem; padding-right: 0.5rem; }
-            .group-card { padding: 1rem; }
-            .group-title { font-size: 0.92rem; }
+            body { font-size: 16px; }
+            main { padding-left: 0.5rem !important; padding-right: 0.5rem !important; }
+            .group-card { padding: 0.9rem; }
+            .group-title { font-size: 1rem; }
+            .nav-title { font-size: 1rem !important; }
+            #main-nav-actions { gap: 0.45rem !important; }
+            #main-nav-actions a[href="/logout"],
+            #theme-toggle { font-size: 0.78rem !important; padding: 0.45rem 0.65rem !important; }
+            #prog-step { font-size: 1.35rem !important; }
+            #prog-percent { font-size: 1.6rem !important; }
+            #log-box { height: 40vh !important; }
+            #monitor-log-box { height: 38vh !important; }
+            #page-monitor .grid.grid-cols-1.sm\:grid-cols-2.md\:grid-cols-4 { grid-template-columns: 1fr; }
+            #page-monitor .grid.grid-cols-1.sm\:grid-cols-2.md\:grid-cols-4 button { width: 100%; }
+            #page-monitor .flex.items-center.gap-3 { width: 100%; justify-content: space-between; flex-wrap: wrap; }
+            #page-monitor .flex.justify-between.items-center.mb-4 { gap: 0.5rem; align-items: flex-start; flex-wrap: wrap; }
+            #page-task .grid.grid-cols-1.md\:grid-cols-3 { gap: 0.6rem; }
+            #monitor-modal .modal-card { max-height: 95vh; }
+            #monitor-modal .modal-card { margin-top: 1vh; }
+            #monitor-modal .grid.grid-cols-2 { grid-template-columns: 1fr; }
         }
 
         html.theme-day {
@@ -133,6 +205,12 @@
             border: 1px solid #1e293b !important;
         }
         html.theme-day .btn-ctrl.bg-slate-700:hover { background: #1e293b !important; }
+        html.theme-day #monitor-modal button.bg-slate-700 {
+            background: #475569 !important;
+            color: #ffffff !important;
+            border: 1px solid #334155 !important;
+        }
+        html.theme-day #monitor-modal button.bg-slate-700:hover { background: #334155 !important; }
         html.theme-day .bg-amber-500\/15 {
             background: rgba(217, 119, 6, 0.2) !important;
             border: 1px solid rgba(180, 83, 9, 0.35) !important;
@@ -143,19 +221,18 @@
 </head>
 <body class="bg-slate-900 text-slate-200 font-sans">
     <nav class="bg-slate-800/80 backdrop-blur-md border-b border-slate-700 p-4 sticky top-0 z-50">
-        <div class="max-w-7xl mx-auto relative flex flex-col md:flex-row justify-between md:items-center gap-3">
-            <h1 class="text-xl font-bold bg-gradient-to-r from-sky-400 to-emerald-400 bg-clip-text text-transparent">115-strm-web</h1>
-            <div class="flex flex-col md:flex-row md:items-center gap-3 md:gap-8">
-                <div class="flex flex-wrap gap-4 text-sm font-bold overflow-x-auto nav-scroll">
-                    <button onclick="switchTab('monitor')" id="tab-monitor" class="tab-active uppercase">文件夹监控任务</button>
-                    <button onclick="switchTab('task')" id="tab-task" class="tab-inactive uppercase">目录树任务</button>
-                    <button onclick="switchTab('settings')" id="tab-settings" class="tab-inactive uppercase">参数配置</button>
+        <div class="max-w-7xl mx-auto flex flex-col gap-3">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+                <h1 class="nav-title text-xl font-bold bg-gradient-to-r from-sky-400 to-emerald-400 bg-clip-text text-transparent">115-strm-web</h1>
+                <div id="main-nav-actions" class="flex items-center gap-2">
+                    <a href="/logout" class="text-xs bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white px-3 py-1 rounded-lg border border-red-500/20 transition-all font-bold" aria-label="退出登录">退出登录</a>
+                    <button id="theme-toggle" class="text-xs bg-slate-700/40 text-slate-100 px-2 py-1 rounded-lg border border-slate-500/40 hover:bg-slate-600 transition-all" onclick="toggleTheme()" aria-label="切换夜间/日间模式" title="切换夜间/日间模式">🌙 夜间</button>
                 </div>
-                <!-- Desktop Logout (hidden on mobile) -->
-                <a href="/logout" class="hidden md:inline-block text-xs bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white px-3 py-1 rounded-lg border border-red-500/20 transition-all font-bold" aria-label="退出登录">退出登录</a>
-                <!-- Mobile Logout (shown on mobile) -->
-                <a href="/logout" class="md:hidden text-xs bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white px-3 py-1 rounded-lg border border-red-500/20 transition-all font-bold absolute top-2 right-2" aria-label="退出登录">退出登录</a>
-                <button id="theme-toggle" class="text-xs bg-slate-700/40 text-slate-100 px-2 py-1 rounded-lg border border-slate-500/40 hover:bg-slate-600 transition-all" onclick="toggleTheme()" aria-label="切换夜间/日间模式" title="切换夜间/日间模式">🌙 夜间</button>
+            </div>
+            <div id="tab-row" class="flex gap-4 text-sm font-bold overflow-x-auto nav-scroll pb-1">
+                <button onclick="switchTab('monitor')" id="tab-monitor" class="tab-active uppercase">文件夹监控任务</button>
+                <button onclick="switchTab('task')" id="tab-task" class="tab-inactive uppercase">目录树任务</button>
+                <button onclick="switchTab('settings')" id="tab-settings" class="tab-inactive uppercase">参数配置</button>
             </div>
         </div>
     </nav>
@@ -184,7 +261,7 @@
                 <div class="flex justify-end mb-2">
                     <button onclick="clearMainLogs()" class="px-3 py-1 text-xs rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300">清空日志</button>
                 </div>
-                <div id="log-box" class="h-[400px] overflow-y-auto font-mono text-[13px] text-emerald-500/80 p-2 scroll-smooth"></div>
+                <div id="log-box" class="overflow-y-auto font-mono text-[13px] text-emerald-500/80 p-2 scroll-smooth"></div>
             </div>
         </div>
 
@@ -234,7 +311,7 @@
                 </div>
 
                 <div class="group-card xl:col-span-6">
-                    <h3 class="group-title">3. 同步策略与任务模式</h3>
+                    <h3 class="group-title">3. 目录树任务同步策略与任务模式</h3>
                     <div class="space-y-4">
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <label class="block"><span class="text-xs text-slate-500">写入模式</span>
@@ -268,7 +345,7 @@
             </div>
 
             <div class="flex justify-center pt-4">
-                <button onclick="saveSettings()" class="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 px-24 py-5 rounded-2xl font-black text-lg transition-all active:scale-95 shadow-2xl text-white">💾 保存全部配置</button>
+                <button onclick="saveSettings()" class="w-full sm:w-auto bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 px-8 sm:px-24 py-4 sm:py-5 rounded-2xl font-black text-base sm:text-lg transition-all active:scale-95 shadow-2xl text-white">💾 保存全部配置</button>
             </div>
         </div>
 
@@ -279,8 +356,8 @@
                         <h3 class="group-title mb-2">文件夹监控任务列表</h3>
                         <div class="text-xs text-slate-400">执行前会先触发 `reload(refresh=true)`。Webhook 优先尝试定位变动子目录，只刷新对应目录。</div>
                     </div>
-                    <div class="flex items-center gap-3">
-                        <button onclick="openNewMonitorTask()" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">+ 新增任务</button>
+                    <div class="flex items-center gap-3 flex-wrap">
+                        <button onclick="openNewMonitorTask()" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold min-h-[42px]">+ 新增任务</button>
                         <div class="text-xs px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-300">
                             当前状态：<span id="monitor-summary-step" class="text-sky-400 font-bold">空闲</span>
                             <span class="text-slate-500"> / </span>
@@ -294,19 +371,19 @@
             <div class="group-card">
                 <div class="flex justify-between items-center mb-4">
                     <h3 class="group-title mb-0">监控日志</h3>
-                    <div class="flex items-center gap-2">
+                    <div class="flex items-center gap-2 flex-wrap">
                         <div class="text-xs text-slate-400">绿色为生成成功，红色为失败或中断</div>
                         <button onclick="clearMonitorLogs()" class="px-3 py-1 text-xs rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300">清空日志</button>
                     </div>
                 </div>
                 <div class="bg-slate-950/80 rounded-3xl border border-slate-800 p-4 shadow-inner">
-                    <div id="monitor-log-box" class="h-[380px] overflow-y-auto font-mono text-[13px] p-2 scroll-smooth"></div>
+                    <div id="monitor-log-box" class="overflow-y-auto font-mono text-[13px] p-2 scroll-smooth"></div>
                 </div>
             </div>
         </div>
 
         <div id="monitor-modal" class="hidden fixed inset-0 bg-black/60 z-50 p-4">
-            <div class="max-w-2xl mx-auto mt-[4vh] max-h-[92vh] overflow-y-auto group-card modal-card">
+            <div class="w-full max-w-2xl mx-auto mt-[4vh] max-h-[92vh] overflow-y-auto group-card modal-card">
                 <div class="flex items-center justify-between">
                     <h3 id="monitor-modal-title" class="group-title mb-0">新增监控任务</h3>
                     <button onclick="closeMonitorModal()" class="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm">关闭</button>
@@ -314,18 +391,23 @@
                 <div class="space-y-4 mt-4">
                     <label class="block">
                         <span class="text-xs text-slate-500 inline-flex items-center gap-2">
-                            任务名 (同时作为 webhook 路径和 strmtask)
-                            <button type="button" class="info-dot" onclick="showHelp('任务名会用于：1) webhook 地址 /webhook/任务名；2) CloudSaver 的 strmtask 对应匹配。建议用中文短名，且保持唯一。')">i</button>
+                            任务名 (用于 webhook 路径)
+                            <button type="button" class="info-dot" onclick="showHelp('任务名会用于 webhook 地址：/webhook/任务名。建议用中文短名，且保持唯一。')">i</button>
                         </span>
                         <input id="monitor_name" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：自存影视">
                     </label>
                     <label class="flex items-center gap-2 cursor-pointer text-sm">
                         <input type="checkbox" id="monitor_webhook_enabled" class="w-5 h-5 rounded-lg accent-sky-500" onchange="refreshWebhookHint()">
                         开启 webhook
-                        <button type="button" class="info-dot" onclick="showHelp('CloudSaver Webhook 配置说明：\\n1) 接口地址填写：http://你的IP:容器端口/webhook/任务名\\n2) 请求类型固定 POST，请求体格式 JSON\\n3) 推荐 headers：Content-Type: application/json\\n4) data 推荐字段：delayTime、event、strmtask、savepath、xlist_path_fix、title\\n5) strmtask 建议与本任务名一致；savepath 建议传转存目录；xlist_path_fix 推荐如 /115:/全部文件；title 建议传 /{title}\\n6) 系统收到后会优先根据这些字段定位变动子目录做局部刷新，减少大目录全刷风险。')">i</button>
+                        <button type="button" class="info-dot" onclick="showHelp('CloudSaver Webhook 配置说明：\\n1) 接口地址：http://你的IP:容器端口/webhook/任务名\\n   URL 中的任务名用于匹配并触发指定监控任务（必须与页面中的任务名一致）。\\n2) 请求类型：POST；请求体格式：JSON\\n3) 推荐 headers：Content-Type: application/json\\n4) data 建议填写后端会用到的参数：\\n   savepath = /{savePath}\\n   xlist_path_fix = /115:/全部文件\\n   title = /{title}\\n   delayTime = 0（可选，单位秒）\\n5) strmtask 可选：仅作兼容字段，系统以 URL 任务名为准。\\n6) 系统会优先根据这些字段定位变动子目录做局部刷新，减少大目录全刷风险。')">i</button>
                     </label>
                     <div id="webhook-hint" class="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3 leading-5">
-                        webhook 地址：IP:容器端口/webhook/任务名
+                        webhook 地址：IP:容器端口/webhook/任务名（用于触发指定任务）
+                        <br>savepath：/{savePath}
+                        <br>xlist_path_fix：/115:/全部文件
+                        <br>title：/{title}
+                        <br>delayTime：0（可选，秒）
+                        <br>strmtask：可选（兼容字段，以 URL 任务名为准）
                     </div>
                     <label class="block">
                         <span class="text-xs text-slate-500 inline-flex items-center gap-2">
@@ -385,7 +467,7 @@
         </div>
 
         <div id="help-modal" class="hidden fixed inset-0 bg-black/60 z-[60] p-4">
-            <div class="max-w-xl mx-auto mt-[12vh] group-card modal-card">
+            <div class="w-full max-w-xl mx-auto mt-[12vh] group-card modal-card">
                 <div class="flex items-center justify-between mb-3">
                     <div class="text-lg font-black text-white">参数说明</div>
                     <button onclick="closeHelpModal()" class="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm">关闭</button>
@@ -445,18 +527,18 @@
             row.innerHTML = `
                 <div class="col-span-12 md:col-span-5">
                     <span class="text-[10px] text-slate-500 ml-1 font-bold uppercase">目录树下载 URL</span>
-                    <input class="t-url w-full bg-slate-950 border-slate-700 rounded-lg p-2.5 text-xs mt-1 outline-none focus:border-sky-500" value="${escapeHtml(data.url)}" placeholder="AList/OpenList 中的 tree.txt 下载链接">
+                    <input class="t-url w-full bg-slate-950 border-slate-700 rounded-lg p-2.5 text-sm mt-1 outline-none focus:border-sky-500" value="${escapeHtml(data.url)}" placeholder="AList/OpenList 中的 tree.txt 下载链接">
                 </div>
                 <div class="col-span-7 md:col-span-4">
                     <span class="text-[10px] text-slate-500 ml-1 font-bold uppercase">父文件夹路径前缀 (选填)</span>
-                    <input class="t-prefix w-full bg-slate-950 border-slate-700 rounded-lg p-2.5 text-xs mt-1 outline-none focus:border-sky-500" value="${escapeHtml(data.prefix)}" placeholder="补全丢失的路径，如: 电影/漫威">
+                    <input class="t-prefix w-full bg-slate-950 border-slate-700 rounded-lg p-2.5 text-sm mt-1 outline-none focus:border-sky-500" value="${escapeHtml(data.prefix)}" placeholder="补全丢失的路径，如: 电影/漫威">
                 </div>
                 <div class="col-span-3 md:col-span-2">
                     <span class="text-[10px] text-slate-500 ml-1 font-bold uppercase">排除层级</span>
-                    <input type="number" min="1" class="t-exclude w-full bg-slate-950 border-slate-700 rounded-lg p-2.5 text-xs mt-1 outline-none focus:border-sky-500" value="${Number(data.exclude || 1)}">
+                    <input type="number" min="1" class="t-exclude w-full bg-slate-950 border-slate-700 rounded-lg p-2.5 text-sm mt-1 outline-none focus:border-sky-500" value="${Number(data.exclude || 1)}">
                 </div>
                 <div class="col-span-2 md:col-span-1">
-                    <button onclick="this.parentElement.parentElement.remove()" class="w-full bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white p-2.5 rounded-lg transition-colors text-xs font-bold">✕</button>
+                    <button onclick="this.parentElement.parentElement.remove()" class="w-full bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white p-2.5 rounded-lg transition-colors text-sm font-bold">✕</button>
                 </div>
             `;
             container.appendChild(row);
@@ -583,7 +665,14 @@
 
         function refreshWebhookHint() {
             const name = document.getElementById('monitor_name').value.trim() || '任务名';
-            document.getElementById('webhook-hint').innerText = `webhook 地址：IP:容器端口/webhook/${name}`;
+            document.getElementById('webhook-hint').innerHTML = [
+                `webhook 地址：IP:容器端口/webhook/${escapeHtml(name)}（用于触发指定任务）`,
+                'savepath：/{savePath}',
+                'xlist_path_fix：/115:/全部文件',
+                'title：/{title}',
+                'delayTime：0（可选，秒）',
+                'strmtask：可选（兼容字段，以 URL 任务名为准）'
+            ].join('<br>');
         }
 
         async function persistMonitorTasks(tasks) {
@@ -722,7 +811,7 @@
                                     <div>下次定时：${nextRun ? escapeHtml(nextRun) : '未开启'}</div>
                                 </div>
                             </div>
-                            <div class="grid grid-cols-2 md:grid-cols-4 gap-2 shrink-0">
+                            <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2 shrink-0">
                                 <button onclick="startMonitorTask(decodeURIComponent('${taskKey}'))" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold ${monitorState.running ? 'btn-disabled' : ''}">运行</button>
                                 <button onclick="stopMonitorTask(decodeURIComponent('${taskKey}'))" class="px-4 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 text-sm font-bold ${running ? '' : 'btn-disabled'}">中断</button>
                                 <button onclick="editMonitorTask(decodeURIComponent('${taskKey}'))" class="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">编辑</button>
@@ -811,6 +900,9 @@
         }
 
         document.getElementById('monitor_name').addEventListener('input', refreshWebhookHint);
+        document.getElementById('monitor-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'monitor-modal') closeMonitorModal();
+        });
         document.getElementById('help-modal').addEventListener('click', (e) => {
             if (e.target.id === 'help-modal') closeHelpModal();
         });

@@ -1142,17 +1142,15 @@ async def webhook(task_name: str, request: Request) -> JSONResponse:
     if not task.get("webhook_enabled"):
         return JSONResponse(status_code=400, content={"ok": False, "msg": "该任务未开启 webhook"})
     strm_task = str(payload.get("strmtask", "") or "").strip()
-    if not strm_task:
-        return JSONResponse(status_code=400, content={"ok": False, "msg": "缺少必填参数 strmtask"})
-    if strm_task != task_name:
-        return JSONResponse(
-            status_code=400,
-            content={"ok": False, "msg": f"strmtask 不匹配，期望: {task_name}"},
+    if strm_task and strm_task != task_name:
+        await write_monitor_log(
+            f"Webhook 提示：strmtask={strm_task} 与 URL 任务名={task_name} 不一致，已按 URL 任务名执行",
+            "warn",
         )
 
     queue_monitor_job(task_name, "webhook", payload)
     await write_monitor_log(
-        f"收到 webhook: {task_name} strmtask={strm_task} event={payload.get('event', '')} savepath={payload.get('savepath', '')}",
+        f"收到 webhook: {task_name} strmtask={strm_task or '(未传)'} event={payload.get('event', '')} savepath={payload.get('savepath', '')}",
         "info",
     )
     return JSONResponse(content=payload)

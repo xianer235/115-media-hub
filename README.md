@@ -65,14 +65,18 @@ http://你的IP:容器端口/webhook/任务名
 - Method: `POST`
 - Content-Type: `application/json`
 
-推荐 JSON 字段（越完整越好）：
+推荐 JSON 字段：
 
 - `delayTime`
 - `event`
-- `strmtask`
 - `savepath`
 - `xlist_path_fix`
 - `title`
+
+说明：
+
+- 任务匹配以 URL 中的 `任务名` 为准（`/webhook/任务名`）。
+- `strmtask` 为可选兼容字段，不再作为必填校验。
 
 示例：
 
@@ -80,7 +84,6 @@ http://你的IP:容器端口/webhook/任务名
 {
   "delayTime": 0,
   "event": "cs_strm",
-  "strmtask": "自存影视",
   "savepath": "/自存影视/115自存电视剧",
   "xlist_path_fix": "/115:/全部文件",
   "title": "/📺 正义女神 (2026) S01E07 4K WEB-DL AAC 6.12 GB"
