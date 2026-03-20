@@ -86,6 +86,8 @@ http://你的IP:容器端口/webhook/任务名
   "title": "/📺 正义女神 (2026) S01E07 4K WEB-DL AAC 6.12 GB"
 }
 ```
+使用cloud saver示例
+<img width="1462" height="804" alt="cs配置方法" src="https://github.com/user-attachments/assets/d63e7809-cd1b-4bc3-aa3d-ac0b58de3161" />
 
 ## 部署
 
