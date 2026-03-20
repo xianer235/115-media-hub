@@ -35,19 +35,127 @@
             background: rgba(15, 23, 42, 0.85);
         }
         .help-text { white-space: pre-wrap; line-height: 1.7; }
+
+        @media (max-width: 640px) {
+            main { padding-left: 0.5rem; padding-right: 0.5rem; }
+            .group-card { padding: 1rem; }
+            .group-title { font-size: 0.92rem; }
+        }
+
+        html.theme-day {
+            --bg: #f4f7fb;
+            --surface: #ffffff;
+            --surface-soft: #f8fafc;
+            --border: #d9e2ec;
+            --text: #0f172a;
+            --muted: #64748b;
+            --primary: #1d4ed8;
+            --success: #15803d;
+            --warn: #b45309;
+            --danger: #dc2626;
+        }
+        html.theme-day body { background: var(--bg) !important; color: var(--text) !important; }
+        html.theme-day nav { background: rgba(255, 255, 255, 0.95) !important; border-color: var(--border) !important; }
+        html.theme-day .group-card { background: var(--surface) !important; border-color: var(--border) !important; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08); }
+        html.theme-day .group-title { color: var(--primary) !important; border-left-color: var(--primary) !important; }
+        html.theme-day .tree-row { background: var(--surface) !important; border-color: var(--border) !important; }
+        html.theme-day .bg-slate-900,
+        html.theme-day .bg-slate-800,
+        html.theme-day .bg-slate-950,
+        html.theme-day .bg-slate-900\/80,
+        html.theme-day .bg-slate-900\/60,
+        html.theme-day .bg-slate-900\/50,
+        html.theme-day .bg-slate-800\/80,
+        html.theme-day .bg-slate-950\/80 { background: var(--surface) !important; background-image: none !important; }
+        html.theme-day .border-slate-700,
+        html.theme-day .border-slate-800,
+        html.theme-day .border-slate-500\/40 { border-color: var(--border) !important; }
+        html.theme-day .text-slate-100,
+        html.theme-day .text-slate-200,
+        html.theme-day .text-slate-300 { color: #334155 !important; }
+        html.theme-day .text-slate-400,
+        html.theme-day .text-slate-500 { color: var(--muted) !important; }
+        html.theme-day .footer-text { color: var(--muted) !important; }
+        html.theme-day .tab-inactive { color: #475569 !important; }
+        html.theme-day .tab-inactive:hover { color: var(--text) !important; }
+        html.theme-day #log-box,
+        html.theme-day #monitor-log-box { color: #1f2937 !important; }
+        html.theme-day .log-success { color: var(--success) !important; }
+        html.theme-day .log-warn { color: var(--warn) !important; }
+        html.theme-day .log-error { color: var(--danger) !important; }
+        html.theme-day .log-info,
+        html.theme-day .log-divider { color: #475569 !important; }
+        html.theme-day input,
+        html.theme-day select,
+        html.theme-day textarea {
+            background: #ffffff !important;
+            color: var(--text) !important;
+            border-color: #b6c5d6 !important;
+            box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.18);
+        }
+        html.theme-day input::placeholder,
+        html.theme-day textarea::placeholder { color: #7b8aa1 !important; }
+        html.theme-day input:focus,
+        html.theme-day select:focus,
+        html.theme-day textarea:focus {
+            border-color: #3b82f6 !important;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18), inset 0 0 0 1px rgba(59, 130, 246, 0.15) !important;
+            outline: none !important;
+        }
+        html.theme-day .bg-slate-700,
+        html.theme-day .bg-slate-700\/40,
+        html.theme-day .bg-slate-600 { background: var(--surface-soft) !important; }
+        html.theme-day #theme-toggle { color: #334155 !important; }
+        html.theme-day .modal-card,
+        html.theme-day #help-modal-body { background: #fff !important; border-color: var(--border) !important; }
+        html.theme-day #monitor-modal,
+        html.theme-day #help-modal { background: rgba(15, 23, 42, 0.35) !important; }
+        html.theme-day .text-emerald-400 { color: #047857 !important; }
+        html.theme-day .text-red-400 { color: var(--danger) !important; }
+        html.theme-day #prog-step,
+        html.theme-day #page-settings .text-white,
+        html.theme-day #page-monitor .text-white,
+        html.theme-day #help-modal .text-white { color: var(--text) !important; }
+        html.theme-day #help-modal-body { color: #334155 !important; }
+        html.theme-day .hover\:text-white:hover { color: var(--text) !important; }
+        html.theme-day .bg-black\/60 { background: rgba(15, 23, 42, 0.35) !important; }
+        html.theme-day .bg-red-500\/10 { background: rgba(220, 38, 38, 0.08) !important; }
+        html.theme-day .border-red-500\/20 { border-color: rgba(220, 38, 38, 0.25) !important; }
+        html.theme-day .text-red-300 { color: #b91c1c !important; }
+        html.theme-day .text-violet-300 { color: #6d28d9 !important; }
+        html.theme-day .bg-violet-500\/15 { background: rgba(109, 40, 217, 0.1) !important; }
+        html.theme-day .border-violet-500\/20 { border-color: rgba(109, 40, 217, 0.28) !important; }
+        html.theme-day .bg-emerald-600 { background: #059669 !important; }
+        html.theme-day .hover\:bg-emerald-500:hover { background: #10b981 !important; }
+        html.theme-day .btn-ctrl.bg-slate-700 {
+            background: #334155 !important;
+            color: #f8fafc !important;
+            border: 1px solid #1e293b !important;
+        }
+        html.theme-day .btn-ctrl.bg-slate-700:hover { background: #1e293b !important; }
+        html.theme-day .bg-amber-500\/15 {
+            background: rgba(217, 119, 6, 0.2) !important;
+            border: 1px solid rgba(180, 83, 9, 0.35) !important;
+        }
+        html.theme-day .hover\:bg-amber-500\/25:hover { background: rgba(217, 119, 6, 0.3) !important; }
+        html.theme-day .text-amber-300 { color: #92400e !important; }
     </style>
 </head>
 <body class="bg-slate-900 text-slate-200 font-sans">
     <nav class="bg-slate-800/80 backdrop-blur-md border-b border-slate-700 p-4 sticky top-0 z-50">
-        <div class="max-w-7xl mx-auto flex flex-col md:flex-row justify-between md:items-center gap-3">
+        <div class="max-w-7xl mx-auto relative flex flex-col md:flex-row justify-between md:items-center gap-3">
             <h1 class="text-xl font-bold bg-gradient-to-r from-sky-400 to-emerald-400 bg-clip-text text-transparent">115-strm-web</h1>
             <div class="flex flex-col md:flex-row md:items-center gap-3 md:gap-8">
-                <div class="flex flex-wrap gap-4 text-sm font-bold">
+                <div class="flex flex-wrap gap-4 text-sm font-bold overflow-x-auto nav-scroll">
                     <button onclick="switchTab('monitor')" id="tab-monitor" class="tab-active uppercase">文件夹监控任务</button>
                     <button onclick="switchTab('task')" id="tab-task" class="tab-inactive uppercase">目录树任务</button>
                     <button onclick="switchTab('settings')" id="tab-settings" class="tab-inactive uppercase">参数配置</button>
                 </div>
-                <a href="/logout" class="text-xs bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white px-3 py-1 rounded-lg border border-red-500/20 transition-all font-bold">退出登录</a>
+                <!-- Desktop Logout (hidden on mobile) -->
+                <a href="/logout" class="hidden md:inline-block text-xs bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white px-3 py-1 rounded-lg border border-red-500/20 transition-all font-bold" aria-label="退出登录">退出登录</a>
+                <!-- Mobile Logout (shown on mobile) -->
+                <a href="/logout" class="md:hidden text-xs bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white px-3 py-1 rounded-lg border border-red-500/20 transition-all font-bold absolute top-2 right-2" aria-label="退出登录">退出登录</a>
+                <button id="theme-toggle" class="text-xs bg-slate-700/40 text-slate-100 px-2 py-1 rounded-lg border border-slate-500/40 hover:bg-slate-600 transition-all" onclick="toggleTheme()" aria-label="切换夜间/日间模式" title="切换夜间/日间模式">🌙 夜间</button>
             </div>
         </div>
     </nav>
@@ -198,7 +306,7 @@
         </div>
 
         <div id="monitor-modal" class="hidden fixed inset-0 bg-black/60 z-50 p-4">
-            <div class="max-w-2xl mx-auto mt-[4vh] max-h-[92vh] overflow-y-auto group-card">
+            <div class="max-w-2xl mx-auto mt-[4vh] max-h-[92vh] overflow-y-auto group-card modal-card">
                 <div class="flex items-center justify-between">
                     <h3 id="monitor-modal-title" class="group-title mb-0">新增监控任务</h3>
                     <button onclick="closeMonitorModal()" class="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm">关闭</button>
@@ -277,7 +385,7 @@
         </div>
 
         <div id="help-modal" class="hidden fixed inset-0 bg-black/60 z-[60] p-4">
-            <div class="max-w-xl mx-auto mt-[12vh] group-card">
+            <div class="max-w-xl mx-auto mt-[12vh] group-card modal-card">
                 <div class="flex items-center justify-between mb-3">
                     <div class="text-lg font-black text-white">参数说明</div>
                     <button onclick="closeHelpModal()" class="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm">关闭</button>
@@ -706,6 +814,30 @@
         document.getElementById('help-modal').addEventListener('click', (e) => {
             if (e.target.id === 'help-modal') closeHelpModal();
         });
+        function applyThemeFromStorage() {
+            try {
+                const isDay = localStorage.getItem('theme-day') === 'day';
+                document.documentElement.classList.toggle('theme-day', isDay);
+                const btn = document.getElementById('theme-toggle');
+                if (btn) btn.textContent = isDay ? '☀️ 日间' : '🌙 夜间';
+            } catch (e) {}
+        }
+        function toggleTheme() {
+            try {
+                const el = document.documentElement;
+                const isDay = !el.classList.contains('theme-day');
+                if (isDay) {
+                    el.classList.add('theme-day');
+                    localStorage.setItem('theme-day', 'day');
+                } else {
+                    el.classList.remove('theme-day');
+                    localStorage.setItem('theme-day', 'night');
+                }
+                const btn = document.getElementById('theme-toggle');
+                if (btn) btn.textContent = isDay ? '☀️ 日间' : '🌙 夜间';
+            } catch (e) {}
+        }
+        applyThemeFromStorage();
         init();
         refreshMainLogs();
         refreshMonitorState();
