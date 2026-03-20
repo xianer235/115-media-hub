@@ -133,12 +133,6 @@
             border: 1px solid #1e293b !important;
         }
         html.theme-day .btn-ctrl.bg-slate-700:hover { background: #1e293b !important; }
-        html.theme-day #monitor-modal button.bg-slate-700 {
-            background: #475569 !important;
-            color: #ffffff !important;
-            border: 1px solid #334155 !important;
-        }
-        html.theme-day #monitor-modal button.bg-slate-700:hover { background: #334155 !important; }
         html.theme-day .bg-amber-500\/15 {
             background: rgba(217, 119, 6, 0.2) !important;
             border: 1px solid rgba(180, 83, 9, 0.35) !important;
@@ -328,15 +322,10 @@
                     <label class="flex items-center gap-2 cursor-pointer text-sm">
                         <input type="checkbox" id="monitor_webhook_enabled" class="w-5 h-5 rounded-lg accent-sky-500" onchange="refreshWebhookHint()">
                         开启 webhook
-                        <button type="button" class="info-dot" onclick="showHelp('CloudSaver Webhook 配置说明：\\n1) 接口地址：http://你的IP:容器端口/webhook/任务名\\n   任务名用于匹配并触发指定监控任务（必须与页面中的任务名一致）。\\n2) 请求类型：POST；请求体格式：JSON\\n3) 推荐 headers：Content-Type: application/json\\n4) data 需要填写后端会用到的参数：\\n   strmtask = 任务名（必填，且必须等于 URL 中的任务名）\\n   savepath = /{savePath}\\n   xlist_path_fix = /115:/全部文件\\n   title = /{title}\\n   delayTime = 0（可选，单位秒）\\n5) 系统会优先根据这些字段定位变动子目录做局部刷新，减少大目录全刷风险。')">i</button>
+                        <button type="button" class="info-dot" onclick="showHelp('CloudSaver Webhook 配置说明：\\n1) 接口地址填写：http://你的IP:容器端口/webhook/任务名\\n2) 请求类型固定 POST，请求体格式 JSON\\n3) 推荐 headers：Content-Type: application/json\\n4) data 推荐字段：delayTime、event、strmtask、savepath、xlist_path_fix、title\\n5) strmtask 建议与本任务名一致；savepath 建议传转存目录；xlist_path_fix 推荐如 /115:/全部文件；title 建议传 /{title}\\n6) 系统收到后会优先根据这些字段定位变动子目录做局部刷新，减少大目录全刷风险。')">i</button>
                     </label>
                     <div id="webhook-hint" class="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3 leading-5">
-                        webhook 地址：IP:容器端口/webhook/任务名（用于触发指定任务）
-                        <br>strmtask：任务名（必填，必须和 URL 任务名一致）
-                        <br>savepath：/{savePath}
-                        <br>xlist_path_fix：/115:/全部文件
-                        <br>title：/{title}
-                        <br>delayTime：0（可选，秒）
+                        webhook 地址：IP:容器端口/webhook/任务名
                     </div>
                     <label class="block">
                         <span class="text-xs text-slate-500 inline-flex items-center gap-2">
