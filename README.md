@@ -128,7 +128,8 @@ CloudSaver 常用映射建议：
 
 CloudSaver 配置示例图：
 
-<img width="1462" height="804" alt="cs配置方法" src="https://github.com/user-attachments/assets/d63e7809-cd1b-4bc3-aa3d-ac0b58de3161" />
+<img width="2576" height="1444" alt="image" src="https://github.com/user-attachments/assets/e1f4fdd7-64fc-416d-8e43-1125fbe2fbc6" />
+
 
 ## 使用建议
 
