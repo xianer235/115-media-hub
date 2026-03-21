@@ -108,7 +108,7 @@ http://你的IP:容器端口/webhook/任务名
 
 - 任务匹配以 URL 中的 `任务名` 为准（`/webhook/任务名`）。
 - `savepath` 支持两种写法：`连载中/你好1983 (2026)/Season 1` 或 `/连载中/你好1983 (2026)/Season 1`。
-- 局部刷新目录通过 `savepath + 参数配置中的 mount_path` 自动推导，不再依赖 `xlist_path_fix`。
+- 局部刷新目录通过 `savepath + 参数配置中的 mount_path` 自动推导。
 - `title` 仅用于日志中的“转存内容”展示。
 
 CloudSaver 常用映射建议：
