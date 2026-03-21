@@ -417,13 +417,15 @@
                     <label class="flex items-center gap-2 cursor-pointer text-sm">
                         <input type="checkbox" id="monitor_webhook_enabled" class="w-5 h-5 rounded-lg accent-sky-500" onchange="refreshWebhookHint()">
                         开启 webhook
-                        <button type="button" class="info-dot" onclick="showHelp('CloudSaver Webhook 配置说明：\\n1) 接口地址：http://你的IP:容器端口/webhook/任务名\\n   URL 中的任务名用于匹配并触发指定监控任务（必须与页面中的任务名一致）。\\n2) 请求类型：POST；请求体格式：JSON\\n3) 推荐 headers：Content-Type: application/json\\n4) data 建议填写参数：\\n   savepath = 连载中/xxx（或 /连载中/xxx）\\n   delayTime = 0（可选，单位秒）\\n   title = 影视标题（可选，仅写日志）\\n5) 系统会根据 savepath + 参数配置中的挂载根路径定位变动子目录，优先局部刷新。')">i</button>
+                        <button type="button" class="info-dot" onclick="showHelp('CloudSaver Webhook 参数说明（本页面仅接收，不在此处配置触发规则）：\\n1) 接口地址：/webhook/任务名\\n   URL 中的任务名用于匹配并触发指定监控任务。\\n2) 请求类型：POST；请求体格式：JSON。\\n3) 参数用途：\\n   savepath：转存目标父路径，用于定位刷新范围。\\n   sharetitle：转存资源文件夹名；有值时优先刷新 savepath/sharetitle，为空时回退按 savepath 刷新。\\n   delayTime：可选，单位秒；用于覆盖本次任务执行延时。\\n   title：可选；仅用于日志展示“转存内容”。\\n4) 触发条件、变量映射与请求体拼装请在 CloudSaver 中配置。')">i</button>
                     </label>
                     <div id="webhook-hint" class="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3 leading-5">
                         webhook 地址：IP:容器端口/webhook/任务名（用于触发指定任务）
-                        <br>savepath：连载中/你好1983 (2026)/Season 1（可不带 /）
-                        <br>delayTime：0（可选，秒）
-                        <br>title：📺 你好1983 (2026) S01E11...（可选，仅写日志）
+                        <br>savepath：转存目标父路径（用于定位刷新范围）
+                        <br>sharetitle：转存资源文件夹名（为空则回退按 savepath 刷新）
+                        <br>delayTime：可选，单位秒（覆盖本次任务执行延时）
+                        <br>title：可选（仅日志展示）
+                        <br>说明：本页面仅接收参数；触发条件与映射规则请在 CloudSaver 中配置
                     </div>
                     <label class="block">
                         <span class="text-xs text-slate-500 inline-flex items-center gap-2">
@@ -685,9 +687,11 @@
             const name = document.getElementById('monitor_name').value.trim() || '任务名';
             document.getElementById('webhook-hint').innerHTML = [
                 `webhook 地址：IP:容器端口/webhook/${escapeHtml(name)}（用于触发指定任务）`,
-                'savepath：连载中/你好1983 (2026)/Season 1（可不带 /）',
-                'delayTime：0（可选，秒）',
-                'title：📺 你好1983 (2026) S01E11...（可选，仅写日志）'
+                'savepath：转存目标父路径（用于定位刷新范围）',
+                'sharetitle：转存资源文件夹名（为空则回退按 savepath 刷新）',
+                'delayTime：可选，单位秒（覆盖本次任务执行延时）',
+                'title：可选（仅日志展示）',
+                '说明：本页面仅接收参数；触发条件与映射规则请在 CloudSaver 中配置'
             ].join('<br>');
         }
 

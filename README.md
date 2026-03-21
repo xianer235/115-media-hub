@@ -98,33 +98,20 @@ http://你的IP:容器端口/webhook/任务名
 - Method: `POST`
 - Content-Type: `application/json`
 
-推荐 JSON 字段：
+本项目 webhook 仅接收以下参数：
 
-- `savepath`
-- `title`（可选，仅日志展示）
-- `delayTime`（可选）
+- `savepath`：转存目标父路径，用于定位刷新范围。
+- `sharetitle`（可选）：转存资源文件夹名；为空时回退按 `savepath` 刷新。
+- `delayTime`（可选）：本次任务延时秒数，覆盖任务内默认延时。
+- `title`（可选）：仅用于日志展示“转存内容”。
 
 关键规则：
 
 - 任务匹配以 URL 中的 `任务名` 为准（`/webhook/任务名`）。
-- `savepath` 支持两种写法：`连载中/你好1983 (2026)/Season 1` 或 `/连载中/你好1983 (2026)/Season 1`。
-- 局部刷新目录通过 `savepath + 参数配置中的 mount_path` 自动推导。
-- `title` 仅用于日志中的“转存内容”展示。
-
-CloudSaver 常用映射建议：
-
-- `savepath = /{savePath}`
-- `title = {title}`
-
-示例：
-
-```json
-{
-  "delayTime": 0,
-  "savepath": "/自存影视/115自存电视剧",
-  "title": "/📺 正义女神 (2026) S01E07 4K WEB-DL AAC 6.12 GB"
-}
-```
+- `savepath` 支持两种写法：`连载中` 或 `/连载中`（也可传更深路径）。
+- `sharetitle` 不为空时，优先按 `savepath/sharetitle` 做局部刷新；为空时回退按 `savepath` 刷新。
+- 实际目录定位会结合参数配置中的 `mount_path` 自动推导，不需要额外传挂载映射参数。
+- 触发条件、变量映射、请求体内容拼装均在 CloudSaver 中配置；本项目不在本地页面配置这些规则。
 
 CloudSaver 配置示例图：
 

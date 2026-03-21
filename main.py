@@ -291,6 +291,16 @@ def extract_webhook_refresh_path(task: Dict[str, Any], payload: Dict[str, Any], 
     candidates: List[str] = []
     savepath_raw = str(payload.get("savepath", "") or "").strip()
     savepath_rel = normalize_relative_path(savepath_raw)
+    sharetitle_raw = str(payload.get("sharetitle", "") or "").strip()
+    sharetitle_rel = normalize_relative_path(sharetitle_raw)
+
+    if savepath_rel and sharetitle_rel:
+        # 优先定位本次转存子目录：savepath/sharetitle
+        detailed_rel = join_relative_path(savepath_rel, sharetitle_rel)
+        detailed_norm = normalize_remote_path("/" + detailed_rel)
+        candidates.append(detailed_norm)
+        candidates.append(join_remote_path(mount_path, detailed_norm))
+
     if savepath_rel:
         # savepath 支持 "连载中/xxx" 和 "/连载中/xxx" 两种写法
         save_norm = normalize_remote_path("/" + savepath_rel)
@@ -660,8 +670,11 @@ async def run_monitor_task(task_name: str, trigger: str = "manual", payload: Opt
     await write_monitor_log(f"远端路径: {task['scan_path']}", "info")
     if trigger == "webhook" and payload:
         title = str(payload.get("title", "") or "").strip()
+        sharetitle = str(payload.get("sharetitle", "") or "").strip()
         if title:
             await write_monitor_log(f"转存内容：{title}", "info")
+        if sharetitle:
+            await write_monitor_log(f"转存目录名：{sharetitle}", "info")
     await write_monitor_log(f"增量同步: {str(task['incremental'])}", "info")
     await write_monitor_log(f"目录时间检查: {str(task['skip_by_dir_mtime'])}", "info")
     await write_monitor_log(f"保存目录: /strm/{resolve_task_root(task)}", "info")
@@ -1128,10 +1141,11 @@ async def webhook(task_name: str, request: Request) -> JSONResponse:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "该任务未开启 webhook"})
     title = str(payload.get("title", "") or "").strip()
     savepath = str(payload.get("savepath", "") or "").strip()
+    sharetitle = str(payload.get("sharetitle", "") or "").strip()
 
     queue_monitor_job(task_name, "webhook", payload)
     await write_monitor_log(
-        f"收到 webhook: {task_name} savepath={savepath or '(未传)'} delayTime={payload.get('delayTime', 0)}",
+        f"收到 webhook: {task_name} savepath={savepath or '(未传)'} sharetitle={sharetitle or '(空)'} delayTime={payload.get('delayTime', 0)}",
         "info",
     )
     if title:
