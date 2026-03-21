@@ -455,6 +455,78 @@ async def download_tree(url: str, raw_path: str, cfg: Dict[str, Any]) -> None:
     await asyncio.to_thread(http_download, url, raw_path, token, 120)
 
 
+def parse_last_hash_state(raw: Any) -> Dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    text = str(raw or "").strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        return {}
+    return {}
+
+
+def build_tree_cache_key(tree: Dict[str, Any]) -> str:
+    exclude_val = 1
+    try:
+        exclude_val = max(1, int(tree.get("exclude", 1) or 1))
+    except (TypeError, ValueError):
+        exclude_val = 1
+    payload = {
+        "url": str(tree.get("url", "")).strip(),
+        "prefix": normalize_relative_path(tree.get("prefix", "")),
+        "exclude": exclude_val,
+    }
+    return hashlib.md5(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def build_tree_parse_signature(content_hash: str, extensions: set) -> str:
+    payload = {
+        "content_hash": content_hash,
+        "extensions": sorted(extensions),
+    }
+    return hashlib.md5(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def calculate_file_md5(path: str) -> str:
+    digest = hashlib.md5()
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def load_tree_cache(cache_path: str) -> Optional[List[str]]:
+    if not os.path.exists(cache_path):
+        return None
+    try:
+        with open(cache_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return None
+    if not isinstance(data, list):
+        return None
+    results: List[str] = []
+    for item in data:
+        rel = normalize_relative_path(item)
+        if rel:
+            results.append(rel)
+    return results
+
+
+def save_tree_cache(cache_path: str, rel_paths: List[str]) -> None:
+    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+    with open(cache_path, "w", encoding="utf-8") as f:
+        json.dump(rel_paths, f, ensure_ascii=False)
+
+
 async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
     if task_status["running"]:
         return
@@ -473,15 +545,49 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
 
         scan_results: List[str] = []
         user_exts = get_user_extensions(cfg)
+        check_hash_enabled = bool(cfg.get("check_hash", False))
+        can_skip_by_hash = check_hash_enabled and cfg.get("sync_mode") != "full" and not force_full
+        last_hash_state = parse_last_hash_state(cfg.get("last_hash", ""))
+        last_tree_hashes = last_hash_state.get("trees", {}) if isinstance(last_hash_state.get("trees", {}), dict) else {}
+        last_tree_keys = last_hash_state.get("tree_keys", []) if isinstance(last_hash_state.get("tree_keys", []), list) else []
+        current_tree_hashes: Dict[str, Dict[str, str]] = {}
+        current_tree_keys: List[str] = []
+        skipped_tree_count = 0
+        parsed_tree_count = 0
+        if check_hash_enabled and not can_skip_by_hash:
+            await write_log("ℹ 已开启 MD5 校验，但当前为全量模式，跳过策略不生效")
+        await write_log(
+            f"开始目录树任务：源 {len(trees)} 个，模式 {cfg.get('sync_mode', 'incremental')}，MD5校验 {'开' if check_hash_enabled else '关'}"
+        )
 
         for idx, tree in enumerate(trees):
             raw_path = f"{TREE_DIR}/tree_{idx}.raw"
             txt_path = f"{TREE_DIR}/tree_{idx}.txt"
+            tree_key = build_tree_cache_key(tree)
+            current_tree_keys.append(tree_key)
+            tree_cache_path = os.path.join(TREE_DIR, f"cache_{tree_key}.json")
+            tree_scan_results: List[str] = []
+            parse_signature = ""
 
             if not use_local:
                 await update_progress("正在下载", (idx / max(len(trees), 1) * 15), f"获取第 {idx + 1} 个目录树...")
                 await download_tree(tree["url"], raw_path, cfg)
                 downloaded_tree_count += 1
+
+            if os.path.exists(raw_path):
+                file_hash = await asyncio.to_thread(calculate_file_md5, raw_path)
+                parse_signature = build_tree_parse_signature(file_hash, user_exts)
+                if can_skip_by_hash:
+                    old_state = last_tree_hashes.get(tree_key, {})
+                    old_signature = old_state.get("parse_signature", "") if isinstance(old_state, dict) else ""
+                    if old_signature and old_signature == parse_signature:
+                        cached_paths = await asyncio.to_thread(load_tree_cache, tree_cache_path)
+                        if cached_paths is not None:
+                            skipped_tree_count += 1
+                            scan_results.extend(cached_paths)
+                            current_tree_hashes[tree_key] = {"parse_signature": parse_signature}
+                            await write_log(f"第 {idx + 1} 个目录树 MD5 无变化，复用缓存 {len(cached_paths)} 条")
+                            continue
 
             if os.path.exists(raw_path):
                 await update_progress("正在转码", 15 + (idx / max(len(trees), 1) * 5), f"转码目录树 {idx + 1}...")
@@ -495,13 +601,17 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
                     "-o",
                     txt_path,
                 )
-                await proc.wait()
+                code = await proc.wait()
+                if code != 0:
+                    raise RuntimeError(f"目录树 {idx + 1} 转码失败，退出码: {code}")
 
+            parsed_this_tree = False
             if os.path.exists(txt_path):
                 await update_progress("解析中", 20 + (idx / max(len(trees), 1) * 20), f"处理第 {idx + 1} 个结构...")
                 path_stack: Dict[int, str] = {}
                 prefix = normalize_relative_path(tree.get("prefix", ""))
                 exclude = int(tree.get("exclude", 1) or 1)
+                parsed_this_tree = True
                 with open(txt_path, "r", encoding="utf-8", errors="ignore") as f:
                     for line in f:
                         level = line.count("|")
@@ -514,9 +624,34 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
                             rel_parts = full_parts[exclude:]
                             final_rel_path = join_relative_path(prefix, "/".join(rel_parts))
                             if final_rel_path:
+                                tree_scan_results.append(final_rel_path)
                                 scan_results.append(final_rel_path)
 
+            if parse_signature:
+                current_tree_hashes[tree_key] = {"parse_signature": parse_signature}
+            if parsed_this_tree:
+                parsed_tree_count += 1
+                await asyncio.to_thread(save_tree_cache, tree_cache_path, tree_scan_results)
+
+        if check_hash_enabled:
+            cfg["last_hash"] = json.dumps(
+                {"version": 2, "tree_keys": current_tree_keys, "trees": current_tree_hashes},
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            save_config(cfg)
+
+        tree_layout_changed = sorted(last_tree_keys) != sorted(current_tree_keys)
+        if can_skip_by_hash and trees and skipped_tree_count == len(trees) and tree_layout_changed:
+            await write_log("ℹ 目录树源配置有变更，继续执行同步以校正结果")
+        if can_skip_by_hash and trees and skipped_tree_count == len(trees) and not tree_layout_changed:
+            await write_log(f"本轮概况：下载 {downloaded_tree_count} 个，缓存复用 {skipped_tree_count} 个，解析 {parsed_tree_count} 个")
+            await write_log("✅ MD5 校验命中：全部目录树无变动，跳过解析与同步")
+            await update_progress("任务完成", 100, "MD5 校验命中：无变动")
+            return
+
         total_files = len(scan_results)
+        await write_log(f"本轮概况：下载 {downloaded_tree_count} 个，缓存复用 {skipped_tree_count} 个，解析 {parsed_tree_count} 个")
         await write_log(f"解析完成，共发现 {total_files} 个有效文件")
         if total_files == 0:
             if downloaded_tree_count > 0 or use_local:
