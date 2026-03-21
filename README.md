@@ -101,32 +101,27 @@ http://你的IP:容器端口/webhook/任务名
 推荐 JSON 字段：
 
 - `savepath`
-- `xlist_path_fix`
-- `title`
+- `title`（可选，仅日志展示）
 - `delayTime`（可选）
-- `event`（可选，仅日志用途）
-- `strmtask`（可选兼容字段）
 
 关键规则：
 
 - 任务匹配以 URL 中的 `任务名` 为准（`/webhook/任务名`）。
-- `strmtask` 不再作为必填校验；若传入且与 URL 不一致，系统会记录提示日志并按 URL 任务名执行。
+- `savepath` 支持两种写法：`连载中/你好1983 (2026)/Season 1` 或 `/连载中/你好1983 (2026)/Season 1`。
+- 局部刷新目录通过 `savepath + 参数配置中的 mount_path` 自动推导，不再依赖 `xlist_path_fix`。
+- `title` 仅用于日志中的“转存内容”展示。
 
 CloudSaver 常用映射建议：
 
-- `strmtask = 任务名`（可选）
 - `savepath = /{savePath}`
-- `xlist_path_fix = /115:/全部文件`
-- `title = /{title}`
+- `title = {title}`
 
 示例：
 
 ```json
 {
   "delayTime": 0,
-  "event": "cs_strm",
   "savepath": "/自存影视/115自存电视剧",
-  "xlist_path_fix": "/115:/全部文件",
   "title": "/📺 正义女神 (2026) S01E07 4K WEB-DL AAC 6.12 GB"
 }
 ```

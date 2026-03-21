@@ -11,6 +11,7 @@
         .transition-width { transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
         .nav-scroll { -ms-overflow-style: none; scrollbar-width: none; }
         .nav-scroll::-webkit-scrollbar { display: none; }
+        #main-nav-actions { display: flex; align-items: center; gap: 0.5rem; flex-wrap: nowrap; }
         #log-box::-webkit-scrollbar, #monitor-log-box::-webkit-scrollbar { width: 6px; }
         #log-box::-webkit-scrollbar-thumb, #monitor-log-box::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
         #log-box { height: min(48vh, 420px) !important; }
@@ -26,7 +27,13 @@
         .log-error { color: #f87171; }
         .log-warn { color: #fbbf24; }
         .log-info { color: #cbd5e1; }
-        .log-divider { color: #64748b; }
+        .log-divider {
+            color: #94a3b8;
+            margin: 8px 0;
+            padding: 4px 0;
+            border-top: 1px dashed rgba(148, 163, 184, 0.35);
+            border-bottom: 1px dashed rgba(148, 163, 184, 0.2);
+        }
         .info-dot {
             width: 18px;
             height: 18px;
@@ -41,9 +48,11 @@
             background: rgba(15, 23, 42, 0.85);
         }
         .help-text { white-space: pre-wrap; line-height: 1.7; }
+        .footer-link { color: #38bdf8; text-decoration: underline; text-underline-offset: 3px; }
+        .footer-link:hover { color: #7dd3fc; }
 
         @media (max-width: 1024px) {
-            #main-nav-actions { width: 100%; justify-content: flex-end; }
+            #main-nav-actions { width: auto; justify-content: flex-end; }
             .footer-text { padding: 1.8rem 0 1.2rem; }
         }
 
@@ -100,6 +109,9 @@
             #main-nav-actions { gap: 0.45rem !important; }
             #main-nav-actions a[href="/logout"],
             #theme-toggle { font-size: 0.78rem !important; padding: 0.45rem 0.65rem !important; }
+            #main-nav-actions a[href="/logout"],
+            #theme-toggle,
+            .nav-title { white-space: nowrap; }
             #prog-step { font-size: 1.35rem !important; }
             #prog-percent { font-size: 1.6rem !important; }
             #log-box { height: 40vh !important; }
@@ -148,6 +160,8 @@
         html.theme-day .text-slate-400,
         html.theme-day .text-slate-500 { color: var(--muted) !important; }
         html.theme-day .footer-text { color: var(--muted) !important; }
+        html.theme-day .footer-link { color: #1d4ed8 !important; }
+        html.theme-day .footer-link:hover { color: #2563eb !important; }
         html.theme-day .tab-inactive { color: #475569 !important; }
         html.theme-day .tab-inactive:hover { color: var(--text) !important; }
         html.theme-day #log-box,
@@ -157,6 +171,10 @@
         html.theme-day .log-error { color: var(--danger) !important; }
         html.theme-day .log-info,
         html.theme-day .log-divider { color: #475569 !important; }
+        html.theme-day .log-divider {
+            border-top-color: rgba(100, 116, 139, 0.45) !important;
+            border-bottom-color: rgba(100, 116, 139, 0.25) !important;
+        }
         html.theme-day input,
         html.theme-day select,
         html.theme-day textarea {
@@ -222,7 +240,7 @@
 <body class="bg-slate-900 text-slate-200 font-sans">
     <nav class="bg-slate-800/80 backdrop-blur-md border-b border-slate-700 p-4 sticky top-0 z-50">
         <div class="max-w-7xl mx-auto flex flex-col gap-3">
-            <div class="flex flex-wrap items-center justify-between gap-2">
+            <div class="flex items-center justify-between gap-2">
                 <h1 class="nav-title text-xl font-bold bg-gradient-to-r from-sky-400 to-emerald-400 bg-clip-text text-transparent">115-strm-web</h1>
                 <div id="main-nav-actions" class="flex items-center gap-2">
                     <a href="/logout" class="text-xs bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white px-3 py-1 rounded-lg border border-red-500/20 transition-all font-bold" aria-label="退出登录">退出登录</a>
@@ -399,15 +417,13 @@
                     <label class="flex items-center gap-2 cursor-pointer text-sm">
                         <input type="checkbox" id="monitor_webhook_enabled" class="w-5 h-5 rounded-lg accent-sky-500" onchange="refreshWebhookHint()">
                         开启 webhook
-                        <button type="button" class="info-dot" onclick="showHelp('CloudSaver Webhook 配置说明：\\n1) 接口地址：http://你的IP:容器端口/webhook/任务名\\n   URL 中的任务名用于匹配并触发指定监控任务（必须与页面中的任务名一致）。\\n2) 请求类型：POST；请求体格式：JSON\\n3) 推荐 headers：Content-Type: application/json\\n4) data 建议填写后端会用到的参数：\\n   savepath = /{savePath}\\n   xlist_path_fix = /115:/全部文件\\n   title = /{title}\\n   delayTime = 0（可选，单位秒）\\n5) strmtask 可选：仅作兼容字段，系统以 URL 任务名为准。\\n6) 系统会优先根据这些字段定位变动子目录做局部刷新，减少大目录全刷风险。')">i</button>
+                        <button type="button" class="info-dot" onclick="showHelp('CloudSaver Webhook 配置说明：\\n1) 接口地址：http://你的IP:容器端口/webhook/任务名\\n   URL 中的任务名用于匹配并触发指定监控任务（必须与页面中的任务名一致）。\\n2) 请求类型：POST；请求体格式：JSON\\n3) 推荐 headers：Content-Type: application/json\\n4) data 建议填写参数：\\n   savepath = 连载中/xxx（或 /连载中/xxx）\\n   delayTime = 0（可选，单位秒）\\n   title = 影视标题（可选，仅写日志）\\n5) 系统会根据 savepath + 参数配置中的挂载根路径定位变动子目录，优先局部刷新。')">i</button>
                     </label>
                     <div id="webhook-hint" class="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3 leading-5">
                         webhook 地址：IP:容器端口/webhook/任务名（用于触发指定任务）
-                        <br>savepath：/{savePath}
-                        <br>xlist_path_fix：/115:/全部文件
-                        <br>title：/{title}
+                        <br>savepath：连载中/你好1983 (2026)/Season 1（可不带 /）
                         <br>delayTime：0（可选，秒）
-                        <br>strmtask：可选（兼容字段，以 URL 任务名为准）
+                        <br>title：📺 你好1983 (2026) S01E11...（可选，仅写日志）
                     </div>
                     <label class="block">
                         <span class="text-xs text-slate-500 inline-flex items-center gap-2">
@@ -478,10 +494,12 @@
     </main>
 
     <footer class="footer-text">
-        <div class="flex items-center justify-center gap-3">
-            <span class="w-8 h-px bg-slate-800"></span>
+        <div class="flex flex-col sm:flex-row items-center justify-center gap-2 sm:gap-3 px-4">
             <span>© 2026 Powered by <b class="text-slate-400">Gemini</b> / <b class="text-slate-400">GPT</b> & <b class="text-slate-400">仙儿</b></span>
-            <span class="w-8 h-px bg-slate-800"></span>
+            <span class="hidden sm:inline text-slate-600">|</span>
+            <span>Version <b class="text-slate-300">V2.1</b></span>
+            <span class="hidden sm:inline text-slate-600">|</span>
+            <a class="footer-link" href="https://github.com/xianer235/115-strm-web" target="_blank" rel="noopener noreferrer">GitHub 项目地址，求 Star</a>
         </div>
     </footer>
 
@@ -667,11 +685,9 @@
             const name = document.getElementById('monitor_name').value.trim() || '任务名';
             document.getElementById('webhook-hint').innerHTML = [
                 `webhook 地址：IP:容器端口/webhook/${escapeHtml(name)}（用于触发指定任务）`,
-                'savepath：/{savePath}',
-                'xlist_path_fix：/115:/全部文件',
-                'title：/{title}',
+                'savepath：连载中/你好1983 (2026)/Season 1（可不带 /）',
                 'delayTime：0（可选，秒）',
-                'strmtask：可选（兼容字段，以 URL 任务名为准）'
+                'title：📺 你好1983 (2026) S01E11...（可选，仅写日志）'
             ].join('<br>');
         }
 

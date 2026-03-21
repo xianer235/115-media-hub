@@ -289,36 +289,13 @@ def extract_webhook_refresh_path(task: Dict[str, Any], payload: Dict[str, Any], 
     scan_path = normalize_remote_path(task.get("scan_path", ""))
     mount_path = normalize_remote_path(cfg.get("mount_path", "/115"))
     candidates: List[str] = []
-
-    for key in ("refresh_path", "path", "dir", "folder"):
-        raw_val = str(payload.get(key, "") or "").strip()
-        if raw_val.startswith("/"):
-            candidates.append(normalize_remote_path(raw_val))
-
-    savepath = str(payload.get("savepath", "") or "").strip()
-    if savepath.startswith("/"):
-        save_norm = normalize_remote_path(savepath)
+    savepath_raw = str(payload.get("savepath", "") or "").strip()
+    savepath_rel = normalize_relative_path(savepath_raw)
+    if savepath_rel:
+        # savepath 支持 "连载中/xxx" 和 "/连载中/xxx" 两种写法
+        save_norm = normalize_remote_path("/" + savepath_rel)
         candidates.append(save_norm)
         candidates.append(join_remote_path(mount_path, save_norm))
-
-        xlist_fix = str(payload.get("xlist_path_fix", "") or "").strip()
-        if ":" in xlist_fix:
-            left, right = xlist_fix.split(":", 1)
-            left = normalize_remote_path(left)
-            right = normalize_remote_path(right)
-            if save_norm == right:
-                candidates.append(left)
-            elif save_norm.startswith(right + "/"):
-                candidates.append(join_remote_path(left, save_norm[len(right) :]))
-
-    title_path = str(payload.get("title", "") or "").strip()
-    if title_path.startswith("/"):
-        title_dir = normalize_remote_path("/".join([p for p in title_path.split("/")[:-1] if p]))
-        if title_dir and title_dir != "/":
-            if savepath.startswith("/"):
-                candidates.append(join_remote_path(mount_path, normalize_remote_path(savepath), title_dir))
-            else:
-                candidates.append(title_dir)
 
     seen = set()
     for candidate in candidates:
@@ -328,10 +305,10 @@ def extract_webhook_refresh_path(task: Dict[str, Any], payload: Dict[str, Any], 
         if is_subpath(candidate, scan_path):
             return candidate
 
-    # 兼容 CloudSaver 常见格式：savepath 通常是去掉挂载根后的路径
-    if savepath.startswith("/"):
+    # 兼容常见格式：savepath 通常是去掉挂载根后的路径
+    if savepath_rel:
         scan_tail = normalize_relative_path(scan_path[len(mount_path) :]) if scan_path.startswith(mount_path) else normalize_relative_path(scan_path)
-        save_tail = normalize_relative_path(savepath)
+        save_tail = savepath_rel
         if scan_tail and (scan_tail == save_tail or scan_tail.endswith("/" + save_tail) or save_tail.endswith("/" + scan_tail)):
             return scan_path
     return None
@@ -678,8 +655,13 @@ async def run_monitor_task(task_name: str, trigger: str = "manual", payload: Opt
     }
 
     await write_monitor_log(f"开始任务: {task_name}", "info")
+    await write_monitor_log(f"━━━━━━━━━━【任务开始 | {task_name} | {trigger}】━━━━━━━━━━", "divider")
     await write_monitor_log("任务类型: 生成 STRM", "info")
     await write_monitor_log(f"远端路径: {task['scan_path']}", "info")
+    if trigger == "webhook" and payload:
+        title = str(payload.get("title", "") or "").strip()
+        if title:
+            await write_monitor_log(f"转存内容：{title}", "info")
     await write_monitor_log(f"增量同步: {str(task['incremental'])}", "info")
     await write_monitor_log(f"目录时间检查: {str(task['skip_by_dir_mtime'])}", "info")
     await write_monitor_log(f"保存目录: /strm/{resolve_task_root(task)}", "info")
@@ -883,12 +865,15 @@ async def run_monitor_task(task_name: str, trigger: str = "manual", payload: Opt
             "info",
         )
         await write_monitor_log("任务完成", "success")
+        await write_monitor_log(f"━━━━━━━━━━【任务结束 | {task_name} | 成功】━━━━━━━━━━", "divider")
         update_monitor_summary("任务完成", f"{task_name} 执行结束")
     except asyncio.CancelledError:
         await write_monitor_log("任务已中断", "error")
+        await write_monitor_log(f"━━━━━━━━━━【任务结束 | {task_name} | 中断】━━━━━━━━━━", "divider")
         update_monitor_summary("任务中断", task_name)
     except Exception as exc:
         await write_monitor_log(f"任务失败: {exc}", "error")
+        await write_monitor_log(f"━━━━━━━━━━【任务结束 | {task_name} | 失败】━━━━━━━━━━", "divider")
         update_monitor_summary("任务失败", str(exc))
     finally:
         try:
@@ -1141,18 +1126,16 @@ async def webhook(task_name: str, request: Request) -> JSONResponse:
         return JSONResponse(status_code=404, content={"ok": False, "msg": "未找到对应监控任务"})
     if not task.get("webhook_enabled"):
         return JSONResponse(status_code=400, content={"ok": False, "msg": "该任务未开启 webhook"})
-    strm_task = str(payload.get("strmtask", "") or "").strip()
-    if strm_task and strm_task != task_name:
-        await write_monitor_log(
-            f"Webhook 提示：strmtask={strm_task} 与 URL 任务名={task_name} 不一致，已按 URL 任务名执行",
-            "warn",
-        )
+    title = str(payload.get("title", "") or "").strip()
+    savepath = str(payload.get("savepath", "") or "").strip()
 
     queue_monitor_job(task_name, "webhook", payload)
     await write_monitor_log(
-        f"收到 webhook: {task_name} strmtask={strm_task or '(未传)'} event={payload.get('event', '')} savepath={payload.get('savepath', '')}",
+        f"收到 webhook: {task_name} savepath={savepath or '(未传)'} delayTime={payload.get('delayTime', 0)}",
         "info",
     )
+    if title:
+        await write_monitor_log(f"转存内容：{title}", "info")
     return JSONResponse(content=payload)
 
 
