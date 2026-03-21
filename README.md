@@ -115,7 +115,8 @@ http://你的IP:容器端口/webhook/任务名
 
 CloudSaver 配置示例图：
 
-<img width="2576" height="1444" alt="image" src="https://github.com/user-attachments/assets/e1f4fdd7-64fc-416d-8e43-1125fbe2fbc6" />
+<img width="2576" height="1444" alt="image" src="https://github.com/user-attachments/assets/0b454b91-32f4-46cc-97b6-1abc131875bb" />
+
 
 
 ## 使用建议
