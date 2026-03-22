@@ -13,8 +13,5 @@ strm/
 # 如果只想忽略特定文件，可以写 config/auth.json 等
 config/
 
-# 忽略 Docker 构建过程中的临时文件
-.dockerignore
-
 .codex/
 .cursor/

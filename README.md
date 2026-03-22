@@ -42,6 +42,9 @@ services:
 docker compose up -d
 ```
 
+如果你使用本仓库直接构建镜像，仓库根目录下的油猴脚本 `115-magnet-helper-webhook.user.js` 不会参与镜像构建。
+这是一个浏览器侧本地插件，不属于容器运行时所需文件，已通过 `.dockerignore` 排除。
+
 访问：
 
 - `http://服务器IP:18080`
@@ -117,6 +120,67 @@ CloudSaver 配置示例图：
 
 <img width="2576" height="1444" alt="image" src="https://github.com/user-attachments/assets/0b454b91-32f4-46cc-97b6-1abc131875bb" />
 
+## 油猴脚本插件
+
+仓库根目录额外提供了一个油猴脚本：
+
+- `115-magnet-helper-webhook.user.js`
+
+这个脚本是浏览器侧辅助工具，不属于 `115-strm-web` 容器镜像内容，主要用于：
+
+- 自动识别网页中的磁力链接并显示 `115` 按钮。
+- 选择 115 云盘保存目录后，自动发起离线下载。
+- 按保存目录绑定不同的 webhook 地址和延迟秒数。
+- 在保存成功后，顺手触发你在 `115-strm-web` 中配置好的文件夹监控任务。
+
+### 安装方法
+
+推荐先安装浏览器扩展：
+
+- Chrome / Edge：`Tampermonkey`
+- Firefox：`Tampermonkey` 或 `Violentmonkey`
+
+然后将仓库中的 `115-magnet-helper-webhook.user.js` 导入脚本管理器，保存并启用。
+
+### 使用方法
+
+1. 打开任意包含磁力链接的页面。
+2. 页面中识别到 `magnet:` 链接后，旁边会出现 `115` 按钮。
+3. 点击按钮，选择要保存到 115 云盘的目标文件夹。
+4. 如果该文件夹已配置 webhook，脚本会在保存成功后自动再发起一次 webhook 请求。
+
+### Webhook 管理
+
+脚本内置了“按文件夹配置 webhook”的管理界面，支持：
+
+- 为不同保存文件夹配置不同的 webhook 地址
+- 配置对应的 `delayTime`
+- 启用或停用单个文件夹的 webhook
+- 手动测试当前 webhook 是否可达
+
+打开方式有两种：
+
+- Tampermonkey 菜单：`115云盘磁力助手 Webhook 增强版：管理文件夹 webhook`
+- 点击 `115` 按钮后，在文件夹选择弹窗中点 `管理 webhook`
+
+### 请求体说明
+
+脚本触发 webhook 时，默认以 `POST` + `application/json` 发送，常见字段包括：
+
+- `delayTime`：延迟秒数
+- `title`：磁力链接中的资源标题，若可解析
+- `folderId`：115 目标文件夹 ID
+- `folderName`：115 目标文件夹名称
+
+测试按钮还会额外带上：
+
+- `event: "test"`：便于服务端区分测试请求
+
+### 与容器的关系
+
+- 这个脚本只运行在浏览器/Tampermonkey 中。
+- 它不会进入 Docker 镜像，也不会在容器内执行。
+- 容器内仍然只运行 `FastAPI` 服务本体。
 
 
 ## 使用建议
