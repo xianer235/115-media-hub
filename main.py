@@ -13,7 +13,8 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import BackgroundTasks, FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 app = FastAPI()
@@ -40,6 +41,10 @@ VERSION_SOURCE_URL = os.environ.get(
     "https://raw.githubusercontent.com/xianer235/115-strm-web/main/version.json",
 )
 VERSION_CACHE_TTL = int(os.environ.get("VERSION_CACHE_TTL", 6 * 3600))
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+FAVICON_PATH = os.path.join(STATIC_DIR, "icons", "favicon.svg")
+
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 def ensure_parent(path: str) -> None:
@@ -1256,6 +1261,11 @@ async def index(request: Request) -> HTMLResponse:
         return RedirectResponse(url="/login")
     with open("templates/index.html", "r", encoding="utf-8") as f:
         return HTMLResponse(f.read())
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon_ico() -> FileResponse:
+    return FileResponse(FAVICON_PATH, media_type="image/svg+xml")
 
 
 @app.get("/get_settings")

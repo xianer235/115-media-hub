@@ -1,10 +1,10 @@
 {
-  "version": "2.2.0",
-  "buildDate": "2026-03-26T00:00:00+08:00",
+  "version": "2.2.1",
+  "buildDate": "2026-03-26T23:18:00+08:00",
   "notes": [
-    "目录树任务在联网同步前会强制刷新一次来源文件，确保 tree.txt 最新。",
-    "新增版本号与更新日志规范，容器镜像可以带上版本标签。",
-    "Web 管理界面支持检测远端新版本并在顶部展示提示。"
+    "关于页移除“检查源”展示，信息层级更聚焦。",
+    "日间模式下关于页按钮与文字对比度优化，阅读更清晰。",
+    "版本展示与更新提示交互细节调整。"
   ],
   "changelogUrl": "https://github.com/xianer235/115-strm-web/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-strm-web"

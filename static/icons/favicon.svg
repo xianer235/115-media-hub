@@ -1,0 +1,29 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgMain" x1="64" y1="64" x2="448" y2="448" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0B1220"/>
+      <stop offset="1" stop-color="#0F2A44"/>
+    </linearGradient>
+    <linearGradient id="card" x1="112" y1="112" x2="400" y2="400" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0F3A5C"/>
+      <stop offset="1" stop-color="#075985"/>
+    </linearGradient>
+    <linearGradient id="textFill" x1="140" y1="160" x2="372" y2="368" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E0F2FE"/>
+      <stop offset="1" stop-color="#BAE6FD"/>
+    </linearGradient>
+    <filter id="shadow" x="74" y="82" width="364" height="364" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#020617" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <rect x="64" y="64" width="384" height="384" rx="98" fill="url(#bgMain)"/>
+  <g filter="url(#shadow)">
+    <rect x="112" y="112" width="288" height="288" rx="70" fill="url(#card)" stroke="#38BDF8" stroke-opacity="0.45" stroke-width="8"/>
+    <rect x="134" y="248" width="244" height="6" rx="3" fill="#7DD3FC" fill-opacity="0.55"/>
+    <g fill="url(#textFill)" font-family="Arial Black, Impact, sans-serif" font-weight="900" text-anchor="middle">
+      <text x="256" y="236" font-size="154" letter-spacing="4">ST</text>
+      <text x="256" y="374" font-size="154" letter-spacing="4">RM</text>
+    </g>
+  </g>
+</svg>

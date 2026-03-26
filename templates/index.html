@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>115-strm-web</title>
+    <link rel="icon" type="image/svg+xml" href="/static/icons/favicon.svg">
+    <link rel="shortcut icon" href="/favicon.ico">
+    <meta name="theme-color" content="#0f172a">
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { min-height: 100dvh; }
@@ -62,17 +65,64 @@
         }
         #version-banner.hidden { display: none; }
         #version-banner strong { color: #fbbf24; }
-        #version-banner a {
+        #version-banner .banner-action {
             color: #fbbf24;
             border: 1px solid rgba(251, 191, 36, 0.45);
             padding: 0.35rem 0.85rem;
             border-radius: 0.85rem;
             font-weight: 700;
             transition: all 0.2s;
+            background: transparent;
+            cursor: pointer;
         }
-        #version-banner a:hover {
+        #version-banner .banner-action:hover {
             background: rgba(251, 191, 36, 0.15);
             color: #fff;
+        }
+        #page-about .about-action {
+            width: 100%;
+            min-height: 48px;
+            border-radius: 0.95rem;
+            padding: 0.72rem 0.95rem;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            font-size: 0.9rem;
+            font-weight: 800;
+            letter-spacing: 0.01em;
+            text-decoration: none;
+            border: 1px solid transparent;
+            transition: transform 0.2s ease, box-shadow 0.2s ease, filter 0.2s ease;
+            box-shadow: 0 10px 22px rgba(2, 6, 23, 0.22);
+        }
+        #page-about .about-action:hover {
+            transform: translateY(-1px);
+            filter: brightness(1.05);
+        }
+        #page-about .about-action:active { transform: translateY(0); }
+        #page-about .about-action:disabled,
+        #page-about .about-action.btn-disabled {
+            opacity: 0.58;
+            cursor: not-allowed;
+            transform: none;
+            filter: none;
+            box-shadow: none;
+        }
+        #page-about .about-action-primary {
+            color: #f8fbff;
+            background: linear-gradient(135deg, #0ea5e9, #2563eb);
+            border-color: rgba(56, 189, 248, 0.45);
+        }
+        #page-about .about-action-secondary {
+            color: #e2e8f0;
+            background: linear-gradient(135deg, #334155, #1e293b);
+            border-color: rgba(100, 116, 139, 0.45);
+        }
+        #page-about .about-action-star {
+            color: #fffbeb;
+            background: linear-gradient(135deg, #d97706, #b45309);
+            border-color: rgba(251, 191, 36, 0.45);
         }
 
         @media (max-width: 1024px) {
@@ -112,9 +162,11 @@
             }
             #page-settings .text-xs,
             #page-monitor .text-xs,
+            #page-about .text-xs,
             #monitor-modal .text-xs { font-size: 0.82rem !important; }
             #page-settings .text-sm,
             #page-monitor .text-sm,
+            #page-about .text-sm,
             #monitor-modal .text-sm { font-size: 0.95rem !important; }
             #page-monitor .grid.grid-cols-1.sm\:grid-cols-2.md\:grid-cols-4 { grid-template-columns: 1fr 1fr; }
             #page-monitor .grid.grid-cols-1.sm\:grid-cols-2.md\:grid-cols-4 button { min-height: 42px; }
@@ -230,6 +282,10 @@
         html.theme-day #page-settings .text-white,
         html.theme-day #page-monitor .text-white,
         html.theme-day #help-modal .text-white { color: var(--text) !important; }
+        html.theme-day #page-about .text-white { color: var(--text) !important; }
+        html.theme-day #page-about .text-sky-400 { color: #1d4ed8 !important; }
+        html.theme-day #page-about .text-slate-400 { color: #475569 !important; }
+        html.theme-day #page-about .text-slate-500 { color: #64748b !important; }
         html.theme-day #help-modal-body { color: #334155 !important; }
         html.theme-day .hover\:text-white:hover { color: var(--text) !important; }
         html.theme-day .bg-black\/60 { background: rgba(15, 23, 42, 0.35) !important; }
@@ -264,9 +320,33 @@
             border-color: rgba(217, 119, 6, 0.35) !important;
             color: #92400e !important;
         }
-        html.theme-day #version-banner a {
+        html.theme-day #version-banner .banner-action {
             color: #92400e !important;
             border-color: rgba(217, 119, 6, 0.35) !important;
+        }
+        html.theme-day #page-about .group-card {
+            background: linear-gradient(180deg, #ffffff, #f7fbff) !important;
+            border-color: #d4dee9 !important;
+            box-shadow: 0 10px 26px rgba(15, 23, 42, 0.08);
+        }
+        html.theme-day #page-about .about-action {
+            box-shadow: 0 10px 20px rgba(15, 23, 42, 0.12);
+        }
+        html.theme-day #page-about .about-action:hover { filter: brightness(1.02); }
+        html.theme-day #page-about .about-action-primary {
+            color: #ffffff;
+            background: linear-gradient(135deg, #2563eb, #1d4ed8);
+            border-color: #1e40af;
+        }
+        html.theme-day #page-about .about-action-secondary {
+            color: #f8fafc;
+            background: linear-gradient(135deg, #334155, #0f172a);
+            border-color: #1e293b;
+        }
+        html.theme-day #page-about .about-action-star {
+            color: #ffffff;
+            background: linear-gradient(135deg, #f59e0b, #c2410c);
+            border-color: #b45309;
         }
     </style>
 </head>
@@ -284,6 +364,7 @@
                 <button onclick="switchTab('monitor')" id="tab-monitor" class="tab-active uppercase">文件夹监控任务</button>
                 <button onclick="switchTab('task')" id="tab-task" class="tab-inactive uppercase">目录树任务</button>
                 <button onclick="switchTab('settings')" id="tab-settings" class="tab-inactive uppercase">参数配置</button>
+                <button onclick="switchTab('about')" id="tab-about" class="tab-inactive uppercase">关于</button>
             </div>
         </div>
     </nav>
@@ -292,10 +373,11 @@
         <div id="version-banner" class="hidden mb-4 text-sm text-amber-100">
             <div>
                 <div id="version-banner-text" class="text-base font-black tracking-wide text-amber-200">发现新版本</div>
-                <div id="version-banner-notes" class="text-xs text-slate-200/80 mt-1">前往 GitHub 查看更新详情。</div>
+                <div id="version-banner-notes" class="text-xs text-slate-200/80 mt-1">建议先在「关于」页查看更新说明，再进行升级。</div>
             </div>
-            <div class="flex items-center gap-3">
-                <a id="version-banner-link" href="https://github.com/xianer235/115-strm-web" target="_blank" rel="noopener noreferrer">查看更新</a>
+            <div class="flex items-center gap-2 flex-wrap justify-end">
+                <button type="button" onclick="switchTab('about')" class="banner-action">前往关于页</button>
+                <a id="version-banner-link" class="banner-action" href="https://github.com/xianer235/115-strm-web" target="_blank" rel="noopener noreferrer">查看更新日志</a>
                 <button onclick="dismissVersionBanner()" class="text-slate-400 hover:text-white text-lg" aria-label="关闭版本提示">✕</button>
             </div>
         </div>
@@ -443,6 +525,49 @@
             </div>
         </div>
 
+        <div id="page-about" class="hidden space-y-6">
+            <div class="group-card">
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                        <div class="text-base font-black text-white">关于 115-strm-web</div>
+                        <div class="text-xs text-slate-400 mt-1">在这里可以查看版本状态、更新说明和项目链接。</div>
+                    </div>
+                    <div id="about-version-status" class="text-xs px-3 py-2 rounded-xl border border-slate-700 bg-slate-900/80 text-slate-300">尚未检查更新</div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div class="group-card">
+                    <div class="text-xs uppercase tracking-wide text-slate-500">当前版本</div>
+                    <div id="about-local-version" class="text-3xl font-black text-white mt-2">--</div>
+                    <div class="text-xs text-slate-400 mt-3">构建时间：<span id="about-build-date">--</span></div>
+                </div>
+                <div class="group-card">
+                    <div class="text-xs uppercase tracking-wide text-slate-500">远端最新版本</div>
+                    <div id="about-latest-version" class="text-3xl font-black text-sky-400 mt-2">--</div>
+                    <div class="text-xs text-slate-400 mt-3">最近检查（参考）：<span id="about-checked-at">--</span></div>
+                    <div class="text-[11px] text-slate-500 mt-1">受网络代理与缓存影响，时间可能有延迟。</div>
+                    <div id="about-version-error" class="hidden mt-3 text-xs text-red-300 bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2"></div>
+                </div>
+            </div>
+
+            <div class="group-card">
+                <h3 class="group-title">更新说明</h3>
+                <div id="about-version-notes" class="text-sm text-slate-300 leading-7">暂无更新说明</div>
+            </div>
+
+            <div class="group-card">
+                <h3 class="group-title">更新与支持</h3>
+                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                    <button id="about-check-btn" onclick="manualVersionCheck()" class="about-action about-action-primary">手动检查更新</button>
+                    <a id="about-changelog-link" href="https://github.com/xianer235/115-strm-web/blob/main/CHANGELOG.md" target="_blank" rel="noopener noreferrer" class="about-action about-action-secondary">查看更新日志</a>
+                    <a id="about-project-link" href="https://github.com/xianer235/115-strm-web" target="_blank" rel="noopener noreferrer" class="about-action about-action-secondary">项目主页</a>
+                    <a id="about-star-link" href="https://github.com/xianer235/115-strm-web/stargazers" target="_blank" rel="noopener noreferrer" class="about-action about-action-star">给项目点个 Star</a>
+                </div>
+                <div id="about-version-hint" class="text-xs text-slate-400 mt-4">提示：如果检测到新版本，顶部会出现轻提醒，并可直接跳转本页。</div>
+            </div>
+        </div>
+
         <div id="monitor-modal" class="hidden fixed inset-0 bg-black/60 z-50 p-4">
             <div class="w-full max-w-2xl mx-auto mt-[4vh] max-h-[92vh] overflow-y-auto group-card modal-card">
                 <div class="flex items-center justify-between">
@@ -544,7 +669,7 @@
             <span class="hidden sm:inline text-slate-600">|</span>
             <span>Version <b id="version-text" class="text-slate-300">--</b></span>
             <span class="hidden sm:inline text-slate-600">|</span>
-            <a class="footer-link" href="https://github.com/xianer235/115-strm-web" target="_blank" rel="noopener noreferrer">GitHub 项目地址，求 Star</a>
+            <a class="footer-link" href="https://github.com/xianer235/115-strm-web" target="_blank" rel="noopener noreferrer">GitHub 项目主页</a>
         </div>
     </footer>
 
@@ -554,14 +679,16 @@
         let editingMonitorName = null;
         let lastLogLen = 0;
         let lastMonitorLogLen = 0;
-        let versionInfo = { local: null, latest: null };
+        let versionInfo = { local: null, latest: null, has_update: false, checked_at: 0, error: '', source: '' };
         let versionBannerDismissed = false;
         const btnTexts = ["🌐 联网同步更新", "🛠 本地调试解析", "🔥 强制全量重刷"];
         const DEFAULT_EXTENSIONS = "mp4,mkv,avi,mov,wmv,flv,webm,vob,mpg,mpeg,ts,m2ts,mts,rmvb,rm,asf,3gp,m4v,f4v,iso";
         const VERSION_REFRESH_INTERVAL = 1000 * 60 * 15;
+        const VERSION_FALLBACK_PROJECT_URL = 'https://github.com/xianer235/115-strm-web';
+        const VERSION_FALLBACK_CHANGELOG_URL = 'https://github.com/xianer235/115-strm-web/blob/main/CHANGELOG.md';
 
         function switchTab(tab) {
-            ['task', 'settings', 'monitor'].forEach(name => {
+            ['task', 'settings', 'monitor', 'about'].forEach(name => {
                 document.getElementById(`page-${name}`).classList.toggle('hidden', tab !== name);
                 document.getElementById(`tab-${name}`).className = tab === name ? 'tab-active uppercase' : 'tab-inactive uppercase';
             });
@@ -574,6 +701,114 @@
                 .replaceAll('>', '&gt;')
                 .replaceAll('"', '&quot;')
                 .replaceAll("'", '&#39;');
+        }
+
+        function normalizeVersionLabel(rawVersion) {
+            const raw = String(rawVersion || 'dev').trim();
+            if (!raw) return 'Vdev';
+            return raw.startsWith('V') ? raw : `V${raw}`;
+        }
+
+        function formatTimeText(value) {
+            if (!value) return '--';
+            const d = new Date(value);
+            if (Number.isNaN(d.getTime())) return String(value);
+            return d.toLocaleString();
+        }
+
+        function getProjectUrl() {
+            return versionInfo?.latest?.projectUrl || versionInfo?.local?.projectUrl || VERSION_FALLBACK_PROJECT_URL;
+        }
+
+        function getChangelogUrl() {
+            return versionInfo?.latest?.changelogUrl || versionInfo?.local?.changelogUrl || getProjectUrl() || VERSION_FALLBACK_CHANGELOG_URL;
+        }
+
+        function getVersionNotes() {
+            const latestNotes = Array.isArray(versionInfo?.latest?.notes) ? versionInfo.latest.notes.filter(Boolean) : [];
+            if (latestNotes.length) return latestNotes;
+            const localNotes = Array.isArray(versionInfo?.local?.notes) ? versionInfo.local.notes.filter(Boolean) : [];
+            return localNotes;
+        }
+
+        function renderVersionInfoPanel() {
+            const localVersion = normalizeVersionLabel(versionInfo?.local?.version || 'dev');
+            const latestRaw = versionInfo?.latest?.version || '';
+            const latestVersion = latestRaw ? normalizeVersionLabel(latestRaw) : '--';
+            const hasUpdate = !!versionInfo?.has_update;
+            const hasChecked = Number(versionInfo?.checked_at || 0) > 0;
+            const error = String(versionInfo?.error || '').trim();
+
+            const footerVersion = document.getElementById('version-text');
+            if (footerVersion) footerVersion.textContent = localVersion;
+
+            const localEl = document.getElementById('about-local-version');
+            if (localEl) localEl.textContent = localVersion;
+            const buildEl = document.getElementById('about-build-date');
+            if (buildEl) buildEl.textContent = formatTimeText(versionInfo?.local?.buildDate);
+            const latestEl = document.getElementById('about-latest-version');
+            if (latestEl) latestEl.textContent = latestVersion;
+            const checkedEl = document.getElementById('about-checked-at');
+            if (checkedEl) checkedEl.textContent = versionInfo?.checked_at ? `约 ${formatTimeText(versionInfo.checked_at * 1000)}` : '--';
+
+            const statusEl = document.getElementById('about-version-status');
+            if (statusEl) {
+                if (error) {
+                    statusEl.textContent = '检查失败';
+                    statusEl.className = 'text-xs px-3 py-2 rounded-xl border border-red-500/20 bg-red-500/10 text-red-300';
+                } else if (!hasChecked) {
+                    statusEl.textContent = '尚未检查更新';
+                    statusEl.className = 'text-xs px-3 py-2 rounded-xl border border-slate-700 bg-slate-900/80 text-slate-300';
+                } else if (hasUpdate) {
+                    statusEl.textContent = latestRaw ? `有可用更新：${normalizeVersionLabel(latestRaw)}` : '发现可用更新';
+                    statusEl.className = 'text-xs px-3 py-2 rounded-xl border border-amber-500/25 bg-amber-500/15 text-amber-300';
+                } else {
+                    statusEl.textContent = '当前已是最新版本';
+                    statusEl.className = 'text-xs px-3 py-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-300';
+                }
+            }
+
+            const errorEl = document.getElementById('about-version-error');
+            if (errorEl) {
+                if (error) {
+                    errorEl.textContent = `版本检查失败：${error}`;
+                    errorEl.classList.remove('hidden');
+                } else {
+                    errorEl.classList.add('hidden');
+                    errorEl.textContent = '';
+                }
+            }
+
+            const hintEl = document.getElementById('about-version-hint');
+            if (hintEl && !error) {
+                if (!hasChecked) {
+                    hintEl.textContent = '提示：进入页面后会自动检查远端版本，也可以手动点击“检查更新”。';
+                } else {
+                    hintEl.textContent = hasUpdate
+                        ? `检测到新版本 ${latestVersion}，建议先查看更新说明后再升级。`
+                        : '当前版本已和远端同步，后续会自动定时检查。';
+                }
+            }
+
+            const notesWrap = document.getElementById('about-version-notes');
+            if (notesWrap) {
+                const notes = getVersionNotes();
+                if (notes.length) {
+                    notesWrap.innerHTML = `<ul class="list-disc pl-5 space-y-2">${notes.map(note => `<li>${escapeHtml(note)}</li>`).join('')}</ul>`;
+                } else {
+                    notesWrap.textContent = '暂无更新说明';
+                }
+            }
+
+            const changelogUrl = getChangelogUrl();
+            const projectUrl = getProjectUrl();
+            const starUrl = `${projectUrl.replace(/\/+$/, '')}/stargazers`;
+            const changelogLink = document.getElementById('about-changelog-link');
+            if (changelogLink) changelogLink.href = changelogUrl;
+            const projectLink = document.getElementById('about-project-link');
+            if (projectLink) projectLink.href = projectUrl;
+            const starLink = document.getElementById('about-star-link');
+            if (starLink) starLink.href = starUrl;
         }
 
         function showHelp(text) {
@@ -946,14 +1181,14 @@
             const textEl = document.getElementById('version-banner-text');
             const noteEl = document.getElementById('version-banner-notes');
             const linkEl = document.getElementById('version-banner-link');
-            if (textEl) textEl.textContent = latest.version ? `发现新版本 ${latest.version}` : '发现新版本';
+            const fromVer = normalizeVersionLabel(versionInfo?.local?.version || 'dev');
+            const toVer = latest.version ? normalizeVersionLabel(latest.version) : '';
+            if (textEl) textEl.textContent = toVer ? `${fromVer} -> ${toVer} 可更新` : '检测到可用更新';
             if (noteEl) {
-                const notes = Array.isArray(latest.notes) ? latest.notes.filter(Boolean) : [];
-                noteEl.textContent = notes.length ? notes[0] : '点击查看更新日志以了解详情。';
+                const notes = getVersionNotes();
+                noteEl.textContent = notes.length ? notes[0] : '建议先在「关于」页查看更新说明，再执行升级。';
             }
-            const fallback = 'https://github.com/xianer235/115-strm-web';
-            const targetUrl = latest.changelogUrl || latest.projectUrl || versionInfo.source || fallback;
-            if (linkEl) linkEl.href = targetUrl;
+            if (linkEl) linkEl.href = getChangelogUrl();
             banner.classList.remove('hidden');
         }
 
@@ -973,20 +1208,52 @@
                 const res = await fetch(endpoint);
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const data = await res.json();
-                versionInfo = data;
-                const versionLabel = document.getElementById('version-text');
-                if (versionLabel) {
-                    const raw = data?.local?.version || 'dev';
-                    versionLabel.textContent = raw.startsWith('V') ? raw : `V${raw}`;
-                }
-                if (!versionBannerDismissed && data.has_update) {
-                    showVersionBanner(data.latest || {});
-                } else if (!data.has_update) {
+                versionInfo = {
+                    ...versionInfo,
+                    ...data,
+                    error: data?.error || ''
+                };
+                renderVersionInfoPanel();
+                if (!versionBannerDismissed && versionInfo.has_update) {
+                    showVersionBanner(versionInfo.latest || {});
+                } else if (!versionInfo.has_update) {
                     hideVersionBanner();
                     versionBannerDismissed = false;
                 }
             } catch (err) {
                 console.warn('Version refresh failed', err);
+                versionInfo = {
+                    ...versionInfo,
+                    error: err instanceof Error ? err.message : String(err || 'unknown error')
+                };
+                renderVersionInfoPanel();
+            }
+        }
+
+        async function manualVersionCheck() {
+            const btn = document.getElementById('about-check-btn');
+            const hintEl = document.getElementById('about-version-hint');
+            const originalText = btn ? btn.textContent : '';
+            if (btn) {
+                btn.disabled = true;
+                btn.classList.add('btn-disabled');
+                btn.textContent = '检查中...';
+            }
+            await refreshVersionInfo(true);
+            if (hintEl) {
+                if (versionInfo?.error) {
+                    hintEl.textContent = `手动检查失败：${versionInfo.error}`;
+                } else if (versionInfo?.has_update) {
+                    const latest = normalizeVersionLabel(versionInfo?.latest?.version || '');
+                    hintEl.textContent = latest ? `手动检查完成，发现可用更新 ${latest}。` : '手动检查完成，发现可用更新。';
+                } else {
+                    hintEl.textContent = '手动检查完成，当前已是最新版本。';
+                }
+            }
+            if (btn) {
+                btn.disabled = false;
+                btn.classList.remove('btn-disabled');
+                btn.textContent = originalText || '手动检查更新';
             }
         }
 
@@ -1013,6 +1280,7 @@
                 renderMonitorTasks();
                 resetMonitorForm();
                 refreshWebhookHint();
+                renderVersionInfoPanel();
             } catch (e) {}
         }
 

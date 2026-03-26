@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.2.1] - 2026-03-26
+- 关于页展示版本与更新信息。
+- 优化日间模式下关于页按钮和文字对比度，提升可读性与视觉层次。
+- 版本信息更新至 `2.2.1`，构建时间调整为 `2026-03-26 23:18`（UTC+8）。
+
 ## [2.2.0] - 2026-03-26
 - 目录树任务在每次联网同步前自动调用 AList 刷新接口，避免 tree.txt 读取到旧缓存。
 - 新增 `version.json` 与本文档，用于规范化版本号和更新日志。
@@ -13,4 +18,3 @@ All notable changes to this project will be documented in this file. The format 
 - webhook 支持根据 savepath/sharetitle 进行局部目录刷新。
 
 > 早期版本只有零散 commit 说明，如需追溯可查看仓库历史。
-
