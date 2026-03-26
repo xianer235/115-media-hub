@@ -34,6 +34,12 @@ MONITOR_LOG_PATH = os.path.join(LOG_DIR, "monitor.log")
 DEFAULT_EXTENSIONS = "mp4,mkv,avi,mov,wmv,flv,webm,vob,mpg,mpeg,ts,m2ts,mts,rmvb,rm,asf,3gp,m4v,f4v,iso"
 LEGACY_DEFAULT_EXTENSIONS = "mp4,mkv,avi,mov,ts,iso,rmvb,wmv,m4v,mpg,flac,mp3,ass,srt"
 MAX_MONITOR_RETRIES = 5
+VERSION_FILE = os.path.join(os.path.dirname(__file__), "version.json")
+VERSION_SOURCE_URL = os.environ.get(
+    "VERSION_SOURCE_URL",
+    "https://raw.githubusercontent.com/xianer235/115-strm-web/main/version.json",
+)
+VERSION_CACHE_TTL = int(os.environ.get("VERSION_CACHE_TTL", 6 * 3600))
 
 
 def ensure_parent(path: str) -> None:
@@ -119,6 +125,58 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     merged["mount_path"] = normalize_remote_path(merged.get("mount_path", "/115"))
     merged["alist_url"] = str(merged.get("alist_url", "")).strip().rstrip("/")
     return merged
+
+
+def load_local_version() -> Dict[str, Any]:
+    try:
+        with open(VERSION_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            data["version"] = str(data.get("version", "dev")).strip() or "dev"
+            return data
+    except Exception:
+        return {"version": "dev", "notes": [], "changelogUrl": "", "buildDate": ""}
+
+
+def version_key(value: str) -> Tuple[int, ...]:
+    tokens = [token for token in re.split(r"[^\d]+", str(value or "")) if token.isdigit()]
+    if not tokens:
+        return (0,)
+    return tuple(int(token) for token in tokens)
+
+
+def is_remote_version_newer(local_version: str, remote_version: str) -> bool:
+    return version_key(remote_version) > version_key(local_version)
+
+
+async def get_version_state(force_refresh: bool = False) -> Dict[str, Any]:
+    local = load_local_version()
+    now = time.time()
+    latest = version_cache.get("latest")
+    error = version_cache.get("error", "")
+    should_refresh = force_refresh or (now - version_cache.get("checked_at", 0)) > VERSION_CACHE_TTL
+
+    if should_refresh:
+        try:
+            latest = await asyncio.to_thread(http_request_json, VERSION_SOURCE_URL)
+            version_cache["latest"] = latest
+            version_cache["checked_at"] = now
+            version_cache["error"] = ""
+            error = ""
+        except Exception as exc:
+            error = str(exc)
+            version_cache["error"] = error
+            version_cache["checked_at"] = now
+
+    latest_version = (latest or {}).get("version", "")
+    has_update = bool(latest_version and is_remote_version_newer(local.get("version", ""), latest_version))
+    return {
+        "local": local,
+        "latest": latest or {},
+        "checked_at": version_cache.get("checked_at", 0),
+        "has_update": has_update,
+        "error": error,
+        "source": VERSION_SOURCE_URL,
+    }
 
 
 def get_config() -> Dict[str, Any]:
@@ -277,6 +335,7 @@ monitor_control = {"cancel": False}
 monitor_queue: List[Dict[str, Any]] = []
 monitor_last_run: Dict[str, float] = {}
 monitor_next_run: Dict[str, str] = {}
+version_cache: Dict[str, Any] = {"latest": None, "checked_at": 0.0, "error": ""}
 
 
 def is_subpath(path: str, root: str) -> bool:
@@ -402,6 +461,56 @@ def http_download(url: str, target_path: str, token: str = "", timeout: int = 60
     req = urllib.request.Request(url, headers=headers, method="GET")
     with urllib.request.urlopen(req, timeout=timeout) as resp, open(target_path, "wb") as f:
         shutil.copyfileobj(resp, f)
+
+
+def extract_tree_remote_path(tree_url: str, base_url: str) -> Optional[str]:
+    cleaned_url = str(tree_url or "").strip()
+    base_url = str(base_url or "").strip().rstrip("/")
+    if not cleaned_url or not base_url:
+        return None
+
+    if "://" not in cleaned_url:
+        prefix = "" if cleaned_url.startswith("/") else "/"
+        cleaned_url = f"{base_url}{prefix}{cleaned_url}"
+
+    try:
+        base_parts = urllib.parse.urlsplit(base_url)
+        tree_parts = urllib.parse.urlsplit(cleaned_url)
+    except Exception:
+        return None
+
+    if base_parts.netloc and tree_parts.netloc:
+        if tree_parts.netloc.lower() != base_parts.netloc.lower():
+            return None
+    elif not cleaned_url.startswith(base_url):
+        return None
+
+    path = tree_parts.path or ""
+    marker_idx = path.lower().find("/d")
+    if marker_idx == -1:
+        return None
+    encoded = path[marker_idx + 2 :].lstrip("/")
+    if not encoded:
+        return None
+    remote_path = urllib.parse.unquote(encoded)
+    if not remote_path.startswith("/"):
+        remote_path = "/" + remote_path.lstrip("/")
+    return remote_path
+
+
+async def refresh_tree_file(tree_url: str, cfg: Dict[str, Any]) -> None:
+    remote_path = extract_tree_remote_path(tree_url, cfg.get("alist_url", ""))
+    if not remote_path:
+        return
+    try:
+        await api_post(
+            cfg,
+            "/api/fs/get",
+            {"path": remote_path, "password": "", "refresh": True},
+        )
+        await write_log(f"已刷新目录树文件缓存: {remote_path}")
+    except Exception as exc:
+        await write_log(f"⚠ 目录树刷新失败（{remote_path}）: {exc}")
 
 
 async def api_post(cfg: Dict[str, Any], path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -570,6 +679,7 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
             parse_signature = ""
 
             if not use_local:
+                await refresh_tree_file(tree["url"], cfg)
                 await update_progress("正在下载", (idx / max(len(trees), 1) * 15), f"获取第 {idx + 1} 个目录树...")
                 await download_tree(tree["url"], raw_path, cfg)
                 downloaded_tree_count += 1
@@ -1144,6 +1254,12 @@ async def index(request: Request) -> HTMLResponse:
 @app.get("/get_settings")
 async def get_settings(request: Request) -> Dict[str, Any]:
     return get_config()
+
+
+@app.get("/version")
+async def get_version_endpoint(request: Request) -> Dict[str, Any]:
+    force = request.query_params.get("refresh") == "1"
+    return await get_version_state(force_refresh=force)
 
 
 @app.post("/save_settings")

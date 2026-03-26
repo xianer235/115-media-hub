@@ -1,0 +1,16 @@
+# Changelog
+
+All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## [2.2.0] - 2026-03-26
+- 目录树任务在每次联网同步前自动调用 AList 刷新接口，避免 tree.txt 读取到旧缓存。
+- 新增 `version.json` 与本文档，用于规范化版本号和更新日志。
+- Docker 镜像支持通过 `APP_VERSION` 构建参数写入 OCI 元数据。
+- Web UI 会在检测到远端最新版本时显示提示横幅，可引导到 GitHub 查看更新内容。
+
+## [2.1.0] - 2026-02-?? *(历史版本)*
+- 初始前端顶部展示静态版本号。
+- webhook 支持根据 savepath/sharetitle 进行局部目录刷新。
+
+> 早期版本只有零散 commit 说明，如需追溯可查看仓库历史。
+

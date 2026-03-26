@@ -1,5 +1,12 @@
 FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/python:3.12-slim
 
+ARG APP_VERSION=dev
+LABEL org.opencontainers.image.title="115-strm-web" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.description="FastAPI service to convert 115 directory trees into STRM files" \
+      org.opencontainers.image.source="https://github.com/xianer235/115-strm-web"
+ENV APP_VERSION=${APP_VERSION}
+
 WORKDIR /app
 
 # 安装转码和下载必须的工具

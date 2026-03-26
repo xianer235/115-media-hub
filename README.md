@@ -189,6 +189,20 @@ CloudSaver 配置示例图：
 - 监控任务目录很大时，建议优先启用 webhook 局部刷新，降低被限流/风控概率。
 - 目录树导出较慢时，建议按子目录拆分多份目录树后在页面多源合并。
 
+## 版本号与更新日志规范
+
+- 当前版本写在仓库根目录 `version.json` 中，包含 `version`、`buildDate`、`notes`、`changelogUrl` 等信息；容器启动界面会读取此文件并提示新版本。
+- 所有功能变更记录在 `CHANGELOG.md`，格式遵循 Keep a Changelog。请在每次发布前新增条目。
+- 构建镜像时可自动带上版本号：
+
+  ```bash
+  APP_VER=$(jq -r '.version' version.json)
+  docker build --build-arg APP_VERSION="$APP_VER" -t xianer235/115-strm-web:"$APP_VER" .
+  ```
+
+- 推送镜像或发版前的步骤建议为：`更新代码 → 修改 version.json → 更新 CHANGELOG.md → 构建镜像 → 推送/发布 tag`。
+- Web 后台在加载时会调用 `/version` 接口自动检查 GitHub 主分支上的 `version.json`，如检测到更高版本会在顶部显示提示横幅，方便你及时拉取更新。
+
 ## 免责声明
 
 本项目仅用于学习和个人自动化管理，请遵守 115、AList/OpenList 及相关平台的使用条款。

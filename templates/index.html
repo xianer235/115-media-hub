@@ -50,6 +50,30 @@
         .help-text { white-space: pre-wrap; line-height: 1.7; }
         .footer-link { color: #38bdf8; text-decoration: underline; text-underline-offset: 3px; }
         .footer-link:hover { color: #7dd3fc; }
+        #version-banner {
+            border-radius: 1.25rem;
+            border: 1px solid rgba(245, 158, 11, 0.35);
+            background: linear-gradient(120deg, rgba(251, 191, 36, 0.18), rgba(236, 72, 153, 0.12));
+            padding: 1rem 1.25rem;
+            display: flex;
+            justify-content: space-between;
+            gap: 1rem;
+            align-items: center;
+        }
+        #version-banner.hidden { display: none; }
+        #version-banner strong { color: #fbbf24; }
+        #version-banner a {
+            color: #fbbf24;
+            border: 1px solid rgba(251, 191, 36, 0.45);
+            padding: 0.35rem 0.85rem;
+            border-radius: 0.85rem;
+            font-weight: 700;
+            transition: all 0.2s;
+        }
+        #version-banner a:hover {
+            background: rgba(251, 191, 36, 0.15);
+            color: #fff;
+        }
 
         @media (max-width: 1024px) {
             #main-nav-actions { width: auto; justify-content: flex-end; }
@@ -235,6 +259,15 @@
         }
         html.theme-day .hover\:bg-amber-500\/25:hover { background: rgba(217, 119, 6, 0.3) !important; }
         html.theme-day .text-amber-300 { color: #92400e !important; }
+        html.theme-day #version-banner {
+            background: rgba(251, 191, 36, 0.18) !important;
+            border-color: rgba(217, 119, 6, 0.35) !important;
+            color: #92400e !important;
+        }
+        html.theme-day #version-banner a {
+            color: #92400e !important;
+            border-color: rgba(217, 119, 6, 0.35) !important;
+        }
     </style>
 </head>
 <body class="bg-slate-900 text-slate-200 font-sans">
@@ -256,6 +289,16 @@
     </nav>
 
     <main class="max-w-7xl mx-auto p-4 md:p-6">
+        <div id="version-banner" class="hidden mb-4 text-sm text-amber-100">
+            <div>
+                <div id="version-banner-text" class="text-base font-black tracking-wide text-amber-200">发现新版本</div>
+                <div id="version-banner-notes" class="text-xs text-slate-200/80 mt-1">前往 GitHub 查看更新详情。</div>
+            </div>
+            <div class="flex items-center gap-3">
+                <a id="version-banner-link" href="https://github.com/xianer235/115-strm-web" target="_blank" rel="noopener noreferrer">查看更新</a>
+                <button onclick="dismissVersionBanner()" class="text-slate-400 hover:text-white text-lg" aria-label="关闭版本提示">✕</button>
+            </div>
+        </div>
         <div id="page-task" class="hidden space-y-6">
             <div class="bg-slate-800 p-6 rounded-3xl border border-slate-700 shadow-2xl">
                 <div class="flex justify-between items-end mb-4">
@@ -499,7 +542,7 @@
         <div class="flex flex-col sm:flex-row items-center justify-center gap-2 sm:gap-3 px-4">
             <span>© 2026 Powered by <b class="text-slate-400">Gemini</b> / <b class="text-slate-400">GPT</b> & <b class="text-slate-400">仙儿</b></span>
             <span class="hidden sm:inline text-slate-600">|</span>
-            <span>Version <b class="text-slate-300">V2.1</b></span>
+            <span>Version <b id="version-text" class="text-slate-300">--</b></span>
             <span class="hidden sm:inline text-slate-600">|</span>
             <a class="footer-link" href="https://github.com/xianer235/115-strm-web" target="_blank" rel="noopener noreferrer">GitHub 项目地址，求 Star</a>
         </div>
@@ -511,8 +554,11 @@
         let editingMonitorName = null;
         let lastLogLen = 0;
         let lastMonitorLogLen = 0;
+        let versionInfo = { local: null, latest: null };
+        let versionBannerDismissed = false;
         const btnTexts = ["🌐 联网同步更新", "🛠 本地调试解析", "🔥 强制全量重刷"];
         const DEFAULT_EXTENSIONS = "mp4,mkv,avi,mov,wmv,flv,webm,vob,mpg,mpeg,ts,m2ts,mts,rmvb,rm,asf,3gp,m4v,f4v,iso";
+        const VERSION_REFRESH_INTERVAL = 1000 * 60 * 15;
 
         function switchTab(tab) {
             ['task', 'settings', 'monitor'].forEach(name => {
@@ -893,6 +939,57 @@
             } catch (e) {}
         }
 
+        function showVersionBanner(latest) {
+            if (!latest) return;
+            const banner = document.getElementById('version-banner');
+            if (!banner) return;
+            const textEl = document.getElementById('version-banner-text');
+            const noteEl = document.getElementById('version-banner-notes');
+            const linkEl = document.getElementById('version-banner-link');
+            if (textEl) textEl.textContent = latest.version ? `发现新版本 ${latest.version}` : '发现新版本';
+            if (noteEl) {
+                const notes = Array.isArray(latest.notes) ? latest.notes.filter(Boolean) : [];
+                noteEl.textContent = notes.length ? notes[0] : '点击查看更新日志以了解详情。';
+            }
+            const fallback = 'https://github.com/xianer235/115-strm-web';
+            const targetUrl = latest.changelogUrl || latest.projectUrl || versionInfo.source || fallback;
+            if (linkEl) linkEl.href = targetUrl;
+            banner.classList.remove('hidden');
+        }
+
+        function hideVersionBanner() {
+            const banner = document.getElementById('version-banner');
+            if (banner) banner.classList.add('hidden');
+        }
+
+        function dismissVersionBanner() {
+            versionBannerDismissed = true;
+            hideVersionBanner();
+        }
+
+        async function refreshVersionInfo(force = false) {
+            try {
+                const endpoint = force ? '/version?refresh=1' : '/version';
+                const res = await fetch(endpoint);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                versionInfo = data;
+                const versionLabel = document.getElementById('version-text');
+                if (versionLabel) {
+                    const raw = data?.local?.version || 'dev';
+                    versionLabel.textContent = raw.startsWith('V') ? raw : `V${raw}`;
+                }
+                if (!versionBannerDismissed && data.has_update) {
+                    showVersionBanner(data.latest || {});
+                } else if (!data.has_update) {
+                    hideVersionBanner();
+                    versionBannerDismissed = false;
+                }
+            } catch (err) {
+                console.warn('Version refresh failed', err);
+            }
+        }
+
         async function init() {
             try {
                 const res = await fetch('/get_settings');
@@ -953,8 +1050,10 @@
         init();
         refreshMainLogs();
         refreshMonitorState();
+        refreshVersionInfo();
         setInterval(refreshMainLogs, 1000);
         setInterval(refreshMonitorState, 1000);
+        setInterval(() => refreshVersionInfo(false), VERSION_REFRESH_INTERVAL);
     </script>
 </body>
 </html>
