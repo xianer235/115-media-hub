@@ -502,15 +502,22 @@ async def refresh_tree_file(tree_url: str, cfg: Dict[str, Any]) -> None:
     remote_path = extract_tree_remote_path(tree_url, cfg.get("alist_url", ""))
     if not remote_path:
         return
+    parent_dir = os.path.dirname(remote_path) or "/"
     try:
         await api_post(
             cfg,
-            "/api/fs/get",
-            {"path": remote_path, "password": "", "refresh": True},
+            "/api/fs/list",
+            {
+                "path": parent_dir,
+                "password": "",
+                "page": 1,
+                "per_page": 0,
+                "refresh": True,
+            },
         )
-        await write_log(f"已刷新目录树文件缓存: {remote_path}")
+        await write_log(f"已刷新目录树所在目录: {parent_dir}")
     except Exception as exc:
-        await write_log(f"⚠ 目录树刷新失败（{remote_path}）: {exc}")
+        await write_log(f"⚠ 目录树刷新失败（{parent_dir}）: {exc}")
 
 
 async def api_post(cfg: Dict[str, Any], path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
