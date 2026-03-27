@@ -37,6 +37,29 @@
             border-top: 1px dashed rgba(148, 163, 184, 0.35);
             border-bottom: 1px dashed rgba(148, 163, 184, 0.2);
         }
+        .log-task-divider {
+            color: #cbd5e1;
+            margin: 12px 0 8px;
+            padding: 6px 0;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            border-top: 1px dashed rgba(148, 163, 184, 0.5);
+            border-bottom: 1px dashed rgba(148, 163, 184, 0.3);
+        }
+        .log-section-divider {
+            color: #94a3b8;
+            margin: 6px 0 2px;
+            padding: 2px 0;
+            font-size: 12px;
+            border-left: 2px solid rgba(148, 163, 184, 0.25);
+            padding-left: 8px;
+        }
+        .summary-metric { font-weight: 700; }
+        .summary-positive { color: #4ade80; }
+        .summary-skip { color: #fbbf24; }
+        .summary-fail { color: #f87171; }
+        .summary-delete { color: #38bdf8; }
+        .summary-zero { opacity: 0.6; }
         .info-dot {
             width: 18px;
             height: 18px;
@@ -251,6 +274,19 @@
             border-top-color: rgba(100, 116, 139, 0.45) !important;
             border-bottom-color: rgba(100, 116, 139, 0.25) !important;
         }
+        html.theme-day .log-task-divider {
+            color: #334155 !important;
+            border-top-color: rgba(100, 116, 139, 0.55) !important;
+            border-bottom-color: rgba(100, 116, 139, 0.35) !important;
+        }
+        html.theme-day .log-section-divider {
+            color: #64748b !important;
+            border-left-color: rgba(100, 116, 139, 0.35) !important;
+        }
+        html.theme-day .summary-positive { color: #15803d !important; }
+        html.theme-day .summary-skip { color: #b45309 !important; }
+        html.theme-day .summary-fail { color: #dc2626 !important; }
+        html.theme-day .summary-delete { color: #0369a1 !important; }
         html.theme-day input,
         html.theme-day select,
         html.theme-day textarea {
@@ -677,12 +713,17 @@
         let isRunning = false;
         let monitorState = { running: false, current_task: '', tasks: [], logs: [], summary: { step: '空闲', detail: '等待监控任务' }, queued: [], next_runs: {} };
         let editingMonitorName = null;
-        let lastLogLen = 0;
-        let lastMonitorLogLen = 0;
+        let lastLogSignature = '';
+        let lastMonitorLogSignature = '';
+        let lastMonitorRenderKey = '';
+        let statusEventSource = null;
+        let statusFallbackTimer = null;
+        const monitorActionLocks = new Set();
         let versionInfo = { local: null, latest: null, has_update: false, checked_at: 0, error: '', source: '' };
         let versionBannerDismissed = false;
         const btnTexts = ["🌐 联网同步更新", "🛠 本地调试解析", "🔥 强制全量重刷"];
         const DEFAULT_EXTENSIONS = "mp4,mkv,avi,mov,wmv,flv,webm,vob,mpg,mpeg,ts,m2ts,mts,rmvb,rm,asf,3gp,m4v,f4v,iso";
+        const STATUS_FALLBACK_INTERVAL = 15000;
         const VERSION_REFRESH_INTERVAL = 1000 * 60 * 15;
         const VERSION_FALLBACK_PROJECT_URL = 'https://github.com/xianer235/115-strm-web';
         const VERSION_FALLBACK_CHANGELOG_URL = 'https://github.com/xianer235/115-strm-web/blob/main/CHANGELOG.md';
@@ -701,6 +742,174 @@
                 .replaceAll('>', '&gt;')
                 .replaceAll('"', '&quot;')
                 .replaceAll("'", '&#39;');
+        }
+
+        function buildLogSignature(logs, formatter) {
+            const list = Array.isArray(logs) ? logs : [];
+            const tail = list.length ? formatter(list[list.length - 1]) : '';
+            return `${list.length}:${tail}`;
+        }
+
+        function decorateSummaryMetric(segment) {
+            const raw = String(segment || '').trim();
+            const match = raw.match(/^(.*?)(\d+)$/);
+            if (!match) return escapeHtml(raw);
+
+            const label = match[1].trim();
+            const value = Number(match[2]);
+            const classMap = {
+                '新增/更新': 'summary-positive',
+                '跳过文件': 'summary-skip',
+                '跳过目录': 'summary-skip',
+                '失败目录': 'summary-fail',
+                '删除文件': 'summary-delete',
+                '删除目录': 'summary-delete'
+            };
+            const colorClass = classMap[label];
+            if (!colorClass) return escapeHtml(raw);
+
+            const zeroClass = value === 0 ? ' summary-zero' : '';
+            return `<span class="summary-metric ${colorClass}${zeroClass}">${escapeHtml(raw)}</span>`;
+        }
+
+        function decorateMonitorSummaryText(text) {
+            const raw = String(text || '');
+            const match = raw.match(/^(\d{2}-\d{2} \d{2}:\d{2}:\d{2}\s+)?(生成汇总:|清理汇总:)\s*(.*)$/);
+            if (!match) return escapeHtml(raw);
+
+            const timestamp = escapeHtml(match[1] || '');
+            const prefix = escapeHtml(match[2]);
+            const metrics = String(match[3] || '')
+                .split(' | ')
+                .map(decorateSummaryMetric)
+                .join('<span class="text-slate-500"> | </span>');
+
+            return `${timestamp}${prefix} ${metrics}`;
+        }
+
+        function formatMonitorLogHtml(item) {
+            const level = item?.level || 'info';
+            const text = String(item?.text || '');
+            if (level === 'info' && (text.includes('生成汇总:') || text.includes('清理汇总:'))) {
+                return decorateMonitorSummaryText(text);
+            }
+            return escapeHtml(text);
+        }
+
+        function monitorActionToken(action, name) {
+            return `${action}::${String(name || '').trim()}`;
+        }
+
+        function isMonitorActionLocked(action, name) {
+            return monitorActionLocks.has(monitorActionToken(action, name));
+        }
+
+        function setMonitorActionLock(action, name, locked) {
+            const token = monitorActionToken(action, name);
+            if (locked) monitorActionLocks.add(token);
+            else monitorActionLocks.delete(token);
+            renderMonitorTasks();
+            lastMonitorRenderKey = buildMonitorRenderKey(monitorState);
+        }
+
+        function buildMonitorRenderKey(state) {
+            return JSON.stringify({
+                running: !!state?.running,
+                current_task: state?.current_task || '',
+                queued: Array.isArray(state?.queued) ? state.queued : [],
+                next_runs: state?.next_runs || {},
+                tasks: Array.isArray(state?.tasks) ? state.tasks : [],
+                locks: Array.from(monitorActionLocks).sort()
+            });
+        }
+
+        function applyMainState(data) {
+            if (!data) return;
+            if (data.running !== isRunning) updateButtonState(!!data.running);
+
+            const logBox = document.getElementById('log-box');
+            const logs = Array.isArray(data.logs) ? data.logs : [];
+            const logSignature = buildLogSignature(logs, (line) => String(line || ''));
+            if (logSignature !== lastLogSignature) {
+                logBox.innerHTML = logs.map(line => escapeHtml(line)).join('<br>');
+                logBox.scrollTop = logBox.scrollHeight;
+                lastLogSignature = logSignature;
+            }
+
+            const p = data.progress || {};
+            document.getElementById('prog-step').innerText = p.step || '空闲';
+            document.getElementById('prog-percent').innerText = `${Number(p.percent || 0)}%`;
+            document.getElementById('prog-bar').style.width = `${Number(p.percent || 0)}%`;
+            document.getElementById('prog-detail').innerText = p.detail || '等待指令';
+
+            if (data.next_run) {
+                document.getElementById('next-run-container').classList.remove('hidden');
+                document.getElementById('next-run-time').innerText = data.next_run;
+            } else {
+                document.getElementById('next-run-container').classList.add('hidden');
+            }
+        }
+
+        function applyMonitorState(data, { forceRender = false } = {}) {
+            if (!data) return;
+            monitorState = {
+                ...monitorState,
+                ...data,
+                tasks: Array.isArray(data.tasks) ? data.tasks : (monitorState.tasks || []),
+                logs: Array.isArray(data.logs) ? data.logs : (monitorState.logs || []),
+                queued: Array.isArray(data.queued) ? data.queued : (monitorState.queued || []),
+                next_runs: data.next_runs || monitorState.next_runs || {},
+                summary: data.summary || monitorState.summary || { step: '空闲', detail: '等待监控任务' }
+            };
+
+            document.getElementById('monitor-summary-step').innerText = monitorState.summary?.step || '空闲';
+            document.getElementById('monitor-summary-detail').innerText = monitorState.summary?.detail || '等待监控任务';
+
+            const renderKey = buildMonitorRenderKey(monitorState);
+            if (forceRender || renderKey !== lastMonitorRenderKey) {
+                renderMonitorTasks();
+                lastMonitorRenderKey = renderKey;
+            }
+            renderMonitorLogs();
+        }
+
+        function startStatusFallbackPolling() {
+            if (statusFallbackTimer) return;
+            statusFallbackTimer = window.setInterval(() => {
+                refreshMainLogs();
+                refreshMonitorState();
+            }, STATUS_FALLBACK_INTERVAL);
+        }
+
+        function stopStatusFallbackPolling() {
+            if (!statusFallbackTimer) return;
+            window.clearInterval(statusFallbackTimer);
+            statusFallbackTimer = null;
+        }
+
+        function connectStatusStream() {
+            if (!window.EventSource) {
+                startStatusFallbackPolling();
+                return;
+            }
+            if (statusEventSource) statusEventSource.close();
+            statusEventSource = new EventSource('/events');
+            statusEventSource.addEventListener('state', (event) => {
+                try {
+                    const payload = JSON.parse(event.data || '{}');
+                    stopStatusFallbackPolling();
+                    applyMainState(payload.main);
+                    applyMonitorState(payload.monitor);
+                } catch (err) {
+                    console.warn('Status stream parse failed', err);
+                }
+            });
+            statusEventSource.onopen = () => {
+                stopStatusFallbackPolling();
+            };
+            statusEventSource.onerror = () => {
+                startStatusFallbackPolling();
+            };
         }
 
         function normalizeVersionLabel(rawVersion) {
@@ -909,7 +1118,7 @@
         async function clearMainLogs() {
             const res = await fetch('/logs/clear', { method: 'POST' });
             if (res.ok) {
-                lastLogLen = 0;
+                lastLogSignature = '';
                 await refreshMainLogs();
             }
         }
@@ -917,7 +1126,7 @@
         async function clearMonitorLogs() {
             const res = await fetch('/monitor/logs/clear', { method: 'POST' });
             if (res.ok) {
-                lastMonitorLogLen = 0;
+                lastMonitorLogSignature = '';
                 await refreshMonitorState();
             }
         }
@@ -986,8 +1195,7 @@
             if (!res.ok || !data.ok) {
                 throw new Error(data.msg || '保存监控任务失败');
             }
-            monitorState.tasks = data.tasks || [];
-            renderMonitorTasks();
+            applyMonitorState({ ...monitorState, tasks: data.tasks || [] }, { forceRender: true });
         }
 
         async function saveMonitorTask() {
@@ -1039,41 +1247,84 @@
 
         async function deleteMonitorTask(name) {
             if (!confirm(`确定删除监控任务“${name}”吗？`)) return;
-            const res = await fetch('/monitor/delete', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ name })
-            });
-            const data = await res.json();
-            if (!res.ok || !data.ok) {
-                return alert(`❌ ${data.msg || '删除失败'}`);
+            if (isMonitorActionLocked('delete', name)) return;
+            setMonitorActionLock('delete', name, true);
+            try {
+                const res = await fetch('/monitor/delete', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ name })
+                });
+                const data = await res.json();
+                if (!res.ok || !data.ok) {
+                    return alert(`❌ ${data.msg || '删除失败'}`);
+                }
+                applyMonitorState({
+                    ...monitorState,
+                    tasks: (monitorState.tasks || []).filter(item => item.name !== name),
+                    queued: (monitorState.queued || []).filter(item => item !== name),
+                    next_runs: Object.fromEntries(Object.entries(monitorState.next_runs || {}).filter(([taskName]) => taskName !== name))
+                }, { forceRender: true });
+                if (editingMonitorName === name) resetMonitorForm();
+            } finally {
+                setMonitorActionLock('delete', name, false);
             }
-            monitorState.tasks = (monitorState.tasks || []).filter(item => item.name !== name);
-            renderMonitorTasks();
-            if (editingMonitorName === name) resetMonitorForm();
         }
 
         async function startMonitorTask(name) {
-            const res = await fetch('/monitor/start', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ name })
-            });
-            const data = await res.json();
-            if (!res.ok || !data.ok) {
-                return alert(`❌ ${data.msg || '启动失败'}`);
+            if (isMonitorActionLocked('start', name)) return;
+            setMonitorActionLock('start', name, true);
+            try {
+                const res = await fetch('/monitor/start', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ name })
+                });
+                const data = await res.json();
+                if (!res.ok || !data.ok) {
+                    return alert(`❌ ${data.msg || '启动失败'}`);
+                }
+
+                const queued = Array.isArray(monitorState.queued) ? [...monitorState.queued] : [];
+                if (data.status === 'queued') {
+                    if (!queued.includes(name)) queued.push(name);
+                    applyMonitorState({ ...monitorState, queued }, { forceRender: true });
+                } else {
+                    applyMonitorState({
+                        ...monitorState,
+                        running: true,
+                        current_task: name,
+                        queued: queued.filter(item => item !== name),
+                        summary: { step: '准备执行', detail: `${name} (manual)` }
+                    }, { forceRender: true });
+                }
+                await refreshMonitorState();
+            } finally {
+                setMonitorActionLock('start', name, false);
             }
         }
 
         async function stopMonitorTask(name) {
-            const res = await fetch('/monitor/stop', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ name })
-            });
-            const data = await res.json();
-            if (!data.ok) {
-                alert('当前没有这个任务在运行');
+            if (isMonitorActionLocked('stop', name)) return;
+            setMonitorActionLock('stop', name, true);
+            try {
+                const res = await fetch('/monitor/stop', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ name })
+                });
+                const data = await res.json();
+                if (!data.ok) {
+                    alert('当前没有这个任务在运行');
+                    return;
+                }
+                applyMonitorState({
+                    ...monitorState,
+                    summary: { step: '正在中断', detail: `${name} 已发送中断请求` }
+                }, { forceRender: true });
+                await refreshMonitorState();
+            } finally {
+                setMonitorActionLock('stop', name, false);
             }
         }
 
@@ -1089,6 +1340,12 @@
                 const taskKey = encodeURIComponent(task.name || '');
                 const running = monitorState.running && monitorState.current_task === task.name;
                 const queued = (monitorState.queued || []).includes(task.name);
+                const starting = isMonitorActionLocked('start', task.name);
+                const stopping = isMonitorActionLocked('stop', task.name);
+                const deleting = isMonitorActionLocked('delete', task.name);
+                const startDisabled = monitorState.running || starting || stopping || deleting;
+                const stopDisabled = !running || starting || stopping || deleting;
+                const deleteDisabled = running || starting || stopping || deleting;
                 const badge = running
                     ? '<span class="text-[10px] px-3 py-1 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/20">运行中</span>'
                     : queued
@@ -1113,10 +1370,10 @@
                                 </div>
                             </div>
                             <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2 shrink-0">
-                                <button onclick="startMonitorTask(decodeURIComponent('${taskKey}'))" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold ${monitorState.running ? 'btn-disabled' : ''}">运行</button>
-                                <button onclick="stopMonitorTask(decodeURIComponent('${taskKey}'))" class="px-4 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 text-sm font-bold ${running ? '' : 'btn-disabled'}">中断</button>
-                                <button onclick="editMonitorTask(decodeURIComponent('${taskKey}'))" class="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">编辑</button>
-                                <button onclick="deleteMonitorTask(decodeURIComponent('${taskKey}'))" class="px-4 py-2 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-300 text-sm font-bold ${running ? 'btn-disabled' : ''}">删除</button>
+                                <button type="button" data-monitor-action="start" data-task-name="${taskKey}" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold ${startDisabled ? 'btn-disabled' : ''}" ${startDisabled ? 'disabled' : ''}>${starting ? '启动中...' : '运行'}</button>
+                                <button type="button" data-monitor-action="stop" data-task-name="${taskKey}" class="px-4 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 text-sm font-bold ${stopDisabled ? 'btn-disabled' : ''}" ${stopDisabled ? 'disabled' : ''}>${stopping ? '中断中...' : '中断'}</button>
+                                <button type="button" data-monitor-action="edit" data-task-name="${taskKey}" class="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">编辑</button>
+                                <button type="button" data-monitor-action="delete" data-task-name="${taskKey}" class="px-4 py-2 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-300 text-sm font-bold ${deleteDisabled ? 'btn-disabled' : ''}" ${deleteDisabled ? 'disabled' : ''}>${deleting ? '删除中...' : '删除'}</button>
                             </div>
                         </div>
                         ${task.webhook_enabled ? `<div class="mt-3 text-xs text-emerald-400">Webhook：IP:容器端口/webhook/${escapeHtml(task.name)}</div>` : ''}
@@ -1128,37 +1385,18 @@
         function renderMonitorLogs() {
             const box = document.getElementById('monitor-log-box');
             const logs = monitorState.logs || [];
-            if (logs.length === lastMonitorLogLen) return;
-            box.innerHTML = logs.map(item => `<div class="log-${item.level || 'info'}">${escapeHtml(item.text)}</div>`).join('');
+            const logSignature = buildLogSignature(logs, (item) => `${item?.level || 'info'}:${item?.text || ''}`);
+            if (logSignature === lastMonitorLogSignature) return;
+            box.innerHTML = logs.map(item => `<div class="log-${item.level || 'info'}">${formatMonitorLogHtml(item)}</div>`).join('');
             box.scrollTop = box.scrollHeight;
-            lastMonitorLogLen = logs.length;
+            lastMonitorLogSignature = logSignature;
         }
 
         async function refreshMainLogs() {
             try {
                 const res = await fetch('/logs');
                 if (!res.ok) return;
-                const data = await res.json();
-                if (data.running !== isRunning) updateButtonState(data.running);
-
-                const logBox = document.getElementById('log-box');
-                if (data.logs.length !== lastLogLen) {
-                    logBox.innerHTML = data.logs.map(line => escapeHtml(line)).join('<br>');
-                    logBox.scrollTop = logBox.scrollHeight;
-                    lastLogLen = data.logs.length;
-                }
-                const p = data.progress;
-                document.getElementById('prog-step').innerText = p.step;
-                document.getElementById('prog-percent').innerText = `${p.percent}%`;
-                document.getElementById('prog-bar').style.width = `${p.percent}%`;
-                document.getElementById('prog-detail').innerText = p.detail;
-
-                if (data.next_run) {
-                    document.getElementById('next-run-container').classList.remove('hidden');
-                    document.getElementById('next-run-time').innerText = data.next_run;
-                } else {
-                    document.getElementById('next-run-container').classList.add('hidden');
-                }
+                applyMainState(await res.json());
             } catch (e) {}
         }
 
@@ -1166,11 +1404,7 @@
             try {
                 const res = await fetch('/monitor/status');
                 if (!res.ok) return;
-                monitorState = await res.json();
-                document.getElementById('monitor-summary-step').innerText = monitorState.summary?.step || '空闲';
-                document.getElementById('monitor-summary-detail').innerText = monitorState.summary?.detail || '等待监控任务';
-                renderMonitorTasks();
-                renderMonitorLogs();
+                applyMonitorState(await res.json());
             } catch (e) {}
         }
 
@@ -1276,8 +1510,7 @@
                 if (cfg.trees && cfg.trees.length > 0) cfg.trees.forEach(t => addTreeRow(t));
                 else addTreeRow();
 
-                monitorState.tasks = cfg.monitor_tasks || [];
-                renderMonitorTasks();
+                applyMonitorState({ ...monitorState, tasks: cfg.monitor_tasks || [] }, { forceRender: true });
                 resetMonitorForm();
                 refreshWebhookHint();
                 renderVersionInfoPanel();
@@ -1285,6 +1518,17 @@
         }
 
         document.getElementById('monitor_name').addEventListener('input', refreshWebhookHint);
+        document.getElementById('monitor-task-list').addEventListener('click', async (e) => {
+            const btn = e.target.closest('[data-monitor-action]');
+            if (!btn) return;
+            const action = btn.dataset.monitorAction || '';
+            const name = decodeURIComponent(btn.dataset.taskName || '');
+            if (!name) return;
+            if (action === 'start') await startMonitorTask(name);
+            if (action === 'stop') await stopMonitorTask(name);
+            if (action === 'edit') editMonitorTask(name);
+            if (action === 'delete') await deleteMonitorTask(name);
+        });
         document.getElementById('monitor-modal').addEventListener('click', (e) => {
             if (e.target.id === 'monitor-modal') closeMonitorModal();
         });
@@ -1318,9 +1562,8 @@
         init();
         refreshMainLogs();
         refreshMonitorState();
+        connectStatusStream();
         refreshVersionInfo();
-        setInterval(refreshMainLogs, 1000);
-        setInterval(refreshMonitorState, 1000);
         setInterval(() => refreshVersionInfo(false), VERSION_REFRESH_INTERVAL);
     </script>
 </body>

@@ -10,10 +10,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, List, Optional, Set, Tuple
 
 from fastapi import BackgroundTasks, FastAPI, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -41,6 +41,9 @@ VERSION_SOURCE_URL = os.environ.get(
     "https://raw.githubusercontent.com/xianer235/115-strm-web/main/version.json",
 )
 VERSION_CACHE_TTL = int(os.environ.get("VERSION_CACHE_TTL", 6 * 3600))
+UI_EVENT_RETRY_MS = 3000
+UI_HEARTBEAT_SECONDS = 15
+UI_PUSH_DEBOUNCE_SECONDS = 0.15
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 FAVICON_PATH = os.path.join(STATIC_DIR, "icons", "favicon.svg")
 
@@ -341,6 +344,82 @@ monitor_queue: List[Dict[str, Any]] = []
 monitor_last_run: Dict[str, float] = {}
 monitor_next_run: Dict[str, str] = {}
 version_cache: Dict[str, Any] = {"latest": None, "checked_at": 0.0, "error": ""}
+ui_event_subscribers: Set[asyncio.Queue[str]] = set()
+ui_push_pending = False
+ui_push_task: Optional[asyncio.Task] = None
+
+
+def clone_jsonable(value: Any) -> Any:
+    return json.loads(json.dumps(value, ensure_ascii=False))
+
+
+def build_main_status_payload() -> Dict[str, Any]:
+    return {
+        "running": bool(task_status["running"]),
+        "next_run": task_status.get("next_run"),
+        "logs": clone_jsonable(task_status.get("logs", [])),
+        "progress": clone_jsonable(task_status.get("progress", {})),
+    }
+
+
+def build_monitor_status_payload(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    cfg = cfg or get_config()
+    return {
+        "running": bool(monitor_status["running"]),
+        "current_task": str(monitor_status.get("current_task", "")),
+        "queued": clone_jsonable(monitor_status.get("queued", [])),
+        "logs": clone_jsonable(monitor_status.get("logs", [])),
+        "summary": clone_jsonable(monitor_status.get("summary", {})),
+        "tasks": clone_jsonable(cfg.get("monitor_tasks", [])),
+        "webhook_base": "/webhook/",
+        "next_runs": clone_jsonable(monitor_next_run),
+    }
+
+
+def build_ui_state_payload(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    return {
+        "main": build_main_status_payload(),
+        "monitor": build_monitor_status_payload(cfg),
+    }
+
+
+async def broadcast_ui_state(payload: str) -> None:
+    for queue in list(ui_event_subscribers):
+        if queue.full():
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+        try:
+            queue.put_nowait(payload)
+        except asyncio.QueueFull:
+            continue
+
+
+async def flush_ui_state_updates(delay: float) -> None:
+    global ui_push_pending, ui_push_task
+    try:
+        await asyncio.sleep(max(0.0, delay))
+        while ui_push_pending:
+            ui_push_pending = False
+            payload = json.dumps(build_ui_state_payload(), ensure_ascii=False)
+            await broadcast_ui_state(payload)
+            if ui_push_pending:
+                await asyncio.sleep(UI_PUSH_DEBOUNCE_SECONDS)
+    finally:
+        ui_push_task = None
+
+
+def schedule_ui_state_push(delay: float = UI_PUSH_DEBOUNCE_SECONDS) -> None:
+    global ui_push_pending, ui_push_task
+    ui_push_pending = True
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    if ui_push_task is not None and not ui_push_task.done():
+        return
+    ui_push_task = loop.create_task(flush_ui_state_updates(delay))
 
 
 def is_subpath(path: str, root: str) -> bool:
@@ -390,6 +469,7 @@ def extract_webhook_refresh_path(task: Dict[str, Any], payload: Dict[str, Any], 
 
 async def update_progress(step: str, percent: float, detail: str) -> None:
     task_status["progress"].update({"step": step, "percent": int(percent), "detail": detail})
+    schedule_ui_state_push()
     await asyncio.sleep(0)
 
 
@@ -398,6 +478,7 @@ async def write_log(msg: str) -> None:
     task_status["logs"].append(line)
     if len(task_status["logs"]) > 500:
         task_status["logs"].pop(0)
+    schedule_ui_state_push()
     await asyncio.to_thread(append_log_file, MAIN_LOG_PATH, f"{format_log_time(True)} {msg}")
     await asyncio.sleep(0)
 
@@ -407,12 +488,75 @@ async def write_monitor_log(text: str, level: str = "info") -> None:
     monitor_status["logs"].append({"text": line, "level": level})
     if len(monitor_status["logs"]) > 800:
         monitor_status["logs"].pop(0)
+    schedule_ui_state_push()
     await asyncio.to_thread(append_log_file, MONITOR_LOG_PATH, line)
     await asyncio.sleep(0)
 
 
 def update_monitor_summary(step: str, detail: str) -> None:
     monitor_status["summary"] = {"step": step, "detail": detail}
+    schedule_ui_state_push()
+
+
+def format_monitor_trigger(trigger: str) -> str:
+    labels = {
+        "manual": "手动触发",
+        "webhook": "Webhook 触发",
+        "cron": "定时触发",
+        "queued": "队列触发",
+    }
+    return labels.get(trigger, trigger or "未知触发")
+
+
+def format_monitor_bool(enabled: bool) -> str:
+    return "开启" if enabled else "关闭"
+
+
+async def write_monitor_section(title: str) -> None:
+    await write_monitor_log(f"·· {title} ··", "section-divider")
+
+
+async def write_monitor_task_header(task: Dict[str, Any], trigger: str, payload: Optional[Dict[str, Any]] = None) -> None:
+    await write_monitor_log(
+        f"━━━━━━━━━━【任务开始 | {task['name']} | {format_monitor_trigger(trigger)}】━━━━━━━━━━",
+        "task-divider",
+    )
+    await write_monitor_log(
+        f"扫描: {task['scan_path']} | 输出: /strm/{resolve_task_root(task)}",
+        "info",
+    )
+    await write_monitor_log(
+        f"模式: {'增量' if task['incremental'] else '全量'} | 目录时间检查: {format_monitor_bool(task['skip_by_dir_mtime'])}",
+        "info",
+    )
+    if payload and trigger == "webhook":
+        title = str(payload.get("title", "") or "").strip()
+        sharetitle = str(payload.get("sharetitle", "") or "").strip()
+        webhook_bits = []
+        if title:
+            webhook_bits.append(f"内容: {title}")
+        if sharetitle:
+            webhook_bits.append(f"目录: {sharetitle}")
+        if webhook_bits:
+            await write_monitor_log(f"Webhook: {' | '.join(webhook_bits)}", "info")
+
+
+async def write_monitor_task_footer(task_name: str, status: str, level: str = "task-divider") -> None:
+    await write_monitor_log(
+        f"━━━━━━━━━━【任务结束 | {task_name} | {status}】━━━━━━━━━━",
+        level,
+    )
+
+
+async def write_monitor_task_summary(stats: Dict[str, int]) -> None:
+    await write_monitor_log(
+        f"生成汇总: 新增/更新 {stats['generated']} | 跳过文件 {stats['skipped']} | 跳过目录 {stats['skipped_dirs']} | 失败目录 {stats['failed_dirs']}",
+        "info",
+    )
+    await write_monitor_log(
+        f"清理汇总: 删除文件 {stats['deleted_files']} | 删除目录 {stats['deleted_dirs']}",
+        "info",
+    )
 
 
 def check_monitor_cancelled() -> None:
@@ -652,6 +796,7 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
     if task_status["running"]:
         return
     task_status["running"] = True
+    schedule_ui_state_push(0)
     cfg = get_config()
     os.makedirs(TREE_DIR, exist_ok=True)
     ensure_db()
@@ -824,6 +969,7 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
         await update_progress("任务中止", 0, str(exc))
     finally:
         task_status["running"] = False
+        schedule_ui_state_push(0)
 
 
 def resolve_task_root(task: Dict[str, Any]) -> str:
@@ -903,6 +1049,7 @@ async def run_monitor_task(task_name: str, trigger: str = "manual", payload: Opt
     monitor_control["cancel"] = False
     monitor_last_run[task_name] = time.time()
     update_monitor_summary("准备执行", f"{task_name} ({trigger})")
+    schedule_ui_state_push(0)
     run_delay = task["delay_seconds"]
     webhook_delay = 0
     if payload:
@@ -921,21 +1068,7 @@ async def run_monitor_task(task_name: str, trigger: str = "manual", payload: Opt
         "success_dirs": 0,
     }
 
-    await write_monitor_log(f"开始任务: {task_name}", "info")
-    await write_monitor_log(f"━━━━━━━━━━【任务开始 | {task_name} | {trigger}】━━━━━━━━━━", "divider")
-    await write_monitor_log("任务类型: 生成 STRM", "info")
-    await write_monitor_log(f"远端路径: {task['scan_path']}", "info")
-    if trigger == "webhook" and payload:
-        title = str(payload.get("title", "") or "").strip()
-        sharetitle = str(payload.get("sharetitle", "") or "").strip()
-        if title:
-            await write_monitor_log(f"转存内容：{title}", "info")
-        if sharetitle:
-            await write_monitor_log(f"转存目录名：{sharetitle}", "info")
-    await write_monitor_log(f"增量同步: {str(task['incremental'])}", "info")
-    await write_monitor_log(f"目录时间检查: {str(task['skip_by_dir_mtime'])}", "info")
-    await write_monitor_log(f"保存目录: /strm/{resolve_task_root(task)}", "info")
-    await write_monitor_log("=" * 50, "divider")
+    await write_monitor_task_header(task, trigger, payload)
 
     try:
         if run_delay > 0:
@@ -970,7 +1103,7 @@ async def run_monitor_task(task_name: str, trigger: str = "manual", payload: Opt
         queue: List[Tuple[str, str, bool]] = [(start_remote_path, start_local_rel, True)]
         seen_dirs = set()
 
-        await write_monitor_log(">>> 开始生成", "info")
+        await write_monitor_section("扫描生成")
 
         while queue:
             remote_dir, local_dir_rel, do_refresh = queue.pop(0)
@@ -1055,8 +1188,8 @@ async def run_monitor_task(task_name: str, trigger: str = "manual", payload: Opt
             if task["list_delay_ms"] > 0:
                 await sleep_interruptible(task["list_delay_ms"] / 1000)
 
-        await write_monitor_log(">>> 开始清理", "info")
-        await write_monitor_log(f"检查目录: {task['scan_path']}", "info")
+        await write_monitor_section("清理校正")
+        await write_monitor_log(f"清理范围: {start_remote_path}", "info")
         if stats["success_dirs"] == 0:
             raise RuntimeError("未成功读取任何目录，已停止并跳过清理（避免误删本地文件）")
 
@@ -1126,24 +1259,20 @@ async def run_monitor_task(task_name: str, trigger: str = "manual", payload: Opt
         conn.close()
         conn = None
 
-        await write_monitor_log(
-            f"【生成文件完成】 生成 {stats['generated']} 个，复制 0 个，跳过 {stats['skipped']} 个，跳过目录 {stats['skipped_dirs']} 个，读取目录失败 {stats['failed_dirs']} 个",
-            "info",
-        )
-        await write_monitor_log(
-            f"【清理文件完成】 清理目录 {stats['deleted_dirs']} 个，清理文件 {stats['deleted_files']} 个，跳过目录 0 个",
-            "info",
-        )
-        await write_monitor_log("任务完成", "success")
-        await write_monitor_log(f"━━━━━━━━━━【任务结束 | {task_name} | 成功】━━━━━━━━━━", "divider")
+        await write_monitor_section("执行结果")
+        await write_monitor_task_summary(stats)
+        await write_monitor_task_footer(task_name, "执行成功")
         update_monitor_summary("任务完成", f"{task_name} 执行结束")
     except asyncio.CancelledError:
-        await write_monitor_log("任务已中断", "error")
-        await write_monitor_log(f"━━━━━━━━━━【任务结束 | {task_name} | 中断】━━━━━━━━━━", "divider")
+        await write_monitor_section("执行结果")
+        await write_monitor_task_summary(stats)
+        await write_monitor_task_footer(task_name, "已中断")
         update_monitor_summary("任务中断", task_name)
     except Exception as exc:
-        await write_monitor_log(f"任务失败: {exc}", "error")
-        await write_monitor_log(f"━━━━━━━━━━【任务结束 | {task_name} | 失败】━━━━━━━━━━", "divider")
+        await write_monitor_section("执行结果")
+        await write_monitor_task_summary(stats)
+        await write_monitor_log(f"失败原因: {exc}", "error")
+        await write_monitor_task_footer(task_name, "执行失败")
         update_monitor_summary("任务失败", str(exc))
     finally:
         try:
@@ -1154,15 +1283,18 @@ async def run_monitor_task(task_name: str, trigger: str = "manual", payload: Opt
         monitor_status["running"] = False
         monitor_status["current_task"] = ""
         monitor_control["cancel"] = False
+        schedule_ui_state_push(0)
         await start_next_monitor_job()
 
 
 async def start_next_monitor_job() -> None:
     if monitor_status["running"] or not monitor_queue:
         monitor_status["queued"] = [item["task_name"] for item in monitor_queue]
+        schedule_ui_state_push(0)
         return
     next_job = monitor_queue.pop(0)
     monitor_status["queued"] = [item["task_name"] for item in monitor_queue]
+    schedule_ui_state_push(0)
     asyncio.create_task(
         run_monitor_task(
             next_job["task_name"],
@@ -1174,9 +1306,11 @@ async def start_next_monitor_job() -> None:
 
 def queue_monitor_job(task_name: str, trigger: str, payload: Optional[Dict[str, Any]] = None) -> str:
     if any(item["task_name"] == task_name for item in monitor_queue):
+        schedule_ui_state_push(0)
         return "queued"
     monitor_queue.append({"task_name": task_name, "trigger": trigger, "payload": payload or {}})
     monitor_status["queued"] = [item["task_name"] for item in monitor_queue]
+    schedule_ui_state_push(0)
     if monitor_status["running"]:
         return "queued"
     asyncio.create_task(start_next_monitor_job())
@@ -1193,6 +1327,7 @@ async def startup() -> None:
         last_run = time.time()
         while True:
             cfg = get_config()
+            prev_next_run = task_status.get("next_run")
             interval = cfg.get("cron_hour")
             if interval and str(interval).isdigit():
                 interval_min = int(interval)
@@ -1203,6 +1338,8 @@ async def startup() -> None:
                     asyncio.create_task(run_sync())
             else:
                 task_status["next_run"] = None
+            if task_status.get("next_run") != prev_next_run:
+                schedule_ui_state_push(0)
             await asyncio.sleep(5)
 
     async def monitor_scheduler() -> None:
@@ -1210,6 +1347,7 @@ async def startup() -> None:
         while True:
             now = time.time()
             cfg = get_config()
+            prev_next_runs = dict(monitor_next_run)
             tasks = cfg.get("monitor_tasks", [])
             active_names = {task.get("name", "") for task in tasks if task.get("name")}
 
@@ -1233,6 +1371,8 @@ async def startup() -> None:
                 monitor_next_run[name] = datetime.fromtimestamp(next_ts).strftime("%H:%M:%S")
                 if now >= next_ts:
                     queue_monitor_job(name, "cron")
+            if monitor_next_run != prev_next_runs:
+                schedule_ui_state_push(0)
             await asyncio.sleep(5)
 
     asyncio.create_task(scheduler())
@@ -1286,6 +1426,7 @@ async def save_settings(request: Request) -> Dict[str, Any]:
     cfg.update(incoming)
     cfg["monitor_tasks"] = [normalize_task(task) for task in incoming.get("monitor_tasks", cfg.get("monitor_tasks", []))]
     save_config(cfg)
+    schedule_ui_state_push(0)
     return {"ok": True}
 
 
@@ -1300,31 +1441,54 @@ async def start_sync(request: Request, bt: BackgroundTasks) -> Dict[str, str]:
 
 @app.get("/logs")
 async def get_logs(request: Request) -> Dict[str, Any]:
-    return task_status
+    return build_main_status_payload()
 
 
 @app.post("/logs/clear")
 async def clear_logs(request: Request) -> Dict[str, Any]:
     task_status["logs"] = ["系统日志已清空"]
     await asyncio.to_thread(clear_log_file, MAIN_LOG_PATH, f"{format_log_time(True)} 系统日志已清空")
+    schedule_ui_state_push(0)
     return {"ok": True}
 
 
 @app.get("/monitor/status")
 async def get_monitor_status(request: Request) -> Dict[str, Any]:
-    cfg = get_config()
-    return {
-        **monitor_status,
-        "tasks": cfg.get("monitor_tasks", []),
-        "webhook_base": "/webhook/",
-        "next_runs": monitor_next_run,
-    }
+    return build_monitor_status_payload()
+
+
+@app.get("/events")
+async def stream_events(request: Request) -> StreamingResponse:
+    queue: asyncio.Queue[str] = asyncio.Queue(maxsize=8)
+    ui_event_subscribers.add(queue)
+    queue.put_nowait(json.dumps(build_ui_state_payload(), ensure_ascii=False))
+
+    async def event_stream() -> AsyncIterator[str]:
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    payload = await asyncio.wait_for(queue.get(), timeout=UI_HEARTBEAT_SECONDS)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                yield f"retry: {UI_EVENT_RETRY_MS}\nevent: state\ndata: {payload}\n\n"
+        finally:
+            ui_event_subscribers.discard(queue)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/monitor/logs/clear")
 async def clear_monitor_logs(request: Request) -> Dict[str, Any]:
     monitor_status["logs"] = [{"text": f"{format_log_time(True)} 监控日志已清空", "level": "info"}]
     await asyncio.to_thread(clear_log_file, MONITOR_LOG_PATH, f"{format_log_time(True)} 监控日志已清空")
+    schedule_ui_state_push(0)
     return {"ok": True}
 
 
@@ -1350,6 +1514,7 @@ async def save_monitor_tasks(request: Request) -> Dict[str, Any]:
         if dead_name not in alive:
             monitor_last_run.pop(dead_name, None)
             monitor_next_run.pop(dead_name, None)
+    schedule_ui_state_push(0)
     return {"ok": True, "tasks": normalized}
 
 
@@ -1395,6 +1560,7 @@ async def delete_monitor(request: Request) -> Dict[str, Any]:
     cursor.execute("DELETE FROM monitor_dirs WHERE task_name = ?", (task_name,))
     conn.commit()
     conn.close()
+    schedule_ui_state_push(0)
     return {"ok": True}
 
 
@@ -1413,7 +1579,7 @@ async def webhook(task_name: str, request: Request) -> JSONResponse:
 
     queue_monitor_job(task_name, "webhook", payload)
     await write_monitor_log(
-        f"收到 webhook: {task_name} savepath={savepath or '(未传)'} sharetitle={sharetitle or '(空)'} delayTime={payload.get('delayTime', 0)}",
+        f"Webhook 入队: {task_name} | savepath={savepath or '(未传)'} | sharetitle={sharetitle or '(空)'} | delayTime={payload.get('delayTime', 0)}",
         "info",
     )
     if title:

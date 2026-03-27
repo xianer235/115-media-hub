@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.2.2] - 2026-03-27
+- 监控页状态同步改为 `SSE` 优先、低频轮询兜底，减少前后端高频轮询请求。
+- 优化文件夹监控任务按钮交互，降低列表刷新导致首次点击不稳定的问题。
+- 调整监控日志分隔层级与汇总展示，任务边界更清晰，汇总数字支持语义着色。
+- 版本信息更新至 `2.2.2`，构建时间调整为 `2026-03-27 19:42`（UTC+8）。
+
 ## [2.2.1] - 2026-03-26
 - 关于页展示版本与更新信息。
 - 优化日间模式下关于页按钮和文字对比度，提升可读性与视觉层次。
