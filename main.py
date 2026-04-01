@@ -1100,13 +1100,13 @@ async def run_monitor_task(task_name: str, trigger: str = "manual", payload: Opt
             os.path.relpath(start_remote_path, task["scan_path"])
         ) if start_remote_path != task["scan_path"] else ""
         start_local_rel = join_relative_path(task_root, local_sub_rel)
-        queue: List[Tuple[str, str, bool]] = [(start_remote_path, start_local_rel, True)]
+        queue: List[Tuple[str, str]] = [(start_remote_path, start_local_rel)]
         seen_dirs = set()
 
         await write_monitor_section("扫描生成")
 
         while queue:
-            remote_dir, local_dir_rel, do_refresh = queue.pop(0)
+            remote_dir, local_dir_rel = queue.pop(0)
             check_monitor_cancelled()
             if remote_dir in seen_dirs:
                 continue
@@ -1116,7 +1116,9 @@ async def run_monitor_task(task_name: str, trigger: str = "manual", payload: Opt
             await write_monitor_log(f"读取目录: {remote_dir}", "info")
 
             try:
-                modified, items = await list_remote_dir(cfg, remote_dir, do_refresh, task)
+                # Always reload each visited directory so moved/new files inside
+                # existing folders are visible during recursive scans.
+                modified, items = await list_remote_dir(cfg, remote_dir, True, task)
                 stats["success_dirs"] += 1
             except Exception as exc:
                 stats["failed_dirs"] += 1
@@ -1156,7 +1158,7 @@ async def run_monitor_task(task_name: str, trigger: str = "manual", payload: Opt
                 size = int(item.get("size") or 0)
 
                 if is_dir:
-                    queue.append((item_remote_path, item_local_rel, False))
+                    queue.append((item_remote_path, item_local_rel))
                     continue
 
                 if not is_video_file(name, extensions):

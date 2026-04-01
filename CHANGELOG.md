@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.2.3] - 2026-04-01
+- 文件夹监控任务递归扫描时，改为对每个访问到的目录执行 `refresh=true`，避免 AList/OpenList 目录缓存导致漏扫。
+- 修复把文件移动到已存在文件夹后，关闭“文件夹修改时间校验跳过更新”仍可能扫不到新文件的问题。
+- 版本信息更新至 `2.2.3`，构建时间调整为 `2026-04-01 10:25`（UTC+8）。
+
 ## [2.2.2] - 2026-03-27
 - 监控页状态同步改为 `SSE` 优先、低频轮询兜底，减少前后端高频轮询请求。
 - 优化文件夹监控任务按钮交互，降低列表刷新导致首次点击不稳定的问题。
