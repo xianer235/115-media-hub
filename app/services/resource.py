@@ -2,7 +2,7 @@ from ..core import *  # noqa: F401,F403
 from .monitor import queue_monitor_job
 
 async def trigger_resource_job_refresh(job_id: int, reason: str = "manual") -> Dict[str, Any]:
-    job = get_resource_job(job_id)
+    job = get_resource_job(job_id, include_private=True)
     if not job:
         raise RuntimeError("资源任务不存在")
     if not job.get("monitor_task_name"):
@@ -29,10 +29,12 @@ async def trigger_resource_job_refresh(job_id: int, reason: str = "manual") -> D
         last_triggered_at=now_text(),
         finished_at=now_text(),
     )
-    conn = open_db()
-    update_resource_item_status(conn, int(job["resource_id"]), "completed")
-    conn.commit()
-    conn.close()
+    resource_id = int(job.get("resource_id", 0) or 0)
+    if resource_id > 0:
+        conn = open_db()
+        update_resource_item_status(conn, resource_id, "completed")
+        conn.commit()
+        conn.close()
     return {"ok": True, "status": status}
 
 
@@ -41,13 +43,13 @@ async def schedule_resource_job_refresh(job_id: int) -> None:
         return
     resource_refresh_pending.add(job_id)
     try:
-        job = get_resource_job(job_id)
+        job = get_resource_job(job_id, include_private=True)
         if not job or not job.get("auto_refresh"):
             return
         delay_seconds = max(0, int(job.get("refresh_delay_seconds", 0) or 0))
         if delay_seconds > 0:
             await asyncio.sleep(delay_seconds)
-        fresh_job = get_resource_job(job_id)
+        fresh_job = get_resource_job(job_id, include_private=True)
         if not fresh_job or str(fresh_job.get("last_triggered_at", "")).strip():
             return
         try:
@@ -63,13 +65,12 @@ async def run_resource_job(job_id: int) -> None:
         return
     resource_job_running.add(job_id)
     try:
-        job = get_resource_job(job_id)
+        job = get_resource_job(job_id, include_private=True)
         if not job:
             return
-        resource = get_resource_item(int(job["resource_id"]))
-        if not resource:
-            update_resource_job(job_id, status="failed", status_detail="资源记录不存在", finished_at=now_text())
-            return
+        resource_id = int(job.get("resource_id", 0) or 0)
+        resource = get_resource_item(resource_id) if resource_id > 0 else {}
+        job_snapshot = job.get("_snapshot", {}) if isinstance(job.get("_snapshot"), dict) else {}
 
         cfg = get_config()
         if not str(cfg.get("cookie_115", "")).strip():
@@ -79,10 +80,11 @@ async def run_resource_job(job_id: int) -> None:
             raise RuntimeError("当前仅支持 magnet 下载和 115 分享链接转存")
 
         update_resource_job(job_id, status="running", status_detail="正在提交到 115", started_at=now_text())
-        conn = open_db()
-        update_resource_item_status(conn, int(resource["id"]), "importing")
-        conn.commit()
-        conn.close()
+        if resource_id > 0:
+            conn = open_db()
+            update_resource_item_status(conn, resource_id, "importing")
+            conn.commit()
+            conn.close()
 
         if link_type == "magnet":
             response = await asyncio.to_thread(
@@ -95,28 +97,34 @@ async def run_resource_job(job_id: int) -> None:
             if int(response.get("errcode", 0) or 0) == 10008:
                 detail = "115 提示任务已存在，已继续走刷新流程"
         else:
-            resource_raw_text = str(resource.get("raw_text", "") or "")
             job_extra = safe_json_loads(job.get("extra_json"), {})
             job_selection = normalize_share_selection_meta(job_extra)
+            share_url = apply_share_receive_code_to_url(
+                str(job.get("link_url", "")).strip(),
+                str(job_snapshot.get("receive_code", "") or "").strip(),
+            )
             response_bundle = await asyncio.to_thread(
                 submit_115_share_receive,
                 str(cfg.get("cookie_115", "")).strip(),
-                str(job.get("link_url", "")).strip(),
+                share_url,
                 str(job.get("folder_id", "")).strip(),
-                resource_raw_text,
+                "",
                 job_selection.get("selected_ids", []),
             )
             response = response_bundle.get("response", {}) if isinstance(response_bundle, dict) else {}
             resolved_selection = merge_share_selection_meta(job_selection, response_bundle.get("selection", {}))
             detail = str(response.get("error", "")).strip() or str(response.get("msg", "")).strip() or "115 已接收转存任务"
 
-            resource_title_rel = normalize_relative_path(resource.get("title", ""))
+            resource_title_rel = normalize_relative_path(job.get("title", "") or resource.get("title", ""))
             current_sharetitle = normalize_relative_path(job.get("sharetitle", ""))
             auto_sharetitle = normalize_relative_path(resolved_selection.get("auto_sharetitle", ""))
             if auto_sharetitle and (not current_sharetitle or current_sharetitle == resource_title_rel):
                 job["sharetitle"] = auto_sharetitle
             if resolved_selection:
-                job["extra_json"] = safe_json_dumps(resolved_selection)
+                merged_extra = merge_json_object(job_extra, resolved_selection)
+                if job_snapshot:
+                    merged_extra["snapshot"] = job_snapshot
+                job["extra_json"] = safe_json_dumps(merged_extra)
 
         monitor_task_name = str(job.get("monitor_task_name", "") or "").strip()
         auto_refresh_enabled = bool(job.get("auto_refresh"))
@@ -140,20 +148,23 @@ async def run_resource_job(job_id: int) -> None:
             if str(job.get("sharetitle", "")).strip():
                 update_fields["sharetitle"] = str(job.get("sharetitle", "")).strip()
         update_resource_job(job_id, **update_fields)
-        conn = open_db()
-        update_resource_item_status(conn, int(resource["id"]), "submitted")
-        conn.commit()
-        conn.close()
+        if resource_id > 0:
+            conn = open_db()
+            update_resource_item_status(conn, resource_id, "submitted")
+            conn.commit()
+            conn.close()
 
         if bool(job.get("auto_refresh")) and str(job.get("monitor_task_name", "")).strip():
             asyncio.create_task(schedule_resource_job_refresh(job_id))
     except Exception as exc:
         update_resource_job(job_id, status="failed", status_detail=str(exc), finished_at=now_text())
-        failed_job = get_resource_job(job_id)
+        failed_job = get_resource_job(job_id, include_private=True)
         if failed_job:
-            conn = open_db()
-            update_resource_item_status(conn, int(failed_job["resource_id"]), "failed")
-            conn.commit()
-            conn.close()
+            failed_resource_id = int(failed_job.get("resource_id", 0) or 0)
+            if failed_resource_id > 0:
+                conn = open_db()
+                update_resource_item_status(conn, failed_resource_id, "failed")
+                conn.commit()
+                conn.close()
     finally:
         resource_job_running.discard(job_id)

@@ -100,34 +100,52 @@ async def run_monitor_task(task_name: str, trigger: str = "manual", payload: Opt
         )
 
         task_root = resolve_task_root(task)
+        task_scan_path = normalize_remote_path(task["scan_path"])
         alist_base = cfg["alist_url"].rstrip("/")
         extensions = get_user_extensions(cfg)
         min_bytes = int(task["min_file_size_mb"] * 1024 * 1024)
-        start_remote_path = normalize_remote_path(task["scan_path"])
+        start_remote_path = task_scan_path
+        refresh_source_label = ""
         if trigger in ("webhook", "resource") and payload:
             hinted_path = extract_webhook_refresh_path(task, payload, cfg)
             source_label = "Webhook" if trigger == "webhook" else "资源导入"
+            refresh_source_label = source_label
             if hinted_path:
                 start_remote_path = hinted_path
                 await write_monitor_log(f"{source_label} 定位刷新目录: {start_remote_path}", "info")
             else:
                 await write_monitor_log(f"{source_label} 未识别到有效子目录，回退全任务路径刷新", "warn")
 
-        local_sub_rel = normalize_relative_path(
-            os.path.relpath(start_remote_path, task["scan_path"])
-        ) if start_remote_path != task["scan_path"] else ""
-        start_local_rel = join_relative_path(task_root, local_sub_rel)
+        if refresh_source_label and start_remote_path != task_scan_path:
+            # OpenList 对“刚创建目录”的直查偶发不可见，先刷新父目录再进入目标目录更稳妥。
+            parent_remote_path = normalize_remote_path(os.path.dirname(start_remote_path))
+            if parent_remote_path != start_remote_path and is_subpath(parent_remote_path, task_scan_path):
+                try:
+                    await write_monitor_log(f"{refresh_source_label} 预刷新父目录: {parent_remote_path}", "info")
+                    await list_remote_dir(cfg, parent_remote_path, True, task)
+                except Exception as exc:
+                    await write_monitor_log(
+                        f"{refresh_source_label} 预刷新父目录失败: {parent_remote_path} ({exc})",
+                        "warn",
+                    )
+
+        def build_local_dir_rel(remote_path: str) -> str:
+            if remote_path == task_scan_path:
+                return task_root
+            local_sub_path = normalize_relative_path(os.path.relpath(remote_path, task_scan_path))
+            return join_relative_path(task_root, local_sub_path)
+
+        start_local_rel = build_local_dir_rel(start_remote_path)
         queue: List[Tuple[str, str]] = [(start_remote_path, start_local_rel)]
-        seen_dirs = set()
+        scanned_dirs = set()
 
         await write_monitor_section("扫描生成")
 
         while queue:
             remote_dir, local_dir_rel = queue.pop(0)
             check_monitor_cancelled()
-            if remote_dir in seen_dirs:
+            if remote_dir in scanned_dirs:
                 continue
-            seen_dirs.add(remote_dir)
 
             update_monitor_summary("扫描目录", remote_dir)
             await write_monitor_log(f"读取目录: {remote_dir}", "info")
@@ -140,7 +158,23 @@ async def run_monitor_task(task_name: str, trigger: str = "manual", payload: Opt
             except Exception as exc:
                 stats["failed_dirs"] += 1
                 await write_monitor_log(f"读取目录失败: {remote_dir} ({exc})", "error")
+                if (
+                    refresh_source_label
+                    and remote_dir == start_remote_path
+                    and remote_dir != task_scan_path
+                ):
+                    fallback_remote_path = normalize_remote_path(os.path.dirname(remote_dir))
+                    if fallback_remote_path != remote_dir and is_subpath(fallback_remote_path, task_scan_path):
+                        start_remote_path = fallback_remote_path
+                        start_local_rel = build_local_dir_rel(start_remote_path)
+                        if not any(item[0] == start_remote_path for item in queue):
+                            queue.insert(0, (start_remote_path, start_local_rel))
+                        await write_monitor_log(
+                            f"{refresh_source_label} 起始目录暂不可见，回退父目录重试: {start_remote_path}",
+                            "warn",
+                        )
                 continue
+            scanned_dirs.add(remote_dir)
 
             dir_rel = normalize_relative_path(os.path.relpath(local_dir_rel, task_root)) if local_dir_rel != task_root else ""
             if task["skip_by_dir_mtime"] and modified:
@@ -195,7 +229,7 @@ async def run_monitor_task(task_name: str, trigger: str = "manual", payload: Opt
                 else:
                     stats["skipped"] += 1
 
-                remote_rel = normalize_relative_path(os.path.relpath(item_remote_path, task["scan_path"]))
+                remote_rel = normalize_relative_path(os.path.relpath(item_remote_path, task_scan_path))
                 cursor.execute(
                     """
                     INSERT OR REPLACE INTO current_scan(local_rel_path, remote_rel_path, remote_modified, file_size)

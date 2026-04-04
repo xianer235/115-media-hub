@@ -1,16 +1,17 @@
         let isRunning = false;
         let monitorState = { running: false, current_task: '', tasks: [], logs: [], summary: { step: '空闲', detail: '等待监控任务' }, queued: [], next_runs: {} };
-        let resourceState = { sources: [], items: [], jobs: [], channel_sections: [], last_syncs: {}, monitor_tasks: [], stats: { source_count: 0, item_count: 0, job_count: 0 }, cookie_configured: false };
+        let resourceState = { sources: [], items: [], jobs: [], channel_sections: [], search_sections: [], last_syncs: {}, monitor_tasks: [], stats: { source_count: 0, item_count: 0, filtered_item_count: 0, completed_job_count: 0 }, cookie_configured: false, search: '', search_meta: {} };
         let editingMonitorName = null;
         let editingResourceSourceIndex = null;
         let selectedResourceId = null;
         let selectedResourceItem = null;
         let resourceModalMode = 'detail';
-        let selectedResourceChannelId = '';
         let resourceFolderTrail = [{ id: '0', name: '根目录' }];
         let resourceFolderEntries = [];
         let resourceFolderSummary = { folder_count: 0, file_count: 0 };
         let resourceFolderLoading = false;
+        let resourceFolderCreateBusy = false;
+        let resourceFolderValidationPromise = null;
         let resourceTargetPreviewEntries = [];
         let resourceTargetPreviewSummary = { folder_count: 0, file_count: 0 };
         let resourceTargetPreviewLoading = false;
@@ -29,9 +30,21 @@
         let resourceShareCurrentCid = '0';
         let resourceShareRequestToken = 0;
         let resourceSectionCollapsed = {};
+        let resourceSearchBusy = false;
         let resourceSyncBusy = false;
         let resourceWarmupDone = false;
+        let resourceChannelExtraItems = {};
+        let resourceChannelLoadingMore = {};
+        let resourceChannelNextBefore = {};
+        let resourceChannelNoMore = {};
+        let resourceTempIdSeed = -1;
+        let resourceClientIdSeed = -100000;
+        let resourceClientIdsByIdentity = {};
+        let resourceJobModalOpen = false;
+        let resourceSourceModalOpen = false;
+        let resourceJobFilter = 'all';
         let tgProxyTestState = { loading: false, ok: null, message: '', latency_ms: 0, mode: '', proxy_url: '', target_url: '' };
+        let resourceTgHealthState = { visible: false, tone: 'loading', title: '', meta: '', note: '' };
         let lastLogSignature = '';
         let lastMonitorLogSignature = '';
         let lastMonitorRenderKey = '';
@@ -40,6 +53,8 @@
         const monitorActionLocks = new Set();
         let versionInfo = { local: null, latest: null, has_update: false, checked_at: 0, error: '', source: '' };
         let versionBannerDismissed = false;
+        let modalScrollLockCount = 0;
+        let modalScrollLockY = 0;
         const btnTexts = ["🌐 联网同步更新", "🛠 本地调试解析", "🔥 强制全量重刷"];
         const DEFAULT_EXTENSIONS = "mp4,mkv,avi,mov,wmv,flv,webm,vob,mpg,mpeg,ts,m2ts,mts,rmvb,rm,asf,3gp,m4v,f4v,iso";
         const STATUS_FALLBACK_INTERVAL = 15000;
@@ -47,13 +62,157 @@
         const VERSION_REFRESH_INTERVAL = 1000 * 60 * 15;
         const VERSION_FALLBACK_PROJECT_URL = 'https://github.com/xianer235/115-strm-web';
         const VERSION_FALLBACK_CHANGELOG_URL = 'https://github.com/xianer235/115-strm-web/blob/main/CHANGELOG.md';
+        const RESOURCE_FOLDER_MEMORY_KEY = 'resource-folder-selection-v1';
+        const TOAST_DEFAULT_DURATION_MS = 3000;
+
+        function lockPageScroll() {
+            if (modalScrollLockCount === 0) {
+                modalScrollLockY = Math.max(0, window.scrollY || window.pageYOffset || 0);
+                document.body.classList.add('body-scroll-lock');
+                document.body.style.top = `-${modalScrollLockY}px`;
+            }
+            modalScrollLockCount += 1;
+            syncResourceBackTopButton();
+        }
+
+        function unlockPageScroll() {
+            if (modalScrollLockCount <= 0) return;
+            modalScrollLockCount -= 1;
+            if (modalScrollLockCount > 0) return;
+
+            const restoreY = modalScrollLockY;
+            modalScrollLockY = 0;
+            document.body.classList.remove('body-scroll-lock');
+            document.body.style.top = '';
+            window.scrollTo(0, restoreY);
+            syncResourceBackTopButton();
+        }
+
+        function scrollResourceToTop() {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        function syncResourceBackTopButton() {
+            const btn = document.getElementById('resource-back-top-btn');
+            const resourcePage = document.getElementById('page-resource');
+            if (!btn || !resourcePage) return;
+            const isResourceVisible = !resourcePage.classList.contains('hidden');
+            const isModalLocked = document.body.classList.contains('body-scroll-lock');
+            const scrollTop = Math.max(0, window.scrollY || window.pageYOffset || 0);
+            const shouldShow = isResourceVisible && !isModalLocked && scrollTop > 360;
+            btn.classList.toggle('hidden', !shouldShow);
+        }
+
+        function syncSettingsSaveDock() {
+            const dock = document.getElementById('settings-save-dock');
+            const settingsPage = document.getElementById('page-settings');
+            if (!dock || !settingsPage) return;
+
+            const isSettingsVisible = !settingsPage.classList.contains('hidden');
+            if (!isSettingsVisible) {
+                dock.classList.remove('is-inline');
+                settingsPage.classList.remove('has-inline-save-dock');
+                return;
+            }
+
+            const viewportHeight = Math.max(0, window.innerHeight || document.documentElement.clientHeight || 0);
+            const scrollTop = Math.max(0, window.scrollY || window.pageYOffset || 0);
+            const docHeight = Math.max(document.body.scrollHeight || 0, document.documentElement.scrollHeight || 0);
+            const footer = document.querySelector('footer.footer-text');
+            const nearDocumentEnd = scrollTop + viewportHeight >= docHeight - 4;
+            let shouldInline = false;
+
+            if (footer) {
+                const footerRect = footer.getBoundingClientRect();
+                const footerVisible = footerRect.top < viewportHeight && footerRect.bottom > 0;
+                shouldInline = footerVisible || nearDocumentEnd;
+            } else {
+                shouldInline = nearDocumentEnd;
+            }
+
+            dock.classList.toggle('is-inline', shouldInline);
+            settingsPage.classList.toggle('has-inline-save-dock', shouldInline);
+        }
+
+        function showLockedModal(modalId) {
+            const modal = document.getElementById(modalId);
+            if (!modal) return;
+            const isHidden = modal.classList.contains('hidden');
+            modal.classList.remove('hidden');
+            if (isHidden) lockPageScroll();
+        }
+
+        function hideLockedModal(modalId) {
+            const modal = document.getElementById(modalId);
+            if (!modal) return;
+            const wasVisible = !modal.classList.contains('hidden');
+            modal.classList.add('hidden');
+            if (wasVisible) unlockPageScroll();
+        }
 
         function switchTab(tab) {
             ['task', 'resource', 'settings', 'monitor', 'about'].forEach(name => {
                 document.getElementById(`page-${name}`).classList.toggle('hidden', tab !== name);
                 document.getElementById(`tab-${name}`).className = tab === name ? 'tab-active uppercase' : 'tab-inactive uppercase';
             });
+            if (tab !== 'resource') toggleResourceJobModal(false);
             if (tab === 'resource') refreshResourceState();
+            syncResourceBackTopButton();
+            syncSettingsSaveDock();
+        }
+
+        function normalizeToastPlacement(placement) {
+            const normalized = String(placement || '').trim().toLowerCase();
+            if (normalized === 'top-center') return 'top-center';
+            return 'bottom-right';
+        }
+
+        function getGlobalToastStack(placement = 'bottom-right') {
+            const normalizedPlacement = normalizeToastPlacement(placement);
+            const stackId = `global-toast-stack-${normalizedPlacement}`;
+            let stack = document.getElementById(stackId);
+            if (stack) return stack;
+            stack = document.createElement('div');
+            stack.id = stackId;
+            stack.className = `global-toast-stack global-toast-stack-${normalizedPlacement}`;
+            stack.setAttribute('aria-live', 'polite');
+            stack.setAttribute('aria-atomic', 'false');
+            document.body.appendChild(stack);
+            return stack;
+        }
+
+        function showToast(message, { tone = 'info', duration = TOAST_DEFAULT_DURATION_MS, placement = 'bottom-right' } = {}) {
+            const text = String(message || '').trim();
+            if (!text) return;
+
+            const normalizedTone = ['success', 'error', 'warn', 'info'].includes(String(tone || '').toLowerCase())
+                ? String(tone || '').toLowerCase()
+                : 'info';
+            const stack = getGlobalToastStack(placement);
+            const toast = document.createElement('div');
+            toast.className = `global-toast global-toast-${normalizedTone}`;
+            toast.setAttribute('role', normalizedTone === 'error' ? 'alert' : 'status');
+            toast.textContent = text;
+            stack.appendChild(toast);
+
+            requestAnimationFrame(() => {
+                toast.classList.add('is-visible');
+            });
+
+            const removeToast = () => {
+                if (!toast.parentNode) return;
+                toast.classList.remove('is-visible');
+                window.setTimeout(() => {
+                    if (toast.parentNode) toast.remove();
+                }, 180);
+            };
+
+            const ttl = Math.max(1200, Number(duration || TOAST_DEFAULT_DURATION_MS));
+            const timer = window.setTimeout(removeToast, ttl);
+            toast.addEventListener('click', () => {
+                window.clearTimeout(timer);
+                removeToast();
+            });
         }
 
         function escapeHtml(str) {
@@ -63,6 +222,18 @@
                 .replaceAll('>', '&gt;')
                 .replaceAll('"', '&quot;')
                 .replaceAll("'", '&#39;');
+        }
+
+        function uniquePreserveOrder(values) {
+            const seen = new Set();
+            const result = [];
+            (Array.isArray(values) ? values : []).forEach(value => {
+                const token = String(value || '').trim();
+                if (!token || seen.has(token)) return;
+                seen.add(token);
+                result.push(token);
+            });
+            return result;
         }
 
         function buildLogSignature(logs, formatter) {
@@ -410,6 +581,35 @@
             };
         }
 
+        function getCurrentTgTransportSnapshot() {
+            const cfg = getCurrentTgProxyConfig();
+            const protocol = String(cfg.tg_proxy_protocol || 'http').trim() || 'http';
+            const host = String(cfg.tg_proxy_host || '').trim();
+            const port = String(cfg.tg_proxy_port || '').trim();
+            const proxyUrl = cfg.tg_proxy_enabled && host && port
+                ? `${protocol}://${host}:${port}`
+                : '';
+            return {
+                mode: proxyUrl ? 'proxy' : 'direct',
+                modeLabel: proxyUrl ? '代理模式' : '直连模式',
+                proxyUrl
+            };
+        }
+
+        function inferTgModeFromMessage(message, fallbackMode = '') {
+            const text = String(message || '').trim();
+            if (text.includes('代理')) return 'proxy';
+            if (text.includes('直连')) return 'direct';
+            return fallbackMode || '';
+        }
+
+        function formatDurationText(durationMs) {
+            const value = Number(durationMs || 0);
+            if (!Number.isFinite(value) || value <= 0) return '';
+            if (value < 1000) return `总耗时 ${Math.max(1, Math.round(value))} ms`;
+            return `总耗时 ${(value / 1000).toFixed(value >= 10000 ? 0 : 1)} s`;
+        }
+
         function renderTgProxyTestStatus() {
             const btn = document.getElementById('tg-proxy-test-btn');
             const statusEl = document.getElementById('tg-proxy-test-status');
@@ -421,31 +621,34 @@
             if (!statusEl) return;
 
             if (tgProxyTestState.loading) {
-                statusEl.className = 'rounded-xl border px-4 py-3 text-sm leading-6 border-sky-500/20 bg-sky-500/10 text-sky-200';
-                statusEl.innerHTML = '正在请求 TG 频道页并测量当前响应时间，请稍候...';
+                statusEl.className = 'tg-proxy-status tg-proxy-status--loading';
+                statusEl.innerHTML = `
+                    <div class="tg-proxy-status-title">正在测试 TG 访问链路</div>
+                    <div class="tg-proxy-status-meta">正在请求 TG 频道页并测量当前响应时间，请稍候...</div>
+                `;
                 statusEl.classList.remove('hidden');
                 return;
             }
 
             if (tgProxyTestState.ok === true) {
                 const modeLabel = tgProxyTestState.mode === 'proxy'
-                    ? `代理模式 <span class="text-slate-200">${escapeHtml(tgProxyTestState.proxy_url || '--')}</span>`
+                    ? `代理模式 ${escapeHtml(tgProxyTestState.proxy_url || '--')}`
                     : '直连模式';
-                statusEl.className = 'rounded-xl border px-4 py-3 text-sm leading-6 border-emerald-500/20 bg-emerald-500/10 text-emerald-300';
+                statusEl.className = 'tg-proxy-status tg-proxy-status--success';
                 statusEl.innerHTML = `
-                    <div class="font-bold">TG 连通成功，延迟约 ${escapeHtml(String(tgProxyTestState.latency_ms || 0))} ms</div>
-                    <div class="text-xs text-emerald-100/80 mt-1">${modeLabel}</div>
-                    <div class="text-xs text-emerald-100/70 mt-1">测试地址：${escapeHtml(tgProxyTestState.target_url || '')}</div>
+                    <div class="tg-proxy-status-title">TG 可达 · ${escapeHtml(formatDurationText(tgProxyTestState.latency_ms) || `总耗时 ${String(tgProxyTestState.latency_ms || 0)} ms`)}</div>
+                    <div class="tg-proxy-status-meta">${modeLabel}</div>
+                    <div class="tg-proxy-status-note">测试地址：${escapeHtml(tgProxyTestState.target_url || '')}</div>
                 `;
                 statusEl.classList.remove('hidden');
                 return;
             }
 
             if (tgProxyTestState.ok === false) {
-                statusEl.className = 'rounded-xl border px-4 py-3 text-sm leading-6 border-rose-500/20 bg-rose-500/10 text-rose-300';
+                statusEl.className = 'tg-proxy-status tg-proxy-status--error';
                 statusEl.innerHTML = `
-                    <div class="font-bold">TG 延迟测试失败</div>
-                    <div class="text-xs text-rose-100/80 mt-1">${escapeHtml(tgProxyTestState.message || '未知错误')}</div>
+                    <div class="tg-proxy-status-title">TG 延迟测试失败</div>
+                    <div class="tg-proxy-status-meta">${escapeHtml(tgProxyTestState.message || '未知错误')}</div>
                 `;
                 statusEl.classList.remove('hidden');
                 return;
@@ -488,6 +691,186 @@
                 };
             }
             renderTgProxyTestStatus();
+        }
+
+        function setResourceTgHealthState(nextState = {}) {
+            resourceTgHealthState = {
+                ...resourceTgHealthState,
+                ...nextState
+            };
+            renderResourceTgHealthStatus();
+        }
+
+        function renderResourceTgHealthStatus() {
+            const el = document.getElementById('resource-search-proxy-health');
+            if (!el) return;
+            if (!resourceTgHealthState.visible) {
+                el.className = 'resource-search-proxy-health hidden';
+                el.innerHTML = '';
+                return;
+            }
+            const tone = ['loading', 'success', 'warning', 'error'].includes(resourceTgHealthState.tone)
+                ? resourceTgHealthState.tone
+                : 'loading';
+            el.className = `resource-search-proxy-health resource-search-proxy-health--${tone}`;
+            el.innerHTML = `
+                <div class="resource-search-proxy-health-title">${escapeHtml(resourceTgHealthState.title || 'TG 状态')}</div>
+                ${resourceTgHealthState.meta ? `<div class="resource-search-proxy-health-meta">${escapeHtml(resourceTgHealthState.meta)}</div>` : ''}
+                ${resourceTgHealthState.note ? `<div class="resource-search-proxy-health-note">${escapeHtml(resourceTgHealthState.note)}</div>` : ''}
+                <div class="min-w-0 flex-1"></div>
+                ${resourceTgHealthState.durationText ? `<div class="resource-search-proxy-health-meta shrink-0">${escapeHtml(resourceTgHealthState.durationText)}</div>` : ''}
+            `;
+        }
+
+        function buildResourceTgModeText(mode, proxyUrl) {
+            return mode === 'proxy' && proxyUrl
+                ? `代理 ${proxyUrl}`
+                : '直连';
+        }
+
+        function buildResourceTgHealthSummary(mode, proxyUrl, summary) {
+            const modeText = buildResourceTgModeText(mode, proxyUrl);
+            return summary ? `${modeText} · ${summary}` : modeText;
+        }
+
+        function getActionElapsedMs(startedAt) {
+            if (!Number.isFinite(Number(startedAt || 0))) return 0;
+            return Math.max(1, Math.round(performance.now() - Number(startedAt || 0)));
+        }
+
+        function setResourceTgHealthResult({ tone, title, mode, proxyUrl, summary, durationMs, note = '' }) {
+            setResourceTgHealthState({
+                visible: true,
+                tone,
+                title,
+                meta: buildResourceTgHealthSummary(mode, proxyUrl, summary),
+                note,
+                durationText: formatDurationText(durationMs)
+            });
+        }
+
+        function showResourceTgHealthLoading(context, keyword = '') {
+            const transport = getCurrentTgTransportSnapshot();
+            const actionText = context === 'sync'
+                ? '刷新频道资源'
+                : `检索「${keyword || '...'}」`;
+            setResourceTgHealthState({
+                visible: true,
+                tone: 'loading',
+                title: 'TG 检测中',
+                meta: `${buildResourceTgModeText(transport.mode, transport.proxyUrl)} · ${actionText}`,
+                note: '',
+                durationText: ''
+            });
+        }
+
+        function applyResourceTgHealthFromSearchResult(data, keyword = '', durationMs = 0) {
+            const transport = getCurrentTgTransportSnapshot();
+            const errors = Array.isArray(data?.search_meta?.errors) ? data.search_meta.errors : [];
+            const searchedSources = Number(data?.search_meta?.searched_sources || 0);
+            const matchedChannels = Number(data?.search_meta?.matched_channels || 0);
+            const filteredCount = Number(data?.stats?.filtered_item_count || 0);
+            const successCount = Math.max(0, searchedSources - errors.length);
+            const firstError = errors[0]?.message || '';
+            const mode = inferTgModeFromMessage(firstError, transport.mode);
+
+            if (!errors.length) {
+                setResourceTgHealthResult({
+                    tone: 'success',
+                    title: 'TG 正常',
+                    mode,
+                    proxyUrl: transport.proxyUrl,
+                    summary: filteredCount > 0
+                        ? `${matchedChannels} 个频道命中 ${filteredCount} 条`
+                        : `已检索 ${searchedSources} 个订阅源，无命中`,
+                    durationMs
+                });
+                return;
+            }
+
+            if (successCount > 0) {
+                setResourceTgHealthResult({
+                    tone: 'warning',
+                    title: 'TG 波动',
+                    mode,
+                    proxyUrl: transport.proxyUrl,
+                    summary: `成功 ${successCount} 个，异常 ${errors.length} 个`,
+                    durationMs,
+                    note: firstError || ''
+                });
+                return;
+            }
+
+            setResourceTgHealthResult({
+                tone: 'error',
+                title: 'TG 异常',
+                mode,
+                proxyUrl: transport.proxyUrl,
+                summary: `${errors.length || searchedSources || 0} 个订阅源未返回`,
+                durationMs,
+                note: firstError || ''
+            });
+        }
+
+        function applyResourceTgHealthFromSyncResult(data, durationMs = 0) {
+            const transport = getCurrentTgTransportSnapshot();
+            const errors = Array.isArray(data?.errors) ? data.errors : [];
+            const synced = Number(data?.synced || 0);
+            const skipped = Number(data?.skipped || 0);
+            const inserted = Number(data?.items || 0);
+            const firstError = errors[0]?.message || '';
+            const mode = inferTgModeFromMessage(firstError, transport.mode);
+
+            if (!errors.length) {
+                setResourceTgHealthResult({
+                    tone: 'success',
+                    title: 'TG 正常',
+                    mode,
+                    proxyUrl: transport.proxyUrl,
+                    summary: `已刷新 ${synced} 个频道，新增 ${inserted} 条${skipped ? `，缓存 ${skipped} 个` : ''}`,
+                    durationMs
+                });
+                return;
+            }
+
+            if (synced > 0 || skipped > 0) {
+                setResourceTgHealthResult({
+                    tone: 'warning',
+                    title: 'TG 波动',
+                    mode,
+                    proxyUrl: transport.proxyUrl,
+                    summary: `成功 ${synced} 个，异常 ${errors.length} 个`,
+                    durationMs,
+                    note: firstError || ''
+                });
+                return;
+            }
+
+            setResourceTgHealthResult({
+                tone: 'error',
+                title: 'TG 异常',
+                mode,
+                proxyUrl: transport.proxyUrl,
+                summary: `${errors.length} 个频道全部失败`,
+                durationMs,
+                note: firstError || ''
+            });
+        }
+
+        function applyResourceTgHealthFailure(context, error, durationMs = 0) {
+            const transport = getCurrentTgTransportSnapshot();
+            const message = String(error?.message || error || '').trim() || '请求未完成';
+            const mode = inferTgModeFromMessage(message, transport.mode);
+            const actionText = context === 'sync' ? '刷新未完成' : '搜索未完成';
+            setResourceTgHealthResult({
+                tone: 'error',
+                title: 'TG 异常',
+                mode,
+                proxyUrl: transport.proxyUrl,
+                summary: actionText,
+                durationMs,
+                note: message
+            });
         }
 
         async function saveSettings() {
@@ -977,13 +1360,209 @@
         function findResourceItem(resourceId) {
             const target = Number(resourceId || 0);
             if (!target) return null;
+            if (selectedResourceItem && Number(selectedResourceItem?.id || 0) === target) return selectedResourceItem;
             const direct = (resourceState.items || []).find(item => Number(item.id) === target);
             if (direct) return direct;
             for (const section of resourceState.channel_sections || []) {
-                const found = (section.items || []).find(item => Number(item.id) === target);
+                const found = getResourceSectionItems(section, '').find(item => Number(item.id) === target);
+                if (found) return found;
+            }
+            const searchKeyword = String(resourceState.search || '').trim();
+            for (const section of resourceState.search_sections || []) {
+                const found = getResourceSectionItems(section, searchKeyword).find(item => Number(item.id) === target);
                 if (found) return found;
             }
             return null;
+        }
+
+        function createTransientResourceItem(rawItem) {
+            const item = rawItem && typeof rawItem === 'object' ? rawItem : {};
+            const extra = item?.extra && typeof item.extra === 'object' ? item.extra : {};
+            return {
+                id: resourceTempIdSeed--,
+                source_type: String(item?.source_type || 'manual').trim() || 'manual',
+                source_name: String(item?.source_name || '').trim(),
+                channel_name: String(item?.channel_name || '').trim(),
+                title: String(item?.title || '未命名资源').trim() || '未命名资源',
+                normalized_title: String(item?.normalized_title || '').trim(),
+                raw_text: String(item?.raw_text || '').trim(),
+                link_url: String(item?.link_url || '').trim(),
+                link_type: String(item?.link_type || '').trim(),
+                message_url: String(item?.message_url || '').trim(),
+                quality: String(item?.quality || '').trim(),
+                year: String(item?.year || '').trim(),
+                published_at: String(item?.published_at || '').trim(),
+                created_at: new Date().toISOString(),
+                status: 'new',
+                extra: {
+                    cover_url: String(extra?.cover_url || '').trim(),
+                    source_post_id: String(extra?.source_post_id || '').trim(),
+                    source_url: String(extra?.source_url || '').trim()
+                },
+                cover_url: String(item?.cover_url || extra?.cover_url || '').trim(),
+                source_post_id: String(item?.source_post_id || extra?.source_post_id || '').trim(),
+            };
+        }
+
+        function serializeTransientResourceForJob(item) {
+            const resource = item && typeof item === 'object' ? item : {};
+            return {
+                source_type: String(resource?.source_type || 'manual').trim() || 'manual',
+                source_name: String(resource?.source_name || '').trim(),
+                channel_name: String(resource?.channel_name || '').trim(),
+                title: String(resource?.title || '未命名资源').trim() || '未命名资源',
+                normalized_title: String(resource?.normalized_title || '').trim(),
+                raw_text: String(resource?.raw_text || '').trim(),
+                link_url: String(resource?.link_url || '').trim(),
+                link_type: String(resource?.link_type || '').trim(),
+                message_url: String(resource?.message_url || '').trim(),
+                quality: String(resource?.quality || '').trim(),
+                year: String(resource?.year || '').trim(),
+                published_at: String(resource?.published_at || '').trim(),
+                extra: {
+                    cover_url: String(resource?.cover_url || resource?.extra?.cover_url || '').trim(),
+                    source_post_id: String(resource?.source_post_id || resource?.extra?.source_post_id || '').trim(),
+                    source_url: String(resource?.extra?.source_url || '').trim()
+                }
+            };
+        }
+
+        function getResourceItemIdentity(item) {
+            const sourcePostId = String(item?.source_post_id || item?.extra?.source_post_id || '').trim();
+            if (sourcePostId) return `post:${sourcePostId}`;
+            const messageUrl = String(item?.message_url || '').trim();
+            if (messageUrl) return `msg:${messageUrl}`;
+            const linkUrl = String(item?.link_url || '').trim();
+            if (linkUrl) return `link:${linkUrl}`;
+            const id = Number(item?.id || 0);
+            if (id) return `id:${id}`;
+            return `title:${String(item?.title || '').trim()}|raw:${String(item?.raw_text || '').trim().slice(0, 120)}`;
+        }
+
+        function ensureResourceClientId(item) {
+            const payload = item && typeof item === 'object' ? item : {};
+            const numericId = Number(payload?.id || 0);
+            if (numericId) return { ...payload, id: numericId };
+            const identity = getResourceItemIdentity(payload);
+            let clientId = resourceClientIdsByIdentity[identity];
+            if (!clientId) {
+                clientId = resourceClientIdSeed--;
+                resourceClientIdsByIdentity = {
+                    ...resourceClientIdsByIdentity,
+                    [identity]: clientId
+                };
+            }
+            return {
+                ...payload,
+                id: clientId
+            };
+        }
+
+        function hydrateResourceItems(items) {
+            return (Array.isArray(items) ? items : []).map(item => ensureResourceClientId(item));
+        }
+
+        function hydrateResourceSections(sections) {
+            return (Array.isArray(sections) ? sections : []).map(section => ({
+                ...section,
+                items: hydrateResourceItems(section?.items || [])
+            }));
+        }
+
+        function dedupeResourceItems(items) {
+            const seen = new Set();
+            const result = [];
+            (Array.isArray(items) ? items : []).forEach(item => {
+                const key = getResourceItemIdentity(item);
+                if (!key || seen.has(key)) return;
+                seen.add(key);
+                result.push(item);
+            });
+            return result;
+        }
+
+        function getResourceItemSortScore(item) {
+            const postCursor = Number(getResourceItemPostCursor(item) || 0);
+            if (Number.isFinite(postCursor) && postCursor > 0) return postCursor;
+            const publishedAt = Date.parse(item?.published_at || item?.created_at || '');
+            if (Number.isFinite(publishedAt) && publishedAt > 0) return publishedAt;
+            return Number(item?.id || 0);
+        }
+
+        function getResourceItemPostCursor(item) {
+            const sourcePostId = String(item?.source_post_id || item?.extra?.source_post_id || '').trim();
+            const sourceMatch = sourcePostId.match(/\/(\d+)$/);
+            if (sourceMatch) return sourceMatch[1];
+            const messageUrl = String(item?.message_url || '').trim();
+            const urlMatch = messageUrl.match(/\/(\d+)(?:\?.*)?$/);
+            return urlMatch ? urlMatch[1] : '';
+        }
+
+        function getResourceSectionPagingKey(channelId, searchKeyword = '') {
+            const normalizedChannelId = normalizeTelegramChannelIdInput(channelId || '');
+            if (!normalizedChannelId) return '';
+            const keyword = String(searchKeyword || '').trim().toLowerCase();
+            return keyword ? `search:${keyword}:${normalizedChannelId}` : `feed:${normalizedChannelId}`;
+        }
+
+        function getResourceSectionPagingMeta(section, searchKeyword = '') {
+            const pagingKey = getResourceSectionPagingKey(section?.channel_id || '', searchKeyword);
+            const sectionItems = Array.isArray(section?.items) ? section.items : [];
+            const fallbackBefore = getResourceItemPostCursor(sectionItems[sectionItems.length - 1]);
+            const sectionHasMore = typeof section?.has_more === 'boolean'
+                ? section.has_more
+                : Number(section?.item_count || 0) > sectionItems.length;
+            return {
+                key: pagingKey,
+                loading: !!resourceChannelLoadingMore[pagingKey],
+                nextBefore: String(resourceChannelNextBefore[pagingKey] || section?.next_before || fallbackBefore || '').trim(),
+                noMore: Object.prototype.hasOwnProperty.call(resourceChannelNoMore, pagingKey)
+                    ? !!resourceChannelNoMore[pagingKey]
+                    : !sectionHasMore,
+            };
+        }
+
+        function getResourceSectionItems(section, searchKeyword = '') {
+            const channelId = normalizeTelegramChannelIdInput(section?.channel_id || '');
+            const pagingKey = getResourceSectionPagingKey(channelId, searchKeyword);
+            return dedupeResourceItems([
+                ...(Array.isArray(section?.items) ? section.items : []),
+                ...(Array.isArray(resourceChannelExtraItems[pagingKey]) ? resourceChannelExtraItems[pagingKey] : [])
+            ]).sort((a, b) => getResourceItemSortScore(b) - getResourceItemSortScore(a));
+        }
+
+        function normalizeResourceStatusForDisplay(status) {
+            const normalized = String(status || '').trim().toLowerCase();
+            if (normalized === 'pending') return 'queued';
+            if (normalized === 'running') return 'importing';
+            return normalized || 'new';
+        }
+
+        function findMatchingResourceJob(item) {
+            const itemKeys = uniquePreserveOrder([
+                String(item?.source_post_id || item?.extra?.source_post_id || '').trim() ? `post:${String(item?.source_post_id || item?.extra?.source_post_id || '').trim()}` : '',
+                String(item?.message_url || '').trim() ? `msg:${String(item?.message_url || '').trim()}` : '',
+                String(item?.link_url || '').trim() ? `link:${String(item?.link_url || '').trim()}` : ''
+            ].filter(Boolean));
+            if (!itemKeys.length) return null;
+            const jobs = Array.isArray(resourceState.jobs) ? resourceState.jobs : [];
+            for (const job of jobs) {
+                const jobKeys = new Set(uniquePreserveOrder([
+                    String(job?.source_post_id || '').trim() ? `post:${String(job?.source_post_id || '').trim()}` : '',
+                    String(job?.message_url || '').trim() ? `msg:${String(job?.message_url || '').trim()}` : '',
+                    String(job?.link_url || '').trim() ? `link:${String(job?.link_url || '').trim()}` : ''
+                ].filter(Boolean)));
+                if (itemKeys.some(key => jobKeys.has(key))) return job;
+            }
+            return null;
+        }
+
+        function getResourceDisplayStatus(item) {
+            const matchedJob = findMatchingResourceJob(item);
+            if (matchedJob) {
+                return normalizeResourceStatusForDisplay(matchedJob?.status);
+            }
+            return normalizeResourceStatusForDisplay(item?.status);
         }
 
         function getResourceCopyText(item) {
@@ -1010,7 +1589,7 @@
         function buildResourcePoster(item) {
             const title = escapeHtml(item?.title || '未命名资源');
             const sourceLabel = escapeHtml((item?.source_name || item?.channel_name || '资源').slice(0, 18) || '资源');
-            const coverUrl = String(item?.cover_url || '').trim();
+            const coverUrl = String(item?.cover_url || item?.extra?.cover_url || '').trim();
             if (!coverUrl) {
                 return `<div class="resource-poster resource-placeholder">${sourceLabel}</div>`;
             }
@@ -1025,6 +1604,7 @@
 
         function buildResourceEntryRow(entry, { showOpenButton = false } = {}) {
             const isDir = !!entry?.is_dir;
+            const normalizedEntryId = String(entry?.id || '').trim();
             const name = escapeHtml(entry?.name || '--');
             const idText = escapeHtml(isDir ? (entry?.id || '--') : (entry?.pick_code || entry?.sha1 || '--'));
             const meta = isDir
@@ -1034,7 +1614,7 @@
                 ? `<button type="button" data-resource-folder-action="open" data-resource-folder-id="${escapeHtml(entry?.id || '')}" data-resource-folder-name="${name}" class="resource-entry-action shrink-0">进入</button>`
                 : `<span class="resource-entry-flag shrink-0">${isDir ? '目录' : escapeHtml(formatFileSizeText(entry?.size || 0))}</span>`;
             return `
-                <div class="resource-entry ${isDir ? 'resource-entry-dir' : 'resource-entry-file'}">
+                <div class="resource-entry ${isDir ? 'resource-entry-dir' : 'resource-entry-file'}" data-resource-entry-id="${escapeHtml(normalizedEntryId)}">
                     <div class="resource-entry-main">
                         <span class="resource-entry-icon">${getResourceIconSvg(isDir ? 'folder' : 'file')}</span>
                         <div class="min-w-0">
@@ -1049,7 +1629,7 @@
 
         function buildResourceMeta(item) {
             const tokens = [];
-            const sourceName = String(item?.source_name || item?.channel_name || '手动录入').trim();
+            const sourceName = String(item?.source_name || item?.channel_name || '频道资源').trim();
             if (sourceName) tokens.push(sourceName);
             if (item?.year) tokens.push(String(item.year));
             if (item?.quality) tokens.push(String(item.quality));
@@ -1077,13 +1657,12 @@
                             <div class="min-w-0">
                                 <button type="button" data-resource-action="preview" data-resource-id="${item.id}" class="resource-card-title break-words text-left bg-transparent border-none p-0 hover:text-sky-700 transition-colors">${escapeHtml(item?.title || '未命名资源')}</button>
                                     <div class="flex flex-wrap items-center gap-2 mt-2">
-                                        ${buildResourceStatusBadge(item?.status)}
+                                        ${buildResourceStatusBadge(getResourceDisplayStatus(item))}
                                         <span class="text-[10px] px-3 py-1 rounded-full bg-slate-700 text-slate-100">${escapeHtml(getResourceLinkTypeLabel(getEffectiveResourceLinkType(item)))}</span>
                                         ${item?.quality ? `<span class="text-[10px] px-3 py-1 rounded-full bg-sky-500/15 text-sky-300 border border-sky-500/20">${escapeHtml(item.quality)}</span>` : ''}
                                         ${item?.year ? `<span class="text-[10px] px-3 py-1 rounded-full bg-violet-500/15 text-violet-300 border border-violet-500/20">${escapeHtml(item.year)}</span>` : ''}
                                     </div>
                             </div>
-                            <button type="button" data-resource-action="delete" data-resource-id="${item.id}" class="text-[11px] font-bold text-slate-400 hover:text-red-300 shrink-0">删除</button>
                         </div>
                         <div class="resource-card-meta mt-3">${buildResourceMeta(item)}</div>
                         <div class="resource-card-desc mt-3">${buildResourceDescription(item)}</div>
@@ -1110,37 +1689,6 @@
                 [normalized]: !isResourceSectionCollapsed(normalized)
             };
             renderResourceBoard();
-        }
-
-        function renderResourceChannelTabs() {
-            const container = document.getElementById('resource-channel-tabs');
-            if (!container) return;
-            const sources = getEnabledResourceSources();
-            const channelIds = new Set(sources.map(source => getResourceSourceChannelId(source)));
-            if (selectedResourceChannelId && !channelIds.has(selectedResourceChannelId)) {
-                selectedResourceChannelId = '';
-            }
-            if (!sources.length) {
-                container.innerHTML = '<span class="resource-chip">暂无已启用频道</span>';
-                return;
-            }
-            const tabs = [
-                {
-                    channel_id: '',
-                    label: '全部频道'
-                },
-                ...sources.map(source => ({
-                    channel_id: getResourceSourceChannelId(source),
-                    label: source.name || getResourceSourceChannelId(source)
-                }))
-            ];
-            container.innerHTML = tabs.map(tab => `
-                <button
-                    type="button"
-                    data-resource-channel="${escapeHtml(tab.channel_id || '__all__')}"
-                    class="resource-chip ${selectedResourceChannelId === tab.channel_id ? 'resource-chip-active' : ''}"
-                >${escapeHtml(tab.label)}</button>
-            `).join('');
         }
 
         function syncResourceSourceSelect() {
@@ -1239,7 +1787,7 @@
             if (!match.savepath) {
                 hiddenInput.value = '';
                 displayInput.textContent = '请先选择保存目录';
-                delayInput.disabled = true;
+                delayInput.disabled = false;
                 renderResourceImportBehaviorHint('');
                 return;
             }
@@ -1248,11 +1796,10 @@
 
             if (match.taskName) {
                 displayInput.textContent = match.taskName;
-                delayInput.disabled = false;
             } else {
                 displayInput.textContent = '当前目录不自动触发';
-                delayInput.disabled = true;
             }
+            delayInput.disabled = false;
 
             renderResourceImportBehaviorHint(match.savepath);
             renderResourceImportSummary();
@@ -1278,55 +1825,155 @@
             if (selectionCountEl) selectionCountEl.textContent = selectionText;
         }
 
-        function renderResourceBoard() {
-            const container = document.getElementById('resource-board');
-            const hint = document.getElementById('resource-board-hint');
-            if (!container || !hint) return;
+        function syncResourceChannelPagingState() {
+            const searchKeyword = String(resourceState.search || '').trim();
+            const validKeys = new Set();
+            (resourceState.channel_sections || []).forEach(section => {
+                const key = getResourceSectionPagingKey(section?.channel_id || '', '');
+                if (key) validKeys.add(key);
+            });
+            (resourceState.search_sections || []).forEach(section => {
+                const key = getResourceSectionPagingKey(section?.channel_id || '', searchKeyword);
+                if (key) validKeys.add(key);
+            });
+            [resourceChannelExtraItems, resourceChannelLoadingMore, resourceChannelNextBefore, resourceChannelNoMore].forEach(store => {
+                Object.keys(store).forEach(key => {
+                    if (!validKeys.has(key)) delete store[key];
+                });
+            });
+        }
 
-            const keyword = document.getElementById('resource-search-input')?.value?.trim() || '';
-            const status = document.getElementById('resource-status-filter')?.value || '';
-            const sections = (resourceState.channel_sections || []).filter(section => section.enabled !== false);
-            const filteredSections = selectedResourceChannelId
-                ? sections.filter(section => normalizeTelegramChannelIdInput(section.channel_id) === selectedResourceChannelId)
-                : sections;
-            const listMode = !!keyword || !!status;
+        async function loadMoreResourceChannelItems(channelId, searchKeyword = '') {
+            const normalizedChannelId = normalizeTelegramChannelIdInput(channelId || '');
+            const keyword = String(searchKeyword || '').trim();
+            const pagingKey = getResourceSectionPagingKey(normalizedChannelId, keyword);
+            if (!normalizedChannelId || !pagingKey || resourceChannelLoadingMore[pagingKey]) return null;
+            const sectionPool = keyword ? (resourceState.search_sections || []) : (resourceState.channel_sections || []);
+            const section = sectionPool.find(item => normalizeTelegramChannelIdInput(item?.channel_id || '') === normalizedChannelId);
+            if (!section) return null;
 
-            if (listMode) {
-                const items = resourceState.items || [];
-                const channelLabel = selectedResourceChannelId
-                    ? (getEnabledResourceSources().find(source => getResourceSourceChannelId(source) === selectedResourceChannelId)?.name || selectedResourceChannelId)
-                    : '全部频道';
-                const filteredCount = Number(resourceState?.stats?.filtered_item_count ?? items.length ?? 0);
-                hint.innerText = `搜索结果：关键词「${keyword || '全部'}」 / 状态「${status ? getResourceStatusLabel(status) : '全部'}」 / 频道「${channelLabel}」 / 共 ${filteredCount} 条`;
-                if (!items.length) {
-                    container.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">没有命中资源。可以先点“同步频道”，或者直接在搜索框里粘贴 magnet / 115 分享链接。</div>';
-                    return;
-                }
-                container.innerHTML = `<div class="resource-grid">${items.map(item => buildResourceCard(item)).join('')}</div>`;
-                return;
+            const currentItems = getResourceSectionItems(section, keyword);
+            const meta = getResourceSectionPagingMeta(section, keyword);
+            const before = String(meta.nextBefore || getResourceItemPostCursor(currentItems[currentItems.length - 1]) || '').trim();
+
+            resourceChannelLoadingMore = {
+                ...resourceChannelLoadingMore,
+                [pagingKey]: true
+            };
+            renderResourceBoard();
+
+            try {
+                const res = await fetch('/resource/channels/more', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        channel_id: normalizedChannelId,
+                        before,
+                        limit: 10,
+                        query: keyword
+                    })
+                });
+                const data = await res.json();
+                if (!res.ok || !data.ok) throw new Error(data.msg || '获取更多资源失败');
+
+                const incomingItems = hydrateResourceItems(Array.isArray(data.items) ? data.items : []);
+                const mergedItems = dedupeResourceItems([
+                    ...(Array.isArray(resourceChannelExtraItems[pagingKey]) ? resourceChannelExtraItems[pagingKey] : []),
+                    ...incomingItems
+                ]);
+                resourceChannelExtraItems = {
+                    ...resourceChannelExtraItems,
+                    [pagingKey]: mergedItems
+                };
+                resourceChannelNextBefore = {
+                    ...resourceChannelNextBefore,
+                    [pagingKey]: String(data.next_before || '').trim()
+                };
+                resourceChannelNoMore = {
+                    ...resourceChannelNoMore,
+                    [pagingKey]: incomingItems.length === 0 || !String(data.next_before || '').trim()
+                };
+                const nextSectionPool = sectionPool.map(item => {
+                    if (normalizeTelegramChannelIdInput(item?.channel_id || '') !== normalizedChannelId) return item;
+                    const nextShownCount = dedupeResourceItems([
+                        ...currentItems,
+                        ...incomingItems
+                    ]).length;
+                    return {
+                        ...item,
+                        item_count: keyword
+                            ? Math.max(Number(item?.item_count || 0), nextShownCount)
+                            : Math.max(Number(item?.item_count || 0), Number(data.total_count || 0)),
+                        next_before: String(data.next_before || '').trim(),
+                        has_more: Boolean(data.has_more) && !!String(data.next_before || '').trim(),
+                        last_error: ''
+                    };
+                });
+                resourceState = {
+                    ...resourceState,
+                    items: keyword
+                        ? dedupeResourceItems(nextSectionPool.flatMap(item => getResourceSectionItems(item, keyword)))
+                        : resourceState.items,
+                    channel_sections: keyword ? resourceState.channel_sections : nextSectionPool,
+                    search_sections: keyword ? nextSectionPool : resourceState.search_sections,
+                    stats: keyword
+                        ? {
+                            ...(resourceState.stats || {}),
+                            filtered_item_count: nextSectionPool.reduce((sum, item) => sum + getResourceSectionItems(item, keyword).length, 0)
+                        }
+                        : resourceState.stats
+                };
+                const itemCountEl = document.getElementById('resource-item-count');
+                if (itemCountEl) itemCountEl.innerText = String(Number(resourceState?.stats?.item_count || 0));
+                renderResourceBoard();
+                return data;
+            } catch (e) {
+                alert(`❌ ${e.message || '获取更多资源失败'}`);
+                return null;
+            } finally {
+                resourceChannelLoadingMore = {
+                    ...resourceChannelLoadingMore,
+                    [pagingKey]: false
+                };
+                renderResourceBoard();
             }
+        }
 
-            if (!filteredSections.length) {
-                hint.innerText = '空搜索时显示每个启用频道最近 10 条资源；如果列表为空，请先点击“同步频道”。';
-                container.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">还没有可展示的频道资源。先在“参数配置”里添加频道，并执行一次同步即可。</div>';
-                return;
-            }
+        function buildResourceSectionCard(section, { searchKeyword = '' } = {}) {
+            const keyword = String(searchKeyword || '').trim();
+            const isSearchSection = !!keyword;
+            const sectionItems = getResourceSectionItems(section, keyword);
+            const pagingMeta = getResourceSectionPagingMeta(section, keyword);
+            const normalizedChannelId = normalizeTelegramChannelIdInput(section?.channel_id || '');
+            const shownCount = sectionItems.length;
+            const primaryBadge = isSearchSection
+                ? `命中 ${shownCount} 条`
+                : `最近 ${Math.min((Array.isArray(section.items) ? section.items.length : 0), 10)} 条`;
+            const secondaryBadge = isSearchSection
+                ? `${escapeHtml(String(section?.pages_scanned || 0))} 页搜索结果`
+                : `首页缓存 ${escapeHtml(String(section.item_count || (section.items || []).length || 0))} 条`;
+            const subtleText = isSearchSection
+                ? '当前按频道源分组展示命中结果，可继续获取更早匹配内容。'
+                : `最近同步：${escapeHtml(formatResourceSyncTime(section.last_sync_at))}`;
+            const footerText = isSearchSection
+                ? `当前已显示 ${escapeHtml(String(shownCount))} 条命中结果。`
+                : `当前已展开 ${escapeHtml(String(shownCount))} 条；首页缓存 ${escapeHtml(String(section.item_count || 0))} 条最新记录。`;
+            const emptyText = isSearchSection
+                ? '这个频道暂时没有可展示的命中结果。'
+                : '这个频道还没有同步到资源，稍后再试一次同步。';
 
-            hint.innerText = selectedResourceChannelId
-                ? '当前只看所选订阅源最近 10 条资源。'
-                : '空搜索时会按订阅源逐栏展示最近 10 条资源；搜索时显示命中结果。';
-            container.innerHTML = filteredSections.map(section => `
+            return `
                 <section class="resource-section-card" data-collapsed="${isResourceSectionCollapsed(section.channel_id) ? 'true' : 'false'}">
                     <div class="resource-section-header">
                         <button type="button" data-resource-section-toggle="${escapeHtml(section.channel_id || '')}" class="resource-section-header-main min-w-0 flex-1 text-left bg-transparent border-none p-0">
                             <div class="flex flex-wrap items-center gap-2">
                                 <h4 class="text-lg font-black text-white">${escapeHtml(section.name || section.channel_id || '未命名频道')}</h4>
                                 <span class="text-[11px] px-3 py-1 rounded-full bg-slate-800 text-slate-300 border border-slate-700">@${escapeHtml(section.channel_id || '--')}</span>
-                                <span class="text-[11px] px-3 py-1 rounded-full bg-sky-500/10 text-sky-300 border border-sky-500/20">最近 ${Math.min((section.items || []).length, 10)} 条</span>
-                                <span class="text-[11px] px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">已同步 ${escapeHtml(String(section.item_count || (section.items || []).length || 0))} 条</span>
-                                ${section.last_error ? '<span class="text-[11px] px-3 py-1 rounded-full bg-rose-500/10 text-rose-300 border border-rose-500/20">同步异常</span>' : ''}
+                                <span class="text-[11px] px-3 py-1 rounded-full bg-sky-500/10 text-sky-300 border border-sky-500/20">${primaryBadge}</span>
+                                <span class="text-[11px] px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">${secondaryBadge}</span>
+                                ${!isSearchSection && section.last_error ? '<span class="text-[11px] px-3 py-1 rounded-full bg-rose-500/10 text-rose-300 border border-rose-500/20">同步异常</span>' : ''}
                             </div>
-                            <div class="subtle mt-2">最近同步：${escapeHtml(formatResourceSyncTime(section.last_sync_at))}</div>
+                            <div class="subtle mt-2">${subtleText}</div>
                         </button>
                         <div class="flex items-center gap-2 shrink-0">
                             <a href="${escapeHtml(section.url || '#')}" target="_blank" rel="noopener noreferrer" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 text-sm font-bold border border-slate-700">打开频道</a>
@@ -1334,25 +1981,73 @@
                         </div>
                     </div>
                     <div class="resource-section-body">
-                        ${section.last_error ? `<div class="rounded-2xl border border-rose-500/20 bg-rose-500/10 p-5 text-sm text-rose-200 mb-4">频道同步失败：${escapeHtml(section.last_error || '未知错误')}</div>` : ''}
-                        ${(section.items || []).length
-                            ? `<div class="resource-grid">${(section.items || []).map(item => buildResourceCard(item)).join('')}</div>`
-                            : '<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">这个频道还没有同步到资源，稍后再试一次同步。</div>'
+                        ${!isSearchSection && section.last_error ? `<div class="rounded-2xl border border-rose-500/20 bg-rose-500/10 p-5 text-sm text-rose-200 mb-4">频道同步失败：${escapeHtml(section.last_error || '未知错误')}</div>` : ''}
+                        ${sectionItems.length
+                            ? `<div class="resource-grid">${sectionItems.map(item => buildResourceCard(item)).join('')}</div>`
+                            : `<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">${emptyText}</div>`
                         }
+                        <div class="resource-section-footer">
+                            <div class="resource-section-footer-text">${footerText}</div>
+                            <button
+                                type="button"
+                                data-resource-load-more="${escapeHtml(normalizedChannelId)}"
+                                class="resource-section-more-btn ${pagingMeta.loading ? 'btn-disabled' : ''}"
+                                ${pagingMeta.loading || pagingMeta.noMore ? 'disabled' : ''}
+                            >${pagingMeta.loading
+                                ? '获取中...'
+                                : (pagingMeta.noMore ? '没有更多资源了' : '获取更多资源')
+                            }</button>
+                        </div>
                     </div>
                 </section>
-            `).join('');
+            `;
+        }
+
+        function renderResourceBoard() {
+            const container = document.getElementById('resource-board');
+            const hint = document.getElementById('resource-board-hint');
+            if (!container || !hint) return;
+
+            const activeKeyword = String(resourceState.search || '').trim();
+            const isSearchMode = !!activeKeyword;
+            const sections = (resourceState.channel_sections || []).filter(section => section.enabled !== false);
+            if (isSearchMode) {
+                const searchSections = (resourceState.search_sections || []).filter(section => section.enabled !== false);
+                const filteredCount = Number(resourceState?.stats?.filtered_item_count ?? 0);
+                const searchedSources = Number(resourceState?.search_meta?.searched_sources || 0);
+                const searchErrors = Array.isArray(resourceState?.search_meta?.errors) ? resourceState.search_meta.errors : [];
+                hint.innerText = `频道内搜索：关键词「${activeKeyword}」 / 命中 ${filteredCount} 条${searchedSources ? ` / 已检索 ${searchedSources} 个订阅源` : ''}${searchErrors.length ? ` / ${searchErrors.length} 个频道暂未返回` : ''}`;
+                if (!searchSections.length) {
+                    container.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">没有在已启用订阅频道里找到匹配内容。可以先同步频道，或直接粘贴 magnet / 115 分享链接进入导入。</div>';
+                    return;
+                }
+                const errorNote = searchErrors.length
+                    ? `<div class="rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-100">${escapeHtml(`以下频道本次未返回结果：${searchErrors.map(item => item?.name || item?.channel_id || '未命名频道').join('、')}`)}</div>`
+                    : '';
+                container.innerHTML = `${errorNote}${errorNote ? '<div class="h-4"></div>' : ''}${searchSections.map(section => buildResourceSectionCard(section, { searchKeyword: activeKeyword })).join('')}`;
+                return;
+            }
+
+            if (!sections.length) {
+                hint.innerText = '默认按订阅频道分栏展示最近 10 条资源；底部可继续获取更早内容。';
+                container.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">还没有可展示的频道资源。先在“参数配置”里添加频道，并执行一次同步即可。</div>';
+                return;
+            }
+
+            hint.innerText = '默认按订阅频道分栏展示最近 10 条资源；底部可继续获取更早内容。';
+            container.innerHTML = sections.map(section => buildResourceSectionCard(section, { searchKeyword: '' })).join('');
         }
 
         function applyResourceState(data) {
             if (!data) return;
             const nextSources = Array.isArray(data.sources) ? data.sources : (resourceState.sources || []);
-            const nextItems = Array.isArray(data.items) ? data.items : (resourceState.items || []);
+            const nextItems = hydrateResourceItems(Array.isArray(data.items) ? data.items : (resourceState.items || []));
             const nextJobs = Array.isArray(data.jobs) ? data.jobs : (resourceState.jobs || []);
             const nextStats = data.stats || {
                 source_count: nextSources.length,
-                item_count: nextItems.length,
-                job_count: nextJobs.length
+                item_count: Number(resourceState?.stats?.item_count || 0),
+                filtered_item_count: nextItems.length,
+                completed_job_count: Number(resourceState?.stats?.completed_job_count ?? 0)
             };
             resourceState = {
                 ...resourceState,
@@ -1360,14 +2055,15 @@
                 sources: nextSources,
                 items: nextItems,
                 jobs: nextJobs,
-                channel_sections: Array.isArray(data.channel_sections) ? data.channel_sections : (resourceState.channel_sections || []),
+                channel_sections: hydrateResourceSections(Array.isArray(data.channel_sections) ? data.channel_sections : (resourceState.channel_sections || [])),
+                search_sections: hydrateResourceSections(Array.isArray(data.search_sections) ? data.search_sections : (resourceState.search_sections || [])),
                 last_syncs: data.last_syncs || resourceState.last_syncs || {},
                 monitor_tasks: Array.isArray(data.monitor_tasks) ? data.monitor_tasks : (resourceState.monitor_tasks || monitorState.tasks || []),
-                stats: nextStats
+                stats: nextStats,
+                search: typeof data.search === 'string' ? data.search : (resourceState.search || ''),
+                search_meta: data.search_meta || resourceState.search_meta || {}
             };
-            if (typeof data.channel_id === 'string') {
-                selectedResourceChannelId = normalizeTelegramChannelIdInput(data.channel_id);
-            }
+            syncResourceChannelPagingState();
             if (selectedResourceId) {
                 const refreshedSelectedItem = findResourceItem(selectedResourceId);
                 if (refreshedSelectedItem) selectedResourceItem = refreshedSelectedItem;
@@ -1375,15 +2071,28 @@
 
             const stats = resourceState.stats || {};
             document.getElementById('resource-source-count').innerText = String(stats.source_count ?? resourceState.sources.length ?? 0);
-            document.getElementById('resource-item-count').innerText = String(stats.item_count ?? resourceState.items.length ?? 0);
-            document.getElementById('resource-job-count').innerText = String(stats.job_count ?? resourceState.jobs.length ?? 0);
+            document.getElementById('resource-item-count').innerText = String(stats.item_count ?? 0);
+            const completedCount = Number(stats.completed_job_count ?? 0);
+            const completedCountEl = document.getElementById('resource-completed-job-count');
+            if (completedCountEl) completedCountEl.innerText = String(completedCount);
+            const clearCompletedBtn = document.getElementById('resource-clear-completed-btn');
+            if (clearCompletedBtn) {
+                clearCompletedBtn.textContent = completedCount > 0
+                    ? `清空已完成（${completedCount}）`
+                    : '清空已完成';
+                clearCompletedBtn.disabled = completedCount <= 0;
+                clearCompletedBtn.classList.toggle('btn-disabled', completedCount <= 0);
+            }
             document.getElementById('resource-cookie-hint').classList.toggle('hidden', !!resourceState.cookie_configured);
             syncResourceSourceSelect();
             syncResourceMonitorTaskOptions(document.getElementById('resource_job_savepath')?.value || '');
-            renderResourceChannelTabs();
             renderResourceSources();
             renderResourceBoard();
             renderResourceJobs();
+            syncResourceJobModalTrigger();
+            syncResourceSearchClearButton();
+            syncResourceActionButtons();
+            renderResourceTgHealthStatus();
             if (selectedResourceItem) renderResourceModalLayout(selectedResourceItem);
             renderResourceShareBrowser();
             renderResourceTargetPreview();
@@ -1395,14 +2104,82 @@
             }
         }
 
-        async function refreshResourceState() {
+        function syncResourceSearchClearButton() {
+            const input = document.getElementById('resource-search-input');
+            const clearBtn = document.getElementById('resource-search-clear-btn');
+            if (!input || !clearBtn) return;
+            const hasValue = !!String(input.value || '').trim();
+            clearBtn.classList.toggle('hidden', !hasValue);
+            clearBtn.disabled = !hasValue;
+            syncResourceActionButtons();
+        }
+
+        function syncResourceActionButtons() {
+            const input = document.getElementById('resource-search-input');
+            const hint = document.getElementById('resource-board-hint');
+            const searchBtn = document.getElementById('resource-search-btn');
+            const syncBtn = document.getElementById('resource-sync-btn');
+            const keyword = String(input?.value || resourceState.search || '').trim();
+            const directImport = isDirectImportInput(keyword);
+
+            if (searchBtn) {
+                const blocked = resourceSearchBusy || resourceSyncBusy;
+                searchBtn.disabled = blocked;
+                searchBtn.classList.toggle('btn-disabled', blocked);
+                searchBtn.classList.toggle('is-loading', resourceSearchBusy);
+                searchBtn.setAttribute('aria-busy', resourceSearchBusy ? 'true' : 'false');
+                searchBtn.textContent = resourceSearchBusy
+                    ? (directImport ? '识别中...' : '搜索中...')
+                    : '搜索';
+            }
+
+            if (syncBtn) {
+                const blocked = resourceSyncBusy || resourceSearchBusy;
+                syncBtn.disabled = blocked;
+                syncBtn.classList.toggle('btn-disabled', blocked);
+                syncBtn.classList.toggle('is-loading', resourceSyncBusy);
+                syncBtn.setAttribute('aria-busy', resourceSyncBusy ? 'true' : 'false');
+                syncBtn.textContent = resourceSyncBusy ? '同步中...' : '同步频道';
+            }
+
+            if (hint) {
+                const busy = resourceSearchBusy || resourceSyncBusy;
+                hint.classList.toggle('is-loading', busy);
+                if (resourceSearchBusy) {
+                    hint.innerText = directImport
+                        ? '正在识别导入链接，请稍候。'
+                        : `正在频道内搜索「${keyword || '...'}」，请稍候。`;
+                } else if (resourceSyncBusy) {
+                    hint.innerText = '正在刷新订阅频道资源，请稍候。';
+                }
+            }
+        }
+
+        function resetResourceSearchResults() {
+            resourceState = {
+                ...resourceState,
+                search: '',
+                items: [],
+                search_sections: [],
+                search_meta: {},
+                stats: {
+                    ...(resourceState.stats || {}),
+                    filtered_item_count: 0
+                }
+            };
+            syncResourceChannelPagingState();
+            renderResourceBoard();
+        }
+
+        async function refreshResourceState({ allowSearch = true, keywordOverride = null } = {}) {
             try {
-                const q = document.getElementById('resource-search-input')?.value?.trim() || '';
-                const status = document.getElementById('resource-status-filter')?.value || '';
+                const activeKeyword = typeof keywordOverride === 'string'
+                    ? keywordOverride.trim()
+                    : String(resourceState.search || '').trim();
+                const shouldSearchChannels = !!activeKeyword && !isDirectImportInput(activeKeyword) && allowSearch;
+                if (!!activeKeyword && !allowSearch && !isDirectImportInput(activeKeyword)) return null;
                 const params = new URLSearchParams();
-                if (q) params.set('q', q);
-                if (status) params.set('status', status);
-                if (selectedResourceChannelId) params.set('channel_id', selectedResourceChannelId);
+                if (shouldSearchChannels) params.set('q', activeKeyword);
                 const endpoint = params.toString() ? `/resource/state?${params.toString()}` : '/resource/state';
                 const res = await fetch(endpoint);
                 if (!res.ok) return null;
@@ -1422,7 +2199,7 @@
         }
 
         async function parseResourceInputFromSearch(rawText) {
-            const res = await fetch('/resource/items/import_text', {
+            const res = await fetch('/resource/items/preview_text', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
@@ -1433,43 +2210,58 @@
             if (!res.ok || !data.ok) {
                 throw new Error(data.msg || '链接解析失败');
             }
-            await refreshResourceState();
             const items = Array.isArray(data.items) ? data.items : [];
             const preferred = items.find(item => canOpenResourceImport(item)) || items[0];
             if (preferred) {
-                openResourceDetailModal(preferred.id);
+                openResourceItemModal(createTransientResourceItem(preferred), 'import');
             }
             return {
-                inserted: data.inserted || 0,
-                updated: data.updated || 0,
+                inserted: 0,
+                updated: 0,
                 item: preferred || null
             };
         }
 
         async function searchResources() {
             const keyword = document.getElementById('resource-search-input')?.value?.trim() || '';
+            if (resourceSearchBusy || resourceSyncBusy) return null;
             if (!keyword) {
-                await refreshResourceState();
-                return;
+                renderResourceBoard();
+                return null;
             }
-            if (isDirectImportInput(keyword)) {
-                try {
-                    selectedResourceChannelId = '';
-                    document.getElementById('resource-status-filter').value = '';
+            const startedAt = performance.now();
+            resourceSearchBusy = true;
+            if (!isDirectImportInput(keyword)) showResourceTgHealthLoading('search', keyword);
+            syncResourceActionButtons();
+            try {
+                if (isDirectImportInput(keyword)) {
+                    if (String(resourceState.search || '').trim()) resetResourceSearchResults();
                     const result = await parseResourceInputFromSearch(keyword);
-                    const suffix = result.item ? '，已为你打开资源详情面板。' : '。';
-                    alert(`✅ 解析完成：新增 ${result.inserted} 条，更新 ${result.updated} 条${suffix}`);
-                } catch (e) {
-                    alert(`❌ ${e.message}`);
+                    const suffix = result.item ? '，已直接打开导入面板。' : '。';
+                    alert(`✅ 识别完成${suffix}`);
+                    return result;
                 }
-                return;
+                const data = await refreshResourceState({ allowSearch: true, keywordOverride: keyword });
+                if (!data) throw new Error('搜索请求失败，请稍后重试');
+                applyResourceTgHealthFromSearchResult(data, keyword, getActionElapsedMs(startedAt));
+                return data;
+            } catch (e) {
+                if (!isDirectImportInput(keyword)) applyResourceTgHealthFailure('search', e, getActionElapsedMs(startedAt));
+                alert(`❌ ${e.message || '搜索失败'}`);
+                return null;
+            } finally {
+                resourceSearchBusy = false;
+                syncResourceActionButtons();
+                if (!resourceSyncBusy) renderResourceBoard();
             }
-            await refreshResourceState();
         }
 
         async function syncResourceChannels(force = false, { silent = false } = {}) {
-            if (resourceSyncBusy) return null;
+            if (resourceSyncBusy || resourceSearchBusy) return null;
+            const startedAt = performance.now();
             resourceSyncBusy = true;
+            if (!silent) showResourceTgHealthLoading('sync');
+            syncResourceActionButtons();
             try {
                 const res = await fetch('/resource/channels/sync', {
                     method: 'POST',
@@ -1479,6 +2271,7 @@
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.msg || '同步失败');
                 await refreshResourceState();
+                if (!silent) applyResourceTgHealthFromSyncResult(data, getActionElapsedMs(startedAt));
                 if (!silent) {
                     if (Array.isArray(data.errors) && data.errors.length) {
                         const detail = data.errors.map(item => `${item.name || item.channel_id}: ${item.message}`).join('\n');
@@ -1489,18 +2282,52 @@
                 }
                 return data;
             } catch (e) {
+                if (!silent) applyResourceTgHealthFailure('sync', e, getActionElapsedMs(startedAt));
                 if (!silent) alert(`❌ ${e.message}`);
                 return null;
             } finally {
                 resourceSyncBusy = false;
+                syncResourceActionButtons();
+                if (!resourceSearchBusy) renderResourceBoard();
             }
         }
 
-        function clearResourceSearch() {
-            document.getElementById('resource-search-input').value = '';
-            document.getElementById('resource-status-filter').value = '';
-            selectedResourceChannelId = '';
-            refreshResourceState();
+        async function clearCompletedResourceJobs() {
+            const completedCount = Number(resourceState?.stats?.completed_job_count || 0);
+            if (completedCount <= 0) {
+                alert('当前没有可清空的已完成导入记录');
+                return;
+            }
+            if (!confirm('将清空已完成导入记录（不删除网盘文件）。继续吗？')) return;
+            const res = await fetch('/resource/jobs/clear_completed', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({})
+            });
+            const data = await res.json();
+            if (!res.ok || !data.ok) return alert(`❌ ${data.msg || '清空失败'}`);
+            await refreshResourceState();
+            const deleted = Number(data.deleted || 0);
+            if (deleted > 0) {
+                alert(`✅ 已清空 ${deleted} 条已完成导入记录`);
+            } else {
+                alert('✅ 当前没有可清空的已完成导入记录');
+            }
+        }
+
+        async function clearResourceSearch() {
+            const input = document.getElementById('resource-search-input');
+            if (!input) return;
+            const hadKeyword = !!String(input.value || '').trim();
+            input.value = '';
+            syncResourceSearchClearButton();
+            if (resourceState.search || hadKeyword) {
+                resetResourceSearchResults();
+                await refreshResourceState({ keywordOverride: '' });
+            } else {
+                renderResourceBoard();
+            }
+            input.focus();
         }
 
         function currentResourceSourceFormData() {
@@ -1511,13 +2338,68 @@
             };
         }
 
+        function syncResourceSourceSummary() {
+            const sources = Array.isArray(resourceState.sources) ? resourceState.sources : [];
+            const enabledCount = sources.filter(source => source.enabled !== false).length;
+            const disabledCount = Math.max(0, sources.length - enabledCount);
+            const totalEl = document.getElementById('resource-source-total-count');
+            const enabledEl = document.getElementById('resource-source-enabled-count');
+            const disabledEl = document.getElementById('resource-source-disabled-count');
+            if (totalEl) totalEl.innerText = String(sources.length);
+            if (enabledEl) enabledEl.innerText = String(enabledCount);
+            if (disabledEl) disabledEl.innerText = String(disabledCount);
+        }
+
+        function syncResourceSourceModalState() {
+            const editing = editingResourceSourceIndex !== null && editingResourceSourceIndex >= 0;
+            const titleEl = document.getElementById('resource-source-modal-title');
+            const subtitleEl = document.getElementById('resource-source-modal-subtitle');
+            const saveBtn = document.getElementById('resource-source-modal-save-btn');
+            if (titleEl) titleEl.innerText = editing ? '编辑频道订阅' : '新增频道订阅';
+            if (subtitleEl) {
+                subtitleEl.innerText = editing
+                    ? '修改名称、频道 ID 或启用状态后会立即保存，并同步更新资源中心里的订阅展示。'
+                    : '只需要填写公开频道 ID，保存后会立刻出现在资源中心的订阅列表里。';
+            }
+            if (saveBtn) saveBtn.innerText = editing ? '保存修改' : '保存频道订阅';
+        }
+
         function resetResourceSourceForm() {
             editingResourceSourceIndex = null;
             document.getElementById('resource_source_name').value = '';
             document.getElementById('resource_source_channel').value = '';
-            document.getElementById('resource_source_url').value = '';
-            document.getElementById('resource_source_notes').value = '';
             document.getElementById('resource_source_enabled').checked = true;
+            syncResourceSourceModalState();
+        }
+
+        function openResourceSourceModal(index = null) {
+            const sources = resourceState.sources || [];
+            if (Number.isInteger(index) && index >= 0 && sources[index]) {
+                const source = sources[index];
+                editingResourceSourceIndex = index;
+                document.getElementById('resource_source_name').value = source.name || '';
+                document.getElementById('resource_source_channel').value = getResourceSourceChannelId(source);
+                document.getElementById('resource_source_enabled').checked = !!source.enabled;
+            } else {
+                resetResourceSourceForm();
+            }
+            syncResourceSourceModalState();
+            switchTab('settings');
+            resourceSourceModalOpen = true;
+            document.getElementById('resource-source-modal').classList.remove('hidden');
+            requestAnimationFrame(() => {
+                const targetId = editingResourceSourceIndex !== null ? 'resource_source_name' : 'resource_source_channel';
+                const target = document.getElementById(targetId);
+                if (!target) return;
+                target.focus();
+                target.select?.();
+            });
+        }
+
+        function closeResourceSourceModal() {
+            resourceSourceModalOpen = false;
+            document.getElementById('resource-source-modal').classList.add('hidden');
+            resetResourceSourceForm();
         }
 
         async function persistResourceSources(sources) {
@@ -1544,8 +2426,25 @@
             }
         }
 
+        async function toggleResourceSourceEnabled(index, enabled) {
+            const sources = [...(resourceState.sources || [])];
+            if (index < 0 || index >= sources.length) return false;
+            sources[index] = {
+                ...sources[index],
+                enabled: !!enabled
+            };
+            try {
+                await persistResourceSources(sources);
+                return true;
+            } catch (e) {
+                alert(`❌ ${e.message}`);
+                return false;
+            }
+        }
+
         async function saveResourceSource() {
             const source = currentResourceSourceFormData();
+            const isEditing = editingResourceSourceIndex !== null && editingResourceSourceIndex >= 0;
             if (!source.name && !source.channel_id) return alert('请至少填写频道名称或频道 ID');
             if (!source.channel_id) return alert('频道 ID 不能为空，例如 QukanMovie');
             if (!isLikelyTelegramChannelId(source.channel_id)) {
@@ -1556,23 +2455,15 @@
             else sources.push(source);
             try {
                 await persistResourceSources(sources);
-                resetResourceSourceForm();
-                alert('✅ 频道源已保存');
+                closeResourceSourceModal();
+                alert(isEditing ? '✅ 频道订阅已更新' : '✅ 频道订阅已添加');
             } catch (e) {
                 alert(`❌ ${e.message}`);
             }
         }
 
         function editResourceSource(index) {
-            const source = (resourceState.sources || [])[index];
-            if (!source) return;
-            editingResourceSourceIndex = index;
-            document.getElementById('resource_source_name').value = source.name || '';
-            document.getElementById('resource_source_channel').value = getResourceSourceChannelId(source);
-            document.getElementById('resource_source_url').value = source.url || '';
-            document.getElementById('resource_source_notes').value = source.notes || '';
-            document.getElementById('resource_source_enabled').checked = !!source.enabled;
-            switchTab('settings');
+            openResourceSourceModal(index);
         }
 
         async function deleteResourceSource(index) {
@@ -1584,8 +2475,7 @@
             sources.splice(index, 1);
             try {
                 await persistResourceSources(sources);
-                if (selectedResourceChannelId === channelId) selectedResourceChannelId = '';
-                if (editingResourceSourceIndex === index) resetResourceSourceForm();
+                if (editingResourceSourceIndex === index) closeResourceSourceModal();
             } catch (e) {
                 alert(`❌ ${e.message}`);
             }
@@ -1595,35 +2485,58 @@
             const container = document.getElementById('resource-source-list');
             const sources = resourceState.sources || [];
             if (!container) return;
+            syncResourceSourceSummary();
             if (!sources.length) {
-                container.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">还没有配置 TG 频道源，先加一条占位配置也可以。</div>';
+                container.innerHTML = `
+                    <div class="resource-source-empty">
+                        <div class="resource-source-empty-title">还没有频道订阅</div>
+                        <div class="resource-source-empty-copy">从底部添加一个公开 TG 频道后，资源中心就会按这里的顺序展示对应内容。</div>
+                    </div>
+                `;
                 return;
             }
             container.innerHTML = sources.map((source, index) => {
                 const channelId = getResourceSourceChannelId(source);
-                const lastSync = formatResourceSyncTime((resourceState.last_syncs || {})[channelId]);
+                const channelUrl = String(source?.url || (channelId ? `https://t.me/s/${channelId}` : '')).trim();
                 const moveUpDisabled = index === 0 ? 'btn-disabled' : '';
                 const moveDownDisabled = index === sources.length - 1 ? 'btn-disabled' : '';
                 return `
-                    <div class="rounded-2xl border border-slate-700 bg-slate-900/50 p-4">
-                        <div class="flex flex-wrap items-start justify-between gap-3">
-                            <div>
-                                <div class="flex flex-wrap items-center gap-2">
-                                    <div class="text-sm font-bold text-white">${escapeHtml(source.name || `频道 ${index + 1}`)}</div>
+                    <div class="resource-source-card">
+                        <div class="resource-source-card-top">
+                            <div class="min-w-0">
+                                <div class="resource-source-card-title-row">
+                                    <div class="resource-source-card-title">${escapeHtml(source.name || `频道 ${index + 1}`)}</div>
                                     <span class="text-[10px] px-3 py-1 rounded-full bg-slate-800 text-slate-300 border border-slate-700">排序 ${index + 1}</span>
-                                    ${source.enabled ? '<span class="text-[10px] px-3 py-1 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/20">启用</span>' : '<span class="text-[10px] px-3 py-1 rounded-full bg-slate-700 text-slate-200">停用</span>'}
-                                </div>
-                                <div class="text-xs text-slate-400 leading-6 mt-2">
-                                    <div>频道 ID：${escapeHtml(channelId || '--')}</div>
-                                    <div>频道链接：${escapeHtml(source.url || '--')}</div>
-                                    <div>最近同步：${escapeHtml(lastSync)}</div>
                                 </div>
                             </div>
-                            <div class="flex flex-wrap gap-2">
-                                <button type="button" data-resource-source-action="move-up" data-resource-source-index="${index}" class="px-3 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold ${moveUpDisabled}" ${index === 0 ? 'disabled' : ''}>上移</button>
-                                <button type="button" data-resource-source-action="move-down" data-resource-source-index="${index}" class="px-3 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold ${moveDownDisabled}" ${index === sources.length - 1 ? 'disabled' : ''}>下移</button>
-                                <button type="button" data-resource-source-action="edit" data-resource-source-index="${index}" class="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">编辑</button>
-                                <button type="button" data-resource-source-action="delete" data-resource-source-index="${index}" class="px-4 py-2 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-300 text-sm font-bold">删除</button>
+                            <div class="resource-source-card-action-row">
+                                <label class="ui-switch-field">
+                                    <span class="text-xs font-bold uppercase tracking-[0.12em] text-slate-400">启用</span>
+                                    <span class="ui-switch">
+                                        <input
+                                            type="checkbox"
+                                            data-resource-source-toggle="1"
+                                            data-resource-source-index="${index}"
+                                            ${source.enabled ? 'checked' : ''}
+                                        >
+                                        <span class="ui-switch-slider"></span>
+                                    </span>
+                                </label>
+                                <div class="resource-source-card-actions">
+                                    <button type="button" data-resource-source-action="move-up" data-resource-source-index="${index}" class="px-3 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold ${moveUpDisabled}" ${index === 0 ? 'disabled' : ''}>上移</button>
+                                    <button type="button" data-resource-source-action="move-down" data-resource-source-index="${index}" class="px-3 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold ${moveDownDisabled}" ${index === sources.length - 1 ? 'disabled' : ''}>下移</button>
+                                    <button type="button" data-resource-source-action="edit" data-resource-source-index="${index}" class="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">编辑</button>
+                                    <button type="button" data-resource-source-action="delete" data-resource-source-index="${index}" class="px-4 py-2 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-300 text-sm font-bold">删除</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="resource-source-card-grid">
+                            <div class="resource-source-card-field">
+                                <div class="resource-source-card-label">频道链接</div>
+                                ${channelUrl
+                                    ? `<a href="${escapeHtml(channelUrl)}" target="_blank" rel="noopener noreferrer" class="resource-source-card-link">${escapeHtml(channelUrl)}</a>`
+                                    : '<div class="resource-source-card-value">--</div>'
+                                }
                             </div>
                         </div>
                     </div>
@@ -1631,37 +2544,124 @@
             }).join('');
         }
 
+        function getResourceJobCounts(jobs = []) {
+            const list = Array.isArray(jobs) ? jobs : [];
+            return {
+                total: list.length,
+                active: list.filter(job => ['pending', 'running', 'submitted'].includes(String(job?.status || '').toLowerCase())).length,
+                submitted: list.filter(job => String(job?.status || '').toLowerCase() === 'submitted').length,
+                completed: list.filter(job => String(job?.status || '').toLowerCase() === 'completed').length,
+                failed: list.filter(job => String(job?.status || '').toLowerCase() === 'failed').length,
+            };
+        }
+
+        function isResourceJobVisible(job, filter = 'all') {
+            const status = String(job?.status || '').toLowerCase();
+            if (filter === 'active') return ['pending', 'running', 'submitted'].includes(status);
+            if (filter === 'submitted') return status === 'submitted';
+            if (filter === 'completed') return status === 'completed';
+            if (filter === 'failed') return status === 'failed';
+            return true;
+        }
+
+        function renderResourceJobFilters(counts) {
+            const container = document.getElementById('resource-job-filter-tabs');
+            if (!container) return;
+            const options = [
+                { value: 'all', label: '全部', count: counts.total },
+                { value: 'active', label: '处理中', count: counts.active },
+                { value: 'submitted', label: '待刷新', count: counts.submitted },
+                { value: 'completed', label: '已完成', count: counts.completed },
+                { value: 'failed', label: '失败', count: counts.failed },
+            ];
+            container.innerHTML = options.map(option => `
+                <button
+                    type="button"
+                    data-resource-job-filter="${escapeHtml(option.value)}"
+                    class="resource-job-filter-tab ${resourceJobFilter === option.value ? 'resource-job-filter-tab-active' : ''}"
+                >${escapeHtml(option.label)} (${escapeHtml(String(option.count))})</button>
+            `).join('');
+        }
+
+        function getResourceJobEmptyText(filter = 'all') {
+            if (filter === 'active') return '当前没有正在处理的导入任务。';
+            if (filter === 'submitted') return '当前没有等待刷新生成 strm 的任务。';
+            if (filter === 'completed') return '当前没有已完成的导入记录。';
+            if (filter === 'failed') return '当前没有失败任务。';
+            return '还没有导入任务，资源卡片里的“下载到 115 / 转存到 115”会在这里留下记录。';
+        }
+
         function renderResourceJobs() {
             const container = document.getElementById('resource-job-list');
-            const jobs = resourceState.jobs || [];
+            const jobs = Array.isArray(resourceState.jobs) ? resourceState.jobs : [];
+            const summary = document.getElementById('resource-job-modal-summary');
+            const counts = getResourceJobCounts(jobs);
             if (!container) return;
-            if (!jobs.length) {
-                container.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">还没有导入任务，资源卡片里的“下载到 115 / 转存到 115”就会在这里留下记录。</div>';
+
+            const totalEl = document.getElementById('resource-job-stat-total');
+            const activeEl = document.getElementById('resource-job-stat-active');
+            const completedEl = document.getElementById('resource-job-stat-completed');
+            const failedEl = document.getElementById('resource-job-stat-failed');
+            if (totalEl) totalEl.innerText = String(counts.total);
+            if (activeEl) activeEl.innerText = String(counts.active);
+            if (completedEl) completedEl.innerText = String(counts.completed);
+            if (failedEl) failedEl.innerText = String(counts.failed);
+
+            renderResourceJobFilters(counts);
+
+            if (summary) {
+                if (!jobs.length) summary.innerText = '最近还没有导入记录。';
+                else summary.innerText = `最近 ${counts.total} 条任务，处理中 ${counts.active} 条，已完成 ${counts.completed} 条${counts.failed ? `，失败 ${counts.failed} 条` : ''}`;
+            }
+
+            const visibleJobs = jobs.filter(job => isResourceJobVisible(job, resourceJobFilter));
+            if (!visibleJobs.length) {
+                container.innerHTML = `<div class="resource-job-card-empty">${escapeHtml(getResourceJobEmptyText(resourceJobFilter))}</div>`;
                 return;
             }
-            container.innerHTML = jobs.map(job => {
+
+            container.innerHTML = visibleJobs.map(job => {
                 const hasMonitorTask = !!String(job.monitor_task_name || '').trim();
                 const canManualRefresh = hasMonitorTask && !job.last_triggered_at && String(job.status || '').toLowerCase() === 'submitted';
                 const manualRefreshLabel = !hasMonitorTask ? '当前目录不触发' : (canManualRefresh ? '立即触发刷新' : '无需手动刷新');
+                const autoRefreshText = hasMonitorTask
+                    ? (job.auto_refresh ? `自动刷新 ${escapeHtml(String(job.refresh_delay_seconds || 0))} 秒` : '手动刷新')
+                    : '未绑定监控';
                 return `
-                    <div class="rounded-2xl border border-slate-700 bg-slate-900/50 p-4">
-                        <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div class="resource-job-card">
+                        <div class="resource-job-card-head">
                             <div class="min-w-0 flex-1">
                                 <div class="flex flex-wrap items-center gap-2">
-                                    <div class="text-sm font-bold text-white break-all">${escapeHtml(job.title || `任务 #${job.id}`)}</div>
+                                    <div class="resource-job-card-title">${escapeHtml(job.title || `任务 #${job.id}`)}</div>
                                     ${buildResourceStatusBadge(job.status)}
                                     <span class="text-[10px] px-3 py-1 rounded-full bg-slate-700 text-slate-100">#${job.id}</span>
                                 </div>
-                                <div class="text-xs text-slate-400 leading-6 mt-2 break-all">
-                                    <div>网盘保存路径：${escapeHtml(job.savepath || '--')}</div>
-                                    <div>文件夹监控：${escapeHtml(job.monitor_task_name || '当前目录未纳入文件夹监控')}</div>
-                                    <div>子目录：${escapeHtml(job.sharetitle || job.share_root_title || '--')}</div>
-                                    <div>刷新类型：${escapeHtml(getResourceRefreshTargetLabel(job.refresh_target_type))}</div>
-                                    <div>自动刷新：${hasMonitorTask ? (job.auto_refresh ? `开启（等待 ${escapeHtml(String(job.refresh_delay_seconds || 0))} 秒）` : '关闭') : '当前目录不自动触发'}</div>
-                                    <div>状态详情：${escapeHtml(job.status_detail || '--')}</div>
-                                    <div>创建时间：${escapeHtml(job.created_at || '--')}</div>
+                                <div class="resource-job-card-grid">
+                                    <div class="resource-job-field">
+                                        <div class="resource-job-field-label">保存路径</div>
+                                        <div class="resource-job-field-value">${escapeHtml(job.savepath || '--')}</div>
+                                    </div>
+                                    <div class="resource-job-field">
+                                        <div class="resource-job-field-label">监控任务</div>
+                                        <div class="resource-job-field-value">${escapeHtml(job.monitor_task_name || '当前目录未纳入文件夹监控')}</div>
+                                    </div>
+                                    <div class="resource-job-field">
+                                        <div class="resource-job-field-label">子目录 / 目标</div>
+                                        <div class="resource-job-field-value">${escapeHtml(job.sharetitle || job.share_root_title || '--')}</div>
+                                    </div>
+                                    <div class="resource-job-field">
+                                        <div class="resource-job-field-label">刷新策略</div>
+                                        <div class="resource-job-field-value">${escapeHtml(getResourceRefreshTargetLabel(job.refresh_target_type))} · ${autoRefreshText}</div>
+                                    </div>
+                                </div>
+                                <div class="resource-job-status-note">${escapeHtml(job.status_detail || '--')}</div>
+                                <div class="resource-job-card-meta">
+                                    <span class="resource-job-meta-chip">创建于 ${escapeHtml(job.created_at || '--')}</span>
+                                    <span class="resource-job-meta-chip">${autoRefreshText}</span>
                                 </div>
                             </div>
+                        </div>
+                        <div class="resource-job-card-actions">
                             <div class="flex flex-wrap gap-2 shrink-0">
                                 <button type="button" data-resource-job-action="refresh" data-resource-job-id="${job.id}" class="px-4 py-2 rounded-xl text-sm font-bold ${canManualRefresh ? 'bg-sky-600 hover:bg-sky-500 text-white' : 'bg-slate-700 text-slate-400 btn-disabled'}" ${canManualRefresh ? '' : 'disabled'}>${manualRefreshLabel}</button>
                             </div>
@@ -1669,6 +2669,27 @@
                     </div>
                 `;
             }).join('');
+        }
+
+        function syncResourceJobModalTrigger() {
+            const btn = document.getElementById('resource-job-modal-toggle');
+            const badge = document.getElementById('resource-job-modal-badge');
+            if (!btn || !badge) return;
+            const jobs = Array.isArray(resourceState.jobs) ? resourceState.jobs : [];
+            const activeCount = jobs.filter(job => ['pending', 'running', 'submitted'].includes(String(job?.status || '').toLowerCase())).length;
+            badge.textContent = String(activeCount);
+            badge.classList.toggle('hidden', activeCount <= 0);
+            btn.classList.toggle('border-sky-500', activeCount > 0);
+            btn.classList.toggle('text-sky-100', activeCount > 0);
+            btn.setAttribute('aria-expanded', resourceJobModalOpen ? 'true' : 'false');
+        }
+
+        function toggleResourceJobModal(force) {
+            const modal = document.getElementById('resource-job-modal');
+            if (!modal) return;
+            resourceJobModalOpen = typeof force === 'boolean' ? force : !resourceJobModalOpen;
+            modal.classList.toggle('hidden', !resourceJobModalOpen);
+            syncResourceJobModalTrigger();
         }
 
         async function fetchResourceFolderData(cid = '0') {
@@ -1682,6 +2703,20 @@
                     file_count: Array.isArray(data.files) ? data.files.length : 0
                 }
             };
+        }
+
+        async function createResourceFolder(cid = '0', name = '') {
+            const res = await fetch('/resource/115/folders/create', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    cid: String(cid || '0'),
+                    name: String(name || '')
+                })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.ok) throw new Error(data.msg || '新建文件夹失败');
+            return data;
         }
 
         function resetResourceShareState() {
@@ -1714,7 +2749,20 @@
         }
 
         async function fetchResourceShareData(resourceId, cid = '0') {
-            const res = await fetch(`/resource/115/share_entries?resource_id=${encodeURIComponent(String(resourceId || 0))}&cid=${encodeURIComponent(String(cid || '0'))}`);
+            let res;
+            if (Number(resourceId || 0) > 0) {
+                res = await fetch(`/resource/115/share_entries?resource_id=${encodeURIComponent(String(resourceId || 0))}&cid=${encodeURIComponent(String(cid || '0'))}`);
+            } else {
+                res = await fetch('/resource/115/share_entries_preview', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        cid,
+                        link_url: String(selectedResourceItem?.link_url || '').trim(),
+                        raw_text: String(selectedResourceItem?.raw_text || '').trim()
+                    })
+                });
+            }
             const data = await res.json();
             if (!res.ok || !data.ok) throw new Error(data.msg || '读取分享内容失败');
             return {
@@ -1822,7 +2870,7 @@
         }
 
         async function reloadResourceShareRoot() {
-            if (!selectedResourceId || !isCurrentResource115Share()) return;
+            if (!selectedResourceItem || !isCurrentResource115Share()) return;
             await loadResourceShareBranch(selectedResourceId, '0', { resetSelection: true });
         }
 
@@ -1923,7 +2971,7 @@
         }
 
         async function goResourceShareRoot() {
-            if (!selectedResourceId || !isCurrentResource115Share()) return;
+            if (!selectedResourceItem || !isCurrentResource115Share()) return;
             resourceShareTrail = [{ cid: '0', name: resourceShareInfo?.title || '分享根目录' }];
             resourceShareCurrentCid = '0';
             if (!Object.prototype.hasOwnProperty.call(resourceShareEntriesByParent, '0') || !resourceShareRootLoaded) {
@@ -1934,7 +2982,7 @@
         }
 
         async function goResourceShareBack() {
-            if (!selectedResourceId || !isCurrentResource115Share()) return;
+            if (!selectedResourceItem || !isCurrentResource115Share()) return;
             if (resourceShareTrail.length <= 1) {
                 await goResourceShareRoot();
                 return;
@@ -1949,7 +2997,7 @@
         }
 
         async function openResourceShareFolder(entryId) {
-            if (!selectedResourceId || !isCurrentResource115Share()) return;
+            if (!selectedResourceItem || !isCurrentResource115Share()) return;
             const entry = resourceShareEntryIndex[String(entryId || '').trim()];
             if (!entry || !entry.is_dir) return;
             const branchId = String(entry.cid || entry.id || '').trim();
@@ -1964,7 +3012,7 @@
         }
 
         async function openResourceShareTrail(index) {
-            if (!selectedResourceId || !isCurrentResource115Share()) return;
+            if (!selectedResourceItem || !isCurrentResource115Share()) return;
             const targetIndex = Math.max(0, Math.min(Number(index || 0), resourceShareTrail.length - 1));
             resourceShareTrail = resourceShareTrail.slice(0, targetIndex + 1);
             resourceShareCurrentCid = String(resourceShareTrail[targetIndex]?.cid || '0');
@@ -1991,7 +3039,7 @@
                                 type="checkbox"
                                 data-resource-share-check="1"
                                 data-resource-share-id="${escapeHtml(normalized.id)}"
-                                class="h-4 w-4 rounded border-slate-600 bg-slate-900 accent-sky-500"
+                                class="ui-checkbox ui-checkbox-sm"
                                 ${effectiveSelected ? 'checked' : ''}
                                 ${coveredByAncestor ? 'disabled' : ''}
                             >
@@ -2085,13 +3133,193 @@
             renderResourceImportSummary();
         }
 
-        function setSelectedResourceFolder(folderId, displayPath, { loadPreview = false } = {}) {
-            const normalizedPath = normalizeRelativePathInput(displayPath);
-            document.getElementById('resource_job_folder_id').value = String(folderId || '0');
+        function normalizeResourceFolderTrail(trail = []) {
+            const normalized = [{ id: '0', name: '根目录' }];
+            (Array.isArray(trail) ? trail : []).forEach((item, index) => {
+                if (index === 0) return;
+                const id = String(item?.id || '').trim();
+                const name = String(item?.name || '').trim();
+                if (!id || !name) return;
+                normalized.push({ id, name });
+            });
+            return normalized;
+        }
+
+        function buildResourceFolderDisplayPathFromTrail(trail = []) {
+            return normalizeResourceFolderTrail(trail)
+                .slice(1)
+                .map(item => normalizeRelativePathInput(item?.name || ''))
+                .filter(Boolean)
+                .join('/');
+        }
+
+        function getRememberedResourceFolderSelection() {
+            const fallback = {
+                folder_id: '0',
+                display_path: '',
+                trail: [{ id: '0', name: '根目录' }]
+            };
+            try {
+                const raw = localStorage.getItem(RESOURCE_FOLDER_MEMORY_KEY);
+                if (!raw) return fallback;
+                const data = JSON.parse(raw || '{}');
+                const folderId = String(data?.folder_id || '').trim();
+                let trail = normalizeResourceFolderTrail(data?.trail || []);
+                let displayPath = normalizeRelativePathInput(data?.display_path || '');
+                if (!displayPath) displayPath = buildResourceFolderDisplayPathFromTrail(trail);
+                if (!folderId || folderId === '0' || !displayPath) return fallback;
+
+                const currentTrailLastId = String(trail[trail.length - 1]?.id || '0').trim() || '0';
+                if (currentTrailLastId !== folderId) {
+                    const tailName = displayPath.split('/').filter(Boolean).pop() || '目录';
+                    trail = normalizeResourceFolderTrail(trail.concat([{ id: folderId, name: tailName }]));
+                }
+                return {
+                    folder_id: folderId,
+                    display_path: displayPath,
+                    trail
+                };
+            } catch (e) {
+                return fallback;
+            }
+        }
+
+        function rememberResourceFolderSelection(folderId, displayPath, trail = []) {
+            const normalizedFolderId = String(folderId || '0').trim() || '0';
+            const normalizedPath = normalizeRelativePathInput(displayPath || '');
+            if (!normalizedPath || normalizedFolderId === '0') return;
+            const normalizedTrail = normalizeResourceFolderTrail(trail);
+            try {
+                localStorage.setItem(RESOURCE_FOLDER_MEMORY_KEY, JSON.stringify({
+                    folder_id: normalizedFolderId,
+                    display_path: normalizedPath,
+                    trail: normalizedTrail
+                }));
+            } catch (e) {}
+        }
+
+        function setSelectedResourceFolder(folderId, displayPath, { loadPreview = false, persist = true, trail = [] } = {}) {
+            const resolvedTrail = normalizeResourceFolderTrail(Array.isArray(trail) && trail.length ? trail : resourceFolderTrail);
+            const fallbackPath = buildResourceFolderDisplayPathFromTrail(resolvedTrail);
+            const normalizedPath = normalizeRelativePathInput(displayPath || fallbackPath);
+            const normalizedFolderId = String(folderId || '0').trim() || '0';
+            document.getElementById('resource_job_folder_id').value = normalizedFolderId;
             document.getElementById('resource_job_folder_path').value = normalizedPath || '根目录';
             document.getElementById('resource_job_savepath').value = normalizedPath;
             syncResourceMonitorTaskOptions(normalizedPath);
-            if (loadPreview) loadResourceTargetPreview(folderId || '0');
+            if (persist) rememberResourceFolderSelection(normalizedFolderId, normalizedPath, resolvedTrail);
+            if (loadPreview) loadResourceTargetPreview(normalizedFolderId || '0');
+        }
+
+        async function resolveResourceFolderTrailByIds(trail = []) {
+            const normalizedTrail = normalizeResourceFolderTrail(trail);
+            if (normalizedTrail.length <= 1) {
+                return { valid: true, trail: normalizedTrail };
+            }
+
+            const resolvedTrail = [{ id: '0', name: '根目录' }];
+            let parentCid = '0';
+            for (let i = 1; i < normalizedTrail.length; i += 1) {
+                const expected = normalizedTrail[i] || {};
+                const expectedId = String(expected.id || '').trim();
+                if (!expectedId || expectedId === '0') break;
+                const result = await fetchResourceFolderData(parentCid);
+                const entries = Array.isArray(result.entries) ? result.entries : [];
+                const matched = entries.find(entry => {
+                    if (!entry?.is_dir) return false;
+                    const entryId = String(entry?.id || entry?.cid || '').trim();
+                    return entryId && entryId === expectedId;
+                });
+                if (!matched) {
+                    return { valid: false, trail: resolvedTrail };
+                }
+                const matchedId = String(matched.id || matched.cid || '').trim() || expectedId;
+                const matchedName = String(matched.name || expected.name || '目录').trim() || '目录';
+                resolvedTrail.push({ id: matchedId, name: matchedName });
+                parentCid = matchedId;
+            }
+            return { valid: true, trail: normalizeResourceFolderTrail(resolvedTrail) };
+        }
+
+        async function resolveResourceFolderTrailByPath(displayPath = '') {
+            const normalizedPath = normalizeRelativePathInput(displayPath || '');
+            if (!normalizedPath) {
+                return { valid: true, trail: [{ id: '0', name: '根目录' }] };
+            }
+
+            const resolvedTrail = [{ id: '0', name: '根目录' }];
+            let parentCid = '0';
+            const parts = normalizedPath.split('/').filter(Boolean);
+            for (const part of parts) {
+                const result = await fetchResourceFolderData(parentCid);
+                const entries = Array.isArray(result.entries) ? result.entries : [];
+                const matched = entries.find(entry => !!entry?.is_dir && String(entry?.name || '').trim() === part);
+                if (!matched) {
+                    return { valid: false, trail: normalizeResourceFolderTrail(resolvedTrail) };
+                }
+                const matchedId = String(matched.id || matched.cid || '').trim();
+                if (!matchedId) {
+                    return { valid: false, trail: normalizeResourceFolderTrail(resolvedTrail) };
+                }
+                const matchedName = String(matched.name || part).trim() || part;
+                resolvedTrail.push({ id: matchedId, name: matchedName });
+                parentCid = matchedId;
+            }
+            return { valid: true, trail: normalizeResourceFolderTrail(resolvedTrail) };
+        }
+
+        async function ensureResourceFolderSelectionValid({ phase = 'submit' } = {}) {
+            if (!resourceState.cookie_configured) return true;
+            if (resourceFolderValidationPromise) return resourceFolderValidationPromise;
+
+            resourceFolderValidationPromise = (async () => {
+                const currentTrail = normalizeResourceFolderTrail(resourceFolderTrail);
+                const currentPath = normalizeRelativePathInput(document.getElementById('resource_job_savepath')?.value || '');
+                if (currentTrail.length <= 1) return true;
+
+                let resolved;
+                try {
+                    resolved = await resolveResourceFolderTrailByIds(currentTrail);
+                    if (!resolved.valid && currentPath) {
+                        resolved = await resolveResourceFolderTrailByPath(currentPath);
+                    }
+                } catch (e) {
+                    const detail = e?.message || '读取 115 目录失败';
+                    showToast(`目录合法性检查失败：${detail}`, { tone: 'error', duration: 3200, placement: 'top-center' });
+                    return phase !== 'submit';
+                }
+
+                if (!resolved.valid) {
+                    const rootTrail = [{ id: '0', name: '根目录' }];
+                    resourceFolderTrail = rootTrail;
+                    setSelectedResourceFolder('0', '', { loadPreview: false, persist: false, trail: rootTrail });
+                    try {
+                        localStorage.removeItem(RESOURCE_FOLDER_MEMORY_KEY);
+                    } catch (e) {}
+                    showToast('上次选择的目录已不存在，请重新选择保存目录', { tone: 'warn', duration: 3200, placement: 'top-center' });
+                    return false;
+                }
+
+                const resolvedTrail = normalizeResourceFolderTrail(resolved.trail);
+                const resolvedFolderId = String(resolvedTrail[resolvedTrail.length - 1]?.id || '0').trim() || '0';
+                const resolvedPath = buildResourceFolderDisplayPathFromTrail(resolvedTrail);
+                const currentFolderId = String(document.getElementById('resource_job_folder_id')?.value || '0').trim() || '0';
+                const needsSync = currentFolderId !== resolvedFolderId || currentPath !== resolvedPath;
+                resourceFolderTrail = resolvedTrail;
+                if (needsSync) {
+                    setSelectedResourceFolder(resolvedFolderId, resolvedPath, { loadPreview: false, trail: resolvedTrail });
+                    if (phase === 'open') {
+                        showToast(`已同步目录路径：${resolvedPath || '根目录'}`, { tone: 'info', duration: 2200, placement: 'top-center' });
+                    }
+                }
+                return true;
+            })();
+
+            try {
+                return await resourceFolderValidationPromise;
+            } finally {
+                resourceFolderValidationPromise = null;
+            }
         }
 
         function renderResourceTargetPreview() {
@@ -2242,10 +3470,9 @@
             renderResourceImportSummary();
         }
 
-        function openResourceModal(resourceId, mode = 'detail') {
-            const item = findResourceItem(resourceId);
+        function openResourceItemModal(item, mode = 'detail') {
             if (!item) return;
-            selectedResourceId = Number(item.id);
+            selectedResourceId = Number(item?.id || 0);
             selectedResourceItem = item;
             resourceModalMode = mode === 'import' ? 'import' : 'detail';
             resourceModalLinkType = getEffectiveResourceLinkType(item);
@@ -2253,13 +3480,14 @@
             document.getElementById('resource-import-title').innerText = item.title || '未命名资源';
             document.getElementById('resource-import-subtitle').innerText = `来源：${item.source_name || item.channel_name || '手动录入'} / 时间：${item.published_at ? formatTimeText(item.published_at) : formatTimeText(item.created_at)}`;
             document.getElementById('resource-import-meta').innerHTML = [
-                buildResourceStatusBadge(item?.status),
+                buildResourceStatusBadge(getResourceDisplayStatus(item)),
                 item?.quality ? `<span class="text-[10px] px-3 py-1 rounded-full bg-sky-500/15 text-sky-300 border border-sky-500/20">${escapeHtml(item.quality)}</span>` : '',
                 item?.year ? `<span class="text-[10px] px-3 py-1 rounded-full bg-violet-500/15 text-violet-300 border border-violet-500/20">${escapeHtml(item.year)}</span>` : ''
             ].filter(Boolean).join('');
             document.getElementById('resource-import-link-actions').innerHTML = buildResourceImportLinkActions(item);
             document.getElementById('resource-import-raw-text').textContent = String(item.raw_text || item.title || '暂无可预览内容').trim();
-            resourceFolderTrail = [{ id: '0', name: '根目录' }];
+            const rememberedFolder = getRememberedResourceFolderSelection();
+            resourceFolderTrail = normalizeResourceFolderTrail(rememberedFolder.trail);
             resourceFolderEntries = [];
             resourceFolderSummary = { folder_count: 0, file_count: 0 };
             resourceTargetPreviewEntries = [];
@@ -2267,16 +3495,33 @@
             resourceTargetPreviewLoading = false;
             resourceTargetPreviewError = '';
             resetResourceShareState();
-            setSelectedResourceFolder('0', '', { loadPreview: false });
+            setSelectedResourceFolder(
+                rememberedFolder.folder_id || '0',
+                rememberedFolder.display_path || '',
+                {
+                    loadPreview: resourceModalMode === 'import',
+                    persist: false,
+                    trail: resourceFolderTrail
+                }
+            );
             document.getElementById('resource_job_refresh_delay_seconds').value = 4;
             syncResourceMonitorTaskOptions(document.getElementById('resource_job_savepath')?.value || '');
             renderResourceModalLayout(item);
             renderResourceShareBrowser();
             renderResourceImportSummary();
-            document.getElementById('resource-import-modal').classList.remove('hidden');
-            if (resourceModalMode === 'import' && resourceModalLinkType === '115share' && resourceState.cookie_configured) {
-                loadResourceShareBranch(item.id, '0', { resetSelection: true });
+            showLockedModal('resource-import-modal');
+            if (resourceModalMode === 'import' && resourceState.cookie_configured) {
+                void ensureResourceFolderSelectionValid({ phase: 'open' });
             }
+            if (resourceModalMode === 'import' && resourceModalLinkType === '115share' && resourceState.cookie_configured) {
+                loadResourceShareBranch(selectedResourceId, '0', { resetSelection: true });
+            }
+        }
+
+        function openResourceModal(resourceId, mode = 'detail') {
+            const item = findResourceItem(resourceId);
+            if (!item) return;
+            openResourceItemModal(item, mode);
         }
 
         function openResourceDetailModal(resourceId) {
@@ -2288,30 +3533,34 @@
         }
 
         function closeResourceJobModal() {
+            closeResourceFolderModal();
             selectedResourceId = null;
             selectedResourceItem = null;
             resourceModalMode = 'detail';
             resourceModalLinkType = '';
             resetResourceShareState();
-            document.getElementById('resource-import-modal').classList.add('hidden');
+            hideLockedModal('resource-import-modal');
         }
 
         async function submitResourceJob() {
-            if (!selectedResourceId) return alert('未选择资源');
+            if (!selectedResourceItem) return alert('未选择资源');
             const selectionState = getResourceShareSelectionState();
             if (isCurrentResource115Share() && resourceShareRootLoaded && !selectionState.selected_ids.length) {
                 return alert('请先至少勾选一个要转存的目录或文件');
             }
+            const folderSelectionValid = await ensureResourceFolderSelectionValid({ phase: 'submit' });
+            if (!folderSelectionValid) return;
             const savepath = normalizeRelativePathInput(document.getElementById('resource_job_savepath').value.trim());
             if (!savepath) {
                 return alert('请先选择一个非根目录的 115 保存目录');
             }
             const payload = {
-                resource_id: selectedResourceId,
                 savepath,
                 refresh_delay_seconds: parseInt(document.getElementById('resource_job_refresh_delay_seconds').value || '0', 10) || 0,
                 auto_refresh: true
             };
+            if (Number(selectedResourceId || 0) > 0) payload.resource_id = selectedResourceId;
+            else payload.resource = serializeTransientResourceForJob(selectedResourceItem);
             if (isCurrentResource115Share()) {
                 payload.share_selection = selectionState;
             }
@@ -2321,30 +3570,21 @@
                 body: JSON.stringify(payload)
             });
             const data = await res.json();
-            if (!res.ok || !data.ok) return alert(`❌ ${data.msg || '提交失败'}`);
+            if (!res.ok || !data.ok) {
+                showToast(`提交失败：${data.msg || '请稍后重试'}`, { tone: 'error', duration: 3000, placement: 'top-center' });
+                return;
+            }
             closeResourceJobModal();
             await refreshResourceState();
             const matchedTaskName = String(data.monitor_task_name || '').trim();
             const tail = matchedTaskName
                 ? (data.auto_refresh ? `，保存完成后会自动触发“${matchedTaskName}”` : `，已匹配“${matchedTaskName}”，可稍后手动触发刷新`)
                 : '，当前目录不会自动生成 strm';
-            alert(`✅ 已创建导入任务 #${data.job_id}${tail}`);
-        }
-
-        async function deleteResourceItemRecord(resourceId) {
-            if (!confirm('确定删除这条资源记录以及关联导入任务吗？')) return;
-            const res = await fetch('/resource/items/delete', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ id: resourceId })
-            });
-            const data = await res.json();
-            if (!res.ok || !data.ok) return alert(`❌ ${data.msg || '删除失败'}`);
-            await refreshResourceState();
+            showToast(`已创建导入任务 #${data.job_id}${tail}`, { tone: 'success', duration: 3000, placement: 'top-center' });
         }
 
         async function copyResourceRecord(resourceId) {
-            const item = findResourceItem(resourceId);
+            const item = findResourceItem(resourceId) || (selectedResourceItem && Number(selectedResourceItem?.id || 0) === Number(resourceId || 0) ? selectedResourceItem : null);
             if (!item) return;
             const text = getResourceCopyText(item);
             if (!text) return alert('这条资源没有可复制的内容');
@@ -2373,6 +3613,18 @@
                 return;
             }
             container.innerHTML = resourceFolderEntries.map(entry => buildResourceEntryRow(entry, { showOpenButton: true })).join('');
+        }
+
+        function setResourceFolderCreateBusy(loading = false) {
+            resourceFolderCreateBusy = !!loading;
+            const createBtn = document.getElementById('resource-folder-create-btn');
+            const nameInput = document.getElementById('resource-folder-create-name');
+            if (createBtn) {
+                createBtn.disabled = resourceFolderCreateBusy;
+                createBtn.classList.toggle('btn-disabled', resourceFolderCreateBusy);
+                createBtn.innerText = resourceFolderCreateBusy ? '新建中...' : '新建文件夹';
+            }
+            if (nameInput) nameInput.disabled = resourceFolderCreateBusy;
         }
 
         function renderResourceFolderBreadcrumbs() {
@@ -2404,7 +3656,7 @@
             } catch (e) {
                 resourceFolderEntries = [];
                 resourceFolderSummary = { folder_count: 0, file_count: 0 };
-                alert(`❌ ${e.message}`);
+                showToast(`目录读取失败：${e.message || '请稍后重试'}`, { tone: 'error', duration: 3200 });
             } finally {
                 resourceFolderLoading = false;
                 renderResourceFolderBreadcrumbs();
@@ -2412,14 +3664,57 @@
             }
         }
 
+        async function createResourceFolderInCurrent() {
+            if (resourceFolderLoading || resourceFolderCreateBusy) return;
+            const nameInput = document.getElementById('resource-folder-create-name');
+            const folderName = String(nameInput?.value || '').trim();
+            if (!folderName) {
+                showToast('请输入新文件夹名称', { tone: 'warn', duration: 2200, placement: 'top-center' });
+                return;
+            }
+
+            const current = resourceFolderTrail[resourceFolderTrail.length - 1] || { id: '0', name: '根目录' };
+            const currentCid = String(current.id || '0').trim() || '0';
+            try {
+                setResourceFolderCreateBusy(true);
+                const result = await createResourceFolder(currentCid, folderName);
+                const folder = result.folder || {};
+                const createdFolderId = String(folder.id || '').trim();
+                const createdFolderName = String(folder.name || folderName).trim() || folderName;
+                if (nameInput) nameInput.value = '';
+
+                await loadResourceFolders(currentCid);
+
+                if (createdFolderId) {
+                    const selectedTrail = normalizeResourceFolderTrail(resourceFolderTrail.concat([{ id: createdFolderId, name: createdFolderName }]));
+                    resourceFolderTrail = selectedTrail;
+                    await loadResourceFolders(createdFolderId);
+                    setSelectedResourceFolder(
+                        createdFolderId,
+                        buildResourceFolderDisplayPathFromTrail(selectedTrail),
+                        { loadPreview: true, trail: selectedTrail }
+                    );
+                }
+                showToast(`已创建并进入文件夹：${createdFolderName}`, { tone: 'success', duration: 3000, placement: 'top-center' });
+            } catch (e) {
+                showToast(`新建文件夹失败：${e.message || '请稍后重试'}`, { tone: 'error', duration: 3600, placement: 'top-center' });
+            } finally {
+                setResourceFolderCreateBusy(false);
+            }
+        }
+
         async function openResourceFolderModal() {
-            document.getElementById('resource-folder-modal').classList.remove('hidden');
+            showLockedModal('resource-folder-modal');
+            const createInput = document.getElementById('resource-folder-create-name');
+            if (createInput) createInput.value = '';
+            setResourceFolderCreateBusy(false);
             renderResourceFolderBreadcrumbs();
             await loadResourceFolders(resourceFolderTrail[resourceFolderTrail.length - 1]?.id || '0');
         }
 
         function closeResourceFolderModal() {
-            document.getElementById('resource-folder-modal').classList.add('hidden');
+            hideLockedModal('resource-folder-modal');
+            setResourceFolderCreateBusy(false);
         }
 
         async function goResourceFolderBack() {
@@ -2442,7 +3737,7 @@
         function selectCurrentResourceFolder() {
             const current = resourceFolderTrail[resourceFolderTrail.length - 1] || { id: '0', name: '根目录' };
             const displayPath = resourceFolderTrail.slice(1).map(item => item.name).join('/');
-            setSelectedResourceFolder(current.id || '0', displayPath);
+            setSelectedResourceFolder(current.id || '0', displayPath, { trail: resourceFolderTrail });
             closeResourceFolderModal();
         }
 
@@ -2577,10 +3872,29 @@
         }
 
         document.getElementById('monitor_name').addEventListener('input', refreshWebhookHint);
+        ['resource_source_name', 'resource_source_channel'].forEach(id => {
+            document.getElementById(id).addEventListener('keydown', async (e) => {
+                if (e.key !== 'Enter' || e.isComposing) return;
+                e.preventDefault();
+                await saveResourceSource();
+            });
+        });
         document.getElementById('resource-search-input').addEventListener('keydown', (e) => {
             if (e.key === 'Enter') searchResources();
         });
-        document.getElementById('resource-status-filter').addEventListener('change', searchResources);
+        document.getElementById('resource-search-input').addEventListener('input', async (e) => {
+            syncResourceSearchClearButton();
+            if (String(e.target?.value || '').trim()) return;
+            if (String(resourceState.search || '').trim()) {
+                resetResourceSearchResults();
+                await refreshResourceState({ keywordOverride: '' });
+                return;
+            }
+            renderResourceBoard();
+        });
+        document.getElementById('resource-job-modal-toggle').addEventListener('click', () => {
+            toggleResourceJobModal();
+        });
         document.getElementById('resource-source-list').addEventListener('click', async (e) => {
             const btn = e.target.closest('[data-resource-source-action]');
             if (!btn) return;
@@ -2592,20 +3906,23 @@
             if (action === 'edit') editResourceSource(index);
             if (action === 'delete') await deleteResourceSource(index);
         });
-        document.getElementById('resource-channel-tabs').addEventListener('click', async (e) => {
-            const btn = e.target.closest('[data-resource-channel]');
-            if (!btn) return;
-            const nextChannelId = btn.dataset.resourceChannel === '__all__'
-                ? ''
-                : normalizeTelegramChannelIdInput(btn.dataset.resourceChannel || '');
-            if (selectedResourceChannelId === nextChannelId) return;
-            selectedResourceChannelId = nextChannelId;
-            await refreshResourceState();
+        document.getElementById('resource-source-list').addEventListener('change', async (e) => {
+            const toggle = e.target.closest('[data-resource-source-toggle]');
+            if (!toggle) return;
+            const index = parseInt(toggle.dataset.resourceSourceIndex || '-1', 10);
+            if (index < 0) return;
+            const ok = await toggleResourceSourceEnabled(index, !!toggle.checked);
+            if (!ok) toggle.checked = !toggle.checked;
         });
         document.getElementById('resource-board').addEventListener('click', async (e) => {
             const toggleBtn = e.target.closest('[data-resource-section-toggle]');
             if (toggleBtn) {
                 toggleResourceSection(toggleBtn.dataset.resourceSectionToggle || '');
+                return;
+            }
+            const loadMoreBtn = e.target.closest('[data-resource-load-more]');
+            if (loadMoreBtn) {
+                await loadMoreResourceChannelItems(loadMoreBtn.dataset.resourceLoadMore || '', String(resourceState.search || '').trim());
                 return;
             }
             const btn = e.target.closest('[data-resource-action]');
@@ -2616,7 +3933,6 @@
             if (action === 'preview') openResourceDetailModal(resourceId);
             if (action === 'import') openResourceImportModal(resourceId);
             if (action === 'copy') await copyResourceRecord(resourceId);
-            if (action === 'delete') await deleteResourceItemRecord(resourceId);
         });
         document.getElementById('resource-job-list').addEventListener('click', async (e) => {
             const btn = e.target.closest('[data-resource-job-action]');
@@ -2625,6 +3941,14 @@
             const jobId = parseInt(btn.dataset.resourceJobId || '0', 10);
             if (!jobId) return;
             if (action === 'refresh') await triggerResourceJobRefresh(jobId);
+        });
+        document.getElementById('resource-job-filter-tabs').addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-resource-job-filter]');
+            if (!btn) return;
+            const nextFilter = String(btn.dataset.resourceJobFilter || 'all').trim() || 'all';
+            if (resourceJobFilter === nextFilter) return;
+            resourceJobFilter = nextFilter;
+            renderResourceJobs();
         });
         document.getElementById('monitor-task-list').addEventListener('click', async (e) => {
             const btn = e.target.closest('[data-monitor-action]');
@@ -2643,11 +3967,19 @@
         document.getElementById('help-modal').addEventListener('click', (e) => {
             if (e.target.id === 'help-modal') closeHelpModal();
         });
+        document.getElementById('resource-source-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'resource-source-modal') closeResourceSourceModal();
+        });
         document.getElementById('resource-import-modal').addEventListener('click', (e) => {
             if (e.target.id === 'resource-import-modal') closeResourceJobModal();
         });
         document.getElementById('resource-folder-modal').addEventListener('click', (e) => {
             if (e.target.id === 'resource-folder-modal') closeResourceFolderModal();
+        });
+        document.getElementById('resource-folder-create-name').addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            createResourceFolderInCurrent();
         });
         document.getElementById('resource-folder-list').addEventListener('click', async (e) => {
             const btn = e.target.closest('[data-resource-folder-action]');
@@ -2664,6 +3996,16 @@
             if (action === 'trail') {
                 await openResourceFolderTrail(btn.dataset.resourceFolderIndex || '0');
             }
+        });
+        document.getElementById('resource-job-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'resource-job-modal') toggleResourceJobModal(false);
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && resourceSourceModalOpen) {
+                closeResourceSourceModal();
+                return;
+            }
+            if (e.key === 'Escape' && resourceJobModalOpen) toggleResourceJobModal(false);
         });
         document.getElementById('resource-share-tree').addEventListener('click', async (e) => {
             const btn = e.target.closest('[data-resource-share-action]');
@@ -2692,6 +4034,14 @@
         document.getElementById('resource-share-current-check-all').addEventListener('change', (e) => {
             setCurrentResourceShareEntriesChecked(!!e.target.checked);
         });
+        window.addEventListener('scroll', () => {
+            syncResourceBackTopButton();
+            syncSettingsSaveDock();
+        }, { passive: true });
+        window.addEventListener('resize', () => {
+            syncResourceBackTopButton();
+            syncSettingsSaveDock();
+        });
         function applyThemeFromStorage() {
             try {
                 const isDay = localStorage.getItem('theme-day') === 'day';
@@ -2717,11 +4067,17 @@
         }
         applyThemeFromStorage();
         init();
+        syncResourceBackTopButton();
+        syncSettingsSaveDock();
         refreshMainLogs();
         refreshMonitorState();
         refreshResourceState();
         connectStatusStream();
         refreshVersionInfo();
         setInterval(() => refreshVersionInfo(false), VERSION_REFRESH_INTERVAL);
-        setInterval(() => refreshResourceState(), RESOURCE_REFRESH_INTERVAL);
+        setInterval(() => {
+            const keyword = document.getElementById('resource-search-input')?.value?.trim() || '';
+            if (keyword && !isDirectImportInput(keyword)) return;
+            refreshResourceState();
+        }, RESOURCE_REFRESH_INTERVAL);
     

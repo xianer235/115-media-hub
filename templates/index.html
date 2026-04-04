@@ -73,18 +73,14 @@
         <div id="page-resource" class="space-y-4">
             <div class="group-card resource-shell">
                 <div class="relative z-[1] resource-search-panel">
-                    <div class="resource-search-top">
-                        <div class="min-w-0">
-                            <div class="text-xs uppercase tracking-[0.3em] text-sky-300/80">Resource Search</div>
-                            <div class="resource-search-title mt-1">搜索资源 / 浏览订阅频道</div>
-                            <div id="resource-board-hint" class="resource-search-sub max-w-3xl">
-                                默认展示已启用频道最近 10 条；输入关键字后切换到搜索结果。
-                            </div>
+                    <div class="resource-search-head">
+                        <div id="resource-board-hint" class="resource-search-sub min-w-0">
+                            默认按订阅频道分栏展示最近 10 条资源；搜索会在已启用频道内即时检索，粘贴 magnet / 115 分享链接可直接导入。
                         </div>
                         <div class="resource-search-stats">
                             <div class="resource-search-stat">订阅源 <span id="resource-source-count" class="text-sky-400 font-bold">0</span></div>
-                            <div class="resource-search-stat">资源数 <span id="resource-item-count" class="text-emerald-400 font-bold">0</span></div>
-                            <div class="resource-search-stat">任务数 <span id="resource-job-count" class="text-amber-300 font-bold">0</span></div>
+                            <div class="resource-search-stat">缓存数 <span id="resource-item-count" class="text-emerald-400 font-bold">0</span></div>
+                            <div class="resource-search-stat">完成记录 <span id="resource-completed-job-count" class="text-amber-300 font-bold">0</span></div>
                         </div>
                     </div>
 
@@ -93,24 +89,19 @@
                     </div>
 
                     <div class="resource-search-controls">
-                        <input id="resource-search-input" class="resource-search-input w-full bg-slate-950/85 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500" placeholder="输入关键字，或粘贴 magnet / 115 分享链接">
-                        <button onclick="searchResources()" class="resource-search-btn bg-sky-600 hover:bg-sky-500 text-white shadow-lg">搜索/解析</button>
-                        <button onclick="syncResourceChannels(true)" class="resource-search-btn bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700">同步频道</button>
-                        <select id="resource-status-filter" class="resource-search-select bg-slate-900 border border-slate-700 text-sm">
-                            <option value="">全部状态</option>
-                            <option value="new">未处理</option>
-                            <option value="queued">已入队</option>
-                            <option value="importing">导入中</option>
-                            <option value="submitted">待刷新</option>
-                            <option value="completed">已完成</option>
-                            <option value="failed">失败</option>
-                        </select>
-                        <button onclick="clearResourceSearch()" class="resource-search-btn bg-slate-800 hover:bg-slate-700 text-slate-200">清空</button>
-                    </div>
-
-                    <div class="resource-search-channels">
-                        <div class="resource-search-channels-label">频道</div>
-                        <div id="resource-channel-tabs" class="flex flex-wrap gap-2 min-w-0 flex-1"></div>
+                        <div class="resource-search-input-shell">
+                            <div class="resource-search-input-wrap">
+                                <input id="resource-search-input" class="resource-search-input w-full bg-slate-950/85 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-100 placeholder:text-slate-500" placeholder="搜索订阅频道，或粘贴 magnet / 115 分享链接直接导入">
+                                <button id="resource-search-clear-btn" type="button" onclick="clearResourceSearch()" class="resource-search-clear-btn hidden" aria-label="清空搜索">✕</button>
+                            </div>
+                            <div id="resource-search-proxy-health" class="resource-search-proxy-health hidden" aria-live="polite"></div>
+                        </div>
+                        <button id="resource-search-btn" type="button" onclick="searchResources()" class="resource-search-btn bg-sky-600 hover:bg-sky-500 text-white shadow-lg">搜索</button>
+                        <button id="resource-sync-btn" type="button" onclick="syncResourceChannels(true)" class="resource-search-btn bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700">同步频道</button>
+                        <button id="resource-job-modal-toggle" type="button" class="resource-search-btn resource-job-trigger bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700" aria-expanded="false">
+                            任务列表
+                            <span id="resource-job-modal-badge" class="resource-job-trigger-badge hidden">0</span>
+                        </button>
                     </div>
                 </div>
             </div>
@@ -118,24 +109,12 @@
             <div class="group-card">
                 <div id="resource-board" class="space-y-8"></div>
             </div>
-
-            <div class="hidden">
-                <div id="resource-job-list" class="space-y-3"></div>
-            </div>
         </div>
+        <button id="resource-back-top-btn" type="button" onclick="scrollResourceToTop()" class="resource-back-top-btn hidden" aria-label="回到资源页顶部">回到顶部</button>
 
         <div id="page-settings" class="hidden space-y-6">
-            <div class="group-card">
-                <div class="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                        <div class="text-base font-black text-white">参数配置中心</div>
-                        <div class="text-xs text-slate-400 mt-1">目录树任务与文件夹监控任务共享此处的 AList/OpenList 连接与认证参数。</div>
-                    </div>
-                    <div class="text-[11px] text-slate-400 px-3 py-2 rounded-xl border border-slate-700 bg-slate-900/80">建议修改后统一点击“保存全部配置”</div>
-                </div>
-            </div>
-            <div class="grid grid-cols-1 xl:grid-cols-12 gap-6">
-                <div class="group-card xl:col-span-5">
+            <div class="grid grid-cols-1 gap-6 settings-grid">
+                <div class="group-card settings-section-card">
                     <h3 class="group-title">1. AList/OpenList 播放链接基础配置</h3>
                     <div class="space-y-4">
                         <label class="block"><span class="text-xs text-slate-500">AList/OpenList 访问链接前缀 (如 http://192.168.1.5:5244)</span><input id="alist_url" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none focus:border-sky-500 transition-colors"></label>
@@ -157,7 +136,7 @@
                     </div>
                 </div>
 
-                <div class="group-card xl:col-span-7">
+                <div class="group-card settings-section-card">
                     <div class="flex flex-wrap justify-between items-center gap-3 mb-4">
                         <h3 class="group-title">2. 目录树多源配置 (分块解析增强版)</h3>
                         <button onclick="addTreeRow()" class="text-xs bg-sky-500/20 text-sky-400 hover:bg-sky-500 hover:text-white px-3 py-1 rounded-lg border border-sky-500/40 transition-all font-bold">+ 添加目录树链接</button>
@@ -169,7 +148,7 @@
                     </div>
                 </div>
 
-                <div class="group-card xl:col-span-6">
+                <div class="group-card settings-section-card">
                     <h3 class="group-title">3. 目录树任务同步策略与任务模式</h3>
                     <div class="space-y-4">
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -182,31 +161,21 @@
                             <label class="block"><span class="text-xs text-slate-500">定时频率 (分钟)</span><input id="cron_hour" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1"></label>
                         </div>
                         <div class="space-y-3 pt-1">
-                            <label class="flex items-center gap-2 cursor-pointer text-sm hover:text-white transition-colors">
-                                <input type="checkbox" id="check_hash" class="w-5 h-5 rounded-lg accent-sky-500"> 开启 MD5 校验 (无变动跳过解析)
+                            <label class="flex items-center gap-3 cursor-pointer text-sm hover:text-white transition-colors">
+                                <input type="checkbox" id="check_hash" class="ui-checkbox"> 开启 MD5 校验 (无变动跳过解析)
                             </label>
-                            <label class="flex items-center gap-2 cursor-pointer text-sm hover:text-white transition-colors">
-                                <input type="checkbox" id="sync_clean" class="w-5 h-5 rounded-lg accent-sky-500"> 自动清理模式 (本地同步删除)
+                            <label class="flex items-center gap-3 cursor-pointer text-sm hover:text-white transition-colors">
+                                <input type="checkbox" id="sync_clean" class="ui-checkbox"> 自动清理模式 (本地同步删除)
                             </label>
                         </div>
                     </div>
                 </div>
 
-                <div class="group-card xl:col-span-6">
-                    <h3 class="group-title">4. 后台安全管理</h3>
+                <div class="group-card settings-section-card">
+                    <h3 class="group-title">4. TG 访问代理</h3>
                     <div class="space-y-4">
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <label class="block"><span class="text-xs text-slate-500">管理账号</span><input id="username" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1"></label>
-                            <label class="block"><span class="text-xs text-slate-500">管理密码</span><input id="password" type="password" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1"></label>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="group-card xl:col-span-6">
-                    <h3 class="group-title">5. TG 访问代理</h3>
-                    <div class="space-y-4">
-                        <label class="flex items-center gap-2 cursor-pointer text-sm">
-                            <input type="checkbox" id="tg_proxy_enabled" class="w-5 h-5 rounded-lg accent-sky-500">
+                        <label class="flex items-center gap-3 cursor-pointer text-sm">
+                            <input type="checkbox" id="tg_proxy_enabled" class="ui-checkbox">
                             访问 TG 频道时启用代理
                         </label>
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -241,45 +210,52 @@
                     </div>
                 </div>
 
-                <div class="group-card xl:col-span-12">
-                    <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
-                        <h3 class="group-title mb-0">6. TG 订阅源管理</h3>
-                        <div class="text-xs text-slate-400">只需要填频道 ID，例如 `QukanMovie`，系统会自动拼成 `https://t.me/s/QukanMovie`。</div>
-                    </div>
-                    <div class="grid grid-cols-1 lg:grid-cols-[minmax(0,360px)_1fr] gap-6">
-                        <div class="space-y-4">
-                            <label class="block">
-                                <span class="text-xs text-slate-500">频道名称</span>
-                                <input id="resource_source_name" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：趣看电影">
-                            </label>
-                            <label class="block">
-                                <span class="text-xs text-slate-500">频道 ID</span>
-                                <input id="resource_source_channel" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：QukanMovie">
-                            </label>
-                            <label class="flex items-center gap-2 cursor-pointer text-sm">
-                                <input type="checkbox" id="resource_source_enabled" class="w-5 h-5 rounded-lg accent-sky-500" checked>
-                                启用频道
-                            </label>
-                            <input id="resource_source_url" type="hidden">
-                            <textarea id="resource_source_notes" class="hidden"></textarea>
-                            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
-                                <button onclick="saveResourceSource()" class="bg-sky-600 hover:bg-sky-500 rounded-xl py-3 font-bold text-white">保存订阅源</button>
-                                <button onclick="resetResourceSourceForm()" class="bg-slate-700 hover:bg-slate-600 rounded-xl py-3 font-bold text-white">清空表单</button>
+                <div class="group-card settings-section-card">
+                    <div class="resource-source-panel">
+                        <div class="resource-source-panel-head">
+                            <div class="min-w-0">
+                                <div class="settings-hero-eyebrow">Telegram Sources</div>
+                                <h3 class="group-title mb-0">5. TG 订阅源管理</h3>
+                                <div class="resource-source-panel-copy">只需要填写公开频道 ID，例如 `QukanMovie`。支持直接粘贴 `@QukanMovie` 或完整的 `https://t.me/s/QukanMovie` 链接，保存时会自动规范化。</div>
+                            </div>
+                            <div class="resource-source-summary">
+                                <div class="resource-source-summary-card">
+                                    <div class="resource-source-summary-title">频道统计</div>
+                                    <div class="resource-source-summary-metrics">
+                                        <div class="resource-source-summary-item">
+                                            <div class="resource-source-summary-label">总数</div>
+                                            <div id="resource-source-total-count" class="resource-source-summary-value">0</div>
+                                        </div>
+                                        <div class="resource-source-summary-item">
+                                            <div class="resource-source-summary-label">启用</div>
+                                            <div id="resource-source-enabled-count" class="resource-source-summary-value resource-source-summary-value-enabled">0</div>
+                                        </div>
+                                        <div class="resource-source-summary-item">
+                                            <div class="resource-source-summary-label">停用</div>
+                                            <div id="resource-source-disabled-count" class="resource-source-summary-value resource-source-summary-value-disabled">0</div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
-                        <div>
+                        <div class="resource-source-panel-body">
+                            <div class="resource-source-panel-note">资源中心会按这里的顺序分栏展示频道；修改排序或启用状态后会即时生效并自动保存。</div>
                             <div id="resource-source-list" class="space-y-3"></div>
+                            <div class="resource-source-panel-footer">
+                                <div class="resource-source-panel-footer-copy">频道订阅会即时保存；其余参数仍然需要点击页面底部悬浮的“保存全部配置”。</div>
+                                <button type="button" onclick="openResourceSourceModal()" class="resource-source-add-btn">+ 添加频道订阅</button>
+                            </div>
                         </div>
                     </div>
                 </div>
 
-                <div class="group-card xl:col-span-6">
-                    <h3 class="group-title">7. 115 资源导入配置</h3>
+                <div class="group-card settings-section-card">
+                    <h3 class="group-title">6. 115 资源导入配置</h3>
                     <div class="space-y-4">
                         <label class="block">
                             <span class="text-xs text-slate-500 inline-flex items-center gap-2">
                                 115 Cookie
-                                <button type="button" class="info-dot" onclick="showHelp('资源中心第一版会使用 115 Cookie 在服务端发起磁力离线任务。建议使用单独账号，Cookie 失效后需要重新粘贴保存。')">i</button>
+                                <button type="button" class="info-dot" onclick="showHelp('115Cookie推荐使用115不大助手，扫描不常用的支付宝/微信小程序获取。')">i</button>
                             </span>
                             <textarea id="cookie_115" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 min-h-[120px]" placeholder="把浏览器里的 115 Cookie 粘贴到这里，例如 UID=...; CID=...; SEID=...;"></textarea>
                         </label>
@@ -288,10 +264,24 @@
                         </div>
                     </div>
                 </div>
+
+                <div class="group-card settings-section-card">
+                    <h3 class="group-title">7. 后台安全管理</h3>
+                    <div class="space-y-4">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <label class="block"><span class="text-xs text-slate-500">管理账号</span><input id="username" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1"></label>
+                            <label class="block"><span class="text-xs text-slate-500">管理密码</span><input id="password" type="password" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1"></label>
+                        </div>
+                    </div>
+                </div>
             </div>
 
-            <div class="flex justify-center pt-4">
-                <button onclick="saveSettings()" class="w-full sm:w-auto bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 px-8 sm:px-24 py-4 sm:py-5 rounded-2xl font-black text-base sm:text-lg transition-all active:scale-95 shadow-2xl text-white">💾 保存全部配置</button>
+            <div id="settings-save-dock" class="group-card settings-save-card">
+                <div class="min-w-0">
+                    <div class="settings-save-title">配置改动完成后，可在这里统一保存</div>
+                    <div class="settings-save-copy">保存条会固定在页面底部；频道订阅会即时落盘，其余参数仍需手动点一次“保存全部配置”。</div>
+                </div>
+                <button onclick="saveSettings()" class="w-full sm:w-auto bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 px-8 sm:px-16 py-4 rounded-2xl font-black text-base transition-all active:scale-95 shadow-2xl text-white">保存全部配置</button>
             </div>
         </div>
 
@@ -385,8 +375,8 @@
                         </span>
                         <input id="monitor_name" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：自存影视">
                     </label>
-                    <label class="flex items-center gap-2 cursor-pointer text-sm">
-                        <input type="checkbox" id="monitor_webhook_enabled" class="w-5 h-5 rounded-lg accent-sky-500" onchange="refreshWebhookHint()">
+                    <label class="flex items-center gap-3 cursor-pointer text-sm">
+                        <input type="checkbox" id="monitor_webhook_enabled" class="ui-checkbox" onchange="refreshWebhookHint()">
                         开启 webhook
                         <button type="button" class="info-dot" onclick="showHelp('CloudSaver Webhook 参数说明（本页面仅接收，不在此处配置触发规则）：\\n1) 接口地址：/webhook/任务名\\n   URL 中的任务名用于匹配并触发指定监控任务。\\n2) 请求类型：POST；请求体格式：JSON。\\n3) 参数用途：\\n   savepath：转存目标父路径，用于定位刷新范围。\\n   sharetitle：转存后的目录名或文件名。\\n   refresh_target_type：可选，folder / file / mixed；用于区分 sharetitle 是目录、文件，还是混合选择。\\n   delayTime：可选，单位秒；用于覆盖本次任务执行延时。\\n   title：可选；仅用于日志展示“转存内容”。\\n4) 触发条件、变量映射与请求体拼装请在 CloudSaver 中配置。')">i</button>
                     </label>
@@ -413,12 +403,12 @@
                         </span>
                         <input id="monitor_target_path" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="自存影视">
                     </label>
-                    <label class="flex items-center gap-2 cursor-pointer text-sm">
-                        <input type="checkbox" id="monitor_skip_by_dir_mtime" class="w-5 h-5 rounded-lg accent-sky-500">
+                    <label class="flex items-center gap-3 cursor-pointer text-sm">
+                        <input type="checkbox" id="monitor_skip_by_dir_mtime" class="ui-checkbox">
                         文件夹修改时间校验跳过更新
                     </label>
-                    <label class="flex items-center gap-2 cursor-pointer text-sm">
-                        <input type="checkbox" id="monitor_incremental" class="w-5 h-5 rounded-lg accent-sky-500">
+                    <label class="flex items-center gap-3 cursor-pointer text-sm">
+                        <input type="checkbox" id="monitor_incremental" class="ui-checkbox">
                         增量模式 (开启后不删除本地多余文件)
                     </label>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -451,6 +441,40 @@
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
                         <button onclick="saveMonitorTask()" class="bg-sky-600 hover:bg-sky-500 rounded-xl py-3 font-bold text-white">保存任务</button>
                         <button onclick="closeMonitorModal()" class="bg-slate-700 hover:bg-slate-600 rounded-xl py-3 font-bold text-white">取消</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="resource-source-modal" class="hidden fixed inset-0 bg-black/65 backdrop-blur-sm z-[58] p-4">
+            <div class="w-full max-w-xl mx-auto mt-[8vh] group-card modal-card resource-source-modal-shell">
+                <div class="resource-source-modal-header">
+                    <div class="min-w-0">
+                        <div class="resource-source-modal-eyebrow">Subscription</div>
+                        <div id="resource-source-modal-title" class="resource-source-modal-title">新增频道订阅</div>
+                        <div id="resource-source-modal-subtitle" class="resource-source-modal-subtitle">只需要填写公开频道 ID，保存后会立刻出现在资源中心的订阅列表里。</div>
+                    </div>
+                    <button type="button" class="resource-source-modal-close" onclick="closeResourceSourceModal()" aria-label="关闭频道订阅弹窗">✕</button>
+                </div>
+                <div class="space-y-4 mt-5">
+                    <label class="block">
+                        <span class="text-xs text-slate-500">频道名称</span>
+                        <input id="resource_source_name" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：趣看电影">
+                    </label>
+                    <label class="block">
+                        <span class="text-xs text-slate-500">频道 ID</span>
+                        <input id="resource_source_channel" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：QukanMovie">
+                    </label>
+                    <label class="ui-switch-field">
+                        <span class="text-sm text-slate-200">启用频道</span>
+                        <span class="ui-switch">
+                            <input type="checkbox" id="resource_source_enabled" checked>
+                            <span class="ui-switch-slider"></span>
+                        </span>
+                    </label>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                        <button id="resource-source-modal-save-btn" onclick="saveResourceSource()" class="bg-sky-600 hover:bg-sky-500 rounded-xl py-3 font-bold text-white">保存频道订阅</button>
+                        <button onclick="closeResourceSourceModal()" class="bg-slate-700 hover:bg-slate-600 rounded-xl py-3 font-bold text-white">取消</button>
                     </div>
                 </div>
             </div>
@@ -516,7 +540,7 @@
                                 <div class="resource-browser-table mt-3">
                                     <div class="resource-browser-header">
                                         <label class="resource-browser-name-cell">
-                                            <input id="resource-share-current-check-all" type="checkbox" class="h-4 w-4 rounded border-slate-600 bg-slate-900 accent-sky-500">
+                                            <input id="resource-share-current-check-all" type="checkbox" class="ui-checkbox ui-checkbox-sm">
                                             <span>文件名</span>
                                         </label>
                                         <div class="resource-browser-col-size">大小</div>
@@ -596,8 +620,51 @@
                         <button type="button" onclick="selectCurrentResourceFolder()" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold">选择当前目录</button>
                         <button type="button" onclick="goResourceFolderBack()" class="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">返回上一级</button>
                     </div>
+                    <div class="flex flex-col sm:flex-row gap-2">
+                        <input id="resource-folder-create-name" class="w-full sm:flex-1 bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm" placeholder="在当前目录新建文件夹（例如：电影）">
+                        <button id="resource-folder-create-btn" type="button" onclick="createResourceFolderInCurrent()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold whitespace-nowrap">新建文件夹</button>
+                    </div>
                     <div id="resource-folder-list" class="space-y-3"></div>
                 </div>
+            </div>
+        </div>
+
+        <div id="resource-job-modal" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-[57] p-4">
+            <div class="w-full max-w-5xl mx-auto mt-[4vh] max-h-[92vh] overflow-hidden group-card modal-card resource-job-modal-shell">
+                <div class="resource-job-modal-header">
+                    <div class="min-w-0">
+                        <div class="resource-job-modal-eyebrow">Task Center</div>
+                        <div class="resource-job-modal-title">任务列表</div>
+                        <div id="resource-job-modal-summary" class="resource-job-modal-subtitle">等待导入任务</div>
+                    </div>
+                    <div class="resource-job-modal-actions">
+                        <button id="resource-clear-completed-btn" type="button" onclick="clearCompletedResourceJobs()" class="resource-job-modal-action">清空已完成</button>
+                        <button type="button" class="resource-job-modal-close" onclick="toggleResourceJobModal(false)" aria-label="关闭任务列表">✕</button>
+                    </div>
+                </div>
+                <div class="resource-job-modal-stats">
+                    <div class="resource-job-stat-card">
+                        <div class="resource-job-stat-label">最近任务</div>
+                        <div id="resource-job-stat-total" class="resource-job-stat-value">0</div>
+                    </div>
+                    <div class="resource-job-stat-card">
+                        <div class="resource-job-stat-label">处理中</div>
+                        <div id="resource-job-stat-active" class="resource-job-stat-value">0</div>
+                    </div>
+                    <div class="resource-job-stat-card">
+                        <div class="resource-job-stat-label">已完成</div>
+                        <div id="resource-job-stat-completed" class="resource-job-stat-value">0</div>
+                    </div>
+                    <div class="resource-job-stat-card">
+                        <div class="resource-job-stat-label">失败</div>
+                        <div id="resource-job-stat-failed" class="resource-job-stat-value">0</div>
+                    </div>
+                </div>
+                <div class="resource-job-modal-toolbar">
+                    <div id="resource-job-filter-tabs" class="resource-job-filter-tabs"></div>
+                    <div class="resource-job-modal-note">显示最近 40 条导入任务，可按状态快速筛选。</div>
+                </div>
+                <div id="resource-job-list" class="resource-job-modal-list"></div>
             </div>
         </div>
     </main>

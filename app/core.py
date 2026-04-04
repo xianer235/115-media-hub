@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import sqlite3
+import ssl
 import time
 import urllib.error
 import urllib.parse
@@ -48,6 +49,14 @@ UI_EVENT_RETRY_MS = 3000
 UI_HEARTBEAT_SECONDS = 15
 UI_PUSH_DEBOUNCE_SECONDS = 0.15
 TG_SYNC_TTL_SECONDS = 5 * 60
+RESOURCE_CHANNEL_CACHE_LIMIT = max(10, int(os.environ.get("RESOURCE_CHANNEL_CACHE_LIMIT", 40) or 40))
+TG_SEARCH_PAGE_LIMIT = max(10, int(os.environ.get("TG_SEARCH_PAGE_LIMIT", 20) or 20))
+TG_SEARCH_MAX_PAGES = max(1, int(os.environ.get("TG_SEARCH_MAX_PAGES", 6) or 6))
+TG_SEARCH_MATCH_LIMIT_PER_CHANNEL = max(1, int(os.environ.get("TG_SEARCH_MATCH_LIMIT_PER_CHANNEL", 12) or 12))
+TG_SEARCH_TOTAL_LIMIT = max(TG_SEARCH_MATCH_LIMIT_PER_CHANNEL, int(os.environ.get("TG_SEARCH_TOTAL_LIMIT", 60) or 60))
+TG_SEARCH_CHANNEL_TIMEOUT_SECONDS = max(5, int(os.environ.get("TG_SEARCH_CHANNEL_TIMEOUT_SECONDS", 15) or 15))
+TG_FETCH_RETRY_ATTEMPTS = max(1, int(os.environ.get("TG_FETCH_RETRY_ATTEMPTS", 3) or 3))
+TG_FETCH_RETRY_DELAY_SECONDS = max(0.2, float(os.environ.get("TG_FETCH_RETRY_DELAY_SECONDS", 0.8) or 0.8))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 FAVICON_PATH = os.path.join(STATIC_DIR, "icons", "favicon.svg")
 RESOURCE_MAGNET_REGEX = re.compile(r"magnet:\?xt=urn:btih:[A-Za-z0-9]{32,40}[^\s<>'\"]*", re.IGNORECASE)
@@ -56,6 +65,7 @@ RESOURCE_YEAR_REGEX = re.compile(r"\b(19\d{2}|20\d{2})\b")
 TG_WIDGET_POST_REGEX = re.compile(r'<div[^>]+class="tgme_widget_message[^"]*"[^>]+data-post="([^"]+)"[^>]*>', re.IGNORECASE)
 TG_LINK_HREF_REGEX = re.compile(r'href="([^"]+)"', re.IGNORECASE)
 TG_IMAGE_STYLE_REGEX = re.compile(r"background-image:url\('([^']+)'\)", re.IGNORECASE)
+TG_PREV_BEFORE_REGEX = re.compile(r'rel="prev"[^>]+href="[^"]*before=([^"&]+)', re.IGNORECASE)
 TG_EXTRACT_CODE_REGEX = re.compile(r"(?:提取码|访问码|密码)[:：\s]*([A-Za-z0-9]{4,8})", re.IGNORECASE)
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -362,6 +372,26 @@ def ensure_db() -> None:
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_resource_items_status ON resource_items(status)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_resource_jobs_created_at ON resource_jobs(created_at DESC)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_resource_jobs_status ON resource_jobs(status)")
+    cursor.execute(
+        """
+        SELECT id, last_seen_at, extra_json
+        FROM resource_items
+        WHERE last_seen_at LIKE '{%' AND extra_json NOT LIKE '{%'
+        """
+    )
+    for row in cursor.fetchall():
+        row_id = int(row[0] or 0)
+        legacy_extra_raw = str(row[1] or "").strip()
+        last_seen_raw = str(row[2] or "").strip()
+        legacy_extra = safe_json_loads(legacy_extra_raw, {})
+        if not isinstance(legacy_extra, dict):
+            continue
+        if not any(str(legacy_extra.get(key, "") or "").strip() for key in ("cover_url", "source_post_id", "source_url")):
+            continue
+        cursor.execute(
+            "UPDATE resource_items SET last_seen_at = ?, extra_json = ? WHERE id = ?",
+            (last_seen_raw or now_text(), legacy_extra_raw, row_id),
+        )
     conn.commit()
     conn.close()
 
@@ -392,6 +422,15 @@ def safe_json_loads(raw: Any, fallback: Any) -> Any:
         return fallback
 
 
+def merge_json_object(base: Any, patch: Any) -> Dict[str, Any]:
+    merged: Dict[str, Any] = {}
+    if isinstance(base, dict):
+        merged.update(base)
+    if isinstance(patch, dict):
+        merged.update(patch)
+    return merged
+
+
 def sqlite_row_to_dict(row: Optional[sqlite3.Row]) -> Dict[str, Any]:
     if row is None:
         return {}
@@ -408,6 +447,15 @@ def unique_preserve_order(values: List[str]) -> List[str]:
         seen.add(token)
         result.append(token)
     return result
+
+
+def apply_share_receive_code_to_url(url: str, receive_code: str) -> str:
+    share_url = str(url or "").strip()
+    password = str(receive_code or "").strip()
+    if not share_url or not password or "password=" in share_url.lower():
+        return share_url
+    separator = "&" if "?" in share_url else "?"
+    return f"{share_url}{separator}password={urllib.parse.quote(password)}"
 
 
 def strip_html_to_text(fragment: str) -> str:
@@ -441,14 +489,61 @@ def build_tg_proxy_url(cfg: Dict[str, Any], ignore_enabled: bool = False) -> str
 def format_network_error(exc: Exception) -> str:
     if isinstance(exc, urllib.error.HTTPError):
         return f"HTTP {exc.code}: {exc.reason or '请求失败'}"
+    if isinstance(exc, ssl.SSLError):
+        return str(exc.reason or exc)
     if isinstance(exc, urllib.error.URLError):
         reason = exc.reason
         if isinstance(reason, TimeoutError):
             return "连接超时"
+        if isinstance(reason, ssl.SSLError):
+            return str(reason.reason or reason)
         if isinstance(reason, OSError):
             return str(reason.strerror or reason)
         return str(reason or exc)
     return str(exc or "未知网络错误")
+
+
+def unwrap_network_error(exc: Exception) -> Exception:
+    current: Exception = exc
+    seen: Set[int] = set()
+    while current and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, urllib.error.URLError) and isinstance(getattr(current, "reason", None), Exception):
+            current = current.reason
+            continue
+        nested = getattr(current, "__cause__", None) or getattr(current, "__context__", None)
+        if isinstance(nested, Exception):
+            current = nested
+            continue
+        break
+    return current
+
+
+def is_retryable_telegram_request_error(exc: Exception) -> bool:
+    if isinstance(exc, urllib.error.HTTPError):
+        return int(exc.code or 0) in {408, 425, 429, 500, 502, 503, 504}
+
+    root = unwrap_network_error(exc)
+    if isinstance(root, (TimeoutError, ConnectionResetError, EOFError, ssl.SSLError)):
+        return True
+
+    message = " ".join(
+        str(part or "")
+        for part in [exc, root, getattr(root, "strerror", "")]
+    ).lower()
+    retry_fragments = (
+        "unexpected_eof_while_reading",
+        "eof occurred in violation of protocol",
+        "remote end closed connection",
+        "connection reset",
+        "connection aborted",
+        "temporarily unavailable",
+        "temporary failure",
+        "timed out",
+        "tlsv1 alert",
+        "ssl",
+    )
+    return any(fragment in message for fragment in retry_fragments)
 
 
 def test_telegram_latency(cfg: Dict[str, Any], channel_id: str = "telegram", timeout: int = 20) -> Dict[str, Any]:
@@ -675,7 +770,7 @@ def upsert_resource_item(conn: sqlite3.Connection, item: Dict[str, Any]) -> Tupl
                 published_at = ?, last_seen_at = ?, extra_json = ?
             WHERE id = ?
             """,
-            payload + (now, existing["id"]),
+            payload[:12] + (now, payload[12], existing["id"]),
         )
         return int(existing["id"]), False
 
@@ -701,10 +796,76 @@ def update_resource_item_status(conn: sqlite3.Connection, resource_id: int, stat
 def serialize_resource_item_row(row: sqlite3.Row) -> Dict[str, Any]:
     data = sqlite_row_to_dict(row)
     extra = safe_json_loads(data.get("extra_json"), {})
+    legacy_extra = safe_json_loads(data.get("last_seen_at"), {})
+    if not isinstance(extra, dict) or not extra:
+        extra = legacy_extra if isinstance(legacy_extra, dict) else {}
+    elif isinstance(legacy_extra, dict):
+        for key in ("cover_url", "source_post_id", "source_url"):
+            if not str(extra.get(key, "") or "").strip() and str(legacy_extra.get(key, "") or "").strip():
+                extra[key] = legacy_extra[key]
     data["extra"] = extra
     data["cover_url"] = str(extra.get("cover_url", "") or "").strip()
     data["source_post_id"] = str(extra.get("source_post_id", "") or "").strip()
     return data
+
+
+def build_resource_job_snapshot(resource: Dict[str, Any], link_type: str = "") -> Dict[str, Any]:
+    extra = resource.get("extra", {})
+    if not isinstance(extra, dict):
+        extra = safe_json_loads(resource.get("extra_json"), {})
+    snapshot = {
+        "message_url": str(resource.get("message_url", "") or "").strip(),
+        "source_post_id": str((extra or {}).get("source_post_id", "") or "").strip(),
+    }
+    resolved_link_type = resolve_resource_link_type(link_type or resource.get("link_type", ""), resource.get("link_url", ""))
+    if resolved_link_type == "115share":
+        payload = parse_115_share_payload(str(resource.get("link_url", "") or "").strip(), str(resource.get("raw_text", "") or ""))
+        receive_code = str(payload.get("receive_code", "") or "").strip()
+        if receive_code:
+            snapshot["receive_code"] = receive_code
+    return {key: value for key, value in snapshot.items() if str(value or "").strip()}
+
+
+def sanitize_resource_job_input(raw: Dict[str, Any]) -> Dict[str, Any]:
+    source_type = str(raw.get("source_type", "manual") or "manual").strip() or "manual"
+    source_name = str(raw.get("source_name", "") or "").strip()
+    channel_name = str(raw.get("channel_name", "") or "").strip()
+    title = str(raw.get("title", "") or "").strip() or "未命名资源"
+    raw_text = str(raw.get("raw_text", "") or "").strip()
+    link_url = str(raw.get("link_url", "") or "").strip()
+    message_url = str(raw.get("message_url", "") or "").strip()
+    quality = str(raw.get("quality", "") or "").strip()
+    year = str(raw.get("year", "") or "").strip()
+    published_at = str(raw.get("published_at", "") or "").strip()
+    extra = raw.get("extra", {})
+    if not isinstance(extra, dict):
+        extra = {}
+    return {
+        "id": int(raw.get("id", 0) or 0),
+        "source_type": source_type,
+        "source_name": source_name,
+        "channel_name": channel_name,
+        "title": title,
+        "normalized_title": str(raw.get("normalized_title", "") or "").strip() or title.lower(),
+        "raw_text": raw_text,
+        "link_url": link_url,
+        "link_type": resolve_resource_link_type(str(raw.get("link_type", "") or "").strip(), link_url) or detect_resource_link_type(link_url),
+        "message_url": message_url,
+        "quality": quality,
+        "year": year,
+        "published_at": published_at,
+        "extra": {
+            "cover_url": str(extra.get("cover_url", "") or "").strip(),
+            "source_post_id": str(extra.get("source_post_id", "") or "").strip(),
+            "source_url": str(extra.get("source_url", "") or "").strip(),
+        },
+    }
+
+
+def get_resource_job_snapshot(raw_extra: Any) -> Dict[str, Any]:
+    extra = safe_json_loads(raw_extra, {})
+    snapshot = extra.get("snapshot") if isinstance(extra, dict) else {}
+    return snapshot if isinstance(snapshot, dict) else {}
 
 
 def get_resource_item(resource_id: int) -> Dict[str, Any]:
@@ -717,16 +878,25 @@ def get_resource_item(resource_id: int) -> Dict[str, Any]:
     return serialize_resource_item_row(row) if row else {}
 
 
-def serialize_resource_job_row(row: Optional[sqlite3.Row]) -> Dict[str, Any]:
+def serialize_resource_job_row(row: Optional[sqlite3.Row], include_private: bool = False) -> Dict[str, Any]:
     if not row:
         return {}
     data = sqlite_row_to_dict(row)
     extra = safe_json_loads(data.get("extra_json"), {})
+    snapshot = get_resource_job_snapshot(extra)
     data["response"] = safe_json_loads(data.get("response_json"), {})
     data["extra"] = extra if isinstance(extra, dict) else {}
+    data["snapshot"] = {
+        "message_url": str(snapshot.get("message_url", "") or "").strip(),
+        "source_post_id": str(snapshot.get("source_post_id", "") or "").strip(),
+    }
+    if include_private:
+        data["_snapshot"] = snapshot
     data["auto_refresh"] = bool(data.get("auto_refresh"))
     data["refresh_target_type"] = str(data["extra"].get("refresh_target_type", "") or "").strip()
     data["share_root_title"] = str(data["extra"].get("share_root_title", "") or "").strip()
+    data["message_url"] = str(snapshot.get("message_url", "") or "").strip()
+    data["source_post_id"] = str(snapshot.get("source_post_id", "") or "").strip()
     data["selected_ids"] = [
         str(item).strip()
         for item in (data["extra"].get("selected_ids") or [])
@@ -736,7 +906,7 @@ def serialize_resource_job_row(row: Optional[sqlite3.Row]) -> Dict[str, Any]:
     return data
 
 
-def list_resource_items(search: str = "", status: str = "", channel_id: str = "", limit: int = 120) -> List[Dict[str, Any]]:
+def list_resource_items(search: str = "", status: str = "", channel_id: str = "", source_type: str = "", limit: int = 120) -> List[Dict[str, Any]]:
     ensure_db()
     conn = open_db()
     cursor = conn.cursor()
@@ -757,11 +927,15 @@ def list_resource_items(search: str = "", status: str = "", channel_id: str = ""
     if normalized_channel:
         where_parts.append("channel_name = ?")
         params.append(normalized_channel)
+    normalized_source_type = str(source_type or "").strip().lower()
+    if normalized_source_type:
+        where_parts.append("source_type = ?")
+        params.append(normalized_source_type)
 
     sql = "SELECT * FROM resource_items"
     if where_parts:
         sql += " WHERE " + " AND ".join(where_parts)
-    sql += " ORDER BY id DESC LIMIT ?"
+    sql += " ORDER BY CASE WHEN published_at <> '' THEN published_at ELSE created_at END DESC, id DESC LIMIT ?"
     params.append(max(1, min(limit, 500)))
     cursor.execute(sql, params)
     rows = cursor.fetchall()
@@ -769,7 +943,7 @@ def list_resource_items(search: str = "", status: str = "", channel_id: str = ""
     return [serialize_resource_item_row(row) for row in rows]
 
 
-def count_resource_items(search: str = "", status: str = "", channel_id: str = "") -> int:
+def count_resource_items(search: str = "", status: str = "", channel_id: str = "", source_type: str = "") -> int:
     ensure_db()
     conn = open_db()
     cursor = conn.cursor()
@@ -790,6 +964,10 @@ def count_resource_items(search: str = "", status: str = "", channel_id: str = "
     if normalized_channel:
         where_parts.append("channel_name = ?")
         params.append(normalized_channel)
+    normalized_source_type = str(source_type or "").strip().lower()
+    if normalized_source_type:
+        where_parts.append("source_type = ?")
+        params.append(normalized_source_type)
 
     sql = "SELECT COUNT(1) FROM resource_items"
     if where_parts:
@@ -798,6 +976,81 @@ def count_resource_items(search: str = "", status: str = "", channel_id: str = "
     row = cursor.fetchone()
     conn.close()
     return int(row[0] if row else 0)
+
+
+def build_resource_item_identity(item: Dict[str, Any]) -> str:
+    payload = item if isinstance(item, dict) else {}
+    extra = payload.get("extra") if isinstance(payload.get("extra"), dict) else {}
+    source_post_id = str(payload.get("source_post_id", "") or extra.get("source_post_id", "")).strip()
+    if source_post_id:
+        return f"post:{source_post_id}"
+    message_url = str(payload.get("message_url", "")).strip()
+    if message_url:
+        return f"msg:{message_url}"
+    link_url = str(payload.get("link_url", "")).strip()
+    if link_url:
+        return f"link:{link_url}"
+    title = str(payload.get("title", "")).strip()
+    raw_text = str(payload.get("raw_text", "")).strip()
+    return f"title:{title}|raw:{raw_text[:120]}"
+
+
+def dedupe_resource_item_dicts(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    result: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for item in items:
+        key = build_resource_item_identity(item)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
+
+
+def build_resource_search_text(item: Dict[str, Any]) -> str:
+    payload = item if isinstance(item, dict) else {}
+    extra = payload.get("extra") if isinstance(payload.get("extra"), dict) else {}
+    parts = [
+        payload.get("title", ""),
+        payload.get("normalized_title", ""),
+        payload.get("raw_text", ""),
+        payload.get("source_name", ""),
+        payload.get("channel_name", ""),
+        payload.get("link_url", ""),
+        payload.get("message_url", ""),
+        extra.get("source_post_id", ""),
+    ]
+    return " ".join(str(part or "").strip().lower() for part in parts if str(part or "").strip())
+
+
+def resource_item_matches_search(item: Dict[str, Any], keyword: str) -> bool:
+    tokens = [token for token in re.split(r"\s+", str(keyword or "").strip().lower()) if token]
+    if not tokens:
+        return True
+    haystack = build_resource_search_text(item)
+    return all(token in haystack for token in tokens)
+
+
+def get_resource_item_sort_key(item: Dict[str, Any]) -> Tuple[str, int, str]:
+    payload = item if isinstance(item, dict) else {}
+    extra = payload.get("extra") if isinstance(payload.get("extra"), dict) else {}
+    published_at = str(payload.get("published_at", "") or payload.get("created_at", "")).strip()
+    cursor = parse_int(
+        extract_telegram_post_cursor(
+            str(payload.get("message_url", "")).strip()
+            or str(payload.get("source_post_id", "") or extra.get("source_post_id", "")).strip()
+        )
+    )
+    return (published_at, cursor, build_resource_item_identity(payload))
+
+
+def get_resource_item_post_cursor(item: Dict[str, Any]) -> str:
+    payload = item if isinstance(item, dict) else {}
+    extra = payload.get("extra") if isinstance(payload.get("extra"), dict) else {}
+    return extract_telegram_post_cursor(
+        str(payload.get("message_url", "")).strip()
+        or str(payload.get("source_post_id", "") or extra.get("source_post_id", "")).strip()
+    )
 
 
 def list_resource_jobs(limit: int = 80) -> List[Dict[str, Any]]:
@@ -810,14 +1063,119 @@ def list_resource_jobs(limit: int = 80) -> List[Dict[str, Any]]:
     return [serialize_resource_job_row(row) for row in rows]
 
 
-def get_resource_job(job_id: int) -> Dict[str, Any]:
+def get_resource_job(job_id: int, include_private: bool = False) -> Dict[str, Any]:
     ensure_db()
     conn = open_db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM resource_jobs WHERE id = ?", (job_id,))
     row = cursor.fetchone()
     conn.close()
-    return serialize_resource_job_row(row)
+    return serialize_resource_job_row(row, include_private=include_private)
+
+
+def count_resource_jobs(status: str = "") -> int:
+    ensure_db()
+    conn = open_db()
+    cursor = conn.cursor()
+    normalized_status = str(status or "").strip().lower()
+    if normalized_status:
+        cursor.execute("SELECT COUNT(1) FROM resource_jobs WHERE status = ?", (normalized_status,))
+    else:
+        cursor.execute("SELECT COUNT(1) FROM resource_jobs")
+    row = cursor.fetchone()
+    conn.close()
+    return int(row[0] if row else 0)
+
+
+def find_existing_resource_job(resource: Dict[str, Any], savepath: str) -> Dict[str, Any]:
+    ensure_db()
+    conn = open_db()
+    cursor = conn.cursor()
+    normalized_savepath = normalize_relative_path(savepath)
+    link_url = str(resource.get("link_url", "") or "").strip()
+    message_url = str(resource.get("message_url", "") or "").strip()
+    source_post_id = str(resource.get("source_post_id", "") or "").strip()
+    cursor.execute(
+        """
+        SELECT * FROM resource_jobs
+        WHERE savepath = ?
+          AND status IN ('pending', 'running', 'submitted', 'completed')
+        ORDER BY id DESC
+        LIMIT 40
+        """,
+        (normalized_savepath,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    for row in rows:
+        job = serialize_resource_job_row(row)
+        if link_url and str(job.get("link_url", "") or "").strip() == link_url:
+            return job
+        if message_url and str(job.get("message_url", "") or "").strip() == message_url:
+            return job
+        if source_post_id and str(job.get("source_post_id", "") or "").strip() == source_post_id:
+            return job
+    return {}
+
+
+def clear_completed_resource_jobs() -> Dict[str, int]:
+    ensure_db()
+    conn = open_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT resource_id FROM resource_jobs WHERE status = 'completed'")
+    affected_resource_ids = [int(row[0]) for row in cursor.fetchall() if row and row[0]]
+
+    cursor.execute("DELETE FROM resource_jobs WHERE status = 'completed'")
+    deleted_count = int(cursor.rowcount or 0)
+
+    reset_item_count = 0
+    now = now_text()
+    for resource_id in affected_resource_ids:
+        cursor.execute("SELECT COUNT(1) FROM resource_jobs WHERE resource_id = ?", (resource_id,))
+        remain_row = cursor.fetchone()
+        remains = int(remain_row[0] if remain_row else 0)
+        if remains == 0:
+            cursor.execute(
+                "UPDATE resource_items SET status = 'new', last_seen_at = ? WHERE id = ?",
+                (now, resource_id),
+            )
+            reset_item_count += int(cursor.rowcount or 0)
+
+    # If the task table has been fully cleared, reset the AUTOINCREMENT counter
+    # so the next created task starts from 1 again.
+    cursor.execute("SELECT COUNT(1) FROM resource_jobs")
+    remaining_jobs_row = cursor.fetchone()
+    remaining_jobs = int(remaining_jobs_row[0] if remaining_jobs_row else 0)
+    if remaining_jobs == 0:
+        cursor.execute("DELETE FROM sqlite_sequence WHERE name = 'resource_jobs'")
+
+    conn.commit()
+    conn.close()
+    return {"deleted": deleted_count, "reset_items": reset_item_count}
+
+
+def prune_resource_channel_cache(conn: sqlite3.Connection, channel_id: str, keep: int = RESOURCE_CHANNEL_CACHE_LIMIT) -> int:
+    normalized_channel = normalize_telegram_channel_id_from_input(channel_id)
+    keep_limit = max(1, int(keep or RESOURCE_CHANNEL_CACHE_LIMIT))
+    if not normalized_channel:
+        return 0
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT id
+        FROM resource_items
+        WHERE source_type = 'tg' AND channel_name = ?
+        ORDER BY CASE WHEN published_at <> '' THEN published_at ELSE created_at END DESC, id DESC
+        LIMIT -1 OFFSET ?
+        """,
+        (normalized_channel, keep_limit),
+    )
+    stale_ids = [int(row[0]) for row in cursor.fetchall() if row and row[0]]
+    if not stale_ids:
+        return 0
+    placeholders = ",".join(["?"] * len(stale_ids))
+    cursor.execute(f"DELETE FROM resource_items WHERE id IN ({placeholders})", stale_ids)
+    return int(cursor.rowcount or 0)
 
 
 def build_resource_channel_sections(
@@ -842,8 +1200,10 @@ def build_resource_channel_sections(
             channel_items = channel_pool[:per_channel]
             item_count = len(channel_pool)
         else:
-            channel_items = list_resource_items(channel_id=channel_id, limit=per_channel)
-            item_count = count_resource_items(channel_id=channel_id)
+            channel_items = list_resource_items(channel_id=channel_id, source_type="tg", limit=per_channel)
+            item_count = count_resource_items(channel_id=channel_id, source_type="tg")
+        has_more = item_count > len(channel_items)
+        next_before = get_resource_item_post_cursor(channel_items[-1]) if (has_more and channel_items) else ""
         sections.append(
             {
                 "name": source.get("name", channel_id),
@@ -854,9 +1214,167 @@ def build_resource_channel_sections(
                 "last_error": resource_channel_last_error.get(channel_id, ""),
                 "item_count": item_count,
                 "items": channel_items[:per_channel],
+                "next_before": next_before,
+                "has_more": bool(has_more and next_before),
             }
         )
     return sections
+
+
+def search_telegram_channel_resource_items(
+    cfg: Dict[str, Any],
+    source: Dict[str, Any],
+    keyword: str,
+    limit_per_channel: int = TG_SEARCH_MATCH_LIMIT_PER_CHANNEL,
+    max_pages: int = TG_SEARCH_MAX_PAGES,
+    page_size: int = TG_SEARCH_PAGE_LIMIT,
+    start_before: str = "",
+) -> Dict[str, Any]:
+    normalized_source = normalize_resource_source(source or {})
+    channel_id = normalize_telegram_channel_id_from_input(normalized_source.get("channel_id", ""))
+    if not channel_id:
+        return {"channel_id": "", "items": [], "pages_scanned": 0, "next_before": "", "has_more": False}
+
+    items: List[Dict[str, Any]] = []
+    before = extract_telegram_post_cursor(start_before)
+    pages_scanned = 0
+    seen_keys: Set[str] = set()
+    next_before = ""
+    has_more = False
+    target_limit = max(1, int(limit_per_channel or TG_SEARCH_MATCH_LIMIT_PER_CHANNEL))
+    fetch_limit = max(target_limit, max(1, int(page_size or TG_SEARCH_PAGE_LIMIT)))
+
+    for _ in range(max(1, int(max_pages or TG_SEARCH_MAX_PAGES))):
+        page = fetch_telegram_channel_posts_page(
+            cfg,
+            normalized_source,
+            limit=fetch_limit,
+            before=before,
+            query=keyword,
+            allow_empty=True,
+        )
+        pages_scanned += 1
+        page_matches: List[Dict[str, Any]] = []
+        for post in page.get("posts", []) or []:
+            if not resource_item_matches_search(post, keyword):
+                continue
+            identity = build_resource_item_identity(post)
+            if identity in seen_keys:
+                continue
+            seen_keys.add(identity)
+            page_matches.append(post)
+
+        remaining = max(0, target_limit - len(items))
+        if page_matches and remaining > 0:
+            items.extend(page_matches[:remaining])
+
+        page_before = str(page.get("next_before", "") or "").strip()
+        more_in_current_page = len(page_matches) > remaining if remaining > 0 else bool(page_matches)
+        has_more = bool((more_in_current_page or page.get("has_more")) and (page_before or items))
+        if items and has_more:
+            next_before = get_resource_item_post_cursor(items[-1]) or page_before
+        elif not has_more:
+            next_before = ""
+
+        if len(items) >= target_limit:
+            break
+        before = page_before
+        if not before or not page.get("has_more"):
+            break
+
+    items.sort(key=get_resource_item_sort_key, reverse=True)
+    return {
+        "channel_id": channel_id,
+        "items": items,
+        "pages_scanned": pages_scanned,
+        "next_before": next_before,
+        "has_more": bool(next_before and has_more),
+    }
+
+
+async def search_resource_sources(keyword: str) -> Dict[str, Any]:
+    query = str(keyword or "").strip()
+    cfg = get_config()
+    sources = [normalize_resource_source(source or {}) for source in cfg.get("resource_sources", []) if source.get("enabled")]
+    if not query or not sources:
+        return {
+            "items": [],
+            "sections": [],
+            "errors": [],
+            "searched_sources": len(sources),
+            "matched_channels": 0,
+            "pages_scanned": 0,
+        }
+
+    async def search_one_source(source: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(
+                    search_telegram_channel_resource_items,
+                    cfg,
+                    source,
+                    query,
+                    TG_SEARCH_MATCH_LIMIT_PER_CHANNEL,
+                    TG_SEARCH_MAX_PAGES,
+                    TG_SEARCH_PAGE_LIMIT,
+                    "",
+                ),
+                timeout=TG_SEARCH_CHANNEL_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError as exc:
+            channel_id = normalize_telegram_channel_id_from_input(source.get("channel_id", ""))
+            raise RuntimeError(f"频道搜索超时（{channel_id}）") from exc
+
+    tasks = [search_one_source(source) for source in sources]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    items: List[Dict[str, Any]] = []
+    sections: List[Dict[str, Any]] = []
+    errors: List[Dict[str, str]] = []
+    matched_channels = 0
+    pages_scanned = 0
+
+    for source, result in zip(sources, results):
+        channel_id = normalize_telegram_channel_id_from_input(source.get("channel_id", ""))
+        source_name = str(source.get("name", "") or channel_id).strip()
+        if isinstance(result, Exception):
+            errors.append(
+                {
+                    "channel_id": channel_id,
+                    "name": source_name,
+                    "message": str(result),
+                }
+            )
+            continue
+        channel_items = result.get("items", []) if isinstance(result, dict) else []
+        pages_scanned += int(result.get("pages_scanned", 0) or 0) if isinstance(result, dict) else 0
+        if channel_items:
+            matched_channels += 1
+            items.extend(channel_items)
+            sections.append(
+                {
+                    "name": source_name,
+                    "channel_id": channel_id,
+                    "url": build_telegram_channel_url(channel_id),
+                    "enabled": True,
+                    "items": channel_items,
+                    "item_count": len(channel_items),
+                    "next_before": str(result.get("next_before", "") or "").strip(),
+                    "has_more": bool(result.get("has_more")),
+                    "pages_scanned": int(result.get("pages_scanned", 0) or 0),
+                }
+            )
+
+    deduped_items = dedupe_resource_item_dicts(items)
+    deduped_items.sort(key=get_resource_item_sort_key, reverse=True)
+    return {
+        "items": deduped_items[: max(1, int(TG_SEARCH_TOTAL_LIMIT or 60))],
+        "sections": sections,
+        "errors": errors,
+        "searched_sources": len(sources),
+        "matched_channels": matched_channels,
+        "pages_scanned": pages_scanned,
+    }
 
 
 def create_resource_job(resource: Dict[str, Any], data: Dict[str, Any]) -> int:
@@ -868,6 +1386,7 @@ def create_resource_job(resource: Dict[str, Any], data: Dict[str, Any]) -> int:
     folder_id = str(data.get("folder_id", "")).strip()
     savepath = normalize_relative_path(data.get("savepath", ""))
     extra = normalize_share_selection_meta(data.get("share_selection", {})) if link_type == "115share" else {}
+    extra["snapshot"] = build_resource_job_snapshot(resource, link_type)
     manual_sharetitle = normalize_relative_path(data.get("sharetitle", ""))
     if manual_sharetitle:
         sharetitle = manual_sharetitle
@@ -888,7 +1407,7 @@ def create_resource_job(resource: Dict[str, Any], data: Dict[str, Any]) -> int:
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '等待提交到 115', ?, ?, ?)
         """,
         (
-            resource["id"],
+            int(resource.get("id", 0) or 0),
             str(resource.get("title", "")).strip(),
             str(resource.get("link_url", "")).strip(),
             link_type,
@@ -904,7 +1423,9 @@ def create_resource_job(resource: Dict[str, Any], data: Dict[str, Any]) -> int:
         ),
     )
     job_id = int(cursor.lastrowid)
-    update_resource_item_status(conn, int(resource["id"]), "queued")
+    resource_id = int(resource.get("id", 0) or 0)
+    if resource_id > 0:
+        update_resource_item_status(conn, resource_id, "queued")
     conn.commit()
     conn.close()
     return job_id
@@ -1010,6 +1531,35 @@ def normalize_telegram_channel_id_from_input(value: str) -> str:
 def build_telegram_channel_url(channel_id: str) -> str:
     normalized = normalize_telegram_channel_id_from_input(channel_id)
     return f"https://t.me/s/{normalized}" if normalized else ""
+
+
+def build_telegram_channel_page_url(channel_id: str, before: str = "", query: str = "") -> str:
+    base_url = build_telegram_channel_url(channel_id)
+    cursor = str(before or "").strip()
+    keyword = str(query or "").strip()
+    if not base_url:
+        return base_url
+    params: List[Tuple[str, str]] = []
+    if keyword:
+        params.append(("q", keyword))
+    if cursor:
+        params.append(("before", cursor))
+    if not params:
+        return base_url
+    return f"{base_url}?{urllib.parse.urlencode(params)}"
+
+
+def extract_telegram_post_cursor(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    match = re.search(r"/(\d+)$", raw)
+    if match:
+        return match.group(1)
+    match = re.search(r"/(\d+)(?:\?.*)?$", raw)
+    if match:
+        return match.group(1)
+    return raw
 
 
 def basename(path: str) -> str:
@@ -1139,12 +1689,23 @@ def build_ui_state_payload(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, An
     }
 
 
-def build_resource_state_payload(search: str = "", status: str = "", channel_id: str = "") -> Dict[str, Any]:
+async def build_resource_state_payload(search: str = "") -> Dict[str, Any]:
     cfg = get_config()
-    items = list_resource_items(search=search, status=status, channel_id=channel_id)
-    total_item_count = count_resource_items()
-    filtered_item_count = count_resource_items(search=search, status=status, channel_id=channel_id)
-    jobs = list_resource_jobs()
+    keyword = str(search or "").strip()
+    search_meta = await search_resource_sources(keyword) if keyword else {
+        "items": [],
+        "sections": [],
+        "errors": [],
+        "searched_sources": len([source for source in cfg.get("resource_sources", []) if source.get("enabled")]),
+        "matched_channels": 0,
+        "pages_scanned": 0,
+    }
+    items = search_meta.get("items", []) if keyword else []
+    search_sections = search_meta.get("sections", []) if keyword else []
+    jobs = list_resource_jobs(limit=40)
+    total_item_count = count_resource_items(source_type="tg")
+    filtered_item_count = len(items)
+    completed_job_count = count_resource_jobs(status="completed")
     sources = cfg.get("resource_sources", [])
     channel_sections = build_resource_channel_sections(sources, per_channel=10)
     return {
@@ -1153,16 +1714,23 @@ def build_resource_state_payload(search: str = "", status: str = "", channel_id:
         "jobs": clone_jsonable(jobs),
         "monitor_tasks": clone_jsonable(cfg.get("monitor_tasks", [])),
         "cookie_configured": bool(str(cfg.get("cookie_115", "")).strip()),
-        "search": search,
-        "status": status,
-        "channel_id": channel_id,
+        "search": keyword,
         "channel_sections": clone_jsonable(channel_sections),
+        "search_sections": clone_jsonable(search_sections),
         "last_syncs": clone_jsonable(resource_channel_last_sync),
+        "search_meta": clone_jsonable(
+            {
+                "errors": search_meta.get("errors", []),
+                "searched_sources": search_meta.get("searched_sources", 0),
+                "matched_channels": search_meta.get("matched_channels", 0),
+                "pages_scanned": search_meta.get("pages_scanned", 0),
+            }
+        ),
         "stats": {
-            "source_count": len(sources),
+            "source_count": len([source for source in sources if source.get("enabled")]),
             "item_count": total_item_count,
             "filtered_item_count": filtered_item_count,
-            "job_count": len(jobs),
+            "completed_job_count": completed_job_count,
         },
     }
 
@@ -1196,6 +1764,7 @@ async def sync_telegram_channels(force: bool = False, limit_per_channel: int = 1
                 for post in posts:
                     _, created = upsert_resource_item(conn, post)
                     upserted_items += 1 if created else 0
+                prune_resource_channel_cache(conn, channel_id)
                 conn.commit()
                 resource_channel_last_sync[channel_id] = time.time()
                 resource_channel_last_error.pop(channel_id, None)
@@ -1647,6 +2216,85 @@ def list_115_entries(cookie: str, cid: str = "0") -> List[Dict[str, Any]]:
     return entries
 
 
+def create_115_folder(cookie: str, cid: str = "0", folder_name: str = "") -> Dict[str, Any]:
+    cookie = str(cookie or "").strip()
+    if not cookie:
+        raise RuntimeError("115 Cookie 未配置")
+
+    parent_cid = str(cid or "0").strip() or "0"
+    normalized_name = str(folder_name or "").strip()
+    if not normalized_name:
+        raise RuntimeError("文件夹名称不能为空")
+    if any(ch in normalized_name for ch in ("/", "\\")):
+        raise RuntimeError("文件夹名称不能包含 / 或 \\")
+    if normalized_name in (".", ".."):
+        raise RuntimeError("文件夹名称不合法")
+    if len(normalized_name) > 120:
+        raise RuntimeError("文件夹名称过长")
+
+    headers = {
+        "Cookie": cookie,
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://115.com/",
+        "Origin": "https://115.com",
+        "User-Agent": "Mozilla/5.0 115-strm-web",
+    }
+    response = http_request_form_json(
+        "https://webapi.115.com/files/add",
+        {"pid": parent_cid, "cname": normalized_name},
+        timeout=45,
+        extra_headers=headers,
+    )
+
+    def resolve_folder_id_from_response(payload: Dict[str, Any]) -> str:
+        candidates: List[str] = []
+        for key in ("cid", "id", "folder_id", "file_id"):
+            candidates.append(str(payload.get(key, "")).strip())
+        data = payload.get("data")
+        if isinstance(data, dict):
+            for key in ("cid", "id", "folder_id", "file_id"):
+                candidates.append(str(data.get(key, "")).strip())
+        return next((item for item in candidates if item and item != "0"), "")
+
+    def find_existing_folder_id() -> str:
+        entries = list_115_entries(cookie, parent_cid)
+        matched = next(
+            (
+                entry
+                for entry in entries
+                if entry.get("is_dir") and str(entry.get("name", "")).strip() == normalized_name
+            ),
+            None,
+        )
+        return str((matched or {}).get("id", "")).strip()
+
+    folder_id = resolve_folder_id_from_response(response if isinstance(response, dict) else {})
+    success = bool((response or {}).get("state"))
+    if not success and not folder_id:
+        folder_id = find_existing_folder_id()
+
+    if not success and not folder_id:
+        detail = (
+            str((response or {}).get("error", "")).strip()
+            or str((response or {}).get("msg", "")).strip()
+            or str((response or {}).get("message", "")).strip()
+            or "新建 115 文件夹失败"
+        )
+        raise RuntimeError(detail)
+
+    if not folder_id:
+        folder_id = find_existing_folder_id()
+    if not folder_id:
+        raise RuntimeError("文件夹已创建，但未获取到目录 ID")
+
+    return {
+        "id": folder_id,
+        "name": normalized_name,
+        "cid": parent_cid,
+        "created": success,
+    }
+
+
 def resolve_115_folder_id_by_path(cookie: str, relative_path: str) -> str:
     normalized_path = normalize_relative_path(relative_path)
     if not normalized_path:
@@ -1976,13 +2624,18 @@ def submit_115_share_receive(
     }
 
 
-def parse_telegram_posts(html: str, source: Dict[str, Any], limit: int = 10) -> List[Dict[str, Any]]:
+def parse_telegram_posts_page(html: str, source: Dict[str, Any], limit: int = 10) -> Dict[str, Any]:
     channel_id = normalize_telegram_channel_id_from_input(source.get("channel_id", ""))
     if not channel_id:
-        return []
+        return {"posts": [], "next_before": "", "has_more": False, "matched_count": 0}
     matches = list(TG_WIDGET_POST_REGEX.finditer(html))
+    if not matches:
+        return {"posts": [], "next_before": "", "has_more": False, "matched_count": 0}
+    normalized_limit = max(1, limit)
+    start_index = max(0, len(matches) - normalized_limit)
     posts: List[Dict[str, Any]] = []
-    for idx, match in enumerate(matches):
+    for idx in range(start_index, len(matches)):
+        match = matches[idx]
         start = match.start()
         end = matches[idx + 1].start() if idx + 1 < len(matches) else len(html)
         chunk = html[start:end]
@@ -2030,31 +2683,65 @@ def parse_telegram_posts(html: str, source: Dict[str, Any], limit: int = 10) -> 
             },
         }
         posts.append(item)
-        if len(posts) >= limit:
-            break
-    return posts
+    has_more = start_index > 0 or bool(TG_PREV_BEFORE_REGEX.search(html))
+    next_before = extract_telegram_post_cursor(posts[0].get("extra", {}).get("source_post_id", "")) if posts and has_more else ""
+    return {
+        "posts": posts,
+        "next_before": next_before,
+        "has_more": bool(next_before),
+        "matched_count": len(matches),
+    }
 
 
-def fetch_telegram_channel_posts(cfg: Dict[str, Any], source: Dict[str, Any], limit: int = 10) -> List[Dict[str, Any]]:
+def fetch_telegram_channel_posts_page(
+    cfg: Dict[str, Any],
+    source: Dict[str, Any],
+    limit: int = 10,
+    before: str = "",
+    query: str = "",
+    allow_empty: bool = False,
+) -> Dict[str, Any]:
     channel_id = normalize_telegram_channel_id_from_input(source.get("channel_id", ""))
     if not channel_id:
-        return []
+        return {"posts": [], "next_before": "", "has_more": False, "matched_count": 0}
     proxy_url = build_tg_proxy_url(cfg)
     headers = {
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "User-Agent": "Mozilla/5.0 115-strm-web",
     }
-    html, final_url = http_request_text_with_final_url(
-        build_telegram_channel_url(channel_id),
-        timeout=45,
-        extra_headers=headers,
-        proxy_url=proxy_url,
-    )
+    request_url = build_telegram_channel_page_url(channel_id, before, query)
+    html = ""
+    final_url = request_url
+    for attempt in range(1, TG_FETCH_RETRY_ATTEMPTS + 1):
+        try:
+            html, final_url = http_request_text_with_final_url(
+                request_url,
+                timeout=45,
+                extra_headers=headers,
+                proxy_url=proxy_url,
+            )
+            break
+        except Exception as exc:
+            is_retryable = is_retryable_telegram_request_error(exc)
+            if attempt >= TG_FETCH_RETRY_ATTEMPTS or not is_retryable:
+                detail = format_network_error(exc)
+                if is_retryable and attempt > 1:
+                    if not proxy_url:
+                        raise RuntimeError(f"TG 直连不稳定，已重试 {attempt} 次仍失败：{detail}。请在参数配置中启用 TG 代理后重试") from exc
+                    raise RuntimeError(f"TG 代理连接不稳定，已重试 {attempt} 次仍失败：{detail}。请检查 TG 代理配置或代理服务状态") from exc
+                raise RuntimeError(f"TG 页面抓取失败：{detail}") from exc
+            time.sleep(TG_FETCH_RETRY_DELAY_SECONDS * attempt)
     if not is_expected_telegram_channel_url(final_url, channel_id):
         raise RuntimeError(f"频道 ID 无效、频道未公开，或地址已跳转：{final_url}")
     if not TG_WIDGET_POST_REGEX.search(html):
+        if allow_empty:
+            return {"posts": [], "next_before": "", "has_more": False, "matched_count": 0}
         raise RuntimeError("未识别到 TG 频道帖子，请稍后重试或更换频道")
-    return parse_telegram_posts(html, source, limit=limit)
+    return parse_telegram_posts_page(html, source, limit=limit)
+
+
+def fetch_telegram_channel_posts(cfg: Dict[str, Any], source: Dict[str, Any], limit: int = 10) -> List[Dict[str, Any]]:
+    return fetch_telegram_channel_posts_page(cfg, source, limit=limit).get("posts", [])
 
 
 def http_download(url: str, target_path: str, token: str = "", timeout: int = 60) -> None:
@@ -2243,4 +2930,3 @@ def save_tree_cache(cache_path: str, rel_paths: List[str]) -> None:
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
     with open(cache_path, "w", encoding="utf-8") as f:
         json.dump(rel_paths, f, ensure_ascii=False)
-

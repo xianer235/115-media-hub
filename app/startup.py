@@ -24,9 +24,14 @@ async def startup() -> None:
         while True:
             cfg = get_config()
             prev_next_run = task_status.get("next_run")
-            interval = cfg.get("cron_hour")
-            if interval and str(interval).isdigit():
-                interval_min = int(interval)
+            raw_interval = cfg.get("cron_hour")
+            try:
+                interval_min = int(str(raw_interval).strip() or 0)
+            except (TypeError, ValueError):
+                interval_min = 0
+
+            # 目录树定时频率 <= 0 表示关闭定时任务
+            if interval_min > 0:
                 next_ts = last_run + (interval_min * 60)
                 task_status["next_run"] = datetime.fromtimestamp(next_ts).strftime("%H:%M:%S")
                 if time.time() >= next_ts and not task_status["running"]:
@@ -34,6 +39,8 @@ async def startup() -> None:
                     asyncio.create_task(run_sync())
             else:
                 task_status["next_run"] = None
+                # 关闭期间重置参考时间，避免重新启用后立刻连发
+                last_run = time.time()
             if task_status.get("next_run") != prev_next_run:
                 schedule_ui_state_push(0)
             await asyncio.sleep(5)
