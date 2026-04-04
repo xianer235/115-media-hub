@@ -49,24 +49,66 @@ UI_EVENT_RETRY_MS = 3000
 UI_HEARTBEAT_SECONDS = 15
 UI_PUSH_DEBOUNCE_SECONDS = 0.15
 TG_SYNC_TTL_SECONDS = 5 * 60
-RESOURCE_CHANNEL_CACHE_LIMIT = max(10, int(os.environ.get("RESOURCE_CHANNEL_CACHE_LIMIT", 40) or 40))
+RESOURCE_CHANNEL_TYPE_SAMPLE_SIZE = max(20, int(os.environ.get("RESOURCE_CHANNEL_TYPE_SAMPLE_SIZE", 50) or 50))
+RESOURCE_CHANNEL_TYPE_PAGE_LIMIT = max(10, int(os.environ.get("RESOURCE_CHANNEL_TYPE_PAGE_LIMIT", 20) or 20))
+RESOURCE_CHANNEL_TYPE_MAX_PAGES = max(1, int(os.environ.get("RESOURCE_CHANNEL_TYPE_MAX_PAGES", 6) or 6))
+RESOURCE_CHANNEL_CACHE_LIMIT = max(RESOURCE_CHANNEL_TYPE_SAMPLE_SIZE, int(os.environ.get("RESOURCE_CHANNEL_CACHE_LIMIT", 60) or 60))
+RESOURCE_CHANNEL_CACHE_GLOBAL_LIMIT = max(
+    RESOURCE_CHANNEL_CACHE_LIMIT,
+    int(os.environ.get("RESOURCE_CHANNEL_CACHE_GLOBAL_LIMIT", 2000) or 2000),
+)
+RESOURCE_CHANNEL_CACHE_ACTIVE_MIN_KEEP = max(
+    0,
+    min(RESOURCE_CHANNEL_CACHE_LIMIT, int(os.environ.get("RESOURCE_CHANNEL_CACHE_ACTIVE_MIN_KEEP", 10) or 10)),
+)
+RESOURCE_CHANNEL_INACTIVE_CACHE_LIMIT = max(0, int(os.environ.get("RESOURCE_CHANNEL_INACTIVE_CACHE_LIMIT", 5) or 5))
+RESOURCE_CHANNEL_CACHE_TTL_DAYS = max(0, int(os.environ.get("RESOURCE_CHANNEL_CACHE_TTL_DAYS", 30) or 30))
 TG_SEARCH_PAGE_LIMIT = max(10, int(os.environ.get("TG_SEARCH_PAGE_LIMIT", 20) or 20))
 TG_SEARCH_MAX_PAGES = max(1, int(os.environ.get("TG_SEARCH_MAX_PAGES", 6) or 6))
 TG_SEARCH_MATCH_LIMIT_PER_CHANNEL = max(1, int(os.environ.get("TG_SEARCH_MATCH_LIMIT_PER_CHANNEL", 12) or 12))
 TG_SEARCH_TOTAL_LIMIT = max(TG_SEARCH_MATCH_LIMIT_PER_CHANNEL, int(os.environ.get("TG_SEARCH_TOTAL_LIMIT", 60) or 60))
 TG_SEARCH_CHANNEL_TIMEOUT_SECONDS = max(5, int(os.environ.get("TG_SEARCH_CHANNEL_TIMEOUT_SECONDS", 15) or 15))
+TG_CHANNEL_THREADS_MAX = 20
+TG_CHANNEL_THREADS_DEFAULT = max(1, min(TG_CHANNEL_THREADS_MAX, int(os.environ.get("TG_CHANNEL_THREADS_DEFAULT", 6) or 6)))
 TG_FETCH_RETRY_ATTEMPTS = max(1, int(os.environ.get("TG_FETCH_RETRY_ATTEMPTS", 3) or 3))
 TG_FETCH_RETRY_DELAY_SECONDS = max(0.2, float(os.environ.get("TG_FETCH_RETRY_DELAY_SECONDS", 0.8) or 0.8))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 FAVICON_PATH = os.path.join(STATIC_DIR, "icons", "favicon.svg")
 RESOURCE_MAGNET_REGEX = re.compile(r"magnet:\?xt=urn:btih:[A-Za-z0-9]{32,40}[^\s<>'\"]*", re.IGNORECASE)
+RESOURCE_ED2K_REGEX = re.compile(r"ed2k://[^\s<>'\"]+", re.IGNORECASE)
 RESOURCE_URL_REGEX = re.compile(r"https?://[^\s<>'\"]+", re.IGNORECASE)
+RESOURCE_115_SHARE_URL_REGEX = re.compile(
+    r"(?:https?://)?(?:115cdn|115|anxia)\.com/s/[A-Za-z0-9]+(?:\?[^\s<>'\"]*)?",
+    re.IGNORECASE,
+)
+RESOURCE_115_SHARE_BARE_URL_REGEX = re.compile(
+    r"(?:115cdn|115|anxia)\.com/s/[A-Za-z0-9]+(?:\?[^\s<>'\"]*)?",
+    re.IGNORECASE,
+)
 RESOURCE_YEAR_REGEX = re.compile(r"\b(19\d{2}|20\d{2})\b")
+RESOURCE_LINK_TYPE_PATTERNS: List[Tuple[str, re.Pattern[str]]] = [
+    ("115share", re.compile(r"https?://(?:115cdn|115|anxia)\.com/s/[a-z0-9]+", re.IGNORECASE)),
+    ("aliyun", re.compile(r"https?://(?:www\.)?(?:aliyundrive|alipan)\.com/s/[a-z0-9]+", re.IGNORECASE)),
+    ("quark", re.compile(r"https?://(?:pan|www)\.quark\.cn/s/[a-z0-9]+", re.IGNORECASE)),
+    ("baidu", re.compile(r"https?://(?:pan|yun)\.baidu\.com/(?:s/|share/)", re.IGNORECASE)),
+    ("xunlei", re.compile(r"https?://(?:pan|xlpan)\.xunlei\.com/s/[a-z0-9]+", re.IGNORECASE)),
+    ("uc", re.compile(r"https?://drive\.uc\.cn/s/[a-z0-9]+", re.IGNORECASE)),
+    ("123pan", re.compile(r"https?://(?:www\.)?(?:123pan|123684|123865|123912)\.(?:com|cn)/s/[a-z0-9]+", re.IGNORECASE)),
+    ("tianyi", re.compile(r"https?://cloud\.189\.cn/(?:t/|web/share)", re.IGNORECASE)),
+    ("pikpak", re.compile(r"https?://(?:www\.)?(?:mypikpak|pikpak)\.com/s/[a-z0-9]+", re.IGNORECASE)),
+    ("lanzou", re.compile(r"https?://(?:www\.)?lanzou[a-z0-9]*\.[a-z.]+/[a-z0-9]+", re.IGNORECASE)),
+    ("google_drive", re.compile(r"https?://drive\.google\.com/", re.IGNORECASE)),
+    ("onedrive", re.compile(r"https?://(?:1drv\.ms|onedrive\.live\.com)/", re.IGNORECASE)),
+    ("mega", re.compile(r"https?://mega\.nz/", re.IGNORECASE)),
+]
 TG_WIDGET_POST_REGEX = re.compile(r'<div[^>]+class="tgme_widget_message[^"]*"[^>]+data-post="([^"]+)"[^>]*>', re.IGNORECASE)
 TG_LINK_HREF_REGEX = re.compile(r'href="([^"]+)"', re.IGNORECASE)
 TG_IMAGE_STYLE_REGEX = re.compile(r"background-image:url\('([^']+)'\)", re.IGNORECASE)
 TG_PREV_BEFORE_REGEX = re.compile(r'rel="prev"[^>]+href="[^"]*before=([^"&]+)', re.IGNORECASE)
-TG_EXTRACT_CODE_REGEX = re.compile(r"(?:提取码|访问码|密码)[:：\s]*([A-Za-z0-9]{4,8})", re.IGNORECASE)
+TG_EXTRACT_CODE_REGEX = re.compile(
+    r"(?:提取码|提取碼|访问码|訪問碼|密码|密碼|访问密码|訪問密碼|口令|pwd|pass(?:word|code)?|code)\s*(?:[:：=]|是|为|為)?\s*([A-Za-z0-9]{4,8})\b",
+    re.IGNORECASE,
+)
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -86,6 +128,7 @@ def default_config() -> Dict[str, Any]:
         "tg_proxy_protocol": "http",
         "tg_proxy_host": "",
         "tg_proxy_port": "",
+        "tg_channel_threads": TG_CHANNEL_THREADS_DEFAULT,
         "mount_path": "/115",
         "extensions": DEFAULT_EXTENSIONS,
         "trees": [{"url": "", "prefix": "", "exclude": 1}],
@@ -124,7 +167,7 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
 
 def normalize_resource_source(source: Dict[str, Any]) -> Dict[str, Any]:
     name = str(source.get("name", "")).strip()
-    raw_channel_id = str(source.get("channel_id", "") or source.get("channel", "")).strip()
+    raw_channel_id = str(source.get("channel_id", "") or source.get("channel", "") or source.get("id", "")).strip()
     url = str(source.get("url", "")).strip()
     notes = str(source.get("notes", "")).strip()
     channel_id = raw_channel_id.lstrip("@")
@@ -155,6 +198,8 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         merged["tg_proxy_host"] = ""
     if "tg_proxy_port" not in merged:
         merged["tg_proxy_port"] = ""
+    if "tg_channel_threads" not in merged:
+        merged["tg_channel_threads"] = TG_CHANNEL_THREADS_DEFAULT
     if "monitor_tasks" not in merged or not isinstance(merged["monitor_tasks"], list):
         merged["monitor_tasks"] = []
     if "resource_sources" not in merged or not isinstance(merged["resource_sources"], list):
@@ -210,6 +255,11 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         merged["tg_proxy_protocol"] = "http"
     merged["tg_proxy_host"] = str(merged.get("tg_proxy_host", "")).strip()
     merged["tg_proxy_port"] = str(merged.get("tg_proxy_port", "")).strip()
+    try:
+        tg_channel_threads = int(merged.get("tg_channel_threads", TG_CHANNEL_THREADS_DEFAULT) or TG_CHANNEL_THREADS_DEFAULT)
+    except (TypeError, ValueError):
+        tg_channel_threads = TG_CHANNEL_THREADS_DEFAULT
+    merged["tg_channel_threads"] = max(1, min(TG_CHANNEL_THREADS_MAX, tg_channel_threads))
     return merged
 
 
@@ -369,6 +419,9 @@ def ensure_db() -> None:
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_resource_items_link ON resource_items(link_url) WHERE link_url <> ''"
     )
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_resource_items_created_at ON resource_items(created_at DESC)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_resource_items_source_type ON resource_items(source_type)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_resource_items_channel_name ON resource_items(channel_name)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_resource_items_source_channel ON resource_items(source_type, channel_name)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_resource_items_status ON resource_items(status)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_resource_jobs_created_at ON resource_jobs(created_at DESC)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_resource_jobs_status ON resource_jobs(status)")
@@ -449,9 +502,57 @@ def unique_preserve_order(values: List[str]) -> List[str]:
     return result
 
 
+def normalize_receive_code(value: Any) -> str:
+    token = re.sub(r"\s+", "", str(value or "").strip())
+    if not token:
+        return ""
+    if not re.fullmatch(r"[A-Za-z0-9]{1,16}", token):
+        return ""
+    return token
+
+
+def trim_resource_link_token(url: str) -> str:
+    token = str(url or "").strip()
+    if not token:
+        return ""
+    token = token.strip("<>[]{}\"'“”‘’")
+    token = token.rstrip("，。；：！？、,.;!?")
+    while token and token[-1] in (")", "）") and (token.count("(") + token.count("（")) < (token.count(")") + token.count("）")):
+        token = token[:-1].rstrip("，。；：！？、,.;!?")
+    return token
+
+
+def normalize_115_share_url_candidate(url: str) -> str:
+    token = trim_resource_link_token(url)
+    if re.match(r"^(?:115cdn|115|anxia)\.com/s/[A-Za-z0-9]+", token, flags=re.IGNORECASE):
+        return f"https://{token}"
+    return token
+
+
+def extract_resource_links(raw_text: str) -> List[str]:
+    raw = str(raw_text or "")
+    if not raw.strip():
+        return []
+    links: List[str] = []
+    links.extend(RESOURCE_MAGNET_REGEX.findall(raw))
+    links.extend(RESOURCE_ED2K_REGEX.findall(raw))
+    links.extend(RESOURCE_URL_REGEX.findall(raw))
+    links.extend(RESOURCE_115_SHARE_BARE_URL_REGEX.findall(raw))
+
+    normalized_links: List[str] = []
+    for link in links:
+        token = normalize_115_share_url_candidate(link)
+        token = trim_resource_link_token(token)
+        lowered = token.lower()
+        if not token or "t.me/" in lowered or "telegram.me/" in lowered:
+            continue
+        normalized_links.append(token)
+    return unique_preserve_order(normalized_links)
+
+
 def apply_share_receive_code_to_url(url: str, receive_code: str) -> str:
     share_url = str(url or "").strip()
-    password = str(receive_code or "").strip()
+    password = normalize_receive_code(receive_code)
     if not share_url or not password or "password=" in share_url.lower():
         return share_url
     separator = "&" if "?" in share_url else "?"
@@ -470,8 +571,26 @@ def strip_html_to_text(fragment: str) -> str:
 
 def choose_resource_link(candidates: List[str]) -> str:
     normalized = unique_preserve_order(candidates)
-    priority = {"magnet": 0, "115share": 1, "ed2k": 2, "link": 3, "unknown": 9}
-    normalized.sort(key=lambda url: (priority.get(detect_resource_link_type(url), 9), url))
+    priority = {
+        "magnet": 0,
+        "115share": 1,
+        "quark": 2,
+        "aliyun": 3,
+        "baidu": 4,
+        "xunlei": 5,
+        "uc": 6,
+        "123pan": 7,
+        "tianyi": 8,
+        "pikpak": 9,
+        "lanzou": 10,
+        "ed2k": 11,
+        "google_drive": 12,
+        "onedrive": 13,
+        "mega": 14,
+        "link": 15,
+        "unknown": 99,
+    }
+    normalized.sort(key=lambda url: (priority.get(detect_resource_link_type(url), 99), url))
     return normalized[0] if normalized else ""
 
 
@@ -484,6 +603,14 @@ def build_tg_proxy_url(cfg: Dict[str, Any], ignore_enabled: bool = False) -> str
     if not host or not port:
         return ""
     return f"{protocol}://{host}:{port}"
+
+
+def get_tg_channel_threads(cfg: Dict[str, Any]) -> int:
+    try:
+        raw_value = int(cfg.get("tg_channel_threads", TG_CHANNEL_THREADS_DEFAULT) or TG_CHANNEL_THREADS_DEFAULT)
+    except (TypeError, ValueError):
+        raw_value = TG_CHANNEL_THREADS_DEFAULT
+    return max(1, min(TG_CHANNEL_THREADS_MAX, raw_value))
 
 
 def format_network_error(exc: Exception) -> str:
@@ -612,24 +739,30 @@ def guess_resource_quality(text: str) -> str:
 
 
 def detect_resource_link_type(url: str) -> str:
-    lowered = str(url or "").strip().lower()
+    text = str(url or "").strip()
+    lowered = text.lower()
     if not lowered:
         return "unknown"
     if lowered.startswith("magnet:?"):
         return "magnet"
     if lowered.startswith("ed2k://"):
         return "ed2k"
-    if "115cdn.com/s/" in lowered or "115.com/s/" in lowered or "anxia.com/s/" in lowered:
+    if RESOURCE_115_SHARE_URL_REGEX.search(text):
         return "115share"
-    return "link"
+    for link_type, pattern in RESOURCE_LINK_TYPE_PATTERNS:
+        if pattern.search(text):
+            return link_type
+    if lowered.startswith("http://") or lowered.startswith("https://"):
+        return "link"
+    return "unknown"
 
 
 def resolve_resource_link_type(link_type: str, link_url: str) -> str:
     normalized = str(link_type or "").strip().lower()
-    if normalized in ("magnet", "115share"):
-        return normalized
     detected = detect_resource_link_type(link_url)
-    return detected if detected in ("magnet", "115share") else normalized
+    if detected != "unknown":
+        return detected
+    return normalized or "unknown"
 
 
 def pick_resource_title(raw_text: str, fallback_title: str = "") -> str:
@@ -662,10 +795,7 @@ def extract_resource_candidates(
     if not raw:
         return []
 
-    links = RESOURCE_MAGNET_REGEX.findall(raw)
-    if not links:
-        links = [url for url in RESOURCE_URL_REGEX.findall(raw) if "t.me/" not in url and "telegram.me/" not in url]
-    links = unique_preserve_order(links)
+    links = extract_resource_links(raw)
     base_title = pick_resource_title(raw)
     guessed_year = ""
     year_match = RESOURCE_YEAR_REGEX.search(raw)
@@ -699,9 +829,20 @@ def extract_resource_candidates(
     candidates: List[Dict[str, Any]] = []
     multi = len(links) > 1
     for idx, link in enumerate(links, start=1):
+        normalized_link = str(link or "").strip()
+        link_type = detect_resource_link_type(normalized_link)
+        receive_code = ""
+        if link_type == "115share":
+            parsed_payload = parse_115_share_payload(normalized_link, raw)
+            normalized_link = str(parsed_payload.get("url", "") or normalized_link).strip() or normalized_link
+            link_type = detect_resource_link_type(normalized_link)
+            receive_code = normalize_receive_code(parsed_payload.get("receive_code", ""))
         title = base_title
         if multi:
             title = f"{base_title} #{idx}"
+        extra: Dict[str, Any] = {}
+        if receive_code:
+            extra["receive_code"] = receive_code
         candidates.append(
             {
                 "source_type": source_type,
@@ -710,13 +851,14 @@ def extract_resource_candidates(
                 "title": title,
                 "normalized_title": title.lower(),
                 "raw_text": raw,
-                "link_url": link,
-                "link_type": detect_resource_link_type(link),
+                "link_url": normalized_link,
+                "link_type": link_type,
                 "message_url": tg_link,
                 "quality": quality,
                 "year": guessed_year,
                 "published_at": published_at.strip(),
-                "extra": {},
+                "receive_code": receive_code,
+                "extra": extra,
             }
         )
     return candidates
@@ -809,20 +951,29 @@ def serialize_resource_item_row(row: sqlite3.Row) -> Dict[str, Any]:
     return data
 
 
-def build_resource_job_snapshot(resource: Dict[str, Any], link_type: str = "") -> Dict[str, Any]:
+def build_resource_job_snapshot(resource: Dict[str, Any], link_type: str = "", receive_code: str = "") -> Dict[str, Any]:
     extra = resource.get("extra", {})
     if not isinstance(extra, dict):
         extra = safe_json_loads(resource.get("extra_json"), {})
+    manual_receive_code = (
+        normalize_receive_code(receive_code)
+        or normalize_receive_code(resource.get("receive_code", ""))
+        or normalize_receive_code(extra.get("receive_code", ""))
+    )
     snapshot = {
         "message_url": str(resource.get("message_url", "") or "").strip(),
         "source_post_id": str((extra or {}).get("source_post_id", "") or "").strip(),
     }
     resolved_link_type = resolve_resource_link_type(link_type or resource.get("link_type", ""), resource.get("link_url", ""))
     if resolved_link_type == "115share":
-        payload = parse_115_share_payload(str(resource.get("link_url", "") or "").strip(), str(resource.get("raw_text", "") or ""))
-        receive_code = str(payload.get("receive_code", "") or "").strip()
-        if receive_code:
-            snapshot["receive_code"] = receive_code
+        payload = parse_115_share_payload(
+            str(resource.get("link_url", "") or "").strip(),
+            str(resource.get("raw_text", "") or ""),
+            manual_receive_code,
+        )
+        resolved_receive_code = normalize_receive_code(payload.get("receive_code", ""))
+        if resolved_receive_code:
+            snapshot["receive_code"] = resolved_receive_code
     return {key: value for key, value in snapshot.items() if str(value or "").strip()}
 
 
@@ -840,6 +991,10 @@ def sanitize_resource_job_input(raw: Dict[str, Any]) -> Dict[str, Any]:
     extra = raw.get("extra", {})
     if not isinstance(extra, dict):
         extra = {}
+    receive_code = normalize_receive_code(raw.get("receive_code", "") or extra.get("receive_code", ""))
+    link_type = resolve_resource_link_type(str(raw.get("link_type", "") or "").strip(), link_url) or detect_resource_link_type(link_url)
+    if link_type == "115share" and receive_code:
+        link_url = apply_share_receive_code_to_url(link_url, receive_code)
     return {
         "id": int(raw.get("id", 0) or 0),
         "source_type": source_type,
@@ -849,15 +1004,17 @@ def sanitize_resource_job_input(raw: Dict[str, Any]) -> Dict[str, Any]:
         "normalized_title": str(raw.get("normalized_title", "") or "").strip() or title.lower(),
         "raw_text": raw_text,
         "link_url": link_url,
-        "link_type": resolve_resource_link_type(str(raw.get("link_type", "") or "").strip(), link_url) or detect_resource_link_type(link_url),
+        "link_type": link_type,
         "message_url": message_url,
         "quality": quality,
         "year": year,
         "published_at": published_at,
+        "receive_code": receive_code,
         "extra": {
             "cover_url": str(extra.get("cover_url", "") or "").strip(),
             "source_post_id": str(extra.get("source_post_id", "") or "").strip(),
             "source_url": str(extra.get("source_url", "") or "").strip(),
+            "receive_code": receive_code,
         },
     }
 
@@ -1156,10 +1313,16 @@ def clear_completed_resource_jobs() -> Dict[str, int]:
 
 def prune_resource_channel_cache(conn: sqlite3.Connection, channel_id: str, keep: int = RESOURCE_CHANNEL_CACHE_LIMIT) -> int:
     normalized_channel = normalize_telegram_channel_id_from_input(channel_id)
-    keep_limit = max(1, int(keep or RESOURCE_CHANNEL_CACHE_LIMIT))
+    keep_limit = max(0, int(keep if keep is not None else RESOURCE_CHANNEL_CACHE_LIMIT))
     if not normalized_channel:
         return 0
     cursor = conn.cursor()
+    if keep_limit == 0:
+        cursor.execute(
+            "DELETE FROM resource_items WHERE source_type = 'tg' AND channel_name = ?",
+            (normalized_channel,),
+        )
+        return int(cursor.rowcount or 0)
     cursor.execute(
         """
         SELECT id
@@ -1176,6 +1339,215 @@ def prune_resource_channel_cache(conn: sqlite3.Connection, channel_id: str, keep
     placeholders = ",".join(["?"] * len(stale_ids))
     cursor.execute(f"DELETE FROM resource_items WHERE id IN ({placeholders})", stale_ids)
     return int(cursor.rowcount or 0)
+
+
+def delete_resource_items_by_ids(conn: sqlite3.Connection, item_ids: List[int], chunk_size: int = 300) -> int:
+    normalized_ids = [int(item_id) for item_id in (item_ids or []) if int(item_id or 0) > 0]
+    if not normalized_ids:
+        return 0
+    cursor = conn.cursor()
+    deleted = 0
+    size = max(50, min(int(chunk_size or 300), 600))
+    for start in range(0, len(normalized_ids), size):
+        batch = normalized_ids[start:start + size]
+        placeholders = ",".join(["?"] * len(batch))
+        cursor.execute(f"DELETE FROM resource_items WHERE id IN ({placeholders})", batch)
+        deleted += int(cursor.rowcount or 0)
+    return deleted
+
+
+def list_enabled_resource_channel_ids(sources: List[Dict[str, Any]]) -> Set[str]:
+    channel_ids: Set[str] = set()
+    for source in sources or []:
+        if not source.get("enabled", True):
+            continue
+        channel_id = normalize_telegram_channel_id_from_input(source.get("channel_id", ""))
+        if channel_id:
+            channel_ids.add(channel_id)
+    return channel_ids
+
+
+def prune_resource_inactive_channel_cache(
+    conn: sqlite3.Connection,
+    active_channel_ids: Set[str],
+    keep: int = RESOURCE_CHANNEL_INACTIVE_CACHE_LIMIT,
+) -> int:
+    keep_limit = max(0, int(keep or 0))
+    active = set(active_channel_ids or set())
+    cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT channel_name FROM resource_items WHERE source_type = 'tg' AND channel_name <> ''")
+    deleted = 0
+    for row in cursor.fetchall():
+        channel_id = normalize_telegram_channel_id_from_input(row[0] if row else "")
+        if not channel_id or channel_id in active:
+            continue
+        deleted += prune_resource_channel_cache(conn, channel_id, keep=keep_limit)
+    return deleted
+
+
+def prune_resource_cache_by_age(conn: sqlite3.Connection, max_age_days: int = RESOURCE_CHANNEL_CACHE_TTL_DAYS) -> int:
+    days = max(0, int(max_age_days or 0))
+    if days <= 0:
+        return 0
+    cutoff_ts = time.time() - (days * 86400)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, published_at, created_at FROM resource_items WHERE source_type = 'tg'")
+    stale_ids: List[int] = []
+    for row in cursor.fetchall():
+        item_id = int(row[0] or 0)
+        if item_id <= 0:
+            continue
+        published_at = str(row[1] or "").strip()
+        created_at = str(row[2] or "").strip()
+        ts = parse_resource_datetime_to_timestamp(published_at) or parse_resource_datetime_to_timestamp(created_at)
+        if ts > 0 and ts < cutoff_ts:
+            stale_ids.append(item_id)
+    return delete_resource_items_by_ids(conn, stale_ids)
+
+
+def prune_resource_cache_global_limit(
+    conn: sqlite3.Connection,
+    total_limit: int = RESOURCE_CHANNEL_CACHE_GLOBAL_LIMIT,
+    active_channel_ids: Optional[Set[str]] = None,
+    min_keep_per_active: int = RESOURCE_CHANNEL_CACHE_ACTIVE_MIN_KEEP,
+) -> int:
+    hard_limit = max(1, int(total_limit or RESOURCE_CHANNEL_CACHE_GLOBAL_LIMIT))
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(1) FROM resource_items WHERE source_type = 'tg'")
+    total_count = int((cursor.fetchone() or [0])[0] or 0)
+    overflow = total_count - hard_limit
+    if overflow <= 0:
+        return 0
+
+    deleted = 0
+    keep_per_active = max(0, int(min_keep_per_active or 0))
+    active = set(active_channel_ids or set())
+    if active and keep_per_active > 0:
+        active_token = "|" + "|".join(sorted(active)) + "|"
+        try:
+            cursor.execute(
+                """
+                WITH ranked AS (
+                    SELECT
+                        id,
+                        channel_name,
+                        CASE WHEN published_at <> '' THEN published_at ELSE created_at END AS sort_at,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY channel_name
+                            ORDER BY CASE WHEN published_at <> '' THEN published_at ELSE created_at END DESC, id DESC
+                        ) AS channel_rank,
+                        CASE WHEN instr(?, '|' || channel_name || '|') > 0 THEN 1 ELSE 0 END AS is_active
+                    FROM resource_items
+                    WHERE source_type = 'tg'
+                )
+                SELECT id
+                FROM ranked
+                WHERE NOT (is_active = 1 AND channel_rank <= ?)
+                ORDER BY sort_at ASC, id ASC
+                LIMIT ?
+                """,
+                (active_token, keep_per_active, overflow),
+            )
+            protected_candidates = [int(row[0]) for row in cursor.fetchall() if row and row[0]]
+            deleted += delete_resource_items_by_ids(conn, protected_candidates)
+        except sqlite3.OperationalError:
+            deleted = 0
+
+    remaining = max(0, overflow - deleted)
+    if remaining > 0:
+        cursor.execute(
+            """
+            SELECT id
+            FROM resource_items
+            WHERE source_type = 'tg'
+            ORDER BY CASE WHEN published_at <> '' THEN published_at ELSE created_at END ASC, id ASC
+            LIMIT ?
+            """,
+            (remaining,),
+        )
+        fallback_ids = [int(row[0]) for row in cursor.fetchall() if row and row[0]]
+        deleted += delete_resource_items_by_ids(conn, fallback_ids)
+    return deleted
+
+
+def run_resource_cache_governance(conn: sqlite3.Connection, sources: List[Dict[str, Any]]) -> Dict[str, int]:
+    active_channel_ids = list_enabled_resource_channel_ids(sources or [])
+    inactive_pruned = prune_resource_inactive_channel_cache(conn, active_channel_ids, RESOURCE_CHANNEL_INACTIVE_CACHE_LIMIT)
+    expired_pruned = prune_resource_cache_by_age(conn, RESOURCE_CHANNEL_CACHE_TTL_DAYS)
+    global_pruned = prune_resource_cache_global_limit(
+        conn,
+        RESOURCE_CHANNEL_CACHE_GLOBAL_LIMIT,
+        active_channel_ids,
+        RESOURCE_CHANNEL_CACHE_ACTIVE_MIN_KEEP,
+    )
+    return {
+        "inactive": inactive_pruned,
+        "expired": expired_pruned,
+        "global": global_pruned,
+        "active_channels": len(active_channel_ids),
+    }
+
+
+def resolve_resource_item_published_at(item: Dict[str, Any]) -> str:
+    payload = item if isinstance(item, dict) else {}
+    return str(payload.get("published_at", "") or payload.get("created_at", "")).strip()
+
+
+def parse_resource_datetime_to_timestamp(value: str) -> float:
+    raw = str(value or "").strip()
+    if not raw:
+        return 0.0
+    normalized = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
+    try:
+        return datetime.fromisoformat(normalized).timestamp()
+    except Exception:
+        try:
+            return datetime.strptime(raw[:19], "%Y-%m-%d %H:%M:%S").timestamp()
+        except Exception:
+            return 0.0
+
+
+def build_resource_channel_profile(
+    channel_id: str,
+    items: List[Dict[str, Any]],
+    sample_size: int = RESOURCE_CHANNEL_TYPE_SAMPLE_SIZE,
+) -> Dict[str, Any]:
+    normalized_channel = normalize_telegram_channel_id_from_input(channel_id)
+    sorted_items = dedupe_resource_item_dicts(items or [])
+    sorted_items.sort(key=get_resource_item_sort_key, reverse=True)
+    sample = sorted_items[: max(1, int(sample_size or RESOURCE_CHANNEL_TYPE_SAMPLE_SIZE))]
+    link_type_counts: Dict[str, int] = {}
+    latest_published_at = ""
+    latest_timestamp = 0.0
+
+    for item in sample:
+        resolved_type = resolve_resource_link_type(item.get("link_type", ""), item.get("link_url", ""))
+        normalized_type = str(resolved_type or "unknown").strip().lower() or "unknown"
+        link_type_counts[normalized_type] = int(link_type_counts.get(normalized_type, 0) or 0) + 1
+
+        published_at = resolve_resource_item_published_at(item)
+        ts = parse_resource_datetime_to_timestamp(published_at)
+        if ts > latest_timestamp and published_at:
+            latest_timestamp = ts
+            latest_published_at = published_at
+
+    sorted_types = sorted(link_type_counts.items(), key=lambda pair: (-int(pair[1] or 0), pair[0]))
+    dominant_types = [name for name, _ in sorted_types[:3]]
+    primary_type = dominant_types[0] if dominant_types else "unknown"
+    top_count = int(sorted_types[0][1] if sorted_types else 0)
+    sample_count = len(sample)
+    confidence = round(top_count / max(1, sample_count), 3)
+    return {
+        "channel_id": normalized_channel,
+        "sample_size": sample_count,
+        "analyzed_at": now_text(),
+        "latest_published_at": latest_published_at,
+        "latest_published_ts": latest_timestamp,
+        "primary_link_type": primary_type,
+        "dominant_link_types": dominant_types,
+        "link_type_counts": link_type_counts,
+        "confidence": confidence,
+    }
 
 
 def build_resource_channel_sections(
@@ -1199,9 +1571,27 @@ def build_resource_channel_sections(
             channel_pool = indexed_items.get(channel_id, [])
             channel_items = channel_pool[:per_channel]
             item_count = len(channel_pool)
+            cached_profile = resource_channel_profiles.get(channel_id, {})
+            channel_profile = cached_profile if cached_profile else build_resource_channel_profile(channel_id, channel_pool)
         else:
-            channel_items = list_resource_items(channel_id=channel_id, source_type="tg", limit=per_channel)
+            channel_pool = list_resource_items(
+                channel_id=channel_id,
+                source_type="tg",
+                limit=max(per_channel, RESOURCE_CHANNEL_TYPE_SAMPLE_SIZE),
+            )
+            channel_items = channel_pool[:per_channel]
             item_count = count_resource_items(channel_id=channel_id, source_type="tg")
+            cached_profile = resource_channel_profiles.get(channel_id, {})
+            if cached_profile:
+                channel_profile = cached_profile
+            elif channel_pool:
+                channel_profile = build_resource_channel_profile(channel_id, channel_pool)
+            else:
+                channel_profile = {}
+        if channel_profile:
+            resource_channel_profiles[channel_id] = clone_jsonable(channel_profile)
+        else:
+            channel_profile = {}
         has_more = item_count > len(channel_items)
         next_before = get_resource_item_post_cursor(channel_items[-1]) if (has_more and channel_items) else ""
         sections.append(
@@ -1216,6 +1606,11 @@ def build_resource_channel_sections(
                 "items": channel_items[:per_channel],
                 "next_before": next_before,
                 "has_more": bool(has_more and next_before),
+                "channel_profile": clone_jsonable(channel_profile),
+                "latest_published_at": str(channel_profile.get("latest_published_at", "")).strip(),
+                "primary_link_type": str(channel_profile.get("primary_link_type", "unknown")).strip() or "unknown",
+                "dominant_link_types": clone_jsonable(channel_profile.get("dominant_link_types", [])),
+                "link_type_counts": clone_jsonable(channel_profile.get("link_type_counts", {})),
             }
         )
     return sections
@@ -1296,6 +1691,7 @@ async def search_resource_sources(keyword: str) -> Dict[str, Any]:
     query = str(keyword or "").strip()
     cfg = get_config()
     sources = [normalize_resource_source(source or {}) for source in cfg.get("resource_sources", []) if source.get("enabled")]
+    tg_channel_threads = get_tg_channel_threads(cfg)
     if not query or not sources:
         return {
             "items": [],
@@ -1304,23 +1700,27 @@ async def search_resource_sources(keyword: str) -> Dict[str, Any]:
             "searched_sources": len(sources),
             "matched_channels": 0,
             "pages_scanned": 0,
+            "thread_limit": tg_channel_threads,
         }
+
+    semaphore = asyncio.Semaphore(tg_channel_threads)
 
     async def search_one_source(source: Dict[str, Any]) -> Dict[str, Any]:
         try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(
-                    search_telegram_channel_resource_items,
-                    cfg,
-                    source,
-                    query,
-                    TG_SEARCH_MATCH_LIMIT_PER_CHANNEL,
-                    TG_SEARCH_MAX_PAGES,
-                    TG_SEARCH_PAGE_LIMIT,
-                    "",
-                ),
-                timeout=TG_SEARCH_CHANNEL_TIMEOUT_SECONDS,
-            )
+            async with semaphore:
+                return await asyncio.wait_for(
+                    asyncio.to_thread(
+                        search_telegram_channel_resource_items,
+                        cfg,
+                        source,
+                        query,
+                        TG_SEARCH_MATCH_LIMIT_PER_CHANNEL,
+                        TG_SEARCH_MAX_PAGES,
+                        TG_SEARCH_PAGE_LIMIT,
+                        "",
+                    ),
+                    timeout=TG_SEARCH_CHANNEL_TIMEOUT_SECONDS,
+                )
         except asyncio.TimeoutError as exc:
             channel_id = normalize_telegram_channel_id_from_input(source.get("channel_id", ""))
             raise RuntimeError(f"频道搜索超时（{channel_id}）") from exc
@@ -1374,6 +1774,7 @@ async def search_resource_sources(keyword: str) -> Dict[str, Any]:
         "searched_sources": len(sources),
         "matched_channels": matched_channels,
         "pages_scanned": pages_scanned,
+        "thread_limit": tg_channel_threads,
     }
 
 
@@ -1386,7 +1787,10 @@ def create_resource_job(resource: Dict[str, Any], data: Dict[str, Any]) -> int:
     folder_id = str(data.get("folder_id", "")).strip()
     savepath = normalize_relative_path(data.get("savepath", ""))
     extra = normalize_share_selection_meta(data.get("share_selection", {})) if link_type == "115share" else {}
-    extra["snapshot"] = build_resource_job_snapshot(resource, link_type)
+    manual_receive_code = normalize_receive_code(data.get("receive_code", ""))
+    if link_type == "115share" and manual_receive_code:
+        extra["receive_code"] = manual_receive_code
+    extra["snapshot"] = build_resource_job_snapshot(resource, link_type, manual_receive_code)
     manual_sharetitle = normalize_relative_path(data.get("sharetitle", ""))
     if manual_sharetitle:
         sharetitle = manual_sharetitle
@@ -1653,6 +2057,7 @@ resource_refresh_pending: Set[int] = set()
 resource_channel_last_sync: Dict[str, float] = {}
 resource_channel_last_error: Dict[str, str] = {}
 resource_channel_syncing: Set[str] = set()
+resource_channel_profiles: Dict[str, Dict[str, Any]] = {}
 
 
 def clone_jsonable(value: Any) -> Any:
@@ -1708,6 +2113,11 @@ async def build_resource_state_payload(search: str = "") -> Dict[str, Any]:
     completed_job_count = count_resource_jobs(status="completed")
     sources = cfg.get("resource_sources", [])
     channel_sections = build_resource_channel_sections(sources, per_channel=10)
+    channel_profiles = {
+        str(section.get("channel_id", "")).strip(): section.get("channel_profile", {})
+        for section in channel_sections
+        if str(section.get("channel_id", "")).strip()
+    }
     return {
         "sources": clone_jsonable(sources),
         "items": clone_jsonable(items),
@@ -1716,6 +2126,7 @@ async def build_resource_state_payload(search: str = "") -> Dict[str, Any]:
         "cookie_configured": bool(str(cfg.get("cookie_115", "")).strip()),
         "search": keyword,
         "channel_sections": clone_jsonable(channel_sections),
+        "channel_profiles": clone_jsonable(channel_profiles),
         "search_sections": clone_jsonable(search_sections),
         "last_syncs": clone_jsonable(resource_channel_last_sync),
         "search_meta": clone_jsonable(
@@ -1724,6 +2135,7 @@ async def build_resource_state_payload(search: str = "") -> Dict[str, Any]:
                 "searched_sources": search_meta.get("searched_sources", 0),
                 "matched_channels": search_meta.get("matched_channels", 0),
                 "pages_scanned": search_meta.get("pages_scanned", 0),
+                "thread_limit": search_meta.get("thread_limit", get_tg_channel_threads(cfg)),
             }
         ),
         "stats": {
@@ -1739,55 +2151,136 @@ async def sync_telegram_channels(force: bool = False, limit_per_channel: int = 1
     cfg = get_config()
     sources = [source for source in cfg.get("resource_sources", []) if source.get("enabled")]
     if not sources:
-        return {"ok": True, "synced": 0, "items": 0, "skipped": 0, "errors": []}
+        ensure_db()
+        conn = open_db()
+        try:
+            governance_detail = run_resource_cache_governance(conn, [])
+            cache_prune_detail = {
+                "per_channel": 0,
+                "inactive": int(governance_detail.get("inactive", 0) or 0),
+                "expired": int(governance_detail.get("expired", 0) or 0),
+                "global": int(governance_detail.get("global", 0) or 0),
+                "active_channels": 0,
+            }
+            cache_pruned = (
+                cache_prune_detail["inactive"]
+                + cache_prune_detail["expired"]
+                + cache_prune_detail["global"]
+            )
+            if cache_pruned > 0:
+                conn.commit()
+        finally:
+            conn.close()
+        return {
+            "ok": True,
+            "synced": 0,
+            "items": 0,
+            "skipped": 0,
+            "errors": [],
+            "cache_pruned": cache_pruned,
+            "cache_prune_detail": cache_prune_detail,
+        }
 
     ensure_db()
+    tg_channel_threads = get_tg_channel_threads(cfg)
+    semaphore = asyncio.Semaphore(tg_channel_threads)
     synced_channels = 0
     upserted_items = 0
     skipped_channels = 0
+    per_channel_pruned = 0
     errors: List[Dict[str, str]] = []
+    targets: List[Tuple[Dict[str, Any], str]] = []
+    for source in sources:
+        channel_id = normalize_telegram_channel_id_from_input(source.get("channel_id", ""))
+        if not channel_id:
+            continue
+        if not force and channel_id in resource_channel_last_sync and (time.time() - resource_channel_last_sync[channel_id]) < TG_SYNC_TTL_SECONDS:
+            skipped_channels += 1
+            continue
+        if channel_id in resource_channel_syncing:
+            skipped_channels += 1
+            continue
+        resource_channel_syncing.add(channel_id)
+        targets.append((source, channel_id))
+
+    async def fetch_one_source(source: Dict[str, Any], channel_id: str) -> Dict[str, Any]:
+        source_name = str(source.get("name", "") or channel_id).strip()
+        try:
+            async with semaphore:
+                sample_bundle = await asyncio.to_thread(
+                    fetch_telegram_channel_post_samples,
+                    cfg,
+                    source,
+                    max(limit_per_channel, RESOURCE_CHANNEL_TYPE_SAMPLE_SIZE),
+                    max(limit_per_channel, RESOURCE_CHANNEL_TYPE_PAGE_LIMIT),
+                    RESOURCE_CHANNEL_TYPE_MAX_PAGES,
+                )
+                posts = sample_bundle.get("posts", []) if isinstance(sample_bundle, dict) else []
+                if not posts:
+                    posts = await asyncio.to_thread(fetch_telegram_channel_posts, cfg, source, limit_per_channel)
+            return {"channel_id": channel_id, "name": source_name, "posts": posts}
+        except Exception as exc:
+            return {"channel_id": channel_id, "name": source_name, "error": str(exc)}
+        finally:
+            resource_channel_syncing.discard(channel_id)
+
+    results = await asyncio.gather(*(fetch_one_source(source, channel_id) for source, channel_id in targets))
+
     conn = open_db()
     try:
-        for source in sources:
-            channel_id = normalize_telegram_channel_id_from_input(source.get("channel_id", ""))
+        for result in results:
+            channel_id = str(result.get("channel_id", "")).strip()
             if not channel_id:
                 continue
-            if not force and channel_id in resource_channel_last_sync and (time.time() - resource_channel_last_sync[channel_id]) < TG_SYNC_TTL_SECONDS:
-                skipped_channels += 1
-                continue
-            if channel_id in resource_channel_syncing:
-                skipped_channels += 1
-                continue
-            resource_channel_syncing.add(channel_id)
-            try:
-                posts = await asyncio.to_thread(fetch_telegram_channel_posts, cfg, source, limit_per_channel)
-                for post in posts:
-                    _, created = upsert_resource_item(conn, post)
-                    upserted_items += 1 if created else 0
-                prune_resource_channel_cache(conn, channel_id)
-                conn.commit()
-                resource_channel_last_sync[channel_id] = time.time()
-                resource_channel_last_error.pop(channel_id, None)
-                synced_channels += 1
-            except Exception as exc:
-                resource_channel_last_error[channel_id] = str(exc)
+            error_message = str(result.get("error", "")).strip()
+            if error_message:
+                resource_channel_last_error[channel_id] = error_message
                 errors.append(
                     {
                         "channel_id": channel_id,
-                        "name": str(source.get("name", "") or channel_id).strip(),
-                        "message": str(exc),
+                        "name": str(result.get("name", "") or channel_id).strip(),
+                        "message": error_message,
                     }
                 )
-            finally:
-                resource_channel_syncing.discard(channel_id)
+                continue
+
+            posts = result.get("posts", []) if isinstance(result.get("posts"), list) else []
+            for post in posts:
+                _, created = upsert_resource_item(conn, post)
+                upserted_items += 1 if created else 0
+            resource_channel_profiles[channel_id] = build_resource_channel_profile(channel_id, posts)
+            per_channel_pruned += prune_resource_channel_cache(conn, channel_id)
+            conn.commit()
+            resource_channel_last_sync[channel_id] = time.time()
+            resource_channel_last_error.pop(channel_id, None)
+            synced_channels += 1
+        governance_detail = run_resource_cache_governance(conn, sources)
+        cache_prune_detail = {
+            "per_channel": per_channel_pruned,
+            "inactive": int(governance_detail.get("inactive", 0) or 0),
+            "expired": int(governance_detail.get("expired", 0) or 0),
+            "global": int(governance_detail.get("global", 0) or 0),
+            "active_channels": int(governance_detail.get("active_channels", 0) or 0),
+        }
+        cache_pruned = (
+            cache_prune_detail["per_channel"]
+            + cache_prune_detail["inactive"]
+            + cache_prune_detail["expired"]
+            + cache_prune_detail["global"]
+        )
+        if cache_pruned > 0:
+            conn.commit()
     finally:
         conn.close()
+
     return {
         "ok": not errors,
         "synced": synced_channels,
         "items": upserted_items,
         "skipped": skipped_channels,
         "errors": errors,
+        "cache_pruned": cache_pruned,
+        "cache_prune_detail": cache_prune_detail,
     }
 
 
@@ -2327,27 +2820,58 @@ def list_115_folders(cookie: str, cid: str = "0") -> List[Dict[str, str]]:
     ]
 
 
-def parse_115_share_payload(url: str, raw_text: str = "") -> Dict[str, str]:
+def parse_115_share_payload(url: str, raw_text: str = "", receive_code: str = "") -> Dict[str, str]:
     source = str(url or "").strip()
-    normalized = source
-    match = re.search(
-        r"https?://(?:115cdn|115|anxia)\.com/s/([A-Za-z0-9]+)(?:\?password=([A-Za-z0-9]+))?",
-        source,
-        flags=re.IGNORECASE,
-    )
+    match = RESOURCE_115_SHARE_URL_REGEX.search(source)
+    candidate_url = match.group(0) if match else source
+    normalized = normalize_115_share_url_candidate(candidate_url)
     share_code = ""
-    receive_code = ""
-    if match:
-        share_code = match.group(1)
-        receive_code = str(match.group(2) or "").strip()
-        normalized = match.group(0)
-    if not receive_code:
+    receive_code_from_url = ""
+    parsed_url: Optional[urllib.parse.SplitResult] = None
+
+    if normalized:
+        if not normalized.lower().startswith(("http://", "https://")) and re.match(
+            r"^(?:115cdn|115|anxia)\.com/",
+            normalized,
+            flags=re.IGNORECASE,
+        ):
+            normalized = f"https://{normalized}"
+        parsed_url = urllib.parse.urlsplit(normalized)
+        path_match = re.search(r"/s/([A-Za-z0-9]+)", parsed_url.path, flags=re.IGNORECASE)
+        if path_match:
+            share_code = path_match.group(1)
+            query_map = {
+                str(key or "").lower(): values
+                for key, values in urllib.parse.parse_qs(parsed_url.query, keep_blank_values=False).items()
+            }
+            for key in ("password", "pwd", "receive_code", "access_code", "passcode", "code"):
+                values = query_map.get(key) or []
+                if not values:
+                    continue
+                receive_code_from_url = normalize_receive_code(values[0])
+                if receive_code_from_url:
+                    break
+            base_url = f"{parsed_url.scheme or 'https'}://{parsed_url.netloc}/s/{share_code}"
+            normalized = f"{base_url}?{parsed_url.query}" if parsed_url.query else base_url
+
+    resolved_receive_code = normalize_receive_code(receive_code) or receive_code_from_url
+    if not resolved_receive_code:
         receive_match = TG_EXTRACT_CODE_REGEX.search(str(raw_text or ""))
         if receive_match:
-            receive_code = receive_match.group(1)
+            resolved_receive_code = normalize_receive_code(receive_match.group(1))
+
+    if share_code and resolved_receive_code:
+        if parsed_url and parsed_url.netloc:
+            normalized = apply_share_receive_code_to_url(
+                f"{parsed_url.scheme or 'https'}://{parsed_url.netloc}/s/{share_code}",
+                resolved_receive_code,
+            )
+        else:
+            normalized = apply_share_receive_code_to_url(normalized, resolved_receive_code)
+
     return {
         "share_code": share_code,
-        "receive_code": receive_code,
+        "receive_code": resolved_receive_code,
         "url": normalized,
     }
 
@@ -2429,8 +2953,8 @@ def merge_share_selection_meta(primary: Any, fallback: Any) -> Dict[str, Any]:
     return normalize_share_selection_meta(merged)
 
 
-def resolve_115_share_payload(cookie: str, share_url: str, raw_text: str = "") -> Dict[str, str]:
-    parsed = parse_115_share_payload(share_url, raw_text)
+def resolve_115_share_payload(cookie: str, share_url: str, raw_text: str = "", receive_code: str = "") -> Dict[str, str]:
+    parsed = parse_115_share_payload(share_url, raw_text, receive_code)
     if parsed.get("share_code"):
         return parsed
     headers = {
@@ -2440,17 +2964,23 @@ def resolve_115_share_payload(cookie: str, share_url: str, raw_text: str = "") -
         "User-Agent": "Mozilla/5.0 115-strm-web",
     }
     resolved = http_resolve_url(share_url, timeout=30, extra_headers=headers)
-    parsed = parse_115_share_payload(resolved, raw_text)
+    parsed = parse_115_share_payload(resolved, raw_text, receive_code)
     if not parsed.get("share_code"):
         raise RuntimeError("未能识别 115 分享链接")
     return parsed
 
 
-def list_115_share_entries(cookie: str, share_url: str, raw_text: str = "", cid: str = "0") -> Dict[str, Any]:
+def list_115_share_entries(
+    cookie: str,
+    share_url: str,
+    raw_text: str = "",
+    cid: str = "0",
+    receive_code: str = "",
+) -> Dict[str, Any]:
     cookie = str(cookie or "").strip()
     if not cookie:
         raise RuntimeError("115 Cookie 未配置")
-    parsed = resolve_115_share_payload(cookie, share_url, raw_text)
+    parsed = resolve_115_share_payload(cookie, share_url, raw_text, receive_code)
     share_code = str(parsed.get("share_code", "") or "").strip()
     receive_code = str(parsed.get("receive_code", "") or "").strip()
     current_cid = str(cid or "0").strip() or "0"
@@ -2545,8 +3075,9 @@ def prepare_115_share_receive(
     share_url: str,
     raw_text: str = "",
     selected_ids: Optional[List[str]] = None,
+    receive_code: str = "",
 ) -> Dict[str, Any]:
-    parsed = resolve_115_share_payload(cookie, share_url, raw_text)
+    parsed = resolve_115_share_payload(cookie, share_url, raw_text, receive_code)
     normalized_ids: List[str] = []
     seen_ids: Set[str] = set()
     for raw_id in selected_ids or []:
@@ -2558,7 +3089,13 @@ def prepare_115_share_receive(
 
     selection: Dict[str, Any] = {}
     if not normalized_ids:
-        snapshot = list_115_share_entries(cookie, parsed.get("url", share_url), raw_text, "0")
+        snapshot = list_115_share_entries(
+            cookie,
+            parsed.get("url", share_url),
+            raw_text,
+            "0",
+            str(parsed.get("receive_code", "") or ""),
+        )
         normalized_ids = [str(entry.get("id", "")).strip() for entry in snapshot.get("entries", []) if str(entry.get("id", "")).strip()]
         selection = normalize_share_selection_meta(
             {
@@ -2583,11 +3120,12 @@ def submit_115_share_receive(
     folder_id: str,
     raw_text: str = "",
     selected_ids: Optional[List[str]] = None,
+    receive_code: str = "",
 ) -> Dict[str, Any]:
     cookie = str(cookie or "").strip()
     if not cookie:
         raise RuntimeError("115 Cookie 未配置")
-    prepared = prepare_115_share_receive(cookie, share_url, raw_text, selected_ids)
+    prepared = prepare_115_share_receive(cookie, share_url, raw_text, selected_ids, receive_code)
 
     headers = {
         "Cookie": cookie,
@@ -2742,6 +3280,60 @@ def fetch_telegram_channel_posts_page(
 
 def fetch_telegram_channel_posts(cfg: Dict[str, Any], source: Dict[str, Any], limit: int = 10) -> List[Dict[str, Any]]:
     return fetch_telegram_channel_posts_page(cfg, source, limit=limit).get("posts", [])
+
+
+def fetch_telegram_channel_post_samples(
+    cfg: Dict[str, Any],
+    source: Dict[str, Any],
+    sample_size: int = RESOURCE_CHANNEL_TYPE_SAMPLE_SIZE,
+    page_size: int = RESOURCE_CHANNEL_TYPE_PAGE_LIMIT,
+    max_pages: int = RESOURCE_CHANNEL_TYPE_MAX_PAGES,
+) -> Dict[str, Any]:
+    normalized_source = normalize_resource_source(source or {})
+    channel_id = normalize_telegram_channel_id_from_input(normalized_source.get("channel_id", ""))
+    target = max(1, int(sample_size or RESOURCE_CHANNEL_TYPE_SAMPLE_SIZE))
+    fetch_size = max(1, int(page_size or RESOURCE_CHANNEL_TYPE_PAGE_LIMIT))
+    pages = max(1, int(max_pages or RESOURCE_CHANNEL_TYPE_MAX_PAGES))
+    if not channel_id:
+        return {"channel_id": "", "posts": [], "pages_scanned": 0, "next_before": "", "has_more": False}
+
+    before = ""
+    collected: List[Dict[str, Any]] = []
+    seen_keys: Set[str] = set()
+    pages_scanned = 0
+    has_more = False
+
+    for _ in range(pages):
+        page = fetch_telegram_channel_posts_page(
+            cfg,
+            normalized_source,
+            limit=fetch_size,
+            before=before,
+            allow_empty=True,
+        )
+        pages_scanned += 1
+        page_posts = page.get("posts", []) if isinstance(page, dict) else []
+        for post in page_posts:
+            identity = build_resource_item_identity(post)
+            if identity in seen_keys:
+                continue
+            seen_keys.add(identity)
+            collected.append(post)
+            if len(collected) >= target:
+                break
+        before = str(page.get("next_before", "") if isinstance(page, dict) else "").strip()
+        has_more = bool(page.get("has_more")) if isinstance(page, dict) else False
+        if len(collected) >= target or not before or not has_more:
+            break
+
+    collected.sort(key=get_resource_item_sort_key, reverse=True)
+    return {
+        "channel_id": channel_id,
+        "posts": collected[:target],
+        "pages_scanned": pages_scanned,
+        "next_before": before,
+        "has_more": bool(before and has_more),
+    }
 
 
 def http_download(url: str, target_path: str, token: str = "", timeout: int = 60) -> None:

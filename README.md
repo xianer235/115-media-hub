@@ -88,6 +88,21 @@ docker compose up -d
   - `父文件夹路径前缀`（用于路径补全）
   - `排除层级`（默认 `1`，最小建议 `1`）
 
+### 4) 频道缓存治理（可选环境变量）
+
+频道资源缓存采用四层策略：`单频道上限` + `失效频道缩容` + `过期清理` + `全局硬上限`，用于避免频道增多后数据库无限膨胀。
+
+- `RESOURCE_CHANNEL_CACHE_LIMIT`（默认 `60`）  
+  每个频道最多保留多少条缓存。
+- `RESOURCE_CHANNEL_INACTIVE_CACHE_LIMIT`（默认 `5`）  
+  已不在启用订阅列表中的频道，每个频道最多保留多少条缓存（`0` 表示全部清空）。
+- `RESOURCE_CHANNEL_CACHE_TTL_DAYS`（默认 `30`）  
+  超过多少天的频道缓存会被清理（`0` 表示关闭按天清理）。
+- `RESOURCE_CHANNEL_CACHE_GLOBAL_LIMIT`（默认 `2000`）  
+  所有 TG 频道缓存的全局总上限。
+- `RESOURCE_CHANNEL_CACHE_ACTIVE_MIN_KEEP`（默认 `10`）  
+  执行全局裁剪时，尽量为“启用频道”保留的最小条数（当全局上限过低时，仍会优先满足全局硬上限）。
+
 ## Webhook（CloudSaver）说明
 
 服务端地址格式：

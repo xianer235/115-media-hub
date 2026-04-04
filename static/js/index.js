@@ -1,6 +1,6 @@
         let isRunning = false;
         let monitorState = { running: false, current_task: '', tasks: [], logs: [], summary: { step: '空闲', detail: '等待监控任务' }, queued: [], next_runs: {} };
-        let resourceState = { sources: [], items: [], jobs: [], channel_sections: [], search_sections: [], last_syncs: {}, monitor_tasks: [], stats: { source_count: 0, item_count: 0, filtered_item_count: 0, completed_job_count: 0 }, cookie_configured: false, search: '', search_meta: {} };
+        let resourceState = { sources: [], items: [], jobs: [], channel_sections: [], channel_profiles: {}, search_sections: [], last_syncs: {}, monitor_tasks: [], stats: { source_count: 0, item_count: 0, filtered_item_count: 0, completed_job_count: 0 }, cookie_configured: false, search: '', search_meta: {} };
         let editingMonitorName = null;
         let editingResourceSourceIndex = null;
         let selectedResourceId = null;
@@ -26,6 +26,7 @@
         let resourceShareError = '';
         let resourceShareRootLoaded = false;
         let resourceShareInfo = { title: '', count: 0, share_code: '', receive_code: '' };
+        let resourceShareReceiveCode = '';
         let resourceShareTrail = [{ cid: '0', name: '分享根目录' }];
         let resourceShareCurrentCid = '0';
         let resourceShareRequestToken = 0;
@@ -42,9 +43,18 @@
         let resourceClientIdsByIdentity = {};
         let resourceJobModalOpen = false;
         let resourceSourceModalOpen = false;
+        let resourceSourceImportModalOpen = false;
+        let resourceSourceManagerOpen = false;
+        let resourceSourceFilter = 'all';
+        let resourceSourceActivityFilter = 'all';
+        let resourceSourceBulkSelected = {};
+        let resourceSourceTestBusy = false;
+        let resourceSourceTestResult = { total: 0, done: 0, success: 0, failed: 0, running: false, last_name: '', error: '' };
         let resourceJobFilter = 'all';
         let tgProxyTestState = { loading: false, ok: null, message: '', latency_ms: 0, mode: '', proxy_url: '', target_url: '' };
+        let resourceBoardHintText = '';
         let resourceTgHealthState = { visible: false, tone: 'loading', title: '', meta: '', note: '' };
+        let resourceTgLastLatencyMs = 0;
         let lastLogSignature = '';
         let lastMonitorLogSignature = '';
         let lastMonitorRenderKey = '';
@@ -63,6 +73,7 @@
         const VERSION_FALLBACK_PROJECT_URL = 'https://github.com/xianer235/115-strm-web';
         const VERSION_FALLBACK_CHANGELOG_URL = 'https://github.com/xianer235/115-strm-web/blob/main/CHANGELOG.md';
         const RESOURCE_FOLDER_MEMORY_KEY = 'resource-folder-selection-v1';
+        const RESOURCE_IMPORT_DELAY_MEMORY_KEY = 'resource-import-delay-seconds-v1';
         const TOAST_DEFAULT_DURATION_MS = 3000;
 
         function lockPageScroll() {
@@ -581,26 +592,13 @@
             };
         }
 
-        function getCurrentTgTransportSnapshot() {
-            const cfg = getCurrentTgProxyConfig();
-            const protocol = String(cfg.tg_proxy_protocol || 'http').trim() || 'http';
-            const host = String(cfg.tg_proxy_host || '').trim();
-            const port = String(cfg.tg_proxy_port || '').trim();
-            const proxyUrl = cfg.tg_proxy_enabled && host && port
-                ? `${protocol}://${host}:${port}`
-                : '';
-            return {
-                mode: proxyUrl ? 'proxy' : 'direct',
-                modeLabel: proxyUrl ? '代理模式' : '直连模式',
-                proxyUrl
-            };
-        }
-
-        function inferTgModeFromMessage(message, fallbackMode = '') {
-            const text = String(message || '').trim();
-            if (text.includes('代理')) return 'proxy';
-            if (text.includes('直连')) return 'direct';
-            return fallbackMode || '';
+        function getCurrentTgChannelThreads() {
+            const inputRaw = parseInt(document.getElementById('tg_channel_threads')?.value || '', 10);
+            const stateRaw = parseInt(resourceState?.search_meta?.thread_limit || '', 10);
+            const candidate = Number.isFinite(inputRaw)
+                ? inputRaw
+                : (Number.isFinite(stateRaw) ? stateRaw : 6);
+            return Math.min(20, Math.max(1, candidate));
         }
 
         function formatDurationText(durationMs) {
@@ -608,6 +606,46 @@
             if (!Number.isFinite(value) || value <= 0) return '';
             if (value < 1000) return `总耗时 ${Math.max(1, Math.round(value))} ms`;
             return `总耗时 ${(value / 1000).toFixed(value >= 10000 ? 0 : 1)} s`;
+        }
+
+        function formatLatencyText(latencyMs) {
+            const value = Number(latencyMs || 0);
+            if (!Number.isFinite(value) || value <= 0) return '延迟 --';
+            return `延迟 ${Math.max(1, Math.round(value))} ms`;
+        }
+
+        async function probeResourceTgLatency() {
+            try {
+                const res = await fetch('/settings/tg_proxy/test', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(getCurrentTgProxyConfig())
+                });
+                const data = await res.json();
+                if (!res.ok || !data.ok) return { ok: false, latency_ms: 0 };
+                const latencyMs = Number(data.latency_ms || 0);
+                if (Number.isFinite(latencyMs) && latencyMs > 0) {
+                    resourceTgLastLatencyMs = Math.max(1, Math.round(latencyMs));
+                }
+                return { ok: true, latency_ms: resourceTgLastLatencyMs };
+            } catch (e) {
+                return { ok: false, latency_ms: 0 };
+            }
+        }
+
+        async function resolveResourceTgLatencyMs(probePromise, timeoutMs = 6500) {
+            if (!probePromise) return Number(resourceTgLastLatencyMs || 0);
+            try {
+                const result = await Promise.race([
+                    probePromise,
+                    new Promise(resolve => setTimeout(() => resolve({ ok: false, latency_ms: 0 }), timeoutMs))
+                ]);
+                const latencyMs = Number(result?.latency_ms || 0);
+                if (Number.isFinite(latencyMs) && latencyMs > 0) {
+                    resourceTgLastLatencyMs = Math.max(1, Math.round(latencyMs));
+                }
+            } catch (e) {}
+            return Number(resourceTgLastLatencyMs || 0);
         }
 
         function renderTgProxyTestStatus() {
@@ -701,36 +739,55 @@
             renderResourceTgHealthStatus();
         }
 
-        function renderResourceTgHealthStatus() {
-            const el = document.getElementById('resource-search-proxy-health');
-            if (!el) return;
-            if (!resourceTgHealthState.visible) {
-                el.className = 'resource-search-proxy-health hidden';
-                el.innerHTML = '';
-                return;
-            }
+        function formatResourceTgHealthInlineText() {
+            if (!resourceTgHealthState.visible) return '';
+            const title = String(resourceTgHealthState.title || '').trim();
+            const meta = String(resourceTgHealthState.meta || '').trim();
+            if (!title && !meta) return '';
+            if (title === 'TG 待命') return '';
+            return [title, meta].filter(Boolean).join(' · ');
+        }
+
+        function renderResourceBoardHint() {
+            const hint = document.getElementById('resource-board-hint');
+            if (!hint) return;
+            const keyword = String(document.getElementById('resource-search-input')?.value || resourceState.search || '').trim();
+            const directImport = isDirectImportInput(keyword);
             const tone = ['loading', 'success', 'warning', 'error'].includes(resourceTgHealthState.tone)
                 ? resourceTgHealthState.tone
                 : 'loading';
-            el.className = `resource-search-proxy-health resource-search-proxy-health--${tone}`;
-            el.innerHTML = `
-                <div class="resource-search-proxy-health-title">${escapeHtml(resourceTgHealthState.title || 'TG 状态')}</div>
-                ${resourceTgHealthState.meta ? `<div class="resource-search-proxy-health-meta">${escapeHtml(resourceTgHealthState.meta)}</div>` : ''}
-                ${resourceTgHealthState.note ? `<div class="resource-search-proxy-health-note">${escapeHtml(resourceTgHealthState.note)}</div>` : ''}
-                <div class="min-w-0 flex-1"></div>
-                ${resourceTgHealthState.durationText ? `<div class="resource-search-proxy-health-meta shrink-0">${escapeHtml(resourceTgHealthState.durationText)}</div>` : ''}
-            `;
+            const tgText = formatResourceTgHealthInlineText();
+            let text = String(resourceBoardHintText || '').trim();
+
+            if (resourceSearchBusy) {
+                if (directImport) {
+                    text = '正在识别导入链接，请稍候。';
+                } else {
+                    const baseText = `正在频道内搜索「${keyword || '...'}」，请稍候。`;
+                    text = tgText ? `${baseText} ${tgText}` : baseText;
+                }
+            } else if (resourceSyncBusy) {
+                const baseText = '正在刷新订阅频道资源，请稍候。';
+                text = tgText ? `${baseText} ${tgText}` : baseText;
+            } else if (tgText) {
+                text = text ? `${text} ｜ ${tgText}` : tgText;
+            }
+
+            const hasText = !!text;
+            hint.classList.toggle('hidden', !hasText);
+            hint.classList.toggle('is-loading', hasText && (resourceSearchBusy || resourceSyncBusy));
+            hint.classList.remove(
+                'resource-search-sub--loading',
+                'resource-search-sub--success',
+                'resource-search-sub--warning',
+                'resource-search-sub--error'
+            );
+            if (hasText && tgText) hint.classList.add(`resource-search-sub--${tone}`);
+            hint.innerText = hasText ? text : '';
         }
 
-        function buildResourceTgModeText(mode, proxyUrl) {
-            return mode === 'proxy' && proxyUrl
-                ? `代理 ${proxyUrl}`
-                : '直连';
-        }
-
-        function buildResourceTgHealthSummary(mode, proxyUrl, summary) {
-            const modeText = buildResourceTgModeText(mode, proxyUrl);
-            return summary ? `${modeText} · ${summary}` : modeText;
+        function renderResourceTgHealthStatus() {
+            renderResourceBoardHint();
         }
 
         function getActionElapsedMs(startedAt) {
@@ -738,52 +795,47 @@
             return Math.max(1, Math.round(performance.now() - Number(startedAt || 0)));
         }
 
-        function setResourceTgHealthResult({ tone, title, mode, proxyUrl, summary, durationMs, note = '' }) {
+        function setResourceTgHealthResult({ tone, title, detail = '', durationMs = 0, latencyMs = 0 }) {
+            const totalText = formatDurationText(durationMs) || '总耗时 --';
+            const parts = [formatLatencyText(latencyMs), totalText];
+            if (detail) parts.push(detail);
             setResourceTgHealthState({
                 visible: true,
                 tone,
                 title,
-                meta: buildResourceTgHealthSummary(mode, proxyUrl, summary),
-                note,
-                durationText: formatDurationText(durationMs)
+                meta: parts.join(' · '),
+                note: '',
             });
         }
 
-        function showResourceTgHealthLoading(context, keyword = '') {
-            const transport = getCurrentTgTransportSnapshot();
+        function showResourceTgHealthLoading(context) {
             const actionText = context === 'sync'
-                ? '刷新频道资源'
-                : `检索「${keyword || '...'}」`;
+                ? '刷新中'
+                : '搜索中';
             setResourceTgHealthState({
                 visible: true,
                 tone: 'loading',
-                title: 'TG 检测中',
-                meta: `${buildResourceTgModeText(transport.mode, transport.proxyUrl)} · ${actionText}`,
+                title: `TG ${actionText}`,
+                meta: '延迟检测中 · 总耗时 --',
                 note: '',
-                durationText: ''
             });
         }
 
-        function applyResourceTgHealthFromSearchResult(data, keyword = '', durationMs = 0) {
-            const transport = getCurrentTgTransportSnapshot();
+        function applyResourceTgHealthFromSearchResult(data, durationMs = 0, latencyMs = 0) {
             const errors = Array.isArray(data?.search_meta?.errors) ? data.search_meta.errors : [];
             const searchedSources = Number(data?.search_meta?.searched_sources || 0);
-            const matchedChannels = Number(data?.search_meta?.matched_channels || 0);
             const filteredCount = Number(data?.stats?.filtered_item_count || 0);
             const successCount = Math.max(0, searchedSources - errors.length);
-            const firstError = errors[0]?.message || '';
-            const mode = inferTgModeFromMessage(firstError, transport.mode);
 
             if (!errors.length) {
                 setResourceTgHealthResult({
                     tone: 'success',
-                    title: 'TG 正常',
-                    mode,
-                    proxyUrl: transport.proxyUrl,
-                    summary: filteredCount > 0
-                        ? `${matchedChannels} 个频道命中 ${filteredCount} 条`
-                        : `已检索 ${searchedSources} 个订阅源，无命中`,
-                    durationMs
+                    title: 'TG 搜索完成',
+                    detail: filteredCount > 0
+                        ? `命中 ${filteredCount} 条`
+                        : `扫描 ${searchedSources} 个频道`,
+                    durationMs,
+                    latencyMs,
                 });
                 return;
             }
@@ -791,44 +843,37 @@
             if (successCount > 0) {
                 setResourceTgHealthResult({
                     tone: 'warning',
-                    title: 'TG 波动',
-                    mode,
-                    proxyUrl: transport.proxyUrl,
-                    summary: `成功 ${successCount} 个，异常 ${errors.length} 个`,
+                    title: 'TG 搜索波动',
+                    detail: `成功 ${successCount} / ${searchedSources}`,
                     durationMs,
-                    note: firstError || ''
+                    latencyMs,
                 });
                 return;
             }
 
             setResourceTgHealthResult({
                 tone: 'error',
-                title: 'TG 异常',
-                mode,
-                proxyUrl: transport.proxyUrl,
-                summary: `${errors.length || searchedSources || 0} 个订阅源未返回`,
+                title: 'TG 搜索异常',
+                detail: `${errors.length || searchedSources || 0} 个频道失败`,
                 durationMs,
-                note: firstError || ''
+                latencyMs,
             });
         }
 
-        function applyResourceTgHealthFromSyncResult(data, durationMs = 0) {
-            const transport = getCurrentTgTransportSnapshot();
+        function applyResourceTgHealthFromSyncResult(data, durationMs = 0, latencyMs = 0) {
             const errors = Array.isArray(data?.errors) ? data.errors : [];
             const synced = Number(data?.synced || 0);
             const skipped = Number(data?.skipped || 0);
             const inserted = Number(data?.items || 0);
-            const firstError = errors[0]?.message || '';
-            const mode = inferTgModeFromMessage(firstError, transport.mode);
+            const pruned = Number(data?.cache_pruned || 0);
 
             if (!errors.length) {
                 setResourceTgHealthResult({
                     tone: 'success',
-                    title: 'TG 正常',
-                    mode,
-                    proxyUrl: transport.proxyUrl,
-                    summary: `已刷新 ${synced} 个频道，新增 ${inserted} 条${skipped ? `，缓存 ${skipped} 个` : ''}`,
-                    durationMs
+                    title: 'TG 刷新完成',
+                    detail: `频道 ${synced} · 新增 ${inserted}${skipped ? ` · 缓存 ${skipped}` : ''}${pruned ? ` · 清理 ${pruned}` : ''}`,
+                    durationMs,
+                    latencyMs,
                 });
                 return;
             }
@@ -836,40 +881,31 @@
             if (synced > 0 || skipped > 0) {
                 setResourceTgHealthResult({
                     tone: 'warning',
-                    title: 'TG 波动',
-                    mode,
-                    proxyUrl: transport.proxyUrl,
-                    summary: `成功 ${synced} 个，异常 ${errors.length} 个`,
+                    title: 'TG 刷新波动',
+                    detail: `成功 ${synced} · 异常 ${errors.length}`,
                     durationMs,
-                    note: firstError || ''
+                    latencyMs,
                 });
                 return;
             }
 
             setResourceTgHealthResult({
                 tone: 'error',
-                title: 'TG 异常',
-                mode,
-                proxyUrl: transport.proxyUrl,
-                summary: `${errors.length} 个频道全部失败`,
+                title: 'TG 刷新异常',
+                detail: `${errors.length} 个频道失败`,
                 durationMs,
-                note: firstError || ''
+                latencyMs,
             });
         }
 
-        function applyResourceTgHealthFailure(context, error, durationMs = 0) {
-            const transport = getCurrentTgTransportSnapshot();
-            const message = String(error?.message || error || '').trim() || '请求未完成';
-            const mode = inferTgModeFromMessage(message, transport.mode);
+        function applyResourceTgHealthFailure(context, durationMs = 0, latencyMs = 0) {
             const actionText = context === 'sync' ? '刷新未完成' : '搜索未完成';
             setResourceTgHealthResult({
                 tone: 'error',
                 title: 'TG 异常',
-                mode,
-                proxyUrl: transport.proxyUrl,
-                summary: actionText,
+                detail: actionText,
                 durationMs,
-                note: message
+                latencyMs,
             });
         }
 
@@ -884,6 +920,8 @@
             cfg.check_hash = document.getElementById('check_hash').checked;
             cfg.sync_clean = document.getElementById('sync_clean').checked;
             cfg.tg_proxy_enabled = document.getElementById('tg_proxy_enabled').checked;
+            const rawTgThreads = parseInt(document.getElementById('tg_channel_threads')?.value || '', 10);
+            cfg.tg_channel_threads = Math.min(20, Math.max(1, Number.isFinite(rawTgThreads) ? rawTgThreads : 6));
             cfg.monitor_tasks = monitorState.tasks || [];
             cfg.trees = [];
 
@@ -1264,6 +1302,37 @@
                 .join('/');
         }
 
+        function normalizeReceiveCodeInput(value) {
+            const raw = String(value || '').trim().replace(/\s+/g, '');
+            if (!raw) return '';
+            return /^[A-Za-z0-9]{1,16}$/.test(raw) ? raw : '';
+        }
+
+        function extractReceiveCodeFromText(text) {
+            const raw = String(text || '');
+            const matched = raw.match(/(?:提取码|提取碼|访问码|訪問碼|密码|密碼|访问密码|訪問密碼|口令|pwd|pass(?:word|code)?|code)\s*(?:[:：=]|是|为|為)?\s*([A-Za-z0-9]{4,8})\b/i);
+            return normalizeReceiveCodeInput(matched?.[1] || '');
+        }
+
+        function extractReceiveCodeFromShareUrl(url) {
+            const raw = String(url || '').trim();
+            if (!raw) return '';
+            try {
+                const normalized = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+                const parsed = new URL(normalized);
+                const password = parsed.searchParams.get('password')
+                    || parsed.searchParams.get('pwd')
+                    || parsed.searchParams.get('receive_code')
+                    || parsed.searchParams.get('access_code')
+                    || parsed.searchParams.get('passcode')
+                    || parsed.searchParams.get('code')
+                    || '';
+                return normalizeReceiveCodeInput(password);
+            } catch (e) {
+                return '';
+            }
+        }
+
         function getResourceSourceChannelId(source) {
             return normalizeTelegramChannelIdInput(source?.channel_id || source?.channel || '');
         }
@@ -1286,18 +1355,51 @@
                 magnet: 'Magnet',
                 '115share': '115 分享',
                 ed2k: 'ED2K',
+                quark: '夸克网盘',
+                aliyun: '阿里云盘',
+                baidu: '百度网盘',
+                xunlei: '迅雷网盘',
+                uc: 'UC 网盘',
+                '123pan': '123 网盘',
+                tianyi: '天翼云盘',
+                pikpak: 'PikPak',
+                lanzou: '蓝奏云',
+                google_drive: 'Google Drive',
+                onedrive: 'OneDrive',
+                mega: 'MEGA',
                 link: '直链',
                 unknown: '待识别'
             };
             return map[normalized] || normalized || '待识别';
         }
 
+        function detectResourceLinkTypeByUrl(url) {
+            const raw = String(url || '').trim();
+            const lowered = raw.toLowerCase();
+            if (!lowered) return 'unknown';
+            if (lowered.startsWith('magnet:?')) return 'magnet';
+            if (lowered.startsWith('ed2k://')) return 'ed2k';
+            if (/(?:https?:\/\/)?(?:115cdn|115|anxia)\.com\/s\/[a-z0-9]+/i.test(raw)) return '115share';
+            if (/https?:\/\/(?:pan|www)\.quark\.cn\/s\/[a-z0-9]+/i.test(raw)) return 'quark';
+            if (/https?:\/\/(?:www\.)?(?:aliyundrive|alipan)\.com\/s\/[a-z0-9]+/i.test(raw)) return 'aliyun';
+            if (/https?:\/\/(?:pan|yun)\.baidu\.com\/(?:s\/|share\/)/i.test(raw)) return 'baidu';
+            if (/https?:\/\/(?:pan|xlpan)\.xunlei\.com\/s\/[a-z0-9]+/i.test(raw)) return 'xunlei';
+            if (/https?:\/\/drive\.uc\.cn\/s\/[a-z0-9]+/i.test(raw)) return 'uc';
+            if (/https?:\/\/(?:www\.)?(?:123pan|123684|123865|123912)\.(?:com|cn)\/s\/[a-z0-9]+/i.test(raw)) return '123pan';
+            if (/https?:\/\/cloud\.189\.cn\/(?:t\/|web\/share)/i.test(raw)) return 'tianyi';
+            if (/https?:\/\/(?:www\.)?(?:mypikpak|pikpak)\.com\/s\/[a-z0-9]+/i.test(raw)) return 'pikpak';
+            if (/https?:\/\/(?:www\.)?lanzou[a-z0-9]*\.[a-z.]+\/[a-z0-9]+/i.test(raw)) return 'lanzou';
+            if (/https?:\/\/drive\.google\.com\//i.test(raw)) return 'google_drive';
+            if (/https?:\/\/(?:1drv\.ms|onedrive\.live\.com)\//i.test(raw)) return 'onedrive';
+            if (/https?:\/\/mega\.nz\//i.test(raw)) return 'mega';
+            if (lowered.startsWith('http://') || lowered.startsWith('https://')) return 'link';
+            return 'unknown';
+        }
+
         function getEffectiveResourceLinkType(item) {
             const rawType = String(item?.link_type || '').trim().toLowerCase();
-            if (rawType === 'magnet' || rawType === '115share') return rawType;
-            const linkUrl = String(item?.link_url || '').trim().toLowerCase();
-            if (linkUrl.startsWith('magnet:?')) return 'magnet';
-            if (linkUrl.includes('115cdn.com/s/') || linkUrl.includes('115.com/s/') || linkUrl.includes('anxia.com/s/')) return '115share';
+            const detected = detectResourceLinkTypeByUrl(item?.link_url || '');
+            if (detected !== 'unknown') return detected;
             return rawType || 'unknown';
         }
 
@@ -1378,6 +1480,12 @@
         function createTransientResourceItem(rawItem) {
             const item = rawItem && typeof rawItem === 'object' ? rawItem : {};
             const extra = item?.extra && typeof item.extra === 'object' ? item.extra : {};
+            const resolvedReceiveCode = normalizeReceiveCodeInput(
+                item?.receive_code
+                || extra?.receive_code
+                || extractReceiveCodeFromShareUrl(item?.link_url || '')
+                || extractReceiveCodeFromText(item?.raw_text || '')
+            );
             return {
                 id: resourceTempIdSeed--,
                 source_type: String(item?.source_type || 'manual').trim() || 'manual',
@@ -1392,12 +1500,14 @@
                 quality: String(item?.quality || '').trim(),
                 year: String(item?.year || '').trim(),
                 published_at: String(item?.published_at || '').trim(),
+                receive_code: resolvedReceiveCode,
                 created_at: new Date().toISOString(),
                 status: 'new',
                 extra: {
                     cover_url: String(extra?.cover_url || '').trim(),
                     source_post_id: String(extra?.source_post_id || '').trim(),
-                    source_url: String(extra?.source_url || '').trim()
+                    source_url: String(extra?.source_url || '').trim(),
+                    receive_code: resolvedReceiveCode
                 },
                 cover_url: String(item?.cover_url || extra?.cover_url || '').trim(),
                 source_post_id: String(item?.source_post_id || extra?.source_post_id || '').trim(),
@@ -1419,10 +1529,12 @@
                 quality: String(resource?.quality || '').trim(),
                 year: String(resource?.year || '').trim(),
                 published_at: String(resource?.published_at || '').trim(),
+                receive_code: normalizeReceiveCodeInput(resource?.receive_code || resource?.extra?.receive_code || ''),
                 extra: {
                     cover_url: String(resource?.cover_url || resource?.extra?.cover_url || '').trim(),
                     source_post_id: String(resource?.source_post_id || resource?.extra?.source_post_id || '').trim(),
-                    source_url: String(resource?.extra?.source_url || '').trim()
+                    source_url: String(resource?.extra?.source_url || '').trim(),
+                    receive_code: normalizeReceiveCodeInput(resource?.receive_code || resource?.extra?.receive_code || '')
                 }
             };
         }
@@ -1952,9 +2064,11 @@
             const secondaryBadge = isSearchSection
                 ? `${escapeHtml(String(section?.pages_scanned || 0))} 页搜索结果`
                 : `首页缓存 ${escapeHtml(String(section.item_count || (section.items || []).length || 0))} 条`;
+            const primaryType = getResourceLinkTypeLabel(section?.primary_link_type || section?.channel_profile?.primary_link_type || 'unknown');
+            const latestPublishedAt = String(section?.latest_published_at || section?.channel_profile?.latest_published_at || '').trim();
             const subtleText = isSearchSection
                 ? '当前按频道源分组展示命中结果，可继续获取更早匹配内容。'
-                : `最近同步：${escapeHtml(formatResourceSyncTime(section.last_sync_at))}`;
+                : `最近资源：${escapeHtml(latestPublishedAt ? formatTimeText(latestPublishedAt) : '--')} / 最近同步：${escapeHtml(formatResourceSyncTime(section.last_sync_at))}`;
             const footerText = isSearchSection
                 ? `当前已显示 ${escapeHtml(String(shownCount))} 条命中结果。`
                 : `当前已展开 ${escapeHtml(String(shownCount))} 条；首页缓存 ${escapeHtml(String(section.item_count || 0))} 条最新记录。`;
@@ -1971,6 +2085,7 @@
                                 <span class="text-[11px] px-3 py-1 rounded-full bg-slate-800 text-slate-300 border border-slate-700">@${escapeHtml(section.channel_id || '--')}</span>
                                 <span class="text-[11px] px-3 py-1 rounded-full bg-sky-500/10 text-sky-300 border border-sky-500/20">${primaryBadge}</span>
                                 <span class="text-[11px] px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">${secondaryBadge}</span>
+                                ${!isSearchSection ? `<span class="text-[11px] px-3 py-1 rounded-full bg-violet-500/10 text-violet-300 border border-violet-500/20">${escapeHtml(primaryType)}</span>` : ''}
                                 ${!isSearchSection && section.last_error ? '<span class="text-[11px] px-3 py-1 rounded-full bg-rose-500/10 text-rose-300 border border-rose-500/20">同步异常</span>' : ''}
                             </div>
                             <div class="subtle mt-2">${subtleText}</div>
@@ -2005,8 +2120,7 @@
 
         function renderResourceBoard() {
             const container = document.getElementById('resource-board');
-            const hint = document.getElementById('resource-board-hint');
-            if (!container || !hint) return;
+            if (!container) return;
 
             const activeKeyword = String(resourceState.search || '').trim();
             const isSearchMode = !!activeKeyword;
@@ -2016,26 +2130,29 @@
                 const filteredCount = Number(resourceState?.stats?.filtered_item_count ?? 0);
                 const searchedSources = Number(resourceState?.search_meta?.searched_sources || 0);
                 const searchErrors = Array.isArray(resourceState?.search_meta?.errors) ? resourceState.search_meta.errors : [];
-                hint.innerText = `频道内搜索：关键词「${activeKeyword}」 / 命中 ${filteredCount} 条${searchedSources ? ` / 已检索 ${searchedSources} 个订阅源` : ''}${searchErrors.length ? ` / ${searchErrors.length} 个频道暂未返回` : ''}`;
+                resourceBoardHintText = `频道内搜索：关键词「${activeKeyword}」 / 命中 ${filteredCount} 条${searchedSources ? ` / 已检索 ${searchedSources} 个订阅源` : ''}${searchErrors.length ? ` / ${searchErrors.length} 个频道暂未返回` : ''}`;
                 if (!searchSections.length) {
-                    container.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">没有在已启用订阅频道里找到匹配内容。可以先同步频道，或直接粘贴 magnet / 115 分享链接进入导入。</div>';
+                    container.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">没有在已启用订阅频道里找到匹配内容。可以先同步频道，或直接粘贴 magnet / 常见网盘分享链接进入识别。</div>';
+                    renderResourceBoardHint();
                     return;
                 }
                 const errorNote = searchErrors.length
                     ? `<div class="rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-100">${escapeHtml(`以下频道本次未返回结果：${searchErrors.map(item => item?.name || item?.channel_id || '未命名频道').join('、')}`)}</div>`
                     : '';
                 container.innerHTML = `${errorNote}${errorNote ? '<div class="h-4"></div>' : ''}${searchSections.map(section => buildResourceSectionCard(section, { searchKeyword: activeKeyword })).join('')}`;
+                renderResourceBoardHint();
                 return;
             }
 
+            resourceBoardHintText = '';
             if (!sections.length) {
-                hint.innerText = '默认按订阅频道分栏展示最近 10 条资源；底部可继续获取更早内容。';
                 container.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">还没有可展示的频道资源。先在“参数配置”里添加频道，并执行一次同步即可。</div>';
+                renderResourceBoardHint();
                 return;
             }
 
-            hint.innerText = '默认按订阅频道分栏展示最近 10 条资源；底部可继续获取更早内容。';
             container.innerHTML = sections.map(section => buildResourceSectionCard(section, { searchKeyword: '' })).join('');
+            renderResourceBoardHint();
         }
 
         function applyResourceState(data) {
@@ -2056,6 +2173,9 @@
                 items: nextItems,
                 jobs: nextJobs,
                 channel_sections: hydrateResourceSections(Array.isArray(data.channel_sections) ? data.channel_sections : (resourceState.channel_sections || [])),
+                channel_profiles: data.channel_profiles && typeof data.channel_profiles === 'object'
+                    ? data.channel_profiles
+                    : (resourceState.channel_profiles || {}),
                 search_sections: hydrateResourceSections(Array.isArray(data.search_sections) ? data.search_sections : (resourceState.search_sections || [])),
                 last_syncs: data.last_syncs || resourceState.last_syncs || {},
                 monitor_tasks: Array.isArray(data.monitor_tasks) ? data.monitor_tasks : (resourceState.monitor_tasks || monitorState.tasks || []),
@@ -2063,6 +2183,7 @@
                 search: typeof data.search === 'string' ? data.search : (resourceState.search || ''),
                 search_meta: data.search_meta || resourceState.search_meta || {}
             };
+            normalizeResourceSourceBulkSelections();
             syncResourceChannelPagingState();
             if (selectedResourceId) {
                 const refreshedSelectedItem = findResourceItem(selectedResourceId);
@@ -2116,7 +2237,6 @@
 
         function syncResourceActionButtons() {
             const input = document.getElementById('resource-search-input');
-            const hint = document.getElementById('resource-board-hint');
             const searchBtn = document.getElementById('resource-search-btn');
             const syncBtn = document.getElementById('resource-sync-btn');
             const keyword = String(input?.value || resourceState.search || '').trim();
@@ -2141,18 +2261,7 @@
                 syncBtn.setAttribute('aria-busy', resourceSyncBusy ? 'true' : 'false');
                 syncBtn.textContent = resourceSyncBusy ? '同步中...' : '同步频道';
             }
-
-            if (hint) {
-                const busy = resourceSearchBusy || resourceSyncBusy;
-                hint.classList.toggle('is-loading', busy);
-                if (resourceSearchBusy) {
-                    hint.innerText = directImport
-                        ? '正在识别导入链接，请稍候。'
-                        : `正在频道内搜索「${keyword || '...'}」，请稍候。`;
-                } else if (resourceSyncBusy) {
-                    hint.innerText = '正在刷新订阅频道资源，请稍候。';
-                }
-            }
+            renderResourceBoardHint();
         }
 
         function resetResourceSearchResults() {
@@ -2194,8 +2303,14 @@
         function isDirectImportInput(value) {
             const raw = String(value || '').trim();
             if (!raw) return false;
-            return /magnet:\?xt=urn:btih:[a-z0-9]{32,40}/i.test(raw)
-                || /https?:\/\/(?:115cdn|115|anxia)\.com\/s\/[A-Za-z0-9]+/i.test(raw);
+            if (/magnet:\?xt=urn:btih:[a-z0-9]{32,40}/i.test(raw)) return true;
+            if (/ed2k:\/\/[^\s<>'"]+/i.test(raw)) return true;
+            if (/(?:^|[\s(（【\[])(?:https?:\/\/)?(?:115cdn|115|anxia)\.com\/s\/[a-z0-9]+(?:\?[^\s<>'"]*)?/i.test(raw)) return true;
+            const links = raw.match(/https?:\/\/[^\s<>'"]+/gi) || [];
+            return links.some(link => {
+                const linkType = detectResourceLinkTypeByUrl(link);
+                return linkType !== 'unknown' && linkType !== 'link';
+            });
         }
 
         async function parseResourceInputFromSearch(rawText) {
@@ -2211,14 +2326,13 @@
                 throw new Error(data.msg || '链接解析失败');
             }
             const items = Array.isArray(data.items) ? data.items : [];
-            const preferred = items.find(item => canOpenResourceImport(item)) || items[0];
-            if (preferred) {
-                openResourceItemModal(createTransientResourceItem(preferred), 'import');
-            }
+            const preferred = items.find(item => canOpenResourceImport(item));
+            if (!preferred) throw new Error('未在文本中识别到可导入的 magnet 或 115 分享链接');
+            openResourceItemModal(createTransientResourceItem(preferred), 'import');
             return {
                 inserted: 0,
                 updated: 0,
-                item: preferred || null
+                item: preferred
             };
         }
 
@@ -2229,12 +2343,17 @@
                 renderResourceBoard();
                 return null;
             }
+            const directImportMode = isDirectImportInput(keyword);
             const startedAt = performance.now();
             resourceSearchBusy = true;
-            if (!isDirectImportInput(keyword)) showResourceTgHealthLoading('search', keyword);
+            let latencyProbePromise = null;
+            if (!directImportMode) {
+                showResourceTgHealthLoading('search');
+                latencyProbePromise = probeResourceTgLatency();
+            }
             syncResourceActionButtons();
             try {
-                if (isDirectImportInput(keyword)) {
+                if (directImportMode) {
                     if (String(resourceState.search || '').trim()) resetResourceSearchResults();
                     const result = await parseResourceInputFromSearch(keyword);
                     const suffix = result.item ? '，已直接打开导入面板。' : '。';
@@ -2243,10 +2362,14 @@
                 }
                 const data = await refreshResourceState({ allowSearch: true, keywordOverride: keyword });
                 if (!data) throw new Error('搜索请求失败，请稍后重试');
-                applyResourceTgHealthFromSearchResult(data, keyword, getActionElapsedMs(startedAt));
+                const latencyMs = await resolveResourceTgLatencyMs(latencyProbePromise);
+                applyResourceTgHealthFromSearchResult(data, getActionElapsedMs(startedAt), latencyMs);
                 return data;
             } catch (e) {
-                if (!isDirectImportInput(keyword)) applyResourceTgHealthFailure('search', e, getActionElapsedMs(startedAt));
+                if (!directImportMode) {
+                    const latencyMs = await resolveResourceTgLatencyMs(latencyProbePromise);
+                    applyResourceTgHealthFailure('search', getActionElapsedMs(startedAt), latencyMs);
+                }
                 alert(`❌ ${e.message || '搜索失败'}`);
                 return null;
             } finally {
@@ -2260,7 +2383,9 @@
             if (resourceSyncBusy || resourceSearchBusy) return null;
             const startedAt = performance.now();
             resourceSyncBusy = true;
+            let latencyProbePromise = null;
             if (!silent) showResourceTgHealthLoading('sync');
+            if (!silent) latencyProbePromise = probeResourceTgLatency();
             syncResourceActionButtons();
             try {
                 const res = await fetch('/resource/channels/sync', {
@@ -2271,18 +2396,24 @@
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.msg || '同步失败');
                 await refreshResourceState();
-                if (!silent) applyResourceTgHealthFromSyncResult(data, getActionElapsedMs(startedAt));
+                if (!silent) {
+                    const latencyMs = await resolveResourceTgLatencyMs(latencyProbePromise);
+                    applyResourceTgHealthFromSyncResult(data, getActionElapsedMs(startedAt), latencyMs);
+                }
                 if (!silent) {
                     if (Array.isArray(data.errors) && data.errors.length) {
                         const detail = data.errors.map(item => `${item.name || item.channel_id}: ${item.message}`).join('\n');
-                        alert(`⚠️ 已同步 ${data.synced || 0} 个频道，新增 ${data.items || 0} 条资源。\n\n以下频道同步失败：\n${detail}`);
+                        alert(`⚠️ 已同步 ${data.synced || 0} 个频道，新增 ${data.items || 0} 条资源${data.cache_pruned ? `，清理 ${data.cache_pruned} 条旧缓存` : ''}。\n\n以下频道同步失败：\n${detail}`);
                     } else {
-                        alert(`✅ 同步完成：更新 ${data.synced || 0} 个频道，新增 ${data.items || 0} 条资源${data.skipped ? `，跳过 ${data.skipped} 个缓存未过期频道` : ''}`);
+                        alert(`✅ 同步完成：更新 ${data.synced || 0} 个频道，新增 ${data.items || 0} 条资源${data.skipped ? `，跳过 ${data.skipped} 个缓存未过期频道` : ''}${data.cache_pruned ? `，清理 ${data.cache_pruned} 条旧缓存` : ''}`);
                     }
                 }
                 return data;
             } catch (e) {
-                if (!silent) applyResourceTgHealthFailure('sync', e, getActionElapsedMs(startedAt));
+                if (!silent) {
+                    const latencyMs = await resolveResourceTgLatencyMs(latencyProbePromise);
+                    applyResourceTgHealthFailure('sync', getActionElapsedMs(startedAt), latencyMs);
+                }
                 if (!silent) alert(`❌ ${e.message}`);
                 return null;
             } finally {
@@ -2338,6 +2469,570 @@
             };
         }
 
+        function normalizeResourceSourceFilterValue(value) {
+            const normalized = String(value || 'all').trim().toLowerCase();
+            return normalized || 'all';
+        }
+
+        function sanitizeResourceLinkTypeList(values) {
+            return uniquePreserveOrder((Array.isArray(values) ? values : [])
+                .map(item => String(item || '').trim().toLowerCase())
+                .filter(Boolean));
+        }
+
+        function getResourceSourcePrimaryLinkType(profile) {
+            const primary = String(profile?.primary_link_type || '').trim().toLowerCase();
+            if (primary && primary !== 'unknown') return primary;
+            const dominant = sanitizeResourceLinkTypeList(profile?.dominant_link_types);
+            const fallback = dominant.find(type => type !== 'unknown');
+            return fallback || 'unknown';
+        }
+
+        function getResourceSourceTypes(profile) {
+            const counts = profile?.link_type_counts && typeof profile.link_type_counts === 'object'
+                ? profile.link_type_counts
+                : {};
+            const sorted = Object.entries(counts)
+                .map(([type, count]) => [String(type || '').trim().toLowerCase(), Number(count || 0)])
+                .filter(([type, count]) => type && Number.isFinite(count) && count > 0)
+                .sort((a, b) => {
+                    const countDiff = Number(b[1]) - Number(a[1]);
+                    if (countDiff !== 0) return countDiff;
+                    return String(getResourceLinkTypeLabel(a[0])).localeCompare(String(getResourceLinkTypeLabel(b[0])));
+                })
+                .map(([type]) => type);
+            const nonUnknown = sorted.filter(type => type !== 'unknown');
+            if (nonUnknown.length) return nonUnknown;
+            if (sorted.length) return sorted;
+
+            const dominant = sanitizeResourceLinkTypeList(profile?.dominant_link_types).filter(type => type !== 'unknown');
+            if (dominant.length) return dominant;
+            const primary = getResourceSourcePrimaryLinkType(profile);
+            return primary && primary !== 'unknown' ? [primary] : [];
+        }
+
+        function getResourceSourceSectionIndex() {
+            const index = {};
+            (Array.isArray(resourceState.channel_sections) ? resourceState.channel_sections : []).forEach(section => {
+                const channelId = normalizeTelegramChannelIdInput(section?.channel_id || '');
+                if (!channelId) return;
+                index[channelId] = section;
+            });
+            return index;
+        }
+
+        function getResourceSourceProfileFromIndex(source, sectionIndex = {}) {
+            const channelId = getResourceSourceChannelId(source);
+            if (!channelId) return {};
+            const profileFromState = resourceState?.channel_profiles && typeof resourceState.channel_profiles === 'object'
+                ? resourceState.channel_profiles[channelId]
+                : null;
+            if (profileFromState && typeof profileFromState === 'object') return profileFromState;
+            const section = sectionIndex[channelId];
+            if (section?.channel_profile && typeof section.channel_profile === 'object') return section.channel_profile;
+            return {};
+        }
+
+        function parseResourceTimeMs(value) {
+            if (!value) return 0;
+            const d = new Date(value);
+            const ms = d.getTime();
+            return Number.isFinite(ms) ? ms : 0;
+        }
+
+        function formatResourceAgeText(timeMs) {
+            if (!timeMs) return '未知';
+            const diffMs = Math.max(0, Date.now() - timeMs);
+            const diffMinutes = Math.floor(diffMs / 60000);
+            if (diffMinutes < 60) return `${Math.max(1, diffMinutes)} 分钟前`;
+            const diffHours = Math.floor(diffMinutes / 60);
+            if (diffHours < 24) return `${diffHours} 小时前`;
+            const diffDays = Math.floor(diffHours / 24);
+            if (diffDays < 30) return `${diffDays} 天前`;
+            const diffMonths = Math.floor(diffDays / 30);
+            return `${diffMonths} 个月前`;
+        }
+
+        function getResourceSourceActivityMeta(profile) {
+            const latestPublishedAt = String(profile?.latest_published_at || '').trim();
+            const publishedMs = parseResourceTimeMs(latestPublishedAt);
+            if (!publishedMs) {
+                return {
+                    tone: 'idle',
+                    label: '待同步',
+                    detail: '最近资源发布时间：--',
+                };
+            }
+
+            const diffDays = (Date.now() - publishedMs) / 86400000;
+            if (diffDays <= 3) {
+                return {
+                    tone: 'active',
+                    label: '活跃',
+                    detail: `最近资源发布时间：${formatTimeText(latestPublishedAt)}（${formatResourceAgeText(publishedMs)}）`,
+                };
+            }
+            if (diffDays <= 14) {
+                return {
+                    tone: 'warm',
+                    label: '近期',
+                    detail: `最近资源发布时间：${formatTimeText(latestPublishedAt)}（${formatResourceAgeText(publishedMs)}）`,
+                };
+            }
+            if (diffDays <= 45) {
+                return {
+                    tone: 'cool',
+                    label: '稍冷',
+                    detail: `最近资源发布时间：${formatTimeText(latestPublishedAt)}（${formatResourceAgeText(publishedMs)}）`,
+                };
+            }
+            return {
+                tone: 'cold',
+                label: '不活跃',
+                detail: `最近资源发布时间：${formatTimeText(latestPublishedAt)}（${formatResourceAgeText(publishedMs)}）`,
+            };
+        }
+
+        function getResourceSourceActivityBucket(profile) {
+            const latestPublishedAt = String(profile?.latest_published_at || '').trim();
+            const publishedMs = parseResourceTimeMs(latestPublishedAt);
+            if (!publishedMs) return 'unknown';
+            const diffDays = (Date.now() - publishedMs) / 86400000;
+            if (diffDays <= 7) return 'week';
+            if (diffDays <= 30) return 'month';
+            if (diffDays <= 180) return 'half_year';
+            return 'older';
+        }
+
+        function getResourceSourceActivityBucketLabel(bucket) {
+            const normalized = String(bucket || '').trim().toLowerCase();
+            if (normalized === 'week') return '一周内';
+            if (normalized === 'month') return '一月内';
+            if (normalized === 'half_year') return '半年内';
+            if (normalized === 'older') return '半年以上';
+            if (normalized === 'unknown') return '待检测';
+            return '全部';
+        }
+
+        function getResourceSourceViewList(sources = [], sectionIndex = {}) {
+            return (Array.isArray(sources) ? sources : []).map((source, index) => {
+                const channelId = getResourceSourceChannelId(source);
+                const profile = getResourceSourceProfileFromIndex(source, sectionIndex);
+                const activity = getResourceSourceActivityMeta(profile);
+                const primaryType = getResourceSourcePrimaryLinkType(profile);
+                const activityBucket = getResourceSourceActivityBucket(profile);
+                const dominantTypes = sanitizeResourceLinkTypeList(profile?.dominant_link_types);
+                const sourceTypes = getResourceSourceTypes(profile);
+                return {
+                    source,
+                    index,
+                    channelId,
+                    channelUrl: String(source?.url || (channelId ? `https://t.me/s/${channelId}` : '')).trim(),
+                    profile,
+                    activity,
+                    activityBucket,
+                    primaryType,
+                    dominantTypes,
+                    sourceTypes,
+                };
+            });
+        }
+
+        function buildResourceSourceFilterOptions(sources, sectionIndex = {}) {
+            const list = Array.isArray(sources) ? sources : [];
+            const counters = {};
+            list.forEach(source => {
+                const profile = getResourceSourceProfileFromIndex(source, sectionIndex);
+                const types = getResourceSourceTypes(profile);
+                types.forEach(type => {
+                    if (!type || type === 'unknown') return;
+                    counters[type] = (Number(counters[type] || 0) + 1);
+                });
+            });
+
+            const options = [{ value: 'all', label: '全部', count: list.length }];
+            Object.entries(counters)
+                .sort((a, b) => {
+                    const countDiff = Number(b[1] || 0) - Number(a[1] || 0);
+                    if (countDiff !== 0) return countDiff;
+                    return String(getResourceLinkTypeLabel(a[0])).localeCompare(String(getResourceLinkTypeLabel(b[0])));
+                })
+                .forEach(([type, count]) => {
+                    options.push({
+                        value: String(type),
+                        label: getResourceLinkTypeLabel(type),
+                        count: Number(count || 0),
+                    });
+                });
+            return options;
+        }
+
+        function isResourceSourceVisibleByFilter(source, sectionIndex = {}, typeFilter = resourceSourceFilter) {
+            const filter = normalizeResourceSourceFilterValue(typeFilter);
+            if (filter === 'all') return true;
+            const profile = getResourceSourceProfileFromIndex(source, sectionIndex);
+            const types = getResourceSourceTypes(profile);
+            return types.includes(filter);
+        }
+
+        function isResourceSourceVisibleByActivity(source, sectionIndex = {}, activityFilter = resourceSourceActivityFilter) {
+            const filter = normalizeResourceSourceFilterValue(activityFilter);
+            if (filter === 'all') return true;
+            const profile = getResourceSourceProfileFromIndex(source, sectionIndex);
+            return getResourceSourceActivityBucket(profile) === filter;
+        }
+
+        function buildResourceSourceActivityFilterOptions(sources, sectionIndex = {}) {
+            const counters = { week: 0, month: 0, half_year: 0, older: 0, unknown: 0 };
+            (Array.isArray(sources) ? sources : []).forEach(source => {
+                const profile = getResourceSourceProfileFromIndex(source, sectionIndex);
+                const bucket = getResourceSourceActivityBucket(profile);
+                counters[bucket] = Number(counters[bucket] || 0) + 1;
+            });
+            return [
+                { value: 'all', label: '全部', count: (Array.isArray(sources) ? sources.length : 0) },
+                { value: 'week', label: '一周内', count: counters.week },
+                { value: 'month', label: '一月内', count: counters.month },
+                { value: 'half_year', label: '半年内', count: counters.half_year },
+                { value: 'older', label: '半年以上', count: counters.older },
+                { value: 'unknown', label: '待检测', count: counters.unknown },
+            ];
+        }
+
+        function normalizeResourceSourceBulkSelections() {
+            const validChannelIds = new Set((resourceState.sources || []).map(source => getResourceSourceChannelId(source)).filter(Boolean));
+            const next = {};
+            Object.entries(resourceSourceBulkSelected || {}).forEach(([channelId, checked]) => {
+                if (!validChannelIds.has(channelId) || !checked) return;
+                next[channelId] = true;
+            });
+            resourceSourceBulkSelected = next;
+        }
+
+        function openResourceSourceManagerModal() {
+            switchTab('settings');
+            resourceSourceManagerOpen = true;
+            normalizeResourceSourceBulkSelections();
+            showLockedModal('resource-source-manager-modal');
+            renderResourceSourceManagerModal();
+        }
+
+        function closeResourceSourceManagerModal() {
+            resourceSourceManagerOpen = false;
+            hideLockedModal('resource-source-manager-modal');
+        }
+
+        function setResourceSourceBulkSelected(channelId, selected) {
+            const normalized = normalizeTelegramChannelIdInput(channelId);
+            if (!normalized) return;
+            resourceSourceBulkSelected = {
+                ...resourceSourceBulkSelected,
+                [normalized]: !!selected,
+            };
+            if (!selected) delete resourceSourceBulkSelected[normalized];
+        }
+
+        function selectAllFilteredResourceSources() {
+            toggleSelectAllFilteredResourceSources(true);
+        }
+
+        function unselectFilteredResourceSources() {
+            toggleSelectAllFilteredResourceSources(false);
+        }
+
+        function toggleSelectAllFilteredResourceSources(checked) {
+            const filtered = getFilteredResourceSourceViewList();
+            const next = { ...resourceSourceBulkSelected };
+            filtered.forEach(view => {
+                if (!view.channelId) return;
+                if (checked) next[view.channelId] = true;
+                else delete next[view.channelId];
+            });
+            resourceSourceBulkSelected = next;
+            renderResourceSourceManagerModal();
+        }
+
+        function clearResourceSourceSelections() {
+            resourceSourceBulkSelected = {};
+            renderResourceSourceManagerModal();
+        }
+
+        function getFilteredResourceSourceViewList() {
+            const sources = resourceState.sources || [];
+            const sectionIndex = getResourceSourceSectionIndex();
+            const list = getResourceSourceViewList(sources, sectionIndex);
+            return list.filter(view => {
+                if (!isResourceSourceVisibleByFilter(view.source, sectionIndex, resourceSourceFilter)) return false;
+                if (!isResourceSourceVisibleByActivity(view.source, sectionIndex, resourceSourceActivityFilter)) return false;
+                return true;
+            });
+        }
+
+        function getSelectedResourceSourceIdsInFiltered() {
+            const filteredSet = new Set(
+                getFilteredResourceSourceViewList()
+                    .map(view => view.channelId)
+                    .filter(Boolean)
+            );
+            return Object.keys(resourceSourceBulkSelected || {}).filter(channelId => {
+                return !!resourceSourceBulkSelected[channelId] && filteredSet.has(channelId);
+            });
+        }
+
+        async function bulkEnableResourceSources(enabled) {
+            const selectedIds = getSelectedResourceSourceIdsInFiltered();
+            if (!selectedIds.length) {
+                alert('请先在当前筛选结果中勾选要操作的频道');
+                return;
+            }
+            const selectedSet = new Set(selectedIds);
+            const nextSources = (resourceState.sources || []).map(source => {
+                const channelId = getResourceSourceChannelId(source);
+                if (!selectedSet.has(channelId)) return source;
+                return { ...source, enabled: !!enabled };
+            });
+            try {
+                await persistResourceSources(nextSources);
+                renderResourceSourceManagerModal();
+                alert(`✅ 已${enabled ? '启用' : '停用'} ${selectedIds.length} 个频道`);
+            } catch (e) {
+                alert(`❌ ${e.message}`);
+            }
+        }
+
+        async function bulkDeleteResourceSources() {
+            const selectedIds = getSelectedResourceSourceIdsInFiltered();
+            if (!selectedIds.length) {
+                alert('请先在当前筛选结果中勾选要删除的频道');
+                return;
+            }
+            const ok = confirm(`将删除 ${selectedIds.length} 个频道，确定继续吗？`);
+            if (!ok) return;
+            const selectedSet = new Set(selectedIds);
+            const nextSources = (resourceState.sources || []).filter(source => !selectedSet.has(getResourceSourceChannelId(source)));
+            try {
+                await persistResourceSources(nextSources);
+                const nextSelected = { ...resourceSourceBulkSelected };
+                selectedIds.forEach(channelId => {
+                    delete nextSelected[channelId];
+                });
+                resourceSourceBulkSelected = nextSelected;
+                renderResourceSourceManagerModal();
+                alert(`✅ 已删除 ${selectedIds.length} 个频道`);
+            } catch (e) {
+                alert(`❌ ${e.message}`);
+            }
+        }
+
+        function renderResourceSourceManagerModal() {
+            const modal = document.getElementById('resource-source-manager-modal');
+            if (!modal || !resourceSourceManagerOpen) return;
+
+            const typeFiltersEl = document.getElementById('resource-source-manager-type-filters');
+            const activityFiltersEl = document.getElementById('resource-source-manager-activity-filters');
+            const hintEl = document.getElementById('resource-source-manager-filter-hint');
+            const listEl = document.getElementById('resource-source-manager-list');
+            const selectedCountEl = document.getElementById('resource-source-manager-selected-count');
+            const resultEl = document.getElementById('resource-source-manager-test-result');
+            const testBtn = document.getElementById('resource-source-manager-test-btn');
+            const selectAllEl = document.getElementById('resource-source-manager-select-all');
+            if (!typeFiltersEl || !activityFiltersEl || !hintEl || !listEl || !selectedCountEl || !resultEl || !testBtn || !selectAllEl) return;
+
+            const sources = resourceState.sources || [];
+            const sectionIndex = getResourceSourceSectionIndex();
+            const sourceViews = getResourceSourceViewList(sources, sectionIndex);
+            const typeOptions = buildResourceSourceFilterOptions(sources, sectionIndex);
+            const activityOptions = buildResourceSourceActivityFilterOptions(sources, sectionIndex);
+
+            if (!typeOptions.some(option => option.value === normalizeResourceSourceFilterValue(resourceSourceFilter))) {
+                resourceSourceFilter = 'all';
+            }
+            if (!activityOptions.some(option => option.value === normalizeResourceSourceFilterValue(resourceSourceActivityFilter))) {
+                resourceSourceActivityFilter = 'all';
+            }
+
+            const filtered = sourceViews.filter(view => {
+                if (!isResourceSourceVisibleByFilter(view.source, sectionIndex, resourceSourceFilter)) return false;
+                if (!isResourceSourceVisibleByActivity(view.source, sectionIndex, resourceSourceActivityFilter)) return false;
+                return true;
+            });
+
+            typeFiltersEl.innerHTML = typeOptions.map(option => `
+                <button
+                    type="button"
+                    data-resource-source-manager-filter="type"
+                    data-filter-value="${escapeHtml(option.value)}"
+                    class="resource-source-manager-filter-tab ${normalizeResourceSourceFilterValue(resourceSourceFilter) === option.value ? 'resource-source-manager-filter-tab-active' : ''}"
+                >${escapeHtml(option.label)} (${escapeHtml(String(option.count || 0))})</button>
+            `).join('');
+
+            activityFiltersEl.innerHTML = activityOptions.map(option => `
+                <button
+                    type="button"
+                    data-resource-source-manager-filter="activity"
+                    data-filter-value="${escapeHtml(option.value)}"
+                    class="resource-source-manager-filter-tab ${normalizeResourceSourceFilterValue(resourceSourceActivityFilter) === option.value ? 'resource-source-manager-filter-tab-active' : ''}"
+                >${escapeHtml(option.label)} (${escapeHtml(String(option.count || 0))})</button>
+            `).join('');
+
+            const selectedCount = Object.keys(resourceSourceBulkSelected || {}).filter(channelId => resourceSourceBulkSelected[channelId]).length;
+            const selectedInFiltered = filtered.filter(view => !!resourceSourceBulkSelected[view.channelId]).length;
+            selectedCountEl.textContent = String(selectedInFiltered);
+            hintEl.textContent = selectedCount > selectedInFiltered
+                ? `当前筛选结果 ${filtered.length} 个频道，已选中 ${selectedInFiltered} 个（全局已选 ${selectedCount} 个）。`
+                : `当前筛选结果 ${filtered.length} 个频道，已选中 ${selectedInFiltered} 个。`;
+
+            selectAllEl.checked = filtered.length > 0 && selectedInFiltered === filtered.length;
+            selectAllEl.indeterminate = selectedInFiltered > 0 && selectedInFiltered < filtered.length;
+            selectAllEl.disabled = filtered.length <= 0;
+
+            if (resourceSourceTestBusy) {
+                const total = Number(resourceSourceTestResult.total || sources.length || 0);
+                const done = Number(resourceSourceTestResult.done || 0);
+                const success = Number(resourceSourceTestResult.success || 0);
+                const failed = Number(resourceSourceTestResult.failed || 0);
+                const threads = Math.max(1, Number(resourceSourceTestResult.threads || 1));
+                const lastName = String(resourceSourceTestResult.last_name || '').trim();
+                resultEl.textContent = `测试中：${done}/${total}，成功 ${success}，失败 ${failed}，线程 ${threads}${lastName ? `，当前 ${lastName}` : ''}`;
+            } else if (Number(resourceSourceTestResult.total || 0) > 0) {
+                const threads = Math.max(1, Number(resourceSourceTestResult.threads || 1));
+                const base = `测试完成：共 ${resourceSourceTestResult.total} 个频道，成功 ${resourceSourceTestResult.success || 0}，失败 ${resourceSourceTestResult.failed || 0}，线程 ${threads}。`;
+                const firstError = String(resourceSourceTestResult.error || '').trim();
+                resultEl.textContent = firstError ? `${base} 失败示例：${firstError}` : base;
+            } else if (resourceSourceTestResult.error) {
+                resultEl.textContent = `测试失败：${resourceSourceTestResult.error}`;
+            } else {
+                const defaultThreads = getCurrentTgChannelThreads();
+                resultEl.textContent = `点击后会按当前配置并发测试频道分类（线程 ${defaultThreads}，每个频道采样 20 条）。`;
+            }
+            testBtn.disabled = resourceSourceTestBusy || sources.length <= 0;
+
+            if (!filtered.length) {
+                listEl.innerHTML = '<div class="resource-source-empty"><div class="resource-source-empty-title">当前筛选无结果</div><div class="resource-source-empty-copy">可以切换资源类型或活跃时间范围。</div></div>';
+                return;
+            }
+
+            listEl.innerHTML = filtered.map(view => {
+                const checked = !!resourceSourceBulkSelected[view.channelId];
+                const enabled = view.source.enabled !== false;
+                const latest = String(view.profile?.latest_published_at || '').trim();
+                const typeText = (Array.isArray(view.sourceTypes) ? view.sourceTypes : [])
+                    .slice(0, 3)
+                    .map(type => getResourceLinkTypeLabel(type))
+                    .join(' / ');
+                return `
+                    <div class="resource-source-manager-row">
+                        <label class="ui-checkbox">
+                            <input type="checkbox" data-resource-source-bulk-toggle="${escapeHtml(view.channelId)}" ${checked ? 'checked' : ''}>
+                            <span></span>
+                        </label>
+                        <div class="resource-source-manager-row-main">
+                            <div class="resource-source-manager-row-title">
+                                <span>${escapeHtml(view.source.name || view.channelId || '未命名频道')}</span>
+                                <span class="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">@${escapeHtml(view.channelId || '--')}</span>
+                                <span class="text-[10px] px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-200 border border-sky-500/20">${escapeHtml(getResourceLinkTypeLabel(view.primaryType))}</span>
+                                <span class="text-[10px] px-2 py-0.5 rounded-full ${enabled ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20' : 'bg-slate-700 text-slate-300 border border-slate-600'}">${enabled ? '已启用' : '已停用'}</span>
+                            </div>
+                            <div class="resource-source-manager-row-meta">类型：${escapeHtml(typeText || getResourceLinkTypeLabel(view.primaryType || 'unknown'))} · 活跃度：${escapeHtml(getResourceSourceActivityBucketLabel(view.activityBucket))} · 最近发布时间 ${escapeHtml(latest ? formatTimeText(latest) : '--')}</div>
+                        </div>
+                        <div class="resource-source-manager-row-actions">
+                            <button type="button" data-resource-source-manager-action="edit" data-source-index="${view.index}" class="resource-source-compact-btn">编辑</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function testResourceSourceClassification() {
+            const sources = resourceState.sources || [];
+            const sourceEntries = sources
+                .map(source => {
+                    const channelId = getResourceSourceChannelId(source);
+                    return {
+                        channel_id: channelId,
+                        name: String(source?.name || channelId).trim() || channelId,
+                    };
+                })
+                .filter(item => item.channel_id);
+            if (!sourceEntries.length) {
+                alert('当前没有可测试的频道');
+                return;
+            }
+
+            const threadLimit = Math.min(getCurrentTgChannelThreads(), sourceEntries.length);
+            resourceSourceTestBusy = true;
+            resourceSourceTestResult = {
+                total: sourceEntries.length,
+                done: 0,
+                success: 0,
+                failed: 0,
+                running: true,
+                last_name: '',
+                error: '',
+                threads: threadLimit,
+            };
+            renderResourceSourceManagerModal();
+            const nextProfiles = { ...(resourceState.channel_profiles || {}) };
+            try {
+                let cursor = 0;
+                const worker = async () => {
+                    while (true) {
+                        const currentIndex = cursor;
+                        cursor += 1;
+                        if (currentIndex >= sourceEntries.length) break;
+                        const item = sourceEntries[currentIndex];
+                        resourceSourceTestResult = {
+                            ...resourceSourceTestResult,
+                            last_name: item.name || item.channel_id,
+                        };
+                        renderResourceSourceManagerModal();
+                        try {
+                            const res = await fetch('/resource/channels/classify', {
+                                method: 'POST',
+                                headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify({
+                                    channel_id: item.channel_id,
+                                    sample_size: 20,
+                                }),
+                            });
+                            const data = await res.json();
+                            if (!res.ok || !data.ok) throw new Error(data.msg || '分类测试失败');
+                            const profile = data.profile && typeof data.profile === 'object' ? data.profile : {};
+                            nextProfiles[item.channel_id] = profile;
+                            resourceSourceTestResult = {
+                                ...resourceSourceTestResult,
+                                done: Number(resourceSourceTestResult.done || 0) + 1,
+                                success: Number(resourceSourceTestResult.success || 0) + 1,
+                            };
+                        } catch (e) {
+                            resourceSourceTestResult = {
+                                ...resourceSourceTestResult,
+                                done: Number(resourceSourceTestResult.done || 0) + 1,
+                                failed: Number(resourceSourceTestResult.failed || 0) + 1,
+                                error: String(resourceSourceTestResult.error || '').trim() || (e.message || '分类测试失败'),
+                            };
+                        }
+                        renderResourceSourceManagerModal();
+                    }
+                };
+
+                await Promise.all(Array.from({ length: threadLimit }, () => worker()));
+
+                resourceState = {
+                    ...resourceState,
+                    channel_profiles: nextProfiles,
+                };
+                renderResourceSources();
+                resourceSourceTestResult = {
+                    ...resourceSourceTestResult,
+                    running: false,
+                };
+            } finally {
+                resourceSourceTestBusy = false;
+                renderResourceSourceManagerModal();
+            }
+        }
+
         function syncResourceSourceSummary() {
             const sources = Array.isArray(resourceState.sources) ? resourceState.sources : [];
             const enabledCount = sources.filter(source => source.enabled !== false).length;
@@ -2373,6 +3068,7 @@
         }
 
         function openResourceSourceModal(index = null) {
+            if (resourceSourceManagerOpen) closeResourceSourceManagerModal();
             const sources = resourceState.sources || [];
             if (Number.isInteger(index) && index >= 0 && sources[index]) {
                 const source = sources[index];
@@ -2400,6 +3096,263 @@
             resourceSourceModalOpen = false;
             document.getElementById('resource-source-modal').classList.add('hidden');
             resetResourceSourceForm();
+        }
+
+        function buildResourceSourceExportPayload(sources = []) {
+            return (Array.isArray(sources) ? sources : [])
+                .map((source, index) => {
+                    const channelId = getResourceSourceChannelId(source);
+                    if (!channelId) return null;
+                    const fallbackName = `频道 ${index + 1}`;
+                    return {
+                        name: String(source?.name || channelId || fallbackName).trim() || fallbackName,
+                        id: channelId,
+                    };
+                })
+                .filter(Boolean);
+        }
+
+        function downloadResourceSourceExportFile(text) {
+            const payload = String(text || '').trim();
+            if (!payload) return false;
+            try {
+                const blob = new Blob([`${payload}\n`], { type: 'application/json;charset=utf-8' });
+                const stamp = new Date().toISOString().replace(/[:]/g, '-').replace(/\..+$/, '');
+                const link = document.createElement('a');
+                const href = URL.createObjectURL(blob);
+                link.href = href;
+                link.download = `tg-resource-sources-${stamp}.json`;
+                document.body.appendChild(link);
+                link.click();
+                link.remove();
+                window.setTimeout(() => URL.revokeObjectURL(href), 1200);
+                return true;
+            } catch (e) {
+                return false;
+            }
+        }
+
+        async function exportResourceSources() {
+            const payload = buildResourceSourceExportPayload(resourceState.sources || []);
+            if (!payload.length) {
+                alert('当前没有可导出的频道源');
+                return;
+            }
+            const text = JSON.stringify(payload, null, 2);
+            let copied = false;
+            try {
+                if (!navigator.clipboard?.writeText) throw new Error('当前浏览器不支持剪贴板接口');
+                await navigator.clipboard.writeText(text);
+                copied = true;
+            } catch (e) {
+                window.prompt('复制失败，请手动复制下面的频道源 JSON：', text);
+            }
+            const downloaded = downloadResourceSourceExportFile(text);
+            if (copied && downloaded) {
+                alert(`✅ 已导出 ${payload.length} 个频道（已复制到剪贴板，并下载 JSON 文件）`);
+                return;
+            }
+            if (copied) {
+                alert(`✅ 已导出 ${payload.length} 个频道（已复制到剪贴板）`);
+                return;
+            }
+            if (downloaded) {
+                alert(`✅ 已导出 ${payload.length} 个频道（已下载 JSON 文件）`);
+            }
+        }
+
+        function resetResourceSourceImportForm() {
+            const input = document.getElementById('resource_source_import_json');
+            const replaceEl = document.getElementById('resource_source_import_replace');
+            if (input) input.value = '';
+            if (replaceEl) replaceEl.checked = true;
+            setResourceSourceImportBusy(false);
+        }
+
+        function openResourceSourceImportModal() {
+            if (resourceSourceManagerOpen) closeResourceSourceManagerModal();
+            if (resourceSourceModalOpen) closeResourceSourceModal();
+            switchTab('settings');
+            resourceSourceImportModalOpen = true;
+            showLockedModal('resource-source-import-modal');
+            requestAnimationFrame(() => {
+                const input = document.getElementById('resource_source_import_json');
+                if (!input) return;
+                input.focus();
+                input.select?.();
+            });
+        }
+
+        function closeResourceSourceImportModal() {
+            resourceSourceImportModalOpen = false;
+            hideLockedModal('resource-source-import-modal');
+            resetResourceSourceImportForm();
+        }
+
+        function normalizeImportedResourceSourceItem(raw, index = 0) {
+            const displayIndex = index + 1;
+            if (typeof raw === 'string') {
+                const channelId = normalizeTelegramChannelIdInput(raw);
+                if (!channelId) return { source: null, reason: `第 ${displayIndex} 项缺少频道 ID` };
+                if (!isLikelyTelegramChannelId(channelId)) return { source: null, reason: `第 ${displayIndex} 项频道 ID 格式不正确：${channelId}` };
+                return {
+                    source: {
+                        name: channelId,
+                        channel_id: channelId,
+                        enabled: true,
+                    },
+                    reason: '',
+                };
+            }
+            if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+                return { source: null, reason: `第 ${displayIndex} 项不是对象` };
+            }
+
+            const channelRaw = raw.channel_id || raw.channel || raw.id || raw.url || '';
+            const channelId = normalizeTelegramChannelIdInput(channelRaw);
+            if (!channelId) return { source: null, reason: `第 ${displayIndex} 项缺少频道 ID（支持 id / channel_id / channel / url）` };
+            if (!isLikelyTelegramChannelId(channelId)) return { source: null, reason: `第 ${displayIndex} 项频道 ID 格式不正确：${channelId}` };
+
+            const normalized = {
+                name: String(raw.name || raw.title || channelId).trim() || channelId,
+                channel_id: channelId,
+                enabled: typeof raw.enabled === 'boolean' ? raw.enabled : true,
+            };
+            return { source: normalized, reason: '' };
+        }
+
+        function parseResourceSourceImportText(rawText) {
+            const text = String(rawText || '').trim();
+            if (!text) throw new Error('请先粘贴频道源 JSON');
+            let payload = null;
+            try {
+                payload = JSON.parse(text);
+            } catch (e) {
+                throw new Error(`JSON 格式错误：${e.message}`);
+            }
+            if (!Array.isArray(payload)) throw new Error('导入内容必须是 JSON 数组');
+
+            const parsed = [];
+            const seen = new Set();
+            const invalidReasons = [];
+            let duplicateCount = 0;
+
+            payload.forEach((item, index) => {
+                const normalized = normalizeImportedResourceSourceItem(item, index);
+                if (!normalized.source) {
+                    invalidReasons.push(normalized.reason || `第 ${index + 1} 项无效`);
+                    return;
+                }
+                const channelId = getResourceSourceChannelId(normalized.source);
+                if (!channelId) {
+                    invalidReasons.push(`第 ${index + 1} 项无法提取频道 ID`);
+                    return;
+                }
+                if (seen.has(channelId)) {
+                    duplicateCount += 1;
+                    return;
+                }
+                seen.add(channelId);
+                parsed.push(normalized.source);
+            });
+
+            return {
+                total: payload.length,
+                sources: parsed,
+                duplicateCount,
+                invalidReasons,
+            };
+        }
+
+        function mergeResourceSourcesByChannel(existingSources, importedSources) {
+            const merged = [...(Array.isArray(existingSources) ? existingSources : [])];
+            const channelIndexMap = new Map();
+            merged.forEach((source, index) => {
+                const channelId = getResourceSourceChannelId(source);
+                if (!channelId || channelIndexMap.has(channelId)) return;
+                channelIndexMap.set(channelId, index);
+            });
+
+            (Array.isArray(importedSources) ? importedSources : []).forEach(source => {
+                const channelId = getResourceSourceChannelId(source);
+                if (!channelId) return;
+                if (channelIndexMap.has(channelId)) {
+                    const hitIndex = channelIndexMap.get(channelId);
+                    merged[hitIndex] = {
+                        ...merged[hitIndex],
+                        ...source,
+                        channel_id: channelId,
+                    };
+                    return;
+                }
+                channelIndexMap.set(channelId, merged.length);
+                merged.push(source);
+            });
+            return merged;
+        }
+
+        function setResourceSourceImportBusy(loading = false) {
+            const btn = document.getElementById('resource-source-import-submit-btn');
+            const input = document.getElementById('resource_source_import_json');
+            const replaceEl = document.getElementById('resource_source_import_replace');
+            const busy = !!loading;
+            if (btn) {
+                btn.disabled = busy;
+                btn.classList.toggle('btn-disabled', busy);
+                btn.innerText = busy ? '导入中...' : '开始导入';
+            }
+            if (input) input.disabled = busy;
+            if (replaceEl) replaceEl.disabled = busy;
+        }
+
+        async function importResourceSources() {
+            const input = document.getElementById('resource_source_import_json');
+            const replaceEl = document.getElementById('resource_source_import_replace');
+            if (!input) return;
+
+            let parsed = null;
+            try {
+                parsed = parseResourceSourceImportText(input.value);
+            } catch (e) {
+                alert(`❌ ${e.message}`);
+                return;
+            }
+
+            if (!parsed.sources.length) {
+                const firstReasons = parsed.invalidReasons.slice(0, 5).join('\n');
+                const reasonHint = firstReasons ? `\n\n示例问题：\n${firstReasons}` : '';
+                alert(`❌ 没有识别到可导入的频道 ID${reasonHint}`);
+                return;
+            }
+
+            const currentSources = Array.isArray(resourceState.sources) ? resourceState.sources : [];
+            const replaceExisting = !!replaceEl?.checked;
+            if (replaceExisting && currentSources.length) {
+                const ok = confirm(`将覆盖当前 ${currentSources.length} 个频道源，继续导入吗？`);
+                if (!ok) return;
+            }
+
+            const nextSources = replaceExisting
+                ? parsed.sources
+                : mergeResourceSourcesByChannel(currentSources, parsed.sources);
+
+            setResourceSourceImportBusy(true);
+            try {
+                await persistResourceSources(nextSources);
+                closeResourceSourceImportModal();
+                const notes = [
+                    `✅ 已导入 ${parsed.sources.length} 个频道`,
+                ];
+                if (replaceExisting) notes.push('已覆盖旧配置');
+                else notes.push(`当前频道总数 ${nextSources.length}`);
+                if (parsed.duplicateCount > 0) notes.push(`导入数据内重复 ${parsed.duplicateCount} 项已自动去重`);
+                if (parsed.invalidReasons.length > 0) notes.push(`无效数据 ${parsed.invalidReasons.length} 项已跳过`);
+                alert(notes.join('，'));
+            } catch (e) {
+                alert(`❌ ${e.message}`);
+            } finally {
+                setResourceSourceImportBusy(false);
+            }
         }
 
         async function persistResourceSources(sources) {
@@ -2486,6 +3439,7 @@
             const sources = resourceState.sources || [];
             if (!container) return;
             syncResourceSourceSummary();
+            const sectionIndex = getResourceSourceSectionIndex();
             if (!sources.length) {
                 container.innerHTML = `
                     <div class="resource-source-empty">
@@ -2495,53 +3449,36 @@
                 `;
                 return;
             }
-            container.innerHTML = sources.map((source, index) => {
-                const channelId = getResourceSourceChannelId(source);
-                const channelUrl = String(source?.url || (channelId ? `https://t.me/s/${channelId}` : '')).trim();
-                const moveUpDisabled = index === 0 ? 'btn-disabled' : '';
-                const moveDownDisabled = index === sources.length - 1 ? 'btn-disabled' : '';
+            const rows = getResourceSourceViewList(sources, sectionIndex).map(view => {
+                const moveUpDisabled = view.index === 0 ? 'btn-disabled' : '';
+                const moveDownDisabled = view.index === sources.length - 1 ? 'btn-disabled' : '';
+                const enabledLabel = view.source.enabled !== false ? '已启用' : '已停用';
+                const latestPublished = String(view.profile?.latest_published_at || '').trim();
                 return `
-                    <div class="resource-source-card">
-                        <div class="resource-source-card-top">
-                            <div class="min-w-0">
-                                <div class="resource-source-card-title-row">
-                                    <div class="resource-source-card-title">${escapeHtml(source.name || `频道 ${index + 1}`)}</div>
-                                    <span class="text-[10px] px-3 py-1 rounded-full bg-slate-800 text-slate-300 border border-slate-700">排序 ${index + 1}</span>
-                                </div>
+                    <div class="resource-source-compact-row">
+                        <div class="resource-source-compact-main">
+                            <div class="resource-source-compact-title">
+                                <span class="resource-source-compact-name">${escapeHtml(view.source.name || `频道 ${view.index + 1}`)}</span>
+                                <span class="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">#${view.index + 1}</span>
+                                <span class="text-[10px] px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-200 border border-sky-500/20">${escapeHtml(getResourceLinkTypeLabel(view.primaryType))}</span>
+                                <span class="text-[10px] px-2 py-0.5 rounded-full ${view.source.enabled !== false ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20' : 'bg-slate-700 text-slate-300 border border-slate-600'}">${enabledLabel}</span>
                             </div>
-                            <div class="resource-source-card-action-row">
-                                <label class="ui-switch-field">
-                                    <span class="text-xs font-bold uppercase tracking-[0.12em] text-slate-400">启用</span>
-                                    <span class="ui-switch">
-                                        <input
-                                            type="checkbox"
-                                            data-resource-source-toggle="1"
-                                            data-resource-source-index="${index}"
-                                            ${source.enabled ? 'checked' : ''}
-                                        >
-                                        <span class="ui-switch-slider"></span>
-                                    </span>
-                                </label>
-                                <div class="resource-source-card-actions">
-                                    <button type="button" data-resource-source-action="move-up" data-resource-source-index="${index}" class="px-3 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold ${moveUpDisabled}" ${index === 0 ? 'disabled' : ''}>上移</button>
-                                    <button type="button" data-resource-source-action="move-down" data-resource-source-index="${index}" class="px-3 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold ${moveDownDisabled}" ${index === sources.length - 1 ? 'disabled' : ''}>下移</button>
-                                    <button type="button" data-resource-source-action="edit" data-resource-source-index="${index}" class="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">编辑</button>
-                                    <button type="button" data-resource-source-action="delete" data-resource-source-index="${index}" class="px-4 py-2 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-300 text-sm font-bold">删除</button>
-                                </div>
-                            </div>
+                            <div class="resource-source-compact-meta">@${escapeHtml(view.channelId || '--')} · ${escapeHtml(getResourceSourceActivityBucketLabel(view.activityBucket))} · 最近 ${escapeHtml(latestPublished ? formatTimeText(latestPublished) : '--')}</div>
                         </div>
-                        <div class="resource-source-card-grid">
-                            <div class="resource-source-card-field">
-                                <div class="resource-source-card-label">频道链接</div>
-                                ${channelUrl
-                                    ? `<a href="${escapeHtml(channelUrl)}" target="_blank" rel="noopener noreferrer" class="resource-source-card-link">${escapeHtml(channelUrl)}</a>`
-                                    : '<div class="resource-source-card-value">--</div>'
-                                }
-                            </div>
+                        <div class="resource-source-compact-actions">
+                            <label class="ui-switch">
+                                <input type="checkbox" data-resource-source-toggle="1" data-resource-source-index="${view.index}" ${view.source.enabled !== false ? 'checked' : ''}>
+                                <span class="ui-switch-slider"></span>
+                            </label>
+                            <button type="button" data-resource-source-action="move-up" data-resource-source-index="${view.index}" class="resource-source-compact-btn ${moveUpDisabled}" ${view.index === 0 ? 'disabled' : ''}>上移</button>
+                            <button type="button" data-resource-source-action="move-down" data-resource-source-index="${view.index}" class="resource-source-compact-btn ${moveDownDisabled}" ${view.index === sources.length - 1 ? 'disabled' : ''}>下移</button>
+                            <button type="button" data-resource-source-action="edit" data-resource-source-index="${view.index}" class="resource-source-compact-btn">编辑</button>
                         </div>
                     </div>
                 `;
             }).join('');
+            container.innerHTML = `<div class="resource-source-compact-list">${rows}</div>`;
+            renderResourceSourceManagerModal();
         }
 
         function getResourceJobCounts(jobs = []) {
@@ -2729,6 +3666,7 @@
             resourceShareError = '';
             resourceShareRootLoaded = false;
             resourceShareInfo = { title: '', count: 0, share_code: '', receive_code: '' };
+            resourceShareReceiveCode = '';
             resourceShareTrail = [{ cid: '0', name: '分享根目录' }];
             resourceShareCurrentCid = '0';
         }
@@ -2748,10 +3686,51 @@
             return String(resourceModalLinkType || '').trim().toLowerCase() === '115share';
         }
 
+        function syncResourceShareReceiveCodeSection() {
+            const sectionEl = document.getElementById('resource-share-receive-code-section');
+            const inputEl = document.getElementById('resource_share_receive_code');
+            const applyBtnEl = document.getElementById('resource-share-receive-code-apply');
+            const shouldShow = resourceModalMode === 'import' && isCurrentResource115Share();
+
+            if (sectionEl) sectionEl.classList.toggle('hidden', !shouldShow);
+            if (!shouldShow) return;
+
+            if (inputEl) {
+                inputEl.value = resourceShareReceiveCode || '';
+                inputEl.disabled = resourceShareLoading;
+            }
+            if (applyBtnEl) {
+                applyBtnEl.disabled = resourceShareLoading;
+                applyBtnEl.classList.toggle('btn-disabled', resourceShareLoading);
+                applyBtnEl.textContent = resourceShareLoading ? '读取中...' : '应用并刷新';
+            }
+        }
+
+        async function applyResourceShareReceiveCode() {
+            if (resourceModalMode !== 'import' || !isCurrentResource115Share()) return;
+            const inputEl = document.getElementById('resource_share_receive_code');
+            const rawCode = String(inputEl?.value || '').trim();
+            const normalizedCode = normalizeReceiveCodeInput(rawCode);
+            if (rawCode && !normalizedCode) {
+                alert('提取码格式不正确，请输入 1-16 位字母或数字');
+                return;
+            }
+            resourceShareReceiveCode = normalizedCode;
+            syncResourceShareReceiveCodeSection();
+            if (!resourceState.cookie_configured || !selectedResourceItem) return;
+            await loadResourceShareBranch(selectedResourceId, '0', { resetSelection: true });
+        }
+
         async function fetchResourceShareData(resourceId, cid = '0') {
+            const receiveCode = normalizeReceiveCodeInput(resourceShareReceiveCode);
             let res;
             if (Number(resourceId || 0) > 0) {
-                res = await fetch(`/resource/115/share_entries?resource_id=${encodeURIComponent(String(resourceId || 0))}&cid=${encodeURIComponent(String(cid || '0'))}`);
+                const params = new URLSearchParams({
+                    resource_id: String(resourceId || 0),
+                    cid: String(cid || '0')
+                });
+                if (receiveCode) params.set('receive_code', receiveCode);
+                res = await fetch(`/resource/115/share_entries?${params.toString()}`);
             } else {
                 res = await fetch('/resource/115/share_entries_preview', {
                     method: 'POST',
@@ -2759,7 +3738,8 @@
                     body: JSON.stringify({
                         cid,
                         link_url: String(selectedResourceItem?.link_url || '').trim(),
-                        raw_text: String(selectedResourceItem?.raw_text || '').trim()
+                        raw_text: String(selectedResourceItem?.raw_text || '').trim(),
+                        receive_code: receiveCode
                     })
                 });
             }
@@ -2941,6 +3921,10 @@
                 if (isRoot) {
                     resourceShareRootLoaded = true;
                     resourceShareInfo = result.share || { title: '', share_code: '', receive_code: '', count: 0 };
+                    const serverReceiveCode = normalizeReceiveCodeInput(resourceShareInfo?.receive_code || '');
+                    if (serverReceiveCode && !resourceShareReceiveCode) {
+                        resourceShareReceiveCode = serverReceiveCode;
+                    }
                     resourceShareTrail = [{ cid: '0', name: resourceShareInfo?.title || '分享根目录' }];
                     if (resetSelection || !getResourceShareSelectedEntries().length) {
                         selectAllResourceShareRoot({ renderAfter: false });
@@ -2966,6 +3950,7 @@
             } finally {
                 delete resourceShareLoadingParents[branchId];
                 if (isRoot) resourceShareLoading = false;
+                if (isRoot) syncResourceShareReceiveCodeSection();
                 renderResourceShareBrowser();
             }
         }
@@ -3070,6 +4055,7 @@
             const importMode = resourceModalMode === 'import';
             const isShare = isCurrentResource115Share();
             card.classList.toggle('hidden', !importMode);
+            syncResourceShareReceiveCodeSection();
             if (!importMode) {
                 renderResourceImportBehaviorHint();
                 renderResourceImportSummary();
@@ -3151,6 +4137,32 @@
                 .map(item => normalizeRelativePathInput(item?.name || ''))
                 .filter(Boolean)
                 .join('/');
+        }
+
+        function normalizeResourceRefreshDelaySeconds(value, fallback = 4) {
+            const parsed = parseInt(String(value ?? '').trim(), 10);
+            if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+            const fallbackParsed = parseInt(String(fallback ?? '').trim(), 10);
+            if (Number.isFinite(fallbackParsed) && fallbackParsed >= 0) return fallbackParsed;
+            return 4;
+        }
+
+        function getRememberedResourceRefreshDelaySeconds() {
+            try {
+                const raw = localStorage.getItem(RESOURCE_IMPORT_DELAY_MEMORY_KEY);
+                return normalizeResourceRefreshDelaySeconds(raw, 4);
+            } catch (e) {
+                return 4;
+            }
+        }
+
+        function rememberResourceRefreshDelaySeconds(value) {
+            try {
+                localStorage.setItem(
+                    RESOURCE_IMPORT_DELAY_MEMORY_KEY,
+                    String(normalizeResourceRefreshDelaySeconds(value, 4))
+                );
+            } catch (e) {}
         }
 
         function getRememberedResourceFolderSelection() {
@@ -3495,6 +4507,12 @@
             resourceTargetPreviewLoading = false;
             resourceTargetPreviewError = '';
             resetResourceShareState();
+            resourceShareReceiveCode = normalizeReceiveCodeInput(
+                item?.receive_code
+                || item?.extra?.receive_code
+                || extractReceiveCodeFromShareUrl(item?.link_url || '')
+                || extractReceiveCodeFromText(item?.raw_text || '')
+            );
             setSelectedResourceFolder(
                 rememberedFolder.folder_id || '0',
                 rememberedFolder.display_path || '',
@@ -3504,7 +4522,7 @@
                     trail: resourceFolderTrail
                 }
             );
-            document.getElementById('resource_job_refresh_delay_seconds').value = 4;
+            document.getElementById('resource_job_refresh_delay_seconds').value = String(getRememberedResourceRefreshDelaySeconds());
             syncResourceMonitorTaskOptions(document.getElementById('resource_job_savepath')?.value || '');
             renderResourceModalLayout(item);
             renderResourceShareBrowser();
@@ -3548,21 +4566,35 @@
             if (isCurrentResource115Share() && resourceShareRootLoaded && !selectionState.selected_ids.length) {
                 return alert('请先至少勾选一个要转存的目录或文件');
             }
+            let receiveCode = '';
+            if (isCurrentResource115Share()) {
+                const rawReceiveCode = String(document.getElementById('resource_share_receive_code')?.value || resourceShareReceiveCode || '').trim();
+                receiveCode = normalizeReceiveCodeInput(rawReceiveCode);
+                if (rawReceiveCode && !receiveCode) {
+                    return alert('提取码格式不正确，请输入 1-16 位字母或数字');
+                }
+                resourceShareReceiveCode = receiveCode;
+            }
             const folderSelectionValid = await ensureResourceFolderSelectionValid({ phase: 'submit' });
             if (!folderSelectionValid) return;
             const savepath = normalizeRelativePathInput(document.getElementById('resource_job_savepath').value.trim());
             if (!savepath) {
                 return alert('请先选择一个非根目录的 115 保存目录');
             }
+            const refreshDelaySeconds = normalizeResourceRefreshDelaySeconds(
+                document.getElementById('resource_job_refresh_delay_seconds').value,
+                0
+            );
             const payload = {
                 savepath,
-                refresh_delay_seconds: parseInt(document.getElementById('resource_job_refresh_delay_seconds').value || '0', 10) || 0,
+                refresh_delay_seconds: refreshDelaySeconds,
                 auto_refresh: true
             };
             if (Number(selectedResourceId || 0) > 0) payload.resource_id = selectedResourceId;
             else payload.resource = serializeTransientResourceForJob(selectedResourceItem);
             if (isCurrentResource115Share()) {
                 payload.share_selection = selectionState;
+                if (receiveCode) payload.receive_code = receiveCode;
             }
             const res = await fetch('/resource/jobs/create', {
                 method: 'POST',
@@ -3574,6 +4606,7 @@
                 showToast(`提交失败：${data.msg || '请稍后重试'}`, { tone: 'error', duration: 3000, placement: 'top-center' });
                 return;
             }
+            rememberResourceRefreshDelaySeconds(refreshDelaySeconds);
             closeResourceJobModal();
             await refreshResourceState();
             const matchedTaskName = String(data.monitor_task_name || '').trim();
@@ -3849,6 +4882,11 @@
                         else el.value = cfg[k];
                     }
                 });
+                const tgThreadsInput = document.getElementById('tg_channel_threads');
+                if (tgThreadsInput) {
+                    const rawTgThreads = parseInt(cfg.tg_channel_threads || '', 10);
+                    tgThreadsInput.value = String(Math.min(20, Math.max(1, Number.isFinite(rawTgThreads) ? rawTgThreads : 6)));
+                }
 
                 const container = document.getElementById('trees-container');
                 container.innerHTML = '';
@@ -3878,6 +4916,11 @@
                 e.preventDefault();
                 await saveResourceSource();
             });
+        });
+        document.getElementById('resource_source_import_json').addEventListener('keydown', async (e) => {
+            if (e.key !== 'Enter' || e.isComposing || (!e.metaKey && !e.ctrlKey)) return;
+            e.preventDefault();
+            await importResourceSources();
         });
         document.getElementById('resource-search-input').addEventListener('keydown', (e) => {
             if (e.key === 'Enter') searchResources();
@@ -3913,6 +4956,43 @@
             if (index < 0) return;
             const ok = await toggleResourceSourceEnabled(index, !!toggle.checked);
             if (!ok) toggle.checked = !toggle.checked;
+        });
+        document.getElementById('resource-source-manager-type-filters').addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-resource-source-manager-filter="type"]');
+            if (!btn) return;
+            const nextFilter = normalizeResourceSourceFilterValue(btn.dataset.filterValue || 'all');
+            if (resourceSourceFilter === nextFilter) return;
+            resourceSourceFilter = nextFilter;
+            renderResourceSourceManagerModal();
+        });
+        document.getElementById('resource-source-manager-activity-filters').addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-resource-source-manager-filter="activity"]');
+            if (!btn) return;
+            const nextFilter = normalizeResourceSourceFilterValue(btn.dataset.filterValue || 'all');
+            if (resourceSourceActivityFilter === nextFilter) return;
+            resourceSourceActivityFilter = nextFilter;
+            renderResourceSourceManagerModal();
+        });
+        document.getElementById('resource-source-manager-select-all').addEventListener('change', (e) => {
+            toggleSelectAllFilteredResourceSources(!!e.target.checked);
+        });
+        document.getElementById('resource-source-manager-list').addEventListener('change', (e) => {
+            const checkbox = e.target.closest('[data-resource-source-bulk-toggle]');
+            if (!checkbox) return;
+            setResourceSourceBulkSelected(checkbox.dataset.resourceSourceBulkToggle || '', !!checkbox.checked);
+            renderResourceSourceManagerModal();
+        });
+        document.getElementById('resource-source-manager-list').addEventListener('click', async (e) => {
+            const btn = e.target.closest('[data-resource-source-manager-action]');
+            if (!btn) return;
+            const action = String(btn.dataset.resourceSourceManagerAction || '').trim();
+            if (action === 'edit') {
+                const index = parseInt(btn.dataset.sourceIndex || '-1', 10);
+                if (index >= 0) {
+                    closeResourceSourceManagerModal();
+                    openResourceSourceModal(index);
+                }
+            }
         });
         document.getElementById('resource-board').addEventListener('click', async (e) => {
             const toggleBtn = e.target.closest('[data-resource-section-toggle]');
@@ -3970,6 +5050,12 @@
         document.getElementById('resource-source-modal').addEventListener('click', (e) => {
             if (e.target.id === 'resource-source-modal') closeResourceSourceModal();
         });
+        document.getElementById('resource-source-import-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'resource-source-import-modal') closeResourceSourceImportModal();
+        });
+        document.getElementById('resource-source-manager-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'resource-source-manager-modal') closeResourceSourceManagerModal();
+        });
         document.getElementById('resource-import-modal').addEventListener('click', (e) => {
             if (e.target.id === 'resource-import-modal') closeResourceJobModal();
         });
@@ -4001,6 +5087,14 @@
             if (e.target.id === 'resource-job-modal') toggleResourceJobModal(false);
         });
         document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && resourceSourceManagerOpen) {
+                closeResourceSourceManagerModal();
+                return;
+            }
+            if (e.key === 'Escape' && resourceSourceImportModalOpen) {
+                closeResourceSourceImportModal();
+                return;
+            }
             if (e.key === 'Escape' && resourceSourceModalOpen) {
                 closeResourceSourceModal();
                 return;
@@ -4033,6 +5127,15 @@
         });
         document.getElementById('resource-share-current-check-all').addEventListener('change', (e) => {
             setCurrentResourceShareEntriesChecked(!!e.target.checked);
+        });
+        document.getElementById('resource_share_receive_code').addEventListener('keydown', async (e) => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            await applyResourceShareReceiveCode();
+        });
+        document.getElementById('resource_share_receive_code').addEventListener('input', (e) => {
+            const rawCode = String(e?.target?.value || '').trim();
+            resourceShareReceiveCode = normalizeReceiveCodeInput(rawCode);
         });
         window.addEventListener('scroll', () => {
             syncResourceBackTopButton();

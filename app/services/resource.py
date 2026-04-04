@@ -110,6 +110,7 @@ async def run_resource_job(job_id: int) -> None:
                 str(job.get("folder_id", "")).strip(),
                 "",
                 job_selection.get("selected_ids", []),
+                str(job_snapshot.get("receive_code", "") or "").strip(),
             )
             response = response_bundle.get("response", {}) if isinstance(response_bundle, dict) else {}
             resolved_selection = merge_share_selection_meta(job_selection, response_bundle.get("selection", {}))

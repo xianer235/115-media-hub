@@ -45,6 +45,54 @@ async def sync_resource_channels_endpoint(request: Request) -> Dict[str, Any]:
     return await sync_telegram_channels(force=force, limit_per_channel=limit_per_channel)
 
 
+@router.post("/resource/channels/classify")
+async def classify_resource_channel_endpoint(request: Request) -> Dict[str, Any]:
+    data = await request.json()
+    channel_id = normalize_telegram_channel_id_from_input(data.get("channel_id", "") or "")
+    if not channel_id:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "频道 ID 无效"})
+
+    sample_size = max(20, min(int(data.get("sample_size", 20) or 20), 100))
+    cfg = get_config()
+    source = next(
+        (item for item in cfg.get("resource_sources", []) if normalize_telegram_channel_id_from_input(item.get("channel_id", "")) == channel_id),
+        None,
+    )
+    source = normalize_resource_source(source or {"channel_id": channel_id, "name": channel_id, "enabled": True})
+
+    if channel_id in resource_channel_syncing:
+        return JSONResponse(status_code=409, content={"ok": False, "msg": "当前频道正在同步，请稍后再试"})
+
+    try:
+        resource_channel_syncing.add(channel_id)
+        sample = await asyncio.to_thread(
+            fetch_telegram_channel_post_samples,
+            cfg,
+            source,
+            sample_size,
+            max(20, min(sample_size, 50)),
+            RESOURCE_CHANNEL_TYPE_MAX_PAGES,
+        )
+    except Exception as exc:
+        resource_channel_last_error[channel_id] = str(exc)
+        return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
+    finally:
+        resource_channel_syncing.discard(channel_id)
+
+    posts = sample.get("posts", []) if isinstance(sample, dict) else []
+    profile = build_resource_channel_profile(channel_id, posts, sample_size=sample_size)
+    resource_channel_profiles[channel_id] = clone_jsonable(profile)
+    resource_channel_last_error.pop(channel_id, None)
+    return {
+        "ok": True,
+        "channel_id": channel_id,
+        "name": str(source.get("name", "") or channel_id).strip(),
+        "profile": profile,
+        "pages_scanned": int(sample.get("pages_scanned", 0) or 0) if isinstance(sample, dict) else 0,
+        "sample_count": len(posts),
+    }
+
+
 @router.post("/resource/channels/more")
 async def load_more_resource_channel_items_endpoint(request: Request) -> Dict[str, Any]:
     data = await request.json()
@@ -152,7 +200,7 @@ async def preview_resource_text(request: Request) -> Dict[str, Any]:
     data = await request.json()
     raw_text = str(data.get("raw_text", "") or "").strip()
     if not raw_text:
-        return JSONResponse(status_code=400, content={"ok": False, "msg": "请先粘贴 magnet、115 分享链接或资源文本"})
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "请先粘贴 magnet、网盘分享链接或资源文本"})
 
     source_name = str(data.get("source_name", "") or "").strip()
     source_type = str(data.get("source_type", "") or "manual").strip() or "manual"
@@ -203,6 +251,10 @@ async def create_resource_job_endpoint(request: Request) -> Dict[str, Any]:
     link_type = resolve_resource_link_type(resource.get("link_type", ""), resource.get("link_url", ""))
     if link_type not in ("magnet", "115share"):
         return JSONResponse(status_code=400, content={"ok": False, "msg": "当前仅支持 magnet 下载和 115 分享转存"})
+    receive_code_raw = str(data.get("receive_code", "") or "").strip()
+    receive_code = normalize_receive_code(receive_code_raw)
+    if link_type == "115share" and receive_code_raw and not receive_code:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "提取码格式不正确，请输入 1-16 位字母或数字"})
 
     cfg = get_config()
     if not str(cfg.get("cookie_115", "")).strip():
@@ -248,6 +300,8 @@ async def create_resource_job_endpoint(request: Request) -> Dict[str, Any]:
     }
     if link_type == "115share":
         payload["share_selection"] = data.get("share_selection", {})
+        if receive_code:
+            payload["receive_code"] = receive_code
     job_id = create_resource_job(resource, payload)
     asyncio.create_task(run_resource_job(job_id))
     return {
@@ -326,6 +380,10 @@ async def get_115_share_entries_endpoint(request: Request) -> Dict[str, Any]:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "当前资源不是 115 分享链接"})
 
     cid = str(request.query_params.get("cid", "0") or "0").strip() or "0"
+    receive_code_raw = str(request.query_params.get("receive_code", "") or "").strip()
+    receive_code = normalize_receive_code(receive_code_raw)
+    if receive_code_raw and not receive_code:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "提取码格式不正确，请输入 1-16 位字母或数字"})
     try:
         result = await asyncio.to_thread(
             list_115_share_entries,
@@ -333,6 +391,7 @@ async def get_115_share_entries_endpoint(request: Request) -> Dict[str, Any]:
             str(resource.get("link_url", "")).strip(),
             str(resource.get("raw_text", "") or ""),
             cid,
+            receive_code,
         )
         return {
             "ok": True,
@@ -359,6 +418,10 @@ async def preview_115_share_entries_endpoint(request: Request) -> Dict[str, Any]
     data = await request.json()
     link_url = str(data.get("link_url", "") or "").strip()
     raw_text = str(data.get("raw_text", "") or "").strip()
+    receive_code_raw = str(data.get("receive_code", "") or "").strip()
+    receive_code = normalize_receive_code(receive_code_raw)
+    if receive_code_raw and not receive_code:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "提取码格式不正确，请输入 1-16 位字母或数字"})
     if not link_url:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "资源链接为空"})
     cid = str(data.get("cid", "0") or "0").strip() or "0"
@@ -369,6 +432,7 @@ async def preview_115_share_entries_endpoint(request: Request) -> Dict[str, Any]
             link_url,
             raw_text,
             cid,
+            receive_code,
         )
         return {
             "ok": True,
