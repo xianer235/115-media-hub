@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.3.0] - 2026-04-03
+- 新增“资源中心 V1”页：支持 TG 频道源配置、手动粘贴资源文本入库、资源搜索与最近导入任务展示。
+- 参数配置页新增 `115 Cookie`，资源中心可直接用服务端 Cookie 把 magnet 提交到 115 离线任务。
+- 导入任务支持绑定现有文件夹监控任务，并在提交到 115 后按设定延时自动触发内部刷新；同时保留手动补触发入口。
+- 监控队列去重从“仅按任务名”升级为“任务名 + 触发器 + payload”维度，避免不同资源事件互相覆盖。
+- 版本信息更新至 `2.3.0`，构建时间调整为 `2026-04-03 18:20`（UTC+8）。
+
 ## [2.2.3] - 2026-04-01
 - 文件夹监控任务递归扫描时，改为对每个访问到的目录执行 `refresh=true`，避免 AList/OpenList 目录缓存导致漏扫。
 - 修复把文件移动到已存在文件夹后，关闭“文件夹修改时间校验跳过更新”仍可能扫不到新文件的问题。

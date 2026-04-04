@@ -1,10 +1,10 @@
 {
-  "version": "2.2.3",
-  "buildDate": "2026-04-01T10:25:32+08:00",
+  "version": "2.3.0",
+  "buildDate": "2026-04-03T18:20:00+08:00",
   "notes": [
-    "文件夹监控任务递归扫描时对每个访问目录执行 refresh，避免旧缓存漏掉已存在目录中的新文件。",
-    "关闭文件夹修改时间校验后，会重新枚举扫描范围内目录内容，确保新增视频文件能被发现。",
-    "更新版本信息至 2.2.3，并补充对应更新日志。"
+    "新增资源中心 V1：支持 TG 频道源配置、手动文本入库、资源搜索与任务列表。",
+    "新增 115 Cookie 驱动的 magnet 离线导入，并可在导入后内部触发原有文件夹监控任务。",
+    "监控队列去重升级为按任务名+触发器+payload 去重，避免不同资源事件互相覆盖。"
   ],
   "changelogUrl": "https://github.com/xianer235/115-strm-web/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-strm-web"

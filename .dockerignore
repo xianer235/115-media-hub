@@ -11,3 +11,4 @@ __pycache__/
 .gitignore
 .codex/
 .cursor/
+.codex-ui-check/

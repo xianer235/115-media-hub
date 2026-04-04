@@ -8,383 +8,8 @@
     <link rel="shortcut icon" href="/favicon.ico">
     <meta name="theme-color" content="#0f172a">
     <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        body { min-height: 100dvh; }
-        .prog-glow { box-shadow: 0 0 15px rgba(14, 165, 233, 0.4); }
-        .transition-width { transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
-        .nav-scroll { -ms-overflow-style: none; scrollbar-width: none; }
-        .nav-scroll::-webkit-scrollbar { display: none; }
-        #main-nav-actions { display: flex; align-items: center; gap: 0.5rem; flex-wrap: nowrap; }
-        #log-box::-webkit-scrollbar, #monitor-log-box::-webkit-scrollbar { width: 6px; }
-        #log-box::-webkit-scrollbar-thumb, #monitor-log-box::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
-        #log-box { height: min(48vh, 420px) !important; }
-        #monitor-log-box { height: min(46vh, 390px) !important; }
-        .btn-disabled { opacity: 0.5; cursor: not-allowed; pointer-events: none; filter: grayscale(1); }
-        .group-card { background: linear-gradient(180deg, rgba(30,41,59,0.96), rgba(15,23,42,0.96)); border: 1px solid #334155; border-radius: 1.5rem; padding: 1.5rem; box-shadow: 0 10px 28px rgba(2, 6, 23, 0.35); }
-        .group-title { color: #38bdf8; font-weight: 800; font-size: 0.875rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 1.25rem; border-left: 4px solid #38bdf8; padding-left: 0.75rem; }
-        .footer-text { text-align: center; padding: 2.5rem 0 1.5rem 0; color: #64748b; font-size: 0.75rem; letter-spacing: 0.05em; }
-        .tab-active { color: #38bdf8; border-bottom: 2px solid #38bdf8; padding-bottom: 0.25rem; }
-        .tab-inactive { color: #94a3b8; padding-bottom: 0.25rem; }
-        .tab-inactive:hover { color: #fff; }
-        .log-success { color: #4ade80; }
-        .log-error { color: #f87171; }
-        .log-warn { color: #fbbf24; }
-        .log-info { color: #cbd5e1; }
-        .log-divider {
-            color: #94a3b8;
-            margin: 8px 0;
-            padding: 4px 0;
-            border-top: 1px dashed rgba(148, 163, 184, 0.35);
-            border-bottom: 1px dashed rgba(148, 163, 184, 0.2);
-        }
-        .log-task-divider {
-            color: #cbd5e1;
-            margin: 12px 0 8px;
-            padding: 6px 0;
-            font-weight: 700;
-            letter-spacing: 0.02em;
-            border-top: 1px dashed rgba(148, 163, 184, 0.5);
-            border-bottom: 1px dashed rgba(148, 163, 184, 0.3);
-        }
-        .log-section-divider {
-            color: #94a3b8;
-            margin: 6px 0 2px;
-            padding: 2px 0;
-            font-size: 12px;
-            border-left: 2px solid rgba(148, 163, 184, 0.25);
-            padding-left: 8px;
-        }
-        .summary-metric { font-weight: 700; }
-        .summary-positive { color: #4ade80; }
-        .summary-skip { color: #fbbf24; }
-        .summary-fail { color: #f87171; }
-        .summary-delete { color: #38bdf8; }
-        .summary-zero { opacity: 0.6; }
-        .info-dot {
-            width: 18px;
-            height: 18px;
-            border-radius: 9999px;
-            border: 1px solid #475569;
-            color: #93c5fd;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 11px;
-            font-weight: 700;
-            background: rgba(15, 23, 42, 0.85);
-        }
-        .help-text { white-space: pre-wrap; line-height: 1.7; }
-        .footer-link { color: #38bdf8; text-decoration: underline; text-underline-offset: 3px; }
-        .footer-link:hover { color: #7dd3fc; }
-        #version-banner {
-            border-radius: 1.25rem;
-            border: 1px solid rgba(245, 158, 11, 0.35);
-            background: linear-gradient(120deg, rgba(251, 191, 36, 0.18), rgba(236, 72, 153, 0.12));
-            padding: 1rem 1.25rem;
-            display: flex;
-            justify-content: space-between;
-            gap: 1rem;
-            align-items: center;
-        }
-        #version-banner.hidden { display: none; }
-        #version-banner strong { color: #fbbf24; }
-        #version-banner .banner-action {
-            color: #fbbf24;
-            border: 1px solid rgba(251, 191, 36, 0.45);
-            padding: 0.35rem 0.85rem;
-            border-radius: 0.85rem;
-            font-weight: 700;
-            transition: all 0.2s;
-            background: transparent;
-            cursor: pointer;
-        }
-        #version-banner .banner-action:hover {
-            background: rgba(251, 191, 36, 0.15);
-            color: #fff;
-        }
-        #page-about .about-action {
-            width: 100%;
-            min-height: 48px;
-            border-radius: 0.95rem;
-            padding: 0.72rem 0.95rem;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            text-align: center;
-            font-size: 0.9rem;
-            font-weight: 800;
-            letter-spacing: 0.01em;
-            text-decoration: none;
-            border: 1px solid transparent;
-            transition: transform 0.2s ease, box-shadow 0.2s ease, filter 0.2s ease;
-            box-shadow: 0 10px 22px rgba(2, 6, 23, 0.22);
-        }
-        #page-about .about-action:hover {
-            transform: translateY(-1px);
-            filter: brightness(1.05);
-        }
-        #page-about .about-action:active { transform: translateY(0); }
-        #page-about .about-action:disabled,
-        #page-about .about-action.btn-disabled {
-            opacity: 0.58;
-            cursor: not-allowed;
-            transform: none;
-            filter: none;
-            box-shadow: none;
-        }
-        #page-about .about-action-primary {
-            color: #f8fbff;
-            background: linear-gradient(135deg, #0ea5e9, #2563eb);
-            border-color: rgba(56, 189, 248, 0.45);
-        }
-        #page-about .about-action-secondary {
-            color: #e2e8f0;
-            background: linear-gradient(135deg, #334155, #1e293b);
-            border-color: rgba(100, 116, 139, 0.45);
-        }
-        #page-about .about-action-star {
-            color: #fffbeb;
-            background: linear-gradient(135deg, #d97706, #b45309);
-            border-color: rgba(251, 191, 36, 0.45);
-        }
+        <link rel="stylesheet" href="/static/css/index.css">
 
-        @media (max-width: 1024px) {
-            #main-nav-actions { width: auto; justify-content: flex-end; }
-            .footer-text { padding: 1.8rem 0 1.2rem; }
-        }
-
-        @media (max-width: 768px) {
-            body { font-size: 15px; }
-            nav { padding: 0.9rem !important; }
-            main { padding-left: 0.75rem !important; padding-right: 0.75rem !important; }
-            .group-card { padding: 1rem; border-radius: 1rem; }
-            .group-title { font-size: 0.98rem; margin-bottom: 0.9rem; }
-            .nav-title { font-size: 1.05rem !important; }
-            #tab-row { gap: 0.35rem; }
-            .tab-active, .tab-inactive {
-                font-size: 0.93rem;
-                padding: 0.58rem 0.5rem;
-                white-space: nowrap;
-            }
-            .btn-ctrl {
-                min-height: 54px;
-                font-size: 0.98rem;
-                padding: 0.9rem 1rem !important;
-            }
-            input, select, textarea {
-                font-size: 16px !important;
-                min-height: 46px;
-                padding-top: 0.7rem !important;
-                padding-bottom: 0.7rem !important;
-            }
-            #theme-toggle,
-            a[href="/logout"] {
-                min-height: 38px;
-                display: inline-flex;
-                align-items: center;
-            }
-            #page-settings .text-xs,
-            #page-monitor .text-xs,
-            #page-about .text-xs,
-            #monitor-modal .text-xs { font-size: 0.82rem !important; }
-            #page-settings .text-sm,
-            #page-monitor .text-sm,
-            #page-about .text-sm,
-            #monitor-modal .text-sm { font-size: 0.95rem !important; }
-            #page-monitor .grid.grid-cols-1.sm\:grid-cols-2.md\:grid-cols-4 { grid-template-columns: 1fr 1fr; }
-            #page-monitor .grid.grid-cols-1.sm\:grid-cols-2.md\:grid-cols-4 button { min-height: 42px; }
-            #log-box, #monitor-log-box {
-                font-size: 13px !important;
-                line-height: 1.55;
-            }
-        }
-
-        @media (max-width: 640px) {
-            body { font-size: 16px; }
-            main { padding-left: 0.5rem !important; padding-right: 0.5rem !important; }
-            .group-card { padding: 0.9rem; }
-            .group-title { font-size: 1rem; }
-            .nav-title { font-size: 1rem !important; }
-            #main-nav-actions { gap: 0.45rem !important; }
-            #main-nav-actions a[href="/logout"],
-            #theme-toggle { font-size: 0.78rem !important; padding: 0.45rem 0.65rem !important; }
-            #main-nav-actions a[href="/logout"],
-            #theme-toggle,
-            .nav-title { white-space: nowrap; }
-            #prog-step { font-size: 1.35rem !important; }
-            #prog-percent { font-size: 1.6rem !important; }
-            #log-box { height: 40vh !important; }
-            #monitor-log-box { height: 38vh !important; }
-            #page-monitor .grid.grid-cols-1.sm\:grid-cols-2.md\:grid-cols-4 { grid-template-columns: 1fr; }
-            #page-monitor .grid.grid-cols-1.sm\:grid-cols-2.md\:grid-cols-4 button { width: 100%; }
-            #page-monitor .flex.items-center.gap-3 { width: 100%; justify-content: space-between; flex-wrap: wrap; }
-            #page-monitor .flex.justify-between.items-center.mb-4 { gap: 0.5rem; align-items: flex-start; flex-wrap: wrap; }
-            #page-task .grid.grid-cols-1.md\:grid-cols-3 { gap: 0.6rem; }
-            #monitor-modal .modal-card { max-height: 95vh; }
-            #monitor-modal .modal-card { margin-top: 1vh; }
-            #monitor-modal .grid.grid-cols-2 { grid-template-columns: 1fr; }
-        }
-
-        html.theme-day {
-            --bg: #f4f7fb;
-            --surface: #ffffff;
-            --surface-soft: #f8fafc;
-            --border: #d9e2ec;
-            --text: #0f172a;
-            --muted: #64748b;
-            --primary: #1d4ed8;
-            --success: #15803d;
-            --warn: #b45309;
-            --danger: #dc2626;
-        }
-        html.theme-day body { background: var(--bg) !important; color: var(--text) !important; }
-        html.theme-day nav { background: rgba(255, 255, 255, 0.95) !important; border-color: var(--border) !important; }
-        html.theme-day .group-card { background: var(--surface) !important; border-color: var(--border) !important; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08); }
-        html.theme-day .group-title { color: var(--primary) !important; border-left-color: var(--primary) !important; }
-        html.theme-day .tree-row { background: var(--surface) !important; border-color: var(--border) !important; }
-        html.theme-day .bg-slate-900,
-        html.theme-day .bg-slate-800,
-        html.theme-day .bg-slate-950,
-        html.theme-day .bg-slate-900\/80,
-        html.theme-day .bg-slate-900\/60,
-        html.theme-day .bg-slate-900\/50,
-        html.theme-day .bg-slate-800\/80,
-        html.theme-day .bg-slate-950\/80 { background: var(--surface) !important; background-image: none !important; }
-        html.theme-day .border-slate-700,
-        html.theme-day .border-slate-800,
-        html.theme-day .border-slate-500\/40 { border-color: var(--border) !important; }
-        html.theme-day .text-slate-100,
-        html.theme-day .text-slate-200,
-        html.theme-day .text-slate-300 { color: #334155 !important; }
-        html.theme-day .text-slate-400,
-        html.theme-day .text-slate-500 { color: var(--muted) !important; }
-        html.theme-day .footer-text { color: var(--muted) !important; }
-        html.theme-day .footer-link { color: #1d4ed8 !important; }
-        html.theme-day .footer-link:hover { color: #2563eb !important; }
-        html.theme-day .tab-inactive { color: #475569 !important; }
-        html.theme-day .tab-inactive:hover { color: var(--text) !important; }
-        html.theme-day #log-box,
-        html.theme-day #monitor-log-box { color: #1f2937 !important; }
-        html.theme-day .log-success { color: var(--success) !important; }
-        html.theme-day .log-warn { color: var(--warn) !important; }
-        html.theme-day .log-error { color: var(--danger) !important; }
-        html.theme-day .log-info,
-        html.theme-day .log-divider { color: #475569 !important; }
-        html.theme-day .log-divider {
-            border-top-color: rgba(100, 116, 139, 0.45) !important;
-            border-bottom-color: rgba(100, 116, 139, 0.25) !important;
-        }
-        html.theme-day .log-task-divider {
-            color: #334155 !important;
-            border-top-color: rgba(100, 116, 139, 0.55) !important;
-            border-bottom-color: rgba(100, 116, 139, 0.35) !important;
-        }
-        html.theme-day .log-section-divider {
-            color: #64748b !important;
-            border-left-color: rgba(100, 116, 139, 0.35) !important;
-        }
-        html.theme-day .summary-positive { color: #15803d !important; }
-        html.theme-day .summary-skip { color: #b45309 !important; }
-        html.theme-day .summary-fail { color: #dc2626 !important; }
-        html.theme-day .summary-delete { color: #0369a1 !important; }
-        html.theme-day input,
-        html.theme-day select,
-        html.theme-day textarea {
-            background: #ffffff !important;
-            color: var(--text) !important;
-            border-color: #b6c5d6 !important;
-            box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.18);
-        }
-        html.theme-day input::placeholder,
-        html.theme-day textarea::placeholder { color: #7b8aa1 !important; }
-        html.theme-day input:focus,
-        html.theme-day select:focus,
-        html.theme-day textarea:focus {
-            border-color: #3b82f6 !important;
-            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18), inset 0 0 0 1px rgba(59, 130, 246, 0.15) !important;
-            outline: none !important;
-        }
-        html.theme-day .bg-slate-700,
-        html.theme-day .bg-slate-700\/40,
-        html.theme-day .bg-slate-600 { background: var(--surface-soft) !important; }
-        html.theme-day #theme-toggle { color: #334155 !important; }
-        html.theme-day .modal-card,
-        html.theme-day #help-modal-body { background: #fff !important; border-color: var(--border) !important; }
-        html.theme-day #monitor-modal,
-        html.theme-day #help-modal { background: rgba(15, 23, 42, 0.35) !important; }
-        html.theme-day .text-emerald-400 { color: #047857 !important; }
-        html.theme-day .text-red-400 { color: var(--danger) !important; }
-        html.theme-day #prog-step,
-        html.theme-day #page-settings .text-white,
-        html.theme-day #page-monitor .text-white,
-        html.theme-day #help-modal .text-white { color: var(--text) !important; }
-        html.theme-day #page-about .text-white { color: var(--text) !important; }
-        html.theme-day #page-about .text-sky-400 { color: #1d4ed8 !important; }
-        html.theme-day #page-about .text-slate-400 { color: #475569 !important; }
-        html.theme-day #page-about .text-slate-500 { color: #64748b !important; }
-        html.theme-day #help-modal-body { color: #334155 !important; }
-        html.theme-day .hover\:text-white:hover { color: var(--text) !important; }
-        html.theme-day .bg-black\/60 { background: rgba(15, 23, 42, 0.35) !important; }
-        html.theme-day .bg-red-500\/10 { background: rgba(220, 38, 38, 0.08) !important; }
-        html.theme-day .border-red-500\/20 { border-color: rgba(220, 38, 38, 0.25) !important; }
-        html.theme-day .text-red-300 { color: #b91c1c !important; }
-        html.theme-day .text-violet-300 { color: #6d28d9 !important; }
-        html.theme-day .bg-violet-500\/15 { background: rgba(109, 40, 217, 0.1) !important; }
-        html.theme-day .border-violet-500\/20 { border-color: rgba(109, 40, 217, 0.28) !important; }
-        html.theme-day .bg-emerald-600 { background: #059669 !important; }
-        html.theme-day .hover\:bg-emerald-500:hover { background: #10b981 !important; }
-        html.theme-day .btn-ctrl.bg-slate-700 {
-            background: #334155 !important;
-            color: #f8fafc !important;
-            border: 1px solid #1e293b !important;
-        }
-        html.theme-day .btn-ctrl.bg-slate-700:hover { background: #1e293b !important; }
-        html.theme-day #monitor-modal button.bg-slate-700 {
-            background: #475569 !important;
-            color: #ffffff !important;
-            border: 1px solid #334155 !important;
-        }
-        html.theme-day #monitor-modal button.bg-slate-700:hover { background: #334155 !important; }
-        html.theme-day .bg-amber-500\/15 {
-            background: rgba(217, 119, 6, 0.2) !important;
-            border: 1px solid rgba(180, 83, 9, 0.35) !important;
-        }
-        html.theme-day .hover\:bg-amber-500\/25:hover { background: rgba(217, 119, 6, 0.3) !important; }
-        html.theme-day .text-amber-300 { color: #92400e !important; }
-        html.theme-day #version-banner {
-            background: rgba(251, 191, 36, 0.18) !important;
-            border-color: rgba(217, 119, 6, 0.35) !important;
-            color: #92400e !important;
-        }
-        html.theme-day #version-banner .banner-action {
-            color: #92400e !important;
-            border-color: rgba(217, 119, 6, 0.35) !important;
-        }
-        html.theme-day #page-about .group-card {
-            background: linear-gradient(180deg, #ffffff, #f7fbff) !important;
-            border-color: #d4dee9 !important;
-            box-shadow: 0 10px 26px rgba(15, 23, 42, 0.08);
-        }
-        html.theme-day #page-about .about-action {
-            box-shadow: 0 10px 20px rgba(15, 23, 42, 0.12);
-        }
-        html.theme-day #page-about .about-action:hover { filter: brightness(1.02); }
-        html.theme-day #page-about .about-action-primary {
-            color: #ffffff;
-            background: linear-gradient(135deg, #2563eb, #1d4ed8);
-            border-color: #1e40af;
-        }
-        html.theme-day #page-about .about-action-secondary {
-            color: #f8fafc;
-            background: linear-gradient(135deg, #334155, #0f172a);
-            border-color: #1e293b;
-        }
-        html.theme-day #page-about .about-action-star {
-            color: #ffffff;
-            background: linear-gradient(135deg, #f59e0b, #c2410c);
-            border-color: #b45309;
-        }
-    </style>
 </head>
 <body class="bg-slate-900 text-slate-200 font-sans">
     <nav class="bg-slate-800/80 backdrop-blur-md border-b border-slate-700 p-4 sticky top-0 z-50">
@@ -397,7 +22,8 @@
                 </div>
             </div>
             <div id="tab-row" class="flex gap-4 text-sm font-bold overflow-x-auto nav-scroll pb-1">
-                <button onclick="switchTab('monitor')" id="tab-monitor" class="tab-active uppercase">文件夹监控任务</button>
+                <button onclick="switchTab('resource')" id="tab-resource" class="tab-active uppercase">资源中心</button>
+                <button onclick="switchTab('monitor')" id="tab-monitor" class="tab-inactive uppercase">文件夹监控任务</button>
                 <button onclick="switchTab('task')" id="tab-task" class="tab-inactive uppercase">目录树任务</button>
                 <button onclick="switchTab('settings')" id="tab-settings" class="tab-inactive uppercase">参数配置</button>
                 <button onclick="switchTab('about')" id="tab-about" class="tab-inactive uppercase">关于</button>
@@ -441,6 +67,60 @@
                     <button onclick="clearMainLogs()" class="px-3 py-1 text-xs rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300">清空日志</button>
                 </div>
                 <div id="log-box" class="overflow-y-auto font-mono text-[13px] text-emerald-500/80 p-2 scroll-smooth"></div>
+            </div>
+        </div>
+
+        <div id="page-resource" class="space-y-4">
+            <div class="group-card resource-shell">
+                <div class="relative z-[1] resource-search-panel">
+                    <div class="resource-search-top">
+                        <div class="min-w-0">
+                            <div class="text-xs uppercase tracking-[0.3em] text-sky-300/80">Resource Search</div>
+                            <div class="resource-search-title mt-1">搜索资源 / 浏览订阅频道</div>
+                            <div id="resource-board-hint" class="resource-search-sub max-w-3xl">
+                                默认展示已启用频道最近 10 条；输入关键字后切换到搜索结果。
+                            </div>
+                        </div>
+                        <div class="resource-search-stats">
+                            <div class="resource-search-stat">订阅源 <span id="resource-source-count" class="text-sky-400 font-bold">0</span></div>
+                            <div class="resource-search-stat">资源数 <span id="resource-item-count" class="text-emerald-400 font-bold">0</span></div>
+                            <div class="resource-search-stat">任务数 <span id="resource-job-count" class="text-amber-300 font-bold">0</span></div>
+                        </div>
+                    </div>
+
+                    <div id="resource-cookie-hint" class="rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-200">
+                        当前还没配置 115 Cookie。请先到“参数配置”页填写后，再使用导入或转存功能。
+                    </div>
+
+                    <div class="resource-search-controls">
+                        <input id="resource-search-input" class="resource-search-input w-full bg-slate-950/85 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500" placeholder="输入关键字，或粘贴 magnet / 115 分享链接">
+                        <button onclick="searchResources()" class="resource-search-btn bg-sky-600 hover:bg-sky-500 text-white shadow-lg">搜索/解析</button>
+                        <button onclick="syncResourceChannels(true)" class="resource-search-btn bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700">同步频道</button>
+                        <select id="resource-status-filter" class="resource-search-select bg-slate-900 border border-slate-700 text-sm">
+                            <option value="">全部状态</option>
+                            <option value="new">未处理</option>
+                            <option value="queued">已入队</option>
+                            <option value="importing">导入中</option>
+                            <option value="submitted">待刷新</option>
+                            <option value="completed">已完成</option>
+                            <option value="failed">失败</option>
+                        </select>
+                        <button onclick="clearResourceSearch()" class="resource-search-btn bg-slate-800 hover:bg-slate-700 text-slate-200">清空</button>
+                    </div>
+
+                    <div class="resource-search-channels">
+                        <div class="resource-search-channels-label">频道</div>
+                        <div id="resource-channel-tabs" class="flex flex-wrap gap-2 min-w-0 flex-1"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="group-card">
+                <div id="resource-board" class="space-y-8"></div>
+            </div>
+
+            <div class="hidden">
+                <div id="resource-job-list" class="space-y-3"></div>
             </div>
         </div>
 
@@ -521,6 +201,93 @@
                         </div>
                     </div>
                 </div>
+
+                <div class="group-card xl:col-span-6">
+                    <h3 class="group-title">5. TG 访问代理</h3>
+                    <div class="space-y-4">
+                        <label class="flex items-center gap-2 cursor-pointer text-sm">
+                            <input type="checkbox" id="tg_proxy_enabled" class="w-5 h-5 rounded-lg accent-sky-500">
+                            访问 TG 频道时启用代理
+                        </label>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <label class="block">
+                                <span class="text-xs text-slate-500">代理协议</span>
+                                <select id="tg_proxy_protocol" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1">
+                                    <option value="http">http</option>
+                                    <option value="https">https</option>
+                                </select>
+                            </label>
+                            <label class="block">
+                                <span class="text-xs text-slate-500">代理 IP / 域名</span>
+                                <input id="tg_proxy_host" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="127.0.0.1">
+                            </label>
+                            <label class="block">
+                                <span class="text-xs text-slate-500">代理端口</span>
+                                <input id="tg_proxy_port" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="7890">
+                            </label>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-3 pt-1">
+                            <button id="tg-proxy-test-btn" type="button" onclick="testTgProxyLatency()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">
+                                测试 TG 延迟
+                            </button>
+                            <div class="text-xs text-slate-500">
+                                优先使用当前表单里的代理地址测试；未填写代理时会自动回退为直连 TG 测试。
+                            </div>
+                        </div>
+                        <div id="tg-proxy-test-status" class="hidden rounded-xl border px-4 py-3 text-sm leading-6"></div>
+                        <div class="text-xs text-slate-500 leading-6">
+                            用于服务端抓取 `https://t.me/s/频道ID` 公开频道页。当前环境内置按标准代理 URL 方式访问，建议优先使用 `http/https` 代理。
+                        </div>
+                    </div>
+                </div>
+
+                <div class="group-card xl:col-span-12">
+                    <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+                        <h3 class="group-title mb-0">6. TG 订阅源管理</h3>
+                        <div class="text-xs text-slate-400">只需要填频道 ID，例如 `QukanMovie`，系统会自动拼成 `https://t.me/s/QukanMovie`。</div>
+                    </div>
+                    <div class="grid grid-cols-1 lg:grid-cols-[minmax(0,360px)_1fr] gap-6">
+                        <div class="space-y-4">
+                            <label class="block">
+                                <span class="text-xs text-slate-500">频道名称</span>
+                                <input id="resource_source_name" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：趣看电影">
+                            </label>
+                            <label class="block">
+                                <span class="text-xs text-slate-500">频道 ID</span>
+                                <input id="resource_source_channel" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：QukanMovie">
+                            </label>
+                            <label class="flex items-center gap-2 cursor-pointer text-sm">
+                                <input type="checkbox" id="resource_source_enabled" class="w-5 h-5 rounded-lg accent-sky-500" checked>
+                                启用频道
+                            </label>
+                            <input id="resource_source_url" type="hidden">
+                            <textarea id="resource_source_notes" class="hidden"></textarea>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                                <button onclick="saveResourceSource()" class="bg-sky-600 hover:bg-sky-500 rounded-xl py-3 font-bold text-white">保存订阅源</button>
+                                <button onclick="resetResourceSourceForm()" class="bg-slate-700 hover:bg-slate-600 rounded-xl py-3 font-bold text-white">清空表单</button>
+                            </div>
+                        </div>
+                        <div>
+                            <div id="resource-source-list" class="space-y-3"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="group-card xl:col-span-6">
+                    <h3 class="group-title">7. 115 资源导入配置</h3>
+                    <div class="space-y-4">
+                        <label class="block">
+                            <span class="text-xs text-slate-500 inline-flex items-center gap-2">
+                                115 Cookie
+                                <button type="button" class="info-dot" onclick="showHelp('资源中心第一版会使用 115 Cookie 在服务端发起磁力离线任务。建议使用单独账号，Cookie 失效后需要重新粘贴保存。')">i</button>
+                            </span>
+                            <textarea id="cookie_115" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 min-h-[120px]" placeholder="把浏览器里的 115 Cookie 粘贴到这里，例如 UID=...; CID=...; SEID=...;"></textarea>
+                        </label>
+                        <div class="text-xs text-slate-500 leading-6">
+                            当前支持 magnet 离线下载与 115 分享链接转存；保存路径会自动映射到 OpenList 挂载目录，并按路径命中文件夹监控任务。
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <div class="flex justify-center pt-4">
@@ -528,7 +295,7 @@
             </div>
         </div>
 
-        <div id="page-monitor" class="space-y-6">
+        <div id="page-monitor" class="hidden space-y-6">
             <div class="group-card">
                 <div class="flex flex-wrap justify-between gap-3 items-center">
                     <div>
@@ -621,12 +388,13 @@
                     <label class="flex items-center gap-2 cursor-pointer text-sm">
                         <input type="checkbox" id="monitor_webhook_enabled" class="w-5 h-5 rounded-lg accent-sky-500" onchange="refreshWebhookHint()">
                         开启 webhook
-                        <button type="button" class="info-dot" onclick="showHelp('CloudSaver Webhook 参数说明（本页面仅接收，不在此处配置触发规则）：\\n1) 接口地址：/webhook/任务名\\n   URL 中的任务名用于匹配并触发指定监控任务。\\n2) 请求类型：POST；请求体格式：JSON。\\n3) 参数用途：\\n   savepath：转存目标父路径，用于定位刷新范围。\\n   sharetitle：转存资源文件夹名；有值时优先刷新 savepath/sharetitle，为空时回退按 savepath 刷新。\\n   delayTime：可选，单位秒；用于覆盖本次任务执行延时。\\n   title：可选；仅用于日志展示“转存内容”。\\n4) 触发条件、变量映射与请求体拼装请在 CloudSaver 中配置。')">i</button>
+                        <button type="button" class="info-dot" onclick="showHelp('CloudSaver Webhook 参数说明（本页面仅接收，不在此处配置触发规则）：\\n1) 接口地址：/webhook/任务名\\n   URL 中的任务名用于匹配并触发指定监控任务。\\n2) 请求类型：POST；请求体格式：JSON。\\n3) 参数用途：\\n   savepath：转存目标父路径，用于定位刷新范围。\\n   sharetitle：转存后的目录名或文件名。\\n   refresh_target_type：可选，folder / file / mixed；用于区分 sharetitle 是目录、文件，还是混合选择。\\n   delayTime：可选，单位秒；用于覆盖本次任务执行延时。\\n   title：可选；仅用于日志展示“转存内容”。\\n4) 触发条件、变量映射与请求体拼装请在 CloudSaver 中配置。')">i</button>
                     </label>
                     <div id="webhook-hint" class="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3 leading-5">
                         webhook 地址：IP:容器端口/webhook/任务名（用于触发指定任务）
                         <br>savepath：转存目标父路径（用于定位刷新范围）
-                        <br>sharetitle：转存资源文件夹名（为空则回退按 savepath 刷新）
+                        <br>sharetitle：转存后的目录名或文件名
+                        <br>refresh_target_type：folder / file / mixed（用于更精确判断刷新范围）
                         <br>delayTime：可选，单位秒（覆盖本次任务执行延时）
                         <br>title：可选（仅日志展示）
                         <br>说明：本页面仅接收参数；触发条件与映射规则请在 CloudSaver 中配置
@@ -697,6 +465,141 @@
                 <div id="help-modal-body" class="help-text text-sm text-slate-200 bg-slate-900/70 border border-slate-700 rounded-xl p-4"></div>
             </div>
         </div>
+
+        <div id="resource-import-modal" class="hidden fixed inset-0 bg-black/60 z-[55] p-4">
+            <div class="w-full max-w-[1400px] mx-auto mt-[2.5vh] max-h-[93vh] overflow-y-auto group-card modal-card">
+                <div class="flex items-center justify-between">
+                    <h3 id="resource-import-modal-title" class="group-title mb-0">资源详情与保存</h3>
+                    <button onclick="closeResourceJobModal()" class="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm">关闭</button>
+                </div>
+                <div class="space-y-3 mt-4">
+                    <div id="resource-import-detail-grid" class="resource-detail-grid">
+                        <div id="resource-import-main-column" class="resource-import-main-column">
+                            <div class="resource-detail-card resource-import-overview-card">
+                                <div class="resource-import-overview">
+                                    <div id="resource-import-poster" class="resource-detail-poster shrink-0"></div>
+                                    <div class="resource-import-overview-main">
+                                        <div class="min-w-0">
+                                            <div id="resource-import-title" class="resource-import-overview-title">--</div>
+                                            <div id="resource-import-subtitle" class="resource-import-overview-subtitle mt-2">--</div>
+                                            <div id="resource-import-meta" class="flex flex-wrap items-center gap-2 mt-3"></div>
+                                        </div>
+                                        <div id="resource-import-link-actions" class="flex flex-wrap gap-2"></div>
+                                        <div id="resource-import-inline-summary" class="resource-import-inline-summary">
+                                            <span id="resource-import-selection-count" class="resource-import-inline-chip">未选择</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div id="resource-import-raw-card" class="resource-detail-card">
+                                <div class="flex items-center justify-between gap-3 mb-3">
+                                    <div>
+                                        <div class="text-sm font-black text-white">资源文案预览</div>
+                                        <div class="text-xs text-slate-400 mt-1">点开资源后可以先确认原始文案、来源和链接类型。</div>
+                                    </div>
+                                </div>
+                                <div id="resource-import-raw-text" class="resource-detail-text">--</div>
+                            </div>
+                            <div id="resource-share-browser-card" class="resource-detail-card hidden">
+                                <div class="resource-import-toolbar">
+                                    <div class="text-sm font-black text-white">资源选择</div>
+                                    <div class="resource-import-toolbar-actions">
+                                        <button type="button" onclick="goResourceShareRoot()" class="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-[11px] font-bold">根目录</button>
+                                        <button type="button" onclick="goResourceShareBack()" class="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-[11px] font-bold">上级</button>
+                                        <button type="button" onclick="setCurrentResourceShareEntriesChecked(true)" class="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-[11px] font-bold">全选当前层</button>
+                                        <button type="button" onclick="clearResourceShareSelection()" class="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-[11px] font-bold">清空</button>
+                                    </div>
+                                </div>
+                                <div class="resource-browser-toolbar mt-3">
+                                    <div id="resource-share-root-title" class="resource-browser-breadcrumbs">--</div>
+                                </div>
+                                <div class="resource-browser-table mt-3">
+                                    <div class="resource-browser-header">
+                                        <label class="resource-browser-name-cell">
+                                            <input id="resource-share-current-check-all" type="checkbox" class="h-4 w-4 rounded border-slate-600 bg-slate-900 accent-sky-500">
+                                            <span>文件名</span>
+                                        </label>
+                                        <div class="resource-browser-col-size">大小</div>
+                                    </div>
+                                    <div id="resource-share-tree" class="resource-browser-body"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="resource-import-save-panel" class="resource-import-side-column resource-import-side-stack">
+                            <div id="resource-import-save-hint" class="hidden rounded-2xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm leading-6 text-amber-200"></div>
+                            <div class="resource-detail-card resource-import-side-shell">
+                                <div class="resource-import-side-header">
+                                    <div class="text-sm font-black text-white">保存设置</div>
+                                </div>
+                                <div class="resource-save-layout">
+                                    <div class="resource-save-section">
+                                        <div class="resource-import-section-label">115 保存目录</div>
+                                        <div class="resource-save-path-grid">
+                                            <input id="resource_job_folder_path" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" value="根目录" readonly>
+                                            <button type="button" onclick="openResourceFolderModal()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">浏览目录</button>
+                                        </div>
+                                        <input id="resource_job_folder_id" class="hidden" value="0">
+                                        <div class="resource-import-compact-meta">
+                                            <div class="resource-import-compact-item">
+                                                <div class="resource-import-compact-label">提交路径</div>
+                                                <div id="resource_job_savepath_preview" class="resource-import-compact-value">请选择保存目录</div>
+                                            </div>
+                                            <div class="resource-import-compact-item">
+                                                <div class="resource-import-compact-label">监控任务</div>
+                                                <div id="resource_job_monitor_task_display" class="resource-import-compact-value">请先选择保存目录</div>
+                                            </div>
+                                        </div>
+                                        <input id="resource_job_savepath" class="hidden" value="">
+                                        <input id="resource_job_monitor_task" class="hidden" value="">
+                                    </div>
+                                    <div class="resource-save-section">
+                                        <div class="resource-delay-row">
+                                            <div class="resource-delay-copy">
+                                                <div class="resource-import-section-label">监控触发延时</div>
+                                            </div>
+                                            <div class="resource-delay-inline">
+                                                <input id="resource_job_refresh_delay_seconds" type="number" min="0" class="resource-delay-input bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" value="4">
+                                                <span class="resource-delay-suffix">秒</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div id="resource_job_monitor_task_hint" class="text-[11px] text-slate-500 leading-5 px-1">
+                                        目录命中监控任务时自动刷新；未命中时只保存到网盘。
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="resource-import-footer" class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                        <button id="resource-submit-btn" onclick="submitResourceJob()" class="bg-emerald-600 hover:bg-emerald-500 rounded-xl py-3 font-bold text-white">保存到 115</button>
+                        <button id="resource-close-btn" onclick="closeResourceJobModal()" class="bg-slate-700 hover:bg-slate-600 rounded-xl py-3 font-bold text-white">取消</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="resource-folder-modal" class="hidden fixed inset-0 bg-black/60 z-[56] p-4">
+            <div class="w-full max-w-2xl mx-auto mt-[8vh] max-h-[88vh] overflow-y-auto group-card modal-card">
+                <div class="flex items-center justify-between">
+                    <h3 class="group-title mb-0">选择 115 目录</h3>
+                    <button onclick="closeResourceFolderModal()" class="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm">关闭</button>
+                </div>
+                <div class="space-y-4 mt-4">
+                    <div class="resource-folder-pathbar">
+                        <div class="resource-folder-path-label">保存目录路径</div>
+                        <div id="resource-folder-breadcrumbs" class="resource-folder-path-track">根目录</div>
+                    </div>
+                    <div id="resource-folder-summary" class="text-xs text-slate-500">
+                        将同时显示当前目录下的子文件夹和文件，方便确认保存位置。
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                        <button type="button" onclick="selectCurrentResourceFolder()" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold">选择当前目录</button>
+                        <button type="button" onclick="goResourceFolderBack()" class="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">返回上一级</button>
+                    </div>
+                    <div id="resource-folder-list" class="space-y-3"></div>
+                </div>
+            </div>
+        </div>
     </main>
 
     <footer class="footer-text">
@@ -709,862 +612,6 @@
         </div>
     </footer>
 
-    <script>
-        let isRunning = false;
-        let monitorState = { running: false, current_task: '', tasks: [], logs: [], summary: { step: '空闲', detail: '等待监控任务' }, queued: [], next_runs: {} };
-        let editingMonitorName = null;
-        let lastLogSignature = '';
-        let lastMonitorLogSignature = '';
-        let lastMonitorRenderKey = '';
-        let statusEventSource = null;
-        let statusFallbackTimer = null;
-        const monitorActionLocks = new Set();
-        let versionInfo = { local: null, latest: null, has_update: false, checked_at: 0, error: '', source: '' };
-        let versionBannerDismissed = false;
-        const btnTexts = ["🌐 联网同步更新", "🛠 本地调试解析", "🔥 强制全量重刷"];
-        const DEFAULT_EXTENSIONS = "mp4,mkv,avi,mov,wmv,flv,webm,vob,mpg,mpeg,ts,m2ts,mts,rmvb,rm,asf,3gp,m4v,f4v,iso";
-        const STATUS_FALLBACK_INTERVAL = 15000;
-        const VERSION_REFRESH_INTERVAL = 1000 * 60 * 15;
-        const VERSION_FALLBACK_PROJECT_URL = 'https://github.com/xianer235/115-strm-web';
-        const VERSION_FALLBACK_CHANGELOG_URL = 'https://github.com/xianer235/115-strm-web/blob/main/CHANGELOG.md';
-
-        function switchTab(tab) {
-            ['task', 'settings', 'monitor', 'about'].forEach(name => {
-                document.getElementById(`page-${name}`).classList.toggle('hidden', tab !== name);
-                document.getElementById(`tab-${name}`).className = tab === name ? 'tab-active uppercase' : 'tab-inactive uppercase';
-            });
-        }
-
-        function escapeHtml(str) {
-            return String(str || '')
-                .replaceAll('&', '&amp;')
-                .replaceAll('<', '&lt;')
-                .replaceAll('>', '&gt;')
-                .replaceAll('"', '&quot;')
-                .replaceAll("'", '&#39;');
-        }
-
-        function buildLogSignature(logs, formatter) {
-            const list = Array.isArray(logs) ? logs : [];
-            const tail = list.length ? formatter(list[list.length - 1]) : '';
-            return `${list.length}:${tail}`;
-        }
-
-        function decorateSummaryMetric(segment) {
-            const raw = String(segment || '').trim();
-            const match = raw.match(/^(.*?)(\d+)$/);
-            if (!match) return escapeHtml(raw);
-
-            const label = match[1].trim();
-            const value = Number(match[2]);
-            const classMap = {
-                '新增/更新': 'summary-positive',
-                '跳过文件': 'summary-skip',
-                '跳过目录': 'summary-skip',
-                '失败目录': 'summary-fail',
-                '删除文件': 'summary-delete',
-                '删除目录': 'summary-delete'
-            };
-            const colorClass = classMap[label];
-            if (!colorClass) return escapeHtml(raw);
-
-            const zeroClass = value === 0 ? ' summary-zero' : '';
-            return `<span class="summary-metric ${colorClass}${zeroClass}">${escapeHtml(raw)}</span>`;
-        }
-
-        function decorateMonitorSummaryText(text) {
-            const raw = String(text || '');
-            const match = raw.match(/^(\d{2}-\d{2} \d{2}:\d{2}:\d{2}\s+)?(生成汇总:|清理汇总:)\s*(.*)$/);
-            if (!match) return escapeHtml(raw);
-
-            const timestamp = escapeHtml(match[1] || '');
-            const prefix = escapeHtml(match[2]);
-            const metrics = String(match[3] || '')
-                .split(' | ')
-                .map(decorateSummaryMetric)
-                .join('<span class="text-slate-500"> | </span>');
-
-            return `${timestamp}${prefix} ${metrics}`;
-        }
-
-        function formatMonitorLogHtml(item) {
-            const level = item?.level || 'info';
-            const text = String(item?.text || '');
-            if (level === 'info' && (text.includes('生成汇总:') || text.includes('清理汇总:'))) {
-                return decorateMonitorSummaryText(text);
-            }
-            return escapeHtml(text);
-        }
-
-        function monitorActionToken(action, name) {
-            return `${action}::${String(name || '').trim()}`;
-        }
-
-        function isMonitorActionLocked(action, name) {
-            return monitorActionLocks.has(monitorActionToken(action, name));
-        }
-
-        function setMonitorActionLock(action, name, locked) {
-            const token = monitorActionToken(action, name);
-            if (locked) monitorActionLocks.add(token);
-            else monitorActionLocks.delete(token);
-            renderMonitorTasks();
-            lastMonitorRenderKey = buildMonitorRenderKey(monitorState);
-        }
-
-        function buildMonitorRenderKey(state) {
-            return JSON.stringify({
-                running: !!state?.running,
-                current_task: state?.current_task || '',
-                queued: Array.isArray(state?.queued) ? state.queued : [],
-                next_runs: state?.next_runs || {},
-                tasks: Array.isArray(state?.tasks) ? state.tasks : [],
-                locks: Array.from(monitorActionLocks).sort()
-            });
-        }
-
-        function applyMainState(data) {
-            if (!data) return;
-            if (data.running !== isRunning) updateButtonState(!!data.running);
-
-            const logBox = document.getElementById('log-box');
-            const logs = Array.isArray(data.logs) ? data.logs : [];
-            const logSignature = buildLogSignature(logs, (line) => String(line || ''));
-            if (logSignature !== lastLogSignature) {
-                logBox.innerHTML = logs.map(line => escapeHtml(line)).join('<br>');
-                logBox.scrollTop = logBox.scrollHeight;
-                lastLogSignature = logSignature;
-            }
-
-            const p = data.progress || {};
-            document.getElementById('prog-step').innerText = p.step || '空闲';
-            document.getElementById('prog-percent').innerText = `${Number(p.percent || 0)}%`;
-            document.getElementById('prog-bar').style.width = `${Number(p.percent || 0)}%`;
-            document.getElementById('prog-detail').innerText = p.detail || '等待指令';
-
-            if (data.next_run) {
-                document.getElementById('next-run-container').classList.remove('hidden');
-                document.getElementById('next-run-time').innerText = data.next_run;
-            } else {
-                document.getElementById('next-run-container').classList.add('hidden');
-            }
-        }
-
-        function applyMonitorState(data, { forceRender = false } = {}) {
-            if (!data) return;
-            monitorState = {
-                ...monitorState,
-                ...data,
-                tasks: Array.isArray(data.tasks) ? data.tasks : (monitorState.tasks || []),
-                logs: Array.isArray(data.logs) ? data.logs : (monitorState.logs || []),
-                queued: Array.isArray(data.queued) ? data.queued : (monitorState.queued || []),
-                next_runs: data.next_runs || monitorState.next_runs || {},
-                summary: data.summary || monitorState.summary || { step: '空闲', detail: '等待监控任务' }
-            };
-
-            document.getElementById('monitor-summary-step').innerText = monitorState.summary?.step || '空闲';
-            document.getElementById('monitor-summary-detail').innerText = monitorState.summary?.detail || '等待监控任务';
-
-            const renderKey = buildMonitorRenderKey(monitorState);
-            if (forceRender || renderKey !== lastMonitorRenderKey) {
-                renderMonitorTasks();
-                lastMonitorRenderKey = renderKey;
-            }
-            renderMonitorLogs();
-        }
-
-        function startStatusFallbackPolling() {
-            if (statusFallbackTimer) return;
-            statusFallbackTimer = window.setInterval(() => {
-                refreshMainLogs();
-                refreshMonitorState();
-            }, STATUS_FALLBACK_INTERVAL);
-        }
-
-        function stopStatusFallbackPolling() {
-            if (!statusFallbackTimer) return;
-            window.clearInterval(statusFallbackTimer);
-            statusFallbackTimer = null;
-        }
-
-        function connectStatusStream() {
-            if (!window.EventSource) {
-                startStatusFallbackPolling();
-                return;
-            }
-            if (statusEventSource) statusEventSource.close();
-            statusEventSource = new EventSource('/events');
-            statusEventSource.addEventListener('state', (event) => {
-                try {
-                    const payload = JSON.parse(event.data || '{}');
-                    stopStatusFallbackPolling();
-                    applyMainState(payload.main);
-                    applyMonitorState(payload.monitor);
-                } catch (err) {
-                    console.warn('Status stream parse failed', err);
-                }
-            });
-            statusEventSource.onopen = () => {
-                stopStatusFallbackPolling();
-            };
-            statusEventSource.onerror = () => {
-                startStatusFallbackPolling();
-            };
-        }
-
-        function normalizeVersionLabel(rawVersion) {
-            const raw = String(rawVersion || 'dev').trim();
-            if (!raw) return 'Vdev';
-            return raw.startsWith('V') ? raw : `V${raw}`;
-        }
-
-        function formatTimeText(value) {
-            if (!value) return '--';
-            const d = new Date(value);
-            if (Number.isNaN(d.getTime())) return String(value);
-            return d.toLocaleString();
-        }
-
-        function getProjectUrl() {
-            return versionInfo?.latest?.projectUrl || versionInfo?.local?.projectUrl || VERSION_FALLBACK_PROJECT_URL;
-        }
-
-        function getChangelogUrl() {
-            return versionInfo?.latest?.changelogUrl || versionInfo?.local?.changelogUrl || getProjectUrl() || VERSION_FALLBACK_CHANGELOG_URL;
-        }
-
-        function getVersionNotes() {
-            const latestNotes = Array.isArray(versionInfo?.latest?.notes) ? versionInfo.latest.notes.filter(Boolean) : [];
-            if (latestNotes.length) return latestNotes;
-            const localNotes = Array.isArray(versionInfo?.local?.notes) ? versionInfo.local.notes.filter(Boolean) : [];
-            return localNotes;
-        }
-
-        function renderVersionInfoPanel() {
-            const localVersion = normalizeVersionLabel(versionInfo?.local?.version || 'dev');
-            const latestRaw = versionInfo?.latest?.version || '';
-            const latestVersion = latestRaw ? normalizeVersionLabel(latestRaw) : '--';
-            const hasUpdate = !!versionInfo?.has_update;
-            const hasChecked = Number(versionInfo?.checked_at || 0) > 0;
-            const error = String(versionInfo?.error || '').trim();
-
-            const footerVersion = document.getElementById('version-text');
-            if (footerVersion) footerVersion.textContent = localVersion;
-
-            const localEl = document.getElementById('about-local-version');
-            if (localEl) localEl.textContent = localVersion;
-            const buildEl = document.getElementById('about-build-date');
-            if (buildEl) buildEl.textContent = formatTimeText(versionInfo?.local?.buildDate);
-            const latestEl = document.getElementById('about-latest-version');
-            if (latestEl) latestEl.textContent = latestVersion;
-            const checkedEl = document.getElementById('about-checked-at');
-            if (checkedEl) checkedEl.textContent = versionInfo?.checked_at ? `约 ${formatTimeText(versionInfo.checked_at * 1000)}` : '--';
-
-            const statusEl = document.getElementById('about-version-status');
-            if (statusEl) {
-                if (error) {
-                    statusEl.textContent = '检查失败';
-                    statusEl.className = 'text-xs px-3 py-2 rounded-xl border border-red-500/20 bg-red-500/10 text-red-300';
-                } else if (!hasChecked) {
-                    statusEl.textContent = '尚未检查更新';
-                    statusEl.className = 'text-xs px-3 py-2 rounded-xl border border-slate-700 bg-slate-900/80 text-slate-300';
-                } else if (hasUpdate) {
-                    statusEl.textContent = latestRaw ? `有可用更新：${normalizeVersionLabel(latestRaw)}` : '发现可用更新';
-                    statusEl.className = 'text-xs px-3 py-2 rounded-xl border border-amber-500/25 bg-amber-500/15 text-amber-300';
-                } else {
-                    statusEl.textContent = '当前已是最新版本';
-                    statusEl.className = 'text-xs px-3 py-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-300';
-                }
-            }
-
-            const errorEl = document.getElementById('about-version-error');
-            if (errorEl) {
-                if (error) {
-                    errorEl.textContent = `版本检查失败：${error}`;
-                    errorEl.classList.remove('hidden');
-                } else {
-                    errorEl.classList.add('hidden');
-                    errorEl.textContent = '';
-                }
-            }
-
-            const hintEl = document.getElementById('about-version-hint');
-            if (hintEl && !error) {
-                if (!hasChecked) {
-                    hintEl.textContent = '提示：进入页面后会自动检查远端版本，也可以手动点击“检查更新”。';
-                } else {
-                    hintEl.textContent = hasUpdate
-                        ? `检测到新版本 ${latestVersion}，建议先查看更新说明后再升级。`
-                        : '当前版本已和远端同步，后续会自动定时检查。';
-                }
-            }
-
-            const notesWrap = document.getElementById('about-version-notes');
-            if (notesWrap) {
-                const notes = getVersionNotes();
-                if (notes.length) {
-                    notesWrap.innerHTML = `<ul class="list-disc pl-5 space-y-2">${notes.map(note => `<li>${escapeHtml(note)}</li>`).join('')}</ul>`;
-                } else {
-                    notesWrap.textContent = '暂无更新说明';
-                }
-            }
-
-            const changelogUrl = getChangelogUrl();
-            const projectUrl = getProjectUrl();
-            const starUrl = `${projectUrl.replace(/\/+$/, '')}/stargazers`;
-            const changelogLink = document.getElementById('about-changelog-link');
-            if (changelogLink) changelogLink.href = changelogUrl;
-            const projectLink = document.getElementById('about-project-link');
-            if (projectLink) projectLink.href = projectUrl;
-            const starLink = document.getElementById('about-star-link');
-            if (starLink) starLink.href = starUrl;
-        }
-
-        function showHelp(text) {
-            const normalized = String(text || '').replace(/\\n/g, '\n');
-            document.getElementById('help-modal-body').textContent = normalized;
-            document.getElementById('help-modal').classList.remove('hidden');
-        }
-
-        function closeHelpModal() {
-            document.getElementById('help-modal').classList.add('hidden');
-        }
-
-        function addTreeRow(data = {url: '', prefix: '', exclude: 1}) {
-            const container = document.getElementById('trees-container');
-            const row = document.createElement('div');
-            row.className = "tree-row grid grid-cols-12 gap-3 items-end bg-slate-900/50 p-4 rounded-2xl border border-slate-800 hover:border-slate-700 transition-colors";
-            row.innerHTML = `
-                <div class="col-span-12 md:col-span-5">
-                    <span class="text-[10px] text-slate-500 ml-1 font-bold uppercase">目录树下载 URL</span>
-                    <input class="t-url w-full bg-slate-950 border-slate-700 rounded-lg p-2.5 text-sm mt-1 outline-none focus:border-sky-500" value="${escapeHtml(data.url)}" placeholder="AList/OpenList 中的 tree.txt 下载链接">
-                </div>
-                <div class="col-span-7 md:col-span-4">
-                    <span class="text-[10px] text-slate-500 ml-1 font-bold uppercase">父文件夹路径前缀 (选填)</span>
-                    <input class="t-prefix w-full bg-slate-950 border-slate-700 rounded-lg p-2.5 text-sm mt-1 outline-none focus:border-sky-500" value="${escapeHtml(data.prefix)}" placeholder="补全丢失的路径，如: 电影/漫威">
-                </div>
-                <div class="col-span-3 md:col-span-2">
-                    <span class="text-[10px] text-slate-500 ml-1 font-bold uppercase">排除层级</span>
-                    <input type="number" min="1" class="t-exclude w-full bg-slate-950 border-slate-700 rounded-lg p-2.5 text-sm mt-1 outline-none focus:border-sky-500" value="${Number(data.exclude || 1)}">
-                </div>
-                <div class="col-span-2 md:col-span-1">
-                    <button onclick="this.parentElement.parentElement.remove()" class="w-full bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white p-2.5 rounded-lg transition-colors text-sm font-bold">✕</button>
-                </div>
-            `;
-            container.appendChild(row);
-        }
-
-        function resetExtensions() {
-            if (confirm("确定要恢复默认扫描后缀名吗？\n(恢复后请手动点击下方的保存全部配置)")) {
-                document.getElementById('extensions').value = DEFAULT_EXTENSIONS;
-            }
-        }
-
-        async function triggerTask(local, full) {
-            if (isRunning) return;
-            const res = await fetch('/start', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({use_local: local, force_full: full})
-            });
-            if ((await res.json()).status === 'started') updateButtonState(true);
-        }
-
-        function updateButtonState(running) {
-            isRunning = running;
-            document.querySelectorAll('.btn-ctrl').forEach((btn, i) => {
-                btn.classList.toggle('btn-disabled', running);
-                btn.innerText = running ? "⏳ 任务运行中..." : btnTexts[i];
-            });
-        }
-
-        async function saveSettings() {
-            const cfg = {};
-            const standardIds = ['alist_url', 'alist_token', 'mount_path', 'cron_hour', 'sync_mode', 'extensions', 'username', 'password'];
-            standardIds.forEach(id => {
-                const el = document.getElementById(id);
-                if (el) cfg[id] = el.value;
-            });
-
-            cfg.check_hash = document.getElementById('check_hash').checked;
-            cfg.sync_clean = document.getElementById('sync_clean').checked;
-            cfg.monitor_tasks = monitorState.tasks || [];
-            cfg.trees = [];
-
-            document.querySelectorAll('.tree-row').forEach(row => {
-                const url = row.querySelector('.t-url').value.trim();
-                if (url) {
-                    cfg.trees.push({
-                        url,
-                        prefix: row.querySelector('.t-prefix').value.trim(),
-                        exclude: parseInt(row.querySelector('.t-exclude').value || '1', 10) || 1
-                    });
-                }
-            });
-
-            const res = await fetch('/save_settings', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(cfg)
-            });
-
-            if (res.ok) {
-                alert('✅ 配置已保存');
-            } else {
-                alert('❌ 保存失败');
-            }
-        }
-
-        async function clearMainLogs() {
-            const res = await fetch('/logs/clear', { method: 'POST' });
-            if (res.ok) {
-                lastLogSignature = '';
-                await refreshMainLogs();
-            }
-        }
-
-        async function clearMonitorLogs() {
-            const res = await fetch('/monitor/logs/clear', { method: 'POST' });
-            if (res.ok) {
-                lastMonitorLogSignature = '';
-                await refreshMonitorState();
-            }
-        }
-
-        function currentMonitorFormData() {
-            return {
-                name: document.getElementById('monitor_name').value.trim(),
-                webhook_enabled: document.getElementById('monitor_webhook_enabled').checked,
-                scan_path: document.getElementById('monitor_scan_path').value.trim(),
-                target_path: document.getElementById('monitor_target_path').value.trim(),
-                skip_by_dir_mtime: document.getElementById('monitor_skip_by_dir_mtime').checked,
-                incremental: document.getElementById('monitor_incremental').checked,
-                retries: parseInt(document.getElementById('monitor_retries').value || '3', 10) || 3,
-                list_delay_ms: parseInt(document.getElementById('monitor_list_delay_ms').value || '0', 10) || 0,
-                min_file_size_mb: parseFloat(document.getElementById('monitor_min_file_size_mb').value || '0') || 0,
-                delay_seconds: parseInt(document.getElementById('monitor_delay_seconds').value || '0', 10) || 0,
-                cron_minutes: parseInt(document.getElementById('monitor_cron_minutes').value || '0', 10) || 0
-            };
-        }
-
-        function resetMonitorForm() {
-            editingMonitorName = null;
-            document.getElementById('monitor-modal-title').innerText = '新增监控任务';
-            document.getElementById('monitor_name').value = '';
-            document.getElementById('monitor_webhook_enabled').checked = false;
-            document.getElementById('monitor_scan_path').value = '';
-            document.getElementById('monitor_target_path').value = '';
-            document.getElementById('monitor_skip_by_dir_mtime').checked = false;
-            document.getElementById('monitor_incremental').checked = false;
-            document.getElementById('monitor_retries').value = 3;
-            document.getElementById('monitor_list_delay_ms').value = 0;
-            document.getElementById('monitor_min_file_size_mb').value = 0;
-            document.getElementById('monitor_delay_seconds').value = 0;
-            document.getElementById('monitor_cron_minutes').value = 0;
-            refreshWebhookHint();
-        }
-
-        function openNewMonitorTask() {
-            resetMonitorForm();
-            document.getElementById('monitor-modal').classList.remove('hidden');
-        }
-
-        function closeMonitorModal() {
-            document.getElementById('monitor-modal').classList.add('hidden');
-        }
-
-        function refreshWebhookHint() {
-            const name = document.getElementById('monitor_name').value.trim() || '任务名';
-            document.getElementById('webhook-hint').innerHTML = [
-                `webhook 地址：IP:容器端口/webhook/${escapeHtml(name)}（用于触发指定任务）`,
-                'savepath：转存目标父路径（用于定位刷新范围）',
-                'sharetitle：转存资源文件夹名（为空则回退按 savepath 刷新）',
-                'delayTime：可选，单位秒（覆盖本次任务执行延时）',
-                'title：可选（仅日志展示）',
-                '说明：本页面仅接收参数；触发条件与映射规则请在 CloudSaver 中配置'
-            ].join('<br>');
-        }
-
-        async function persistMonitorTasks(tasks) {
-            const res = await fetch('/monitor/save', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ tasks })
-            });
-            const data = await res.json();
-            if (!res.ok || !data.ok) {
-                throw new Error(data.msg || '保存监控任务失败');
-            }
-            applyMonitorState({ ...monitorState, tasks: data.tasks || [] }, { forceRender: true });
-        }
-
-        async function saveMonitorTask() {
-            const task = currentMonitorFormData();
-            if (!task.name) return alert('任务名不能为空');
-            if (!task.scan_path) return alert('扫描路径不能为空');
-            if (!task.target_path) return alert('目标路径不能为空');
-            if (task.retries < 1 || task.retries > 5) return alert('读取失败尝试次数只能在 1 到 5 之间');
-            if (task.cron_minutes < 0) return alert('定时执行分钟不能小于 0');
-
-            const tasks = [...(monitorState.tasks || [])];
-            const dup = tasks.find(item => item.name === task.name && item.name !== editingMonitorName);
-            if (dup) return alert('任务名重复，请修改后再保存');
-
-            const idx = tasks.findIndex(item => item.name === editingMonitorName);
-            if (idx >= 0) tasks[idx] = task;
-            else tasks.push(task);
-
-            try {
-                await persistMonitorTasks(tasks);
-                resetMonitorForm();
-                closeMonitorModal();
-                alert('✅ 监控任务已保存');
-            } catch (e) {
-                alert(`❌ ${e.message}`);
-            }
-        }
-
-        function editMonitorTask(name) {
-            const task = (monitorState.tasks || []).find(item => item.name === name);
-            if (!task) return;
-            editingMonitorName = task.name;
-            document.getElementById('monitor-modal-title').innerText = `编辑监控任务：${task.name}`;
-            document.getElementById('monitor_name').value = task.name || '';
-            document.getElementById('monitor_webhook_enabled').checked = !!task.webhook_enabled;
-            document.getElementById('monitor_scan_path').value = task.scan_path || '';
-            document.getElementById('monitor_target_path').value = task.target_path || '';
-            document.getElementById('monitor_skip_by_dir_mtime').checked = !!task.skip_by_dir_mtime;
-            document.getElementById('monitor_incremental').checked = !!task.incremental;
-            document.getElementById('monitor_retries').value = task.retries ?? 3;
-            document.getElementById('monitor_list_delay_ms').value = task.list_delay_ms ?? 0;
-            document.getElementById('monitor_min_file_size_mb').value = task.min_file_size_mb ?? 0;
-            document.getElementById('monitor_delay_seconds').value = task.delay_seconds ?? 0;
-            document.getElementById('monitor_cron_minutes').value = task.cron_minutes ?? 0;
-            refreshWebhookHint();
-            document.getElementById('monitor-modal').classList.remove('hidden');
-            switchTab('monitor');
-        }
-
-        async function deleteMonitorTask(name) {
-            if (!confirm(`确定删除监控任务“${name}”吗？`)) return;
-            if (isMonitorActionLocked('delete', name)) return;
-            setMonitorActionLock('delete', name, true);
-            try {
-                const res = await fetch('/monitor/delete', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ name })
-                });
-                const data = await res.json();
-                if (!res.ok || !data.ok) {
-                    return alert(`❌ ${data.msg || '删除失败'}`);
-                }
-                applyMonitorState({
-                    ...monitorState,
-                    tasks: (monitorState.tasks || []).filter(item => item.name !== name),
-                    queued: (monitorState.queued || []).filter(item => item !== name),
-                    next_runs: Object.fromEntries(Object.entries(monitorState.next_runs || {}).filter(([taskName]) => taskName !== name))
-                }, { forceRender: true });
-                if (editingMonitorName === name) resetMonitorForm();
-            } finally {
-                setMonitorActionLock('delete', name, false);
-            }
-        }
-
-        async function startMonitorTask(name) {
-            if (isMonitorActionLocked('start', name)) return;
-            setMonitorActionLock('start', name, true);
-            try {
-                const res = await fetch('/monitor/start', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ name })
-                });
-                const data = await res.json();
-                if (!res.ok || !data.ok) {
-                    return alert(`❌ ${data.msg || '启动失败'}`);
-                }
-
-                const queued = Array.isArray(monitorState.queued) ? [...monitorState.queued] : [];
-                if (data.status === 'queued') {
-                    if (!queued.includes(name)) queued.push(name);
-                    applyMonitorState({ ...monitorState, queued }, { forceRender: true });
-                } else {
-                    applyMonitorState({
-                        ...monitorState,
-                        running: true,
-                        current_task: name,
-                        queued: queued.filter(item => item !== name),
-                        summary: { step: '准备执行', detail: `${name} (manual)` }
-                    }, { forceRender: true });
-                }
-                await refreshMonitorState();
-            } finally {
-                setMonitorActionLock('start', name, false);
-            }
-        }
-
-        async function stopMonitorTask(name) {
-            if (isMonitorActionLocked('stop', name)) return;
-            setMonitorActionLock('stop', name, true);
-            try {
-                const res = await fetch('/monitor/stop', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ name })
-                });
-                const data = await res.json();
-                if (!data.ok) {
-                    alert('当前没有这个任务在运行');
-                    return;
-                }
-                applyMonitorState({
-                    ...monitorState,
-                    summary: { step: '正在中断', detail: `${name} 已发送中断请求` }
-                }, { forceRender: true });
-                await refreshMonitorState();
-            } finally {
-                setMonitorActionLock('stop', name, false);
-            }
-        }
-
-        function renderMonitorTasks() {
-            const container = document.getElementById('monitor-task-list');
-            const tasks = monitorState.tasks || [];
-            if (!tasks.length) {
-                container.innerHTML = `<div class="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">还没有文件夹监控任务，点击“新增任务”即可创建。</div>`;
-                return;
-            }
-
-            container.innerHTML = tasks.map(task => {
-                const taskKey = encodeURIComponent(task.name || '');
-                const running = monitorState.running && monitorState.current_task === task.name;
-                const queued = (monitorState.queued || []).includes(task.name);
-                const starting = isMonitorActionLocked('start', task.name);
-                const stopping = isMonitorActionLocked('stop', task.name);
-                const deleting = isMonitorActionLocked('delete', task.name);
-                const startDisabled = monitorState.running || starting || stopping || deleting;
-                const stopDisabled = !running || starting || stopping || deleting;
-                const deleteDisabled = running || starting || stopping || deleting;
-                const badge = running
-                    ? '<span class="text-[10px] px-3 py-1 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/20">运行中</span>'
-                    : queued
-                        ? '<span class="text-[10px] px-3 py-1 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/20">已排队</span>'
-                        : '<span class="text-[10px] px-3 py-1 rounded-full bg-slate-700 text-slate-300">待命</span>';
-                const nextRun = (monitorState.next_runs || {})[task.name];
-                return `
-                    <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4">
-                        <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
-                            <div class="space-y-2">
-                                <div class="flex items-center gap-3 flex-wrap">
-                                    <div class="text-lg font-black text-white">${escapeHtml(task.name)}</div>
-                                    ${badge}
-                                    ${task.webhook_enabled ? '<span class="text-[10px] px-3 py-1 rounded-full bg-sky-500/15 text-sky-300 border border-sky-500/20">Webhook</span>' : ''}
-                                    ${task.incremental ? '<span class="text-[10px] px-3 py-1 rounded-full bg-violet-500/15 text-violet-300 border border-violet-500/20">增量</span>' : '<span class="text-[10px] px-3 py-1 rounded-full bg-red-500/10 text-red-300 border border-red-500/20">全量</span>'}
-                                </div>
-                                <div class="text-xs text-slate-400 leading-6">
-                                    <div>扫描路径：${escapeHtml(task.scan_path)}</div>
-                                    <div>目标路径：/strm/${escapeHtml(task.target_path)}</div>
-                                    <div>参数：重试 ${task.retries} 次 / 列目录延时 ${task.list_delay_ms}ms / 体积过滤 ${task.min_file_size_mb}MB / 执行延时 ${task.delay_seconds}s / 定时 ${task.cron_minutes || 0} 分钟</div>
-                                    <div>下次定时：${nextRun ? escapeHtml(nextRun) : '未开启'}</div>
-                                </div>
-                            </div>
-                            <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2 shrink-0">
-                                <button type="button" data-monitor-action="start" data-task-name="${taskKey}" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold ${startDisabled ? 'btn-disabled' : ''}" ${startDisabled ? 'disabled' : ''}>${starting ? '启动中...' : '运行'}</button>
-                                <button type="button" data-monitor-action="stop" data-task-name="${taskKey}" class="px-4 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 text-sm font-bold ${stopDisabled ? 'btn-disabled' : ''}" ${stopDisabled ? 'disabled' : ''}>${stopping ? '中断中...' : '中断'}</button>
-                                <button type="button" data-monitor-action="edit" data-task-name="${taskKey}" class="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">编辑</button>
-                                <button type="button" data-monitor-action="delete" data-task-name="${taskKey}" class="px-4 py-2 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-300 text-sm font-bold ${deleteDisabled ? 'btn-disabled' : ''}" ${deleteDisabled ? 'disabled' : ''}>${deleting ? '删除中...' : '删除'}</button>
-                            </div>
-                        </div>
-                        ${task.webhook_enabled ? `<div class="mt-3 text-xs text-emerald-400">Webhook：IP:容器端口/webhook/${escapeHtml(task.name)}</div>` : ''}
-                    </div>
-                `;
-            }).join('');
-        }
-
-        function renderMonitorLogs() {
-            const box = document.getElementById('monitor-log-box');
-            const logs = monitorState.logs || [];
-            const logSignature = buildLogSignature(logs, (item) => `${item?.level || 'info'}:${item?.text || ''}`);
-            if (logSignature === lastMonitorLogSignature) return;
-            box.innerHTML = logs.map(item => `<div class="log-${item.level || 'info'}">${formatMonitorLogHtml(item)}</div>`).join('');
-            box.scrollTop = box.scrollHeight;
-            lastMonitorLogSignature = logSignature;
-        }
-
-        async function refreshMainLogs() {
-            try {
-                const res = await fetch('/logs');
-                if (!res.ok) return;
-                applyMainState(await res.json());
-            } catch (e) {}
-        }
-
-        async function refreshMonitorState() {
-            try {
-                const res = await fetch('/monitor/status');
-                if (!res.ok) return;
-                applyMonitorState(await res.json());
-            } catch (e) {}
-        }
-
-        function showVersionBanner(latest) {
-            if (!latest) return;
-            const banner = document.getElementById('version-banner');
-            if (!banner) return;
-            const textEl = document.getElementById('version-banner-text');
-            const noteEl = document.getElementById('version-banner-notes');
-            const linkEl = document.getElementById('version-banner-link');
-            const fromVer = normalizeVersionLabel(versionInfo?.local?.version || 'dev');
-            const toVer = latest.version ? normalizeVersionLabel(latest.version) : '';
-            if (textEl) textEl.textContent = toVer ? `${fromVer} -> ${toVer} 可更新` : '检测到可用更新';
-            if (noteEl) {
-                const notes = getVersionNotes();
-                noteEl.textContent = notes.length ? notes[0] : '建议先在「关于」页查看更新说明，再执行升级。';
-            }
-            if (linkEl) linkEl.href = getChangelogUrl();
-            banner.classList.remove('hidden');
-        }
-
-        function hideVersionBanner() {
-            const banner = document.getElementById('version-banner');
-            if (banner) banner.classList.add('hidden');
-        }
-
-        function dismissVersionBanner() {
-            versionBannerDismissed = true;
-            hideVersionBanner();
-        }
-
-        async function refreshVersionInfo(force = false) {
-            try {
-                const endpoint = force ? '/version?refresh=1' : '/version';
-                const res = await fetch(endpoint);
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                const data = await res.json();
-                versionInfo = {
-                    ...versionInfo,
-                    ...data,
-                    error: data?.error || ''
-                };
-                renderVersionInfoPanel();
-                if (!versionBannerDismissed && versionInfo.has_update) {
-                    showVersionBanner(versionInfo.latest || {});
-                } else if (!versionInfo.has_update) {
-                    hideVersionBanner();
-                    versionBannerDismissed = false;
-                }
-            } catch (err) {
-                console.warn('Version refresh failed', err);
-                versionInfo = {
-                    ...versionInfo,
-                    error: err instanceof Error ? err.message : String(err || 'unknown error')
-                };
-                renderVersionInfoPanel();
-            }
-        }
-
-        async function manualVersionCheck() {
-            const btn = document.getElementById('about-check-btn');
-            const hintEl = document.getElementById('about-version-hint');
-            const originalText = btn ? btn.textContent : '';
-            if (btn) {
-                btn.disabled = true;
-                btn.classList.add('btn-disabled');
-                btn.textContent = '检查中...';
-            }
-            await refreshVersionInfo(true);
-            if (hintEl) {
-                if (versionInfo?.error) {
-                    hintEl.textContent = `手动检查失败：${versionInfo.error}`;
-                } else if (versionInfo?.has_update) {
-                    const latest = normalizeVersionLabel(versionInfo?.latest?.version || '');
-                    hintEl.textContent = latest ? `手动检查完成，发现可用更新 ${latest}。` : '手动检查完成，发现可用更新。';
-                } else {
-                    hintEl.textContent = '手动检查完成，当前已是最新版本。';
-                }
-            }
-            if (btn) {
-                btn.disabled = false;
-                btn.classList.remove('btn-disabled');
-                btn.textContent = originalText || '手动检查更新';
-            }
-        }
-
-        async function init() {
-            try {
-                const res = await fetch('/get_settings');
-                if (!res.ok) return;
-                const cfg = await res.json();
-
-                Object.keys(cfg).forEach(k => {
-                    const el = document.getElementById(k);
-                    if (el && k !== 'trees') {
-                        if (el.type === 'checkbox') el.checked = cfg[k];
-                        else el.value = cfg[k];
-                    }
-                });
-
-                const container = document.getElementById('trees-container');
-                container.innerHTML = '';
-                if (cfg.trees && cfg.trees.length > 0) cfg.trees.forEach(t => addTreeRow(t));
-                else addTreeRow();
-
-                applyMonitorState({ ...monitorState, tasks: cfg.monitor_tasks || [] }, { forceRender: true });
-                resetMonitorForm();
-                refreshWebhookHint();
-                renderVersionInfoPanel();
-            } catch (e) {}
-        }
-
-        document.getElementById('monitor_name').addEventListener('input', refreshWebhookHint);
-        document.getElementById('monitor-task-list').addEventListener('click', async (e) => {
-            const btn = e.target.closest('[data-monitor-action]');
-            if (!btn) return;
-            const action = btn.dataset.monitorAction || '';
-            const name = decodeURIComponent(btn.dataset.taskName || '');
-            if (!name) return;
-            if (action === 'start') await startMonitorTask(name);
-            if (action === 'stop') await stopMonitorTask(name);
-            if (action === 'edit') editMonitorTask(name);
-            if (action === 'delete') await deleteMonitorTask(name);
-        });
-        document.getElementById('monitor-modal').addEventListener('click', (e) => {
-            if (e.target.id === 'monitor-modal') closeMonitorModal();
-        });
-        document.getElementById('help-modal').addEventListener('click', (e) => {
-            if (e.target.id === 'help-modal') closeHelpModal();
-        });
-        function applyThemeFromStorage() {
-            try {
-                const isDay = localStorage.getItem('theme-day') === 'day';
-                document.documentElement.classList.toggle('theme-day', isDay);
-                const btn = document.getElementById('theme-toggle');
-                if (btn) btn.textContent = isDay ? '☀️ 日间' : '🌙 夜间';
-            } catch (e) {}
-        }
-        function toggleTheme() {
-            try {
-                const el = document.documentElement;
-                const isDay = !el.classList.contains('theme-day');
-                if (isDay) {
-                    el.classList.add('theme-day');
-                    localStorage.setItem('theme-day', 'day');
-                } else {
-                    el.classList.remove('theme-day');
-                    localStorage.setItem('theme-day', 'night');
-                }
-                const btn = document.getElementById('theme-toggle');
-                if (btn) btn.textContent = isDay ? '☀️ 日间' : '🌙 夜间';
-            } catch (e) {}
-        }
-        applyThemeFromStorage();
-        init();
-        refreshMainLogs();
-        refreshMonitorState();
-        connectStatusStream();
-        refreshVersionInfo();
-        setInterval(() => refreshVersionInfo(false), VERSION_REFRESH_INTERVAL);
-    </script>
+    <script src="/static/js/index.js"></script>
 </body>
 </html>
