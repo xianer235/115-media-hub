@@ -16,3 +16,7 @@ config/
 .codex/
 .cursor/
 .codex-ui-check/
+
+# macOS Finder metadata
+.DS_Store
+**/.DS_Store
