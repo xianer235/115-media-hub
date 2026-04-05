@@ -3981,6 +3981,7 @@ def http_request_json(
     token: str = "",
     timeout: int = 30,
     extra_headers: Optional[Dict[str, str]] = None,
+    proxy_url: str = "",
 ) -> Dict[str, Any]:
     url = normalize_http_url(url)
     headers = {}
@@ -3993,7 +3994,12 @@ def http_request_json(
     if token:
         headers["Authorization"] = token
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    opener = urllib.request.build_opener()
+    if proxy_url:
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
+        )
+    with opener.open(req, timeout=timeout) as resp:
         charset = resp.headers.get_content_charset() or "utf-8"
         body = resp.read().decode(charset, errors="ignore")
     return json.loads(body or "{}")
@@ -4079,11 +4085,13 @@ def tmdb_request_json(
     cfg: Optional[Dict[str, Any]] = None,
     force_refresh: bool = False,
 ) -> Dict[str, Any]:
-    runtime = get_tmdb_runtime_config(cfg)
+    active_cfg = normalize_config(cfg or get_config())
+    runtime = get_tmdb_runtime_config(active_cfg)
     if not runtime["enabled"]:
         raise RuntimeError("TMDB 增强未启用，请先在参数配置中开启")
     if not runtime["api_key"]:
         raise RuntimeError("TMDB API Key 未填写")
+    proxy_url = build_tg_proxy_url(active_cfg)
 
     normalized_path = "/" + str(path or "").strip().lstrip("/")
     raw_params = dict(params or {})
@@ -4123,12 +4131,15 @@ def tmdb_request_json(
             request_url,
             timeout=TMDB_REQUEST_TIMEOUT_SECONDS,
             extra_headers={"Accept": "application/json"},
+            proxy_url=proxy_url,
         )
     except urllib.error.HTTPError as exc:
         raise RuntimeError(parse_tmdb_http_error(exc)) from exc
     except urllib.error.URLError as exc:
-        reason = str(getattr(exc, "reason", "") or "").strip()
-        raise RuntimeError(f"TMDB 网络异常：{reason or '无法连接 TMDB'}") from exc
+        reason = format_network_error(exc)
+        if proxy_url:
+            raise RuntimeError(f"TMDB 网络异常（代理 {proxy_url}）：{reason}") from exc
+        raise RuntimeError(f"TMDB 网络异常：{reason}") from exc
     except Exception as exc:
         raise RuntimeError(f"TMDB 请求失败：{exc}") from exc
 
