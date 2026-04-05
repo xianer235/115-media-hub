@@ -467,7 +467,7 @@ async def proxy_resource_image(request: Request) -> Response:
         return Response(status_code=400)
     cfg = get_config()
     headers = {
-        "User-Agent": "Mozilla/5.0 115-strm-web",
+        "User-Agent": "Mozilla/5.0 115-media-hub",
         "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
         "Referer": "https://t.me/",
         "Origin": "https://t.me",

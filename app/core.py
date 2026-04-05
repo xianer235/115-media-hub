@@ -73,7 +73,7 @@ TEMPLATE_DIR = os.path.join(BASE_DIR, "templates")
 VERSION_FILE = os.path.join(BASE_DIR, "version.json")
 VERSION_SOURCE_URL = os.environ.get(
     "VERSION_SOURCE_URL",
-    "https://raw.githubusercontent.com/xianer235/115-strm-web/main/version.json",
+    "https://raw.githubusercontent.com/xianer235/115-media-hub/main/version.json",
 )
 VERSION_CACHE_TTL = int(os.environ.get("VERSION_CACHE_TTL", 6 * 3600))
 UI_EVENT_RETRY_MS = 3000
@@ -1144,7 +1144,7 @@ def test_telegram_latency(cfg: Dict[str, Any], channel_id: str = "telegram", tim
     proxy_url = build_tg_proxy_url(cfg, ignore_enabled=True)
     headers = {
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "User-Agent": "Mozilla/5.0 115-strm-web",
+        "User-Agent": "Mozilla/5.0 115-media-hub",
     }
     started_at = time.perf_counter()
     try:
@@ -4467,7 +4467,7 @@ def submit_115_offline_task(cookie: str, resource_url: str, folder_id: str) -> D
         "Accept": "application/json, text/plain, */*",
         "Referer": "https://115.com/",
         "Origin": "https://115.com",
-        "User-Agent": "Mozilla/5.0 115-strm-web",
+        "User-Agent": "Mozilla/5.0 115-media-hub",
     }
     response = http_request_form_json(
         "https://115.com/web/lixian/?ct=lixian&ac=add_task_url",
@@ -4502,7 +4502,7 @@ def list_115_entries(cookie: str, cid: str = "0") -> List[Dict[str, Any]]:
         "Cookie": cookie,
         "Accept": "application/json, text/plain, */*",
         "Referer": "https://115.com/",
-        "User-Agent": "Mozilla/5.0 115-strm-web",
+        "User-Agent": "Mozilla/5.0 115-media-hub",
     }
     url = (
         "https://aps.115.com/natsort/files.php"
@@ -4560,7 +4560,7 @@ def create_115_folder(cookie: str, cid: str = "0", folder_name: str = "") -> Dic
         "Accept": "application/json, text/plain, */*",
         "Referer": "https://115.com/",
         "Origin": "https://115.com",
-        "User-Agent": "Mozilla/5.0 115-strm-web",
+        "User-Agent": "Mozilla/5.0 115-media-hub",
     }
     response = http_request_form_json(
         "https://webapi.115.com/files/add",
@@ -4823,7 +4823,7 @@ def resolve_115_share_payload(cookie: str, share_url: str, raw_text: str = "", r
         "Cookie": str(cookie or "").strip(),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Referer": "https://115.com/",
-        "User-Agent": "Mozilla/5.0 115-strm-web",
+        "User-Agent": "Mozilla/5.0 115-media-hub",
     }
     resolved = http_resolve_url(share_url, timeout=30, extra_headers=headers)
     parsed = parse_115_share_payload(resolved, raw_text, receive_code)
@@ -4851,7 +4851,7 @@ def list_115_share_entries(
         "Cookie": cookie,
         "Accept": "application/json, text/plain, */*",
         "Referer": parsed.get("url", "https://115.com/"),
-        "User-Agent": "Mozilla/5.0 115-strm-web",
+        "User-Agent": "Mozilla/5.0 115-media-hub",
     }
     entries: List[Dict[str, Any]] = []
     offset = 0
@@ -4994,7 +4994,7 @@ def submit_115_share_receive(
         "Accept": "application/json, text/plain, */*",
         "Referer": "https://115.com/",
         "Origin": "https://115.com",
-        "User-Agent": "Mozilla/5.0 115-strm-web",
+        "User-Agent": "Mozilla/5.0 115-media-hub",
     }
     payload = {
         "share_code": prepared.get("share_code", ""),
@@ -5107,7 +5107,7 @@ def fetch_telegram_channel_posts_page(
     proxy_url = build_tg_proxy_url(cfg)
     headers = {
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "User-Agent": "Mozilla/5.0 115-strm-web",
+        "User-Agent": "Mozilla/5.0 115-media-hub",
     }
     request_url = build_telegram_channel_page_url(channel_id, before, query)
     html = ""

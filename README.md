@@ -1,223 +1,221 @@
-# 115-strm-web
+# 115 Media Hub
 
-`115-strm-web` 是一个基于 FastAPI 的 Web 管理工具，用于把挂载在 AList/OpenList 的 115 媒体目录快速生成本地 `.strm` 文件，适配 Emby/Jellyfin/Plex 等媒体库。
+`115 Media Hub` 是一个基于 FastAPI 的媒体自动化管理面板，把 `115`、`AList/OpenList`、`.strm`、TG 资源同步、影视订阅追更放进同一个后台。
 
-项目包含两条任务线：
+它适合已经把 115 挂载到 AList/OpenList、并希望进一步把“生成播放链接”“转存后自动刷新”“按片名自动找资源”串起来的使用场景。
 
-1. `目录树任务`：基于 115 官方目录树文件批量生成（适合大库、低频更新）。
-2. `文件夹监控任务`：基于 AList/OpenList API 实时扫描生成（适合小库、频繁变动，支持 webhook）。
+## 这项目能做什么
 
-## 功能概览
+| 模块 | 作用 |
+| --- | --- |
+| 资源中心 | 同步 TG 公开频道资源，或手动粘贴 magnet / 网盘分享链接入库，并直接提交到 115 离线下载 |
+| 影视订阅任务 | 按周期搜索候选资源，自动创建导入任务，支持电影和剧集追更 |
+| 文件夹监控任务 | 扫描 AList/OpenList 目录变化，支持手动、定时、Webhook 触发 |
+| 目录树任务 | 基于 115 目录树批量生成 `.strm` 文件，适合大库初始化和低频更新 |
+| Web 管理后台 | 集中管理配置、任务、日志、版本提示，支持桌面和移动端 |
 
-- Web 后台管理：登录、参数配置、任务执行、日志查看。
-- 目录树任务支持多源配置：每个源可配置 `父路径前缀`、`排除层级`。
-- 文件夹监控任务支持：新增/编辑/删除、运行/中断、增量/全量、目录时间校验、重试、延时、体积过滤、定时执行。
-- webhook 触发后优先尝试局部目录刷新，减少大目录全刷。
-- 日志分离：目录树日志与监控日志独立，且支持页面一键清空。
-- PC 和手机端响应式布局已适配。
+## 适合这些场景
 
-## 快速部署
+- 大媒体库初始化：先用目录树任务一次性生成 `.strm`
+- 连载或日更内容：用文件夹监控任务做增量刷新
+- 转存成功后自动补扫：用 Webhook 触发指定监控任务
+- 想减少手动找资源：用资源中心和影视订阅任务自动化处理
 
-示例 `compose.yml`：
+## 怎么选任务模式
+
+| 需求 | 推荐方式 |
+| --- | --- |
+| 媒体库很大、更新不频繁 | `目录树任务` |
+| 已有固定目录，想持续补新内容 | `文件夹监控任务` |
+| 想按影片/剧集名称自动找资源 | `影视订阅任务` |
+| 想把转存、离线、刷新串起来 | `资源中心 + Webhook + 文件夹监控任务` |
+
+## 快速开始
+
+以下示例假设你发布的镜像名为 `xianer235/115-media-hub:latest`：
 
 ```yaml
 services:
-  115-strm-web:
-    image: xianer235/115-strm-web:latest
-    container_name: 115-strm-web
-    restart: always
+  115-media-hub:
+    image: xianer235/115-media-hub:latest
+    container_name: 115-media-hub
+    restart: unless-stopped
     ports:
       - "18080:18080"
     volumes:
       - ./strm:/app/strm
       - ./config:/app/config
-      - ./log:/app/log
+      - ./logs:/app/logs
     environment:
       - TZ=Asia/Shanghai
 ```
 
-启动：
+其中 `./strm` 是输出给媒体服务器使用的目录，通常还需要再挂载给 Emby、Jellyfin 或 Plex；`./config` 和 `./logs` 建议持久化保留。
+
+启动命令：
 
 ```bash
 docker compose up -d
 ```
 
-如果你使用本仓库直接构建镜像，仓库根目录下的油猴脚本 `115-magnet-helper-webhook.user.js` 不会参与镜像构建。
-这是一个浏览器侧本地插件，不属于容器运行时所需文件，已通过 `.dockerignore` 排除。
-
-访问：
+访问地址：
 
 - `http://服务器IP:18080`
 
-首次默认账号密码：
+默认账号密码：
 
 - 用户名：`admin`
 - 密码：`admin123`
 
-## 目录说明
+首次登录后，建议立刻到「参数配置」页修改后台账号密码，并配置 `webhook_secret`。
 
-- `/app/strm`：生成的 `.strm` 文件目录。
-- `/app/config/settings.json`：配置文件。
-- `/app/config/data.db`：SQLite 任务状态数据库。
-- `/app/log/task.log`：目录树任务日志。
-- `/app/log/monitor.log`：文件夹监控日志。
+## 首次配置顺序
 
-## 页面说明
+建议第一次按下面顺序配置，这样最省回头路：
 
-### 1) 文件夹监控任务
+1. 配置 `AList/OpenList 访问链接前缀`，例如 `http://192.168.1.5:5244`
+2. 配置 `AList/OpenList Token`
+3. 配置 `115 挂载根路径`，默认通常是 `/115`
+4. 确认 `扫描后缀名` 是否符合你的媒体类型
+5. 如果要用资源中心提交 115 离线任务，再配置 `115 Cookie`
+6. 如果要提升影视订阅识别准确率，再启用 `TMDB API Key`
+7. 如果服务器访问 TG 不稳定，再补充 TG 代理设置
 
-- 用于管理监控任务（运行、中断、编辑、删除）。
-- 扫描时会对每个访问到的目录触发 `refresh=true`（reload），避免旧缓存导致漏扫已存在目录中的新文件。
-- 支持 webhook 触发和按分钟定时执行（`0` 表示关闭）。
+## 推荐使用流程
 
-### 2) 目录树任务
+### 方案一：先建库，再持续增量
 
-- 用于执行目录树下载、解析与批量生成 STRM。
-- 支持：联网同步更新、本地调试解析、强制全量重刷。
-- 支持显示下次自动执行时间（开启定时时显示）。
+1. 在「参数配置」中填好 AList/OpenList 和挂载路径
+2. 在「目录树任务」里配置一个或多个目录树源
+3. 先跑一次目录树任务，完成 `.strm` 初始化
+4. 再为常更新目录添加「文件夹监控任务」，用于后续增量维护
 
-### 3) 参数配置
+### 方案二：转存完成后自动刷新
 
-- `AList/OpenList 访问链接前缀`：如 `http://192.168.1.5:5244`
-- `AList/OpenList Token`：目录树下载与 API 扫描统一认证。
-- `115 挂载根路径`：如 `/115`
-- `扫描后缀名` 默认值：
-  - `mp4,mkv,avi,mov,wmv,flv,webm,vob,mpg,mpeg,ts,m2ts,mts,rmvb,rm,asf,3gp,m4v,f4v,iso`
-- `目录树多源配置`：
-  - `目录树下载 URL`
-  - `父文件夹路径前缀`（用于路径补全）
-  - `排除层级`（默认 `1`，最小建议 `1`）
+1. 创建一个开启了 Webhook 的文件夹监控任务
+2. 让外部工具在转存完成后调用 `/webhook/{任务名}`
+3. 服务端收到请求后，会优先按 `savepath` / `sharetitle` 做局部刷新
 
-### 4) 频道缓存治理（可选环境变量）
+### 方案三：自动找资源并导入 115
 
-频道资源缓存采用四层策略：`单频道上限` + `失效频道缩容` + `过期清理` + `全局硬上限`，用于避免频道增多后数据库无限膨胀。
+1. 在「资源中心」配置 TG 频道源，或手动粘贴资源文本
+2. 配置 `115 Cookie`
+3. 在「影视订阅任务」中创建订阅项
+4. 系统按周期匹配候选资源，并创建导入任务
 
-- `RESOURCE_CHANNEL_CACHE_LIMIT`（默认 `60`）  
-  每个频道最多保留多少条缓存。
-- `RESOURCE_CHANNEL_INACTIVE_CACHE_LIMIT`（默认 `5`）  
-  已不在启用订阅列表中的频道，每个频道最多保留多少条缓存（`0` 表示全部清空）。
-- `RESOURCE_CHANNEL_CACHE_TTL_DAYS`（默认 `30`）  
-  超过多少天的频道缓存会被清理（`0` 表示关闭按天清理）。
-- `RESOURCE_CHANNEL_CACHE_GLOBAL_LIMIT`（默认 `2000`）  
-  所有 TG 频道缓存的全局总上限。
-- `RESOURCE_CHANNEL_CACHE_ACTIVE_MIN_KEEP`（默认 `10`）  
-  执行全局裁剪时，尽量为“启用频道”保留的最小条数（当全局上限过低时，仍会优先满足全局硬上限）。
+## Webhook 说明
 
-## Webhook（CloudSaver）说明
-
-服务端地址格式：
+Webhook 地址格式：
 
 ```text
-http://你的IP:容器端口/webhook/任务名
+POST /webhook/{任务名}
 ```
 
-请求建议：
+普通刷新请求示例：
 
-- Method: `POST`
-- Content-Type: `application/json`
+```json
+{
+  "savepath": "/连载中",
+  "sharetitle": "示例剧名",
+  "delayTime": 30,
+  "title": "CloudSaver 转存完成"
+}
+```
 
-本项目 webhook 仅接收以下参数：
+磁力导入请求示例：
 
-- `savepath`：转存目标父路径，用于定位刷新范围。
-- `sharetitle`（可选）：转存资源文件夹名；为空时回退按 `savepath` 刷新。
-- `delayTime`（可选）：本次任务延时秒数，覆盖任务内默认延时。
-- `title`（可选）：仅用于日志展示“转存内容”。
+```json
+{
+  "savepath": "/电影",
+  "magnet": "magnet:?xt=urn:btih:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "title": "示例电影",
+  "delayTime": 10
+}
+```
 
-关键规则：
+常用字段：
 
-- 任务匹配以 URL 中的 `任务名` 为准（`/webhook/任务名`）。
-- `savepath` 支持两种写法：`连载中` 或 `/连载中`（也可传更深路径）。
-- `sharetitle` 不为空时，优先按 `savepath/sharetitle` 做局部刷新；为空时回退按 `savepath` 刷新。
-- 实际目录定位会结合参数配置中的 `mount_path` 自动推导，不需要额外传挂载映射参数。
-- 触发条件、变量映射、请求体内容拼装均在 CloudSaver 中配置；本项目不在本地页面配置这些规则。
+- `savepath`：转存目标父目录。磁力导入场景下必填
+- `sharetitle`：资源文件夹名。提供后会优先做更小范围的局部刷新
+- `delayTime`：本次延时秒数，会覆盖任务默认延时
+- `title`：只用于日志展示
+- `magnet` / `link_url` / `url`：可选，可直接触发资源导入流程
 
-CloudSaver 配置示例图：
+安全校验：
 
-<img width="2576" height="1444" alt="image" src="https://github.com/user-attachments/assets/0b454b91-32f4-46cc-97b6-1abc131875bb" />
+- 如果 `webhook_secret` 留空，Webhook 不做鉴权
+- 如果已配置 `webhook_secret`，支持两种校验方式
+- 方式一：请求头 `X-Webhook-Token: <secret>`
+- 方式二：签名头 `X-Webhook-Ts`、`X-Webhook-Nonce`、`X-Webhook-Sign`
+- 签名基串为 `{ts}.{nonce}.{body}`，算法为 `HMAC-SHA256`
 
-## 油猴脚本插件
+## 本地开发运行
 
-仓库根目录额外提供了一个油猴脚本：
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install fastapi uvicorn pydantic python-multipart starlette itsdangerous requests
+uvicorn main:app --host 0.0.0.0 --port 18080 --reload
+```
+
+## 持久化目录说明
+
+- `/app/strm`：生成的 `.strm` 文件
+- `/app/config/settings.json`：系统配置文件
+- `/app/config/data.db`：SQLite 数据库
+- `/app/config/trees`：目录树缓存和中间文件
+- `/app/logs/task.log`：目录树任务日志
+- `/app/logs/monitor.log`：文件夹监控日志
+- `/app/logs/subscription.log`：影视订阅日志
+
+## 常用环境变量
+
+基础超时与调度：
+
+- `SUBSCRIPTION_ATTEMPT_INTERVAL_SECONDS`：订阅候选尝试间隔，默认 `2`
+- `SUBSCRIPTION_IMPORT_TIMEOUT_SECONDS`：订阅导入超时秒数，默认 `90`
+- `RESOURCE_IMPORT_TIMEOUT_SECONDS`：资源导入超时秒数，默认 `90`
+- `RESOURCE_JOB_STALE_RECOVER_SECONDS`：导入任务卡死恢复阈值，默认 `300`
+- `VERSION_CACHE_TTL`：版本检查缓存秒数，默认 `21600`
+
+TG 访问相关：
+
+- `TG_CHANNEL_THREADS_DEFAULT`：TG 同步默认线程数，默认 `6`
+
+TMDB 相关：
+
+- `TMDB_REQUEST_TIMEOUT_SECONDS`：TMDB 请求超时，默认 `20`
+
+频道缓存治理：
+
+- `RESOURCE_CHANNEL_CACHE_LIMIT`
+- `RESOURCE_CHANNEL_INACTIVE_CACHE_LIMIT`
+- `RESOURCE_CHANNEL_CACHE_TTL_DAYS`
+- `RESOURCE_CHANNEL_CACHE_GLOBAL_LIMIT`
+- `RESOURCE_CHANNEL_CACHE_ACTIVE_MIN_KEEP`
+
+## 浏览器辅助脚本
+
+仓库根目录自带油猴脚本：
 
 - `115-magnet-helper-webhook.user.js`
 
-这个脚本是浏览器侧辅助工具，不属于 `115-strm-web` 容器镜像内容，主要用于：
+它是浏览器侧工具，不会打包进容器镜像。它的用途主要是：
 
-- 自动识别网页中的磁力链接并显示 `115` 按钮。
-- 选择 115 云盘保存目录后，自动发起离线下载。
-- 按保存目录绑定不同的 webhook 地址和延迟秒数。
-- 在保存成功后，顺手触发你在 `115-strm-web` 中配置好的文件夹监控任务。
+- 在页面里识别磁力链接并辅助提交到 115
+- 按保存目录绑定不同的 Webhook 地址
+- 在离线任务提交后顺手触发服务端刷新
 
-### 安装方法
+服务端同时提供下载入口：
 
-推荐先安装浏览器扩展：
+- `GET /download/userscript/magnet-helper.user.js`
 
-- Chrome / Edge：`Tampermonkey`
-- Firefox：`Tampermonkey` 或 `Violentmonkey`
+## 版本与更新
 
-然后将仓库中的 `115-magnet-helper-webhook.user.js` 导入脚本管理器，保存并启用。
+- 当前版本信息见 `version.json`
+- 历史变更见 `CHANGELOG.md`
+- 仓库地址：<https://github.com/xianer235/115-media-hub>
 
-### 使用方法
+## 说明
 
-1. 打开任意包含磁力链接的页面。
-2. 页面中识别到 `magnet:` 链接后，旁边会出现 `115` 按钮。
-3. 点击按钮，选择要保存到 115 云盘的目标文件夹。
-4. 如果该文件夹已配置 webhook，脚本会在保存成功后自动再发起一次 webhook 请求。
-
-### Webhook 管理
-
-脚本内置了“按文件夹配置 webhook”的管理界面，支持：
-
-- 为不同保存文件夹配置不同的 webhook 地址
-- 配置对应的 `delayTime`
-- 启用或停用单个文件夹的 webhook
-- 手动测试当前 webhook 是否可达
-
-打开方式有两种：
-
-- Tampermonkey 菜单：`115云盘磁力助手 Webhook 增强版：管理文件夹 webhook`
-- 点击 `115` 按钮后，在文件夹选择弹窗中点 `管理 webhook`
-
-### 请求体说明
-
-脚本触发 webhook 时，默认以 `POST` + `application/json` 发送，常见字段包括：
-
-- `delayTime`：延迟秒数
-- `title`：磁力链接中的资源标题，若可解析
-- `folderId`：115 目标文件夹 ID
-- `folderName`：115 目标文件夹名称
-
-测试按钮还会额外带上：
-
-- `event: "test"`：便于服务端区分测试请求
-
-### 与容器的关系
-
-- 这个脚本只运行在浏览器/Tampermonkey 中。
-- 它不会进入 Docker 镜像，也不会在容器内执行。
-- 容器内仍然只运行 `FastAPI` 服务本体。
-
-
-## 使用建议
-
-- 大库建议走目录树任务，小库或连载更新建议走文件夹监控任务。
-- 监控任务目录很大时，建议优先启用 webhook 局部刷新，降低被限流/风控概率。
-- 目录树导出较慢时，建议按子目录拆分多份目录树后在页面多源合并。
-
-## 版本号与更新日志规范
-
-- 当前版本写在仓库根目录 `version.json` 中，包含 `version`、`buildDate`、`notes`、`changelogUrl` 等信息；容器启动界面会读取此文件并提示新版本。
-- 所有功能变更记录在 `CHANGELOG.md`，格式遵循 Keep a Changelog。请在每次发布前新增条目。
-- 构建镜像时可自动带上版本号：
-
-  ```bash
-  APP_VER=$(jq -r '.version' version.json)
-  docker build --build-arg APP_VERSION="$APP_VER" -t xianer235/115-strm-web:"$APP_VER" .
-  ```
-
-- 推送镜像或发版前的步骤建议为：`更新代码 → 修改 version.json → 更新 CHANGELOG.md → 构建镜像 → 推送/发布 tag`。
-- Web 后台在加载时会调用 `/version` 接口自动检查 GitHub 主分支上的 `version.json`，如检测到更高版本会在顶部显示提示横幅，方便你及时拉取更新。
-
-## 免责声明
-
-本项目仅用于学习和个人自动化管理，请遵守 115、AList/OpenList 及相关平台的使用条款。
+本项目用于个人媒体库自动化管理，请结合你自己的使用环境和相关平台规则自行评估后使用。

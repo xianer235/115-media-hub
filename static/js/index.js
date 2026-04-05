@@ -91,8 +91,8 @@
         const STATUS_FALLBACK_INTERVAL = 15000;
         const RESOURCE_REFRESH_INTERVAL = 15000;
         const VERSION_REFRESH_INTERVAL = 1000 * 60 * 15;
-        const VERSION_FALLBACK_PROJECT_URL = 'https://github.com/xianer235/115-strm-web';
-        const VERSION_FALLBACK_CHANGELOG_URL = 'https://github.com/xianer235/115-strm-web/blob/main/CHANGELOG.md';
+        const VERSION_FALLBACK_PROJECT_URL = 'https://github.com/xianer235/115-media-hub';
+        const VERSION_FALLBACK_CHANGELOG_URL = 'https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md';
         const RESOURCE_FOLDER_MEMORY_KEY = 'resource-folder-selection-v1';
         const RESOURCE_IMPORT_DELAY_MEMORY_KEY = 'resource-import-delay-seconds-v1';
         const MAIN_TAB_ROW_HINT_MEMORY_KEY = 'main-tab-row-hint-v1';

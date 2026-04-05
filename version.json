@@ -1,11 +1,11 @@
 {
-  "version": "2.3.4",
-  "buildDate": "2026-04-05T17:54:07+08:00",
+  "version": "0.1.0",
+  "buildDate": "2026-04-06T00:09:05+08:00",
   "notes": [
-    "版本号更新为 2.3.4，用于本次补发版。",
-    "订阅候选资源导入保留硬超时跳过机制，避免单候选卡住整轮订阅。",
-    "候选资源尝试间隔默认维持 2 秒，降低连续提交压力。"
+    "新仓库首个版本，版本号从 0.1.0 重新开始。",
+    "统一项目名称、仓库链接和页面展示文案为 115 Media Hub。",
+    "整理 README、版本信息和镜像元数据，完成新仓库初始化。"
   ],
-  "changelogUrl": "https://github.com/xianer235/115-strm-web/blob/main/CHANGELOG.md",
-  "projectUrl": "https://github.com/xianer235/115-strm-web"
+  "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
+  "projectUrl": "https://github.com/xianer235/115-media-hub"
 }

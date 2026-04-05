@@ -1,10 +1,10 @@
 FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/python:3.12-slim
 
 ARG APP_VERSION=dev
-LABEL org.opencontainers.image.title="115-strm-web" \
+LABEL org.opencontainers.image.title="115-media-hub" \
       org.opencontainers.image.version="${APP_VERSION}" \
-      org.opencontainers.image.description="FastAPI service to convert 115 directory trees into STRM files" \
-      org.opencontainers.image.source="https://github.com/xianer235/115-strm-web"
+      org.opencontainers.image.description="FastAPI media automation hub for 115 and AList/OpenList" \
+      org.opencontainers.image.source="https://github.com/xianer235/115-media-hub"
 ENV APP_VERSION=${APP_VERSION}
 
 WORKDIR /app
