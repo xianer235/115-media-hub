@@ -76,6 +76,7 @@ async def retry_resource_job(job_id: int, reason: str = "manual") -> Dict[str, A
         raise RuntimeError("原任务缺少可导入链接，无法重试")
 
     link_type = resolve_resource_link_type(resource.get("link_type", ""), resource.get("link_url", ""))
+    job_extra = job.get("extra") if isinstance(job.get("extra"), dict) else {}
     payload = {
         "folder_id": str(job.get("folder_id", "") or "").strip(),
         "savepath": normalize_relative_path(job.get("savepath", "")),
@@ -83,11 +84,17 @@ async def retry_resource_job(job_id: int, reason: str = "manual") -> Dict[str, A
         "monitor_task_name": str(job.get("monitor_task_name", "") or "").strip(),
         "refresh_delay_seconds": max(0, int(job.get("refresh_delay_seconds", 0) or 0)),
         "auto_refresh": bool(job.get("auto_refresh")),
+        "extra": {},
     }
+    for key in ("job_source", "webhook_task_name", "refresh_target_type"):
+        value = str(job_extra.get(key, "") or "").strip()
+        if value:
+            payload["extra"][key] = value
+    if not payload["extra"]:
+        payload.pop("extra", None)
     if not payload["savepath"]:
         raise RuntimeError("原任务保存路径为空，无法重试")
     if link_type == "115share":
-        job_extra = job.get("extra") if isinstance(job.get("extra"), dict) else {}
         payload["share_selection"] = normalize_share_selection_meta(job_extra)
         snapshot = job.get("_snapshot", {}) if isinstance(job.get("_snapshot"), dict) else {}
         receive_code = normalize_receive_code(

@@ -48,7 +48,6 @@
         let resourceSectionCollapsed = {};
         let resourceSearchBusy = false;
         let resourceSyncBusy = false;
-        let resourceWarmupDone = false;
         let resourceChannelExtraItems = {};
         let resourceChannelLoadingMore = {};
         let resourceChannelNextBefore = {};
@@ -62,11 +61,15 @@
         let resourceSourceImportModalOpen = false;
         let resourceSourceManagerOpen = false;
         let resourceSourceFilter = 'all';
+        let resourceSourceEnabledFilter = 'all';
         let resourceSourceActivityFilter = 'all';
         let resourceSourceBulkSelected = {};
         let resourceSourceTestBusy = false;
         let resourceSourceTestResult = { total: 0, done: 0, success: 0, failed: 0, running: false, last_name: '', error: '' };
         let resourceJobFilter = 'all';
+        let monitorUserscriptJobs = [];
+        let monitorUserscriptJobCounts = { total: 0, active: 0, submitted: 0, completed: 0, failed: 0 };
+        let monitorUserscriptJobsLoading = false;
         let tgProxyTestState = { loading: false, ok: null, message: '', latency_ms: 0, mode: '', proxy_url: '', target_url: '' };
         let resourceBoardHintText = '';
         let resourceTgHealthState = { visible: false, tone: 'loading', title: '', meta: '', note: '' };
@@ -95,6 +98,7 @@
         const MAIN_TAB_ROW_HINT_MEMORY_KEY = 'main-tab-row-hint-v1';
         const TOAST_DEFAULT_DURATION_MS = 3000;
         const SUBSCRIPTION_EPISODE_CACHE_TTL_MS = 1000 * 60 * 3;
+        const MONITOR_USERSCRIPT_JOB_LIMIT = 60;
 
         function lockPageScroll() {
             if (modalScrollLockCount === 0) {
@@ -246,6 +250,7 @@
             });
             if (tab !== 'resource') toggleResourceJobModal(false);
             if (tab === 'resource') refreshResourceState();
+            if (tab === 'monitor') refreshMonitorUserscriptJobs();
             syncResourceBackTopButton();
             syncSettingsSaveDock();
             focusMainTab(tab);
@@ -256,6 +261,35 @@
             const normalized = String(placement || '').trim().toLowerCase();
             if (normalized === 'top-center') return 'top-center';
             return 'bottom-right';
+        }
+
+        function randomAlphaNumericSecret(length = 32) {
+            const size = Math.max(16, Math.min(Number(length || 32), 96));
+            const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+            const chars = alphabet.split('');
+            const out = [];
+            if (window.crypto && typeof window.crypto.getRandomValues === 'function') {
+                const random = new Uint32Array(size);
+                window.crypto.getRandomValues(random);
+                for (let i = 0; i < size; i += 1) {
+                    out.push(chars[random[i] % chars.length]);
+                }
+            } else {
+                for (let i = 0; i < size; i += 1) {
+                    out.push(chars[Math.floor(Math.random() * chars.length)]);
+                }
+            }
+            return out.join('');
+        }
+
+        function generateWebhookSecret() {
+            const input = document.getElementById('webhook_secret');
+            if (!input) return;
+            const secret = randomAlphaNumericSecret(32);
+            input.value = secret;
+            input.focus();
+            input.select();
+            showToast('已生成随机密钥，请记得点击“保存全部配置”', { tone: 'success', duration: 3000, placement: 'top-center' });
         }
 
         function getGlobalToastStack(placement = 'bottom-right') {
@@ -1008,7 +1042,8 @@
                 'sync_mode',
                 'extensions',
                 'username',
-                'password'
+                'password',
+                'webhook_secret'
             ];
             standardIds.forEach(id => {
                 const el = document.getElementById(id);
@@ -1044,7 +1079,6 @@
             });
 
             if (res.ok) {
-                resourceWarmupDone = false;
                 alert('✅ 配置已保存');
             } else {
                 alert('❌ 保存失败');
@@ -1113,12 +1147,11 @@
             const name = document.getElementById('monitor_name').value.trim() || '任务名';
             document.getElementById('webhook-hint').innerHTML = [
                 `webhook 地址：IP:容器端口/webhook/${escapeHtml(name)}（用于触发指定任务）`,
-                'savepath：转存目标父路径（用于定位刷新范围）',
-                'sharetitle：转存后的目录名或文件名',
-                'refresh_target_type：folder / file / mixed（帮助区分目录刷新还是父目录刷新）',
-                'delayTime：可选，单位秒（覆盖本次任务执行延时）',
-                'title：可选（仅日志展示）',
-                '说明：本页面仅接收参数；触发条件与映射规则请在 CloudSaver 中配置'
+                '普通刷新参数：savepath / sharetitle / refresh_target_type / delayTime / title',
+                '磁力任务参数：magnet 或 link_url（值为磁力链接） + savepath（必填）',
+                '磁力任务会直接创建到资源导入队列，并按当前监控任务自动刷新',
+                '签名校验（可选）：X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign 或 X-Webhook-Token',
+                '说明：签名密钥在「参数配置 -> 后台安全管理」里设置；为空时不校验'
             ].join('<br>');
         }
 
@@ -1319,6 +1352,89 @@
             }).join('');
         }
 
+        function isMonitorPageVisible() {
+            return !document.getElementById('page-monitor')?.classList.contains('hidden');
+        }
+
+        function renderMonitorUserscriptJobs() {
+            const container = document.getElementById('monitor-userscript-job-list');
+            const summaryEl = document.getElementById('monitor-userscript-job-summary');
+            if (!container || !summaryEl) return;
+
+            const jobs = Array.isArray(monitorUserscriptJobs) ? monitorUserscriptJobs : [];
+            const counts = monitorUserscriptJobCounts || getResourceJobCounts(jobs);
+            summaryEl.innerText = jobs.length
+                ? `最近 ${counts.total || jobs.length} 条油猴任务，处理中 ${counts.active || 0} 条，已完成 ${counts.completed || 0} 条${counts.failed ? `，失败 ${counts.failed} 条` : ''}`
+                : (monitorUserscriptJobsLoading ? '正在读取油猴导入任务...' : '暂无油猴脚本导入任务');
+
+            if (!jobs.length) {
+                container.innerHTML = monitorUserscriptJobsLoading
+                    ? `<div class="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">正在加载任务列表...</div>`
+                    : `<div class="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">暂无记录。油猴脚本推送成功后会在这里显示。</div>`;
+                return;
+            }
+
+            container.innerHTML = jobs.map(job => {
+                const hasMonitorTask = !!String(job.monitor_task_name || '').trim();
+                const normalizedStatus = String(job.status || '').toLowerCase();
+                const canManualRefresh = hasMonitorTask && !job.last_triggered_at && normalizedStatus === 'submitted';
+                const canCancel = ['pending', 'running', 'submitted'].includes(normalizedStatus);
+                const canRetry = normalizedStatus === 'failed';
+                const autoRefreshText = hasMonitorTask
+                    ? (job.auto_refresh ? `自动刷新 ${escapeHtml(String(job.refresh_delay_seconds || 0))} 秒` : '手动刷新')
+                    : '未绑定监控';
+                return `
+                    <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4">
+                        <div class="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
+                            <div class="min-w-0 space-y-2">
+                                <div class="flex items-center gap-2 flex-wrap">
+                                    <div class="text-sm font-black text-white">${escapeHtml(job.title || `任务 #${job.id}`)}</div>
+                                    ${buildResourceStatusBadge(job.status)}
+                                    <span class="text-[10px] px-2 py-1 rounded-full bg-slate-700 text-slate-100">#${job.id}</span>
+                                </div>
+                                <div class="text-xs text-slate-400 leading-6">
+                                    <div>保存路径：${escapeHtml(job.savepath || '--')}</div>
+                                    <div>监控任务：${escapeHtml(job.monitor_task_name || '--')}</div>
+                                    <div>刷新策略：${escapeHtml(getResourceRefreshTargetLabel(job.refresh_target_type))} · ${autoRefreshText}</div>
+                                    <div>创建时间：${escapeHtml(formatTimeText(job.created_at || '--'))}</div>
+                                </div>
+                                <div class="text-xs text-slate-300 break-all">${escapeHtml(job.status_detail || '--')}</div>
+                            </div>
+                            <div class="flex flex-wrap gap-2 shrink-0">
+                                <button type="button" data-monitor-userscript-action="cancel" data-resource-job-id="${job.id}" class="px-3 py-2 rounded-xl text-xs font-bold ${canCancel ? 'bg-amber-600 hover:bg-amber-500 text-white' : 'bg-slate-700 text-slate-400 btn-disabled'}" ${canCancel ? '' : 'disabled'}>取消</button>
+                                <button type="button" data-monitor-userscript-action="retry" data-resource-job-id="${job.id}" class="px-3 py-2 rounded-xl text-xs font-bold ${canRetry ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-slate-700 text-slate-400 btn-disabled'}" ${canRetry ? '' : 'disabled'}>重试</button>
+                                <button type="button" data-monitor-userscript-action="refresh" data-resource-job-id="${job.id}" class="px-3 py-2 rounded-xl text-xs font-bold ${canManualRefresh ? 'bg-sky-600 hover:bg-sky-500 text-white' : 'bg-slate-700 text-slate-400 btn-disabled'}" ${canManualRefresh ? '' : 'disabled'}>刷新</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function refreshMonitorUserscriptJobs(force = false) {
+            if (monitorUserscriptJobsLoading) return;
+            if (!force && !isMonitorPageVisible()) return;
+            monitorUserscriptJobsLoading = true;
+            renderMonitorUserscriptJobs();
+            try {
+                const res = await fetch(`/monitor/userscript/jobs?limit=${encodeURIComponent(String(MONITOR_USERSCRIPT_JOB_LIMIT))}`);
+                const data = await res.json();
+                if (!res.ok || !data.ok) {
+                    throw new Error(data.msg || '读取油猴任务失败');
+                }
+                monitorUserscriptJobs = Array.isArray(data.jobs) ? data.jobs : [];
+                monitorUserscriptJobCounts = data.counts || getResourceJobCounts(monitorUserscriptJobs);
+            } catch (e) {
+                if (!monitorUserscriptJobs.length) {
+                    const summaryEl = document.getElementById('monitor-userscript-job-summary');
+                    if (summaryEl) summaryEl.innerText = `读取失败：${e.message || '请稍后重试'}`;
+                }
+            } finally {
+                monitorUserscriptJobsLoading = false;
+                renderMonitorUserscriptJobs();
+            }
+        }
+
         function renderMonitorLogs() {
             const box = document.getElementById('monitor-log-box');
             const logs = monitorState.logs || [];
@@ -1342,6 +1458,7 @@
                 const res = await fetch('/monitor/status');
                 if (!res.ok) return;
                 applyMonitorState(await res.json());
+                if (isMonitorPageVisible()) refreshMonitorUserscriptJobs();
             } catch (e) {}
         }
 
@@ -3420,11 +3537,6 @@
             renderResourceShareBrowser();
             renderResourceTargetPreview();
 
-            const resourcePageVisible = !document.getElementById('page-resource')?.classList.contains('hidden');
-            if (resourcePageVisible && !resourceWarmupDone && getEnabledResourceSources().length) {
-                resourceWarmupDone = true;
-                syncResourceChannels(false, { silent: true });
-            }
         }
 
         function syncResourceSearchClearButton() {
@@ -3583,8 +3695,6 @@
                 if (directImportMode) {
                     if (String(resourceState.search || '').trim()) resetResourceSearchResults();
                     const result = await parseResourceInputFromSearch(keyword);
-                    const suffix = result.item ? '，已直接打开导入面板。' : '。';
-                    alert(`✅ 识别完成${suffix}`);
                     return result;
                 }
                 const data = await refreshResourceState({ allowSearch: true, keywordOverride: keyword });
@@ -3627,21 +3737,12 @@
                     const latencyMs = await resolveResourceTgLatencyMs(latencyProbePromise);
                     applyResourceTgHealthFromSyncResult(data, getActionElapsedMs(startedAt), latencyMs);
                 }
-                if (!silent) {
-                    if (Array.isArray(data.errors) && data.errors.length) {
-                        const detail = data.errors.map(item => `${item.name || item.channel_id}: ${item.message}`).join('\n');
-                        alert(`⚠️ 已同步 ${data.synced || 0} 个频道，新增 ${data.items || 0} 条资源${data.cache_pruned ? `，清理 ${data.cache_pruned} 条旧缓存` : ''}。\n\n以下频道同步失败：\n${detail}`);
-                    } else {
-                        alert(`✅ 同步完成：更新 ${data.synced || 0} 个频道，新增 ${data.items || 0} 条资源${data.skipped ? `，跳过 ${data.skipped} 个缓存未过期频道` : ''}${data.cache_pruned ? `，清理 ${data.cache_pruned} 条旧缓存` : ''}`);
-                    }
-                }
                 return data;
             } catch (e) {
                 if (!silent) {
                     const latencyMs = await resolveResourceTgLatencyMs(latencyProbePromise);
                     applyResourceTgHealthFailure('sync', getActionElapsedMs(startedAt), latencyMs);
                 }
-                if (!silent) alert(`❌ ${e.message}`);
                 return null;
             } finally {
                 resourceSyncBusy = false;
@@ -3954,6 +4055,15 @@
             return getResourceSourceActivityBucket(profile) === filter;
         }
 
+        function isResourceSourceVisibleByEnabled(source, enabledFilter = resourceSourceEnabledFilter) {
+            const filter = normalizeResourceSourceFilterValue(enabledFilter);
+            if (filter === 'all') return true;
+            const enabled = source?.enabled !== false;
+            if (filter === 'enabled') return enabled;
+            if (filter === 'disabled') return !enabled;
+            return true;
+        }
+
         function buildResourceSourceActivityFilterOptions(sources, sectionIndex = {}) {
             const counters = { week: 0, month: 0, half_year: 0, older: 0, unknown: 0 };
             (Array.isArray(sources) ? sources : []).forEach(source => {
@@ -3968,6 +4078,21 @@
                 { value: 'half_year', label: '半年内', count: counters.half_year },
                 { value: 'older', label: '半年以上', count: counters.older },
                 { value: 'unknown', label: '待检测', count: counters.unknown },
+            ];
+        }
+
+        function buildResourceSourceEnabledFilterOptions(sources) {
+            const list = Array.isArray(sources) ? sources : [];
+            let enabledCount = 0;
+            let disabledCount = 0;
+            list.forEach(source => {
+                if (source?.enabled === false) disabledCount += 1;
+                else enabledCount += 1;
+            });
+            return [
+                { value: 'all', label: '全部', count: list.length },
+                { value: 'enabled', label: '已启用', count: enabledCount },
+                { value: 'disabled', label: '已停用', count: disabledCount },
             ];
         }
 
@@ -4029,12 +4154,25 @@
             renderResourceSourceManagerModal();
         }
 
+        function invertFilteredResourceSourceSelections() {
+            const filtered = getFilteredResourceSourceViewList();
+            const next = { ...resourceSourceBulkSelected };
+            filtered.forEach(view => {
+                if (!view.channelId) return;
+                if (next[view.channelId]) delete next[view.channelId];
+                else next[view.channelId] = true;
+            });
+            resourceSourceBulkSelected = next;
+            renderResourceSourceManagerModal();
+        }
+
         function getFilteredResourceSourceViewList() {
             const sources = resourceState.sources || [];
             const sectionIndex = getResourceSourceSectionIndex();
             const list = getResourceSourceViewList(sources, sectionIndex);
             return list.filter(view => {
                 if (!isResourceSourceVisibleByFilter(view.source, sectionIndex, resourceSourceFilter)) return false;
+                if (!isResourceSourceVisibleByEnabled(view.source, resourceSourceEnabledFilter)) return false;
                 if (!isResourceSourceVisibleByActivity(view.source, sectionIndex, resourceSourceActivityFilter)) return false;
                 return true;
             });
@@ -4101,23 +4239,29 @@
             if (!modal || !resourceSourceManagerOpen) return;
 
             const typeFiltersEl = document.getElementById('resource-source-manager-type-filters');
+            const statusFiltersEl = document.getElementById('resource-source-manager-status-filters');
             const activityFiltersEl = document.getElementById('resource-source-manager-activity-filters');
             const hintEl = document.getElementById('resource-source-manager-filter-hint');
             const listEl = document.getElementById('resource-source-manager-list');
             const selectedCountEl = document.getElementById('resource-source-manager-selected-count');
             const resultEl = document.getElementById('resource-source-manager-test-result');
             const testBtn = document.getElementById('resource-source-manager-test-btn');
-            const selectAllEl = document.getElementById('resource-source-manager-select-all');
-            if (!typeFiltersEl || !activityFiltersEl || !hintEl || !listEl || !selectedCountEl || !resultEl || !testBtn || !selectAllEl) return;
+            const selectAllBtn = document.getElementById('resource-source-manager-select-all-btn');
+            const invertBtn = document.getElementById('resource-source-manager-invert-btn');
+            if (!typeFiltersEl || !statusFiltersEl || !activityFiltersEl || !hintEl || !listEl || !selectedCountEl || !resultEl || !testBtn || !selectAllBtn || !invertBtn) return;
 
             const sources = resourceState.sources || [];
             const sectionIndex = getResourceSourceSectionIndex();
             const sourceViews = getResourceSourceViewList(sources, sectionIndex);
             const typeOptions = buildResourceSourceFilterOptions(sources, sectionIndex);
+            const enabledOptions = buildResourceSourceEnabledFilterOptions(sources);
             const activityOptions = buildResourceSourceActivityFilterOptions(sources, sectionIndex);
 
             if (!typeOptions.some(option => option.value === normalizeResourceSourceFilterValue(resourceSourceFilter))) {
                 resourceSourceFilter = 'all';
+            }
+            if (!enabledOptions.some(option => option.value === normalizeResourceSourceFilterValue(resourceSourceEnabledFilter))) {
+                resourceSourceEnabledFilter = 'all';
             }
             if (!activityOptions.some(option => option.value === normalizeResourceSourceFilterValue(resourceSourceActivityFilter))) {
                 resourceSourceActivityFilter = 'all';
@@ -4125,6 +4269,7 @@
 
             const filtered = sourceViews.filter(view => {
                 if (!isResourceSourceVisibleByFilter(view.source, sectionIndex, resourceSourceFilter)) return false;
+                if (!isResourceSourceVisibleByEnabled(view.source, resourceSourceEnabledFilter)) return false;
                 if (!isResourceSourceVisibleByActivity(view.source, sectionIndex, resourceSourceActivityFilter)) return false;
                 return true;
             });
@@ -4135,6 +4280,15 @@
                     data-resource-source-manager-filter="type"
                     data-filter-value="${escapeHtml(option.value)}"
                     class="resource-source-manager-filter-tab ${normalizeResourceSourceFilterValue(resourceSourceFilter) === option.value ? 'resource-source-manager-filter-tab-active' : ''}"
+                >${escapeHtml(option.label)} (${escapeHtml(String(option.count || 0))})</button>
+            `).join('');
+
+            statusFiltersEl.innerHTML = enabledOptions.map(option => `
+                <button
+                    type="button"
+                    data-resource-source-manager-filter="status"
+                    data-filter-value="${escapeHtml(option.value)}"
+                    class="resource-source-manager-filter-tab ${normalizeResourceSourceFilterValue(resourceSourceEnabledFilter) === option.value ? 'resource-source-manager-filter-tab-active' : ''}"
                 >${escapeHtml(option.label)} (${escapeHtml(String(option.count || 0))})</button>
             `).join('');
 
@@ -4154,9 +4308,14 @@
                 ? `当前筛选结果 ${filtered.length} 个频道，已选中 ${selectedInFiltered} 个（全局已选 ${selectedCount} 个）。`
                 : `当前筛选结果 ${filtered.length} 个频道，已选中 ${selectedInFiltered} 个。`;
 
-            selectAllEl.checked = filtered.length > 0 && selectedInFiltered === filtered.length;
-            selectAllEl.indeterminate = selectedInFiltered > 0 && selectedInFiltered < filtered.length;
-            selectAllEl.disabled = filtered.length <= 0;
+            const hasFiltered = filtered.length > 0;
+            const isAllSelected = hasFiltered && selectedInFiltered === filtered.length;
+            selectAllBtn.disabled = !hasFiltered || isAllSelected;
+            selectAllBtn.classList.toggle('btn-disabled', !hasFiltered || isAllSelected);
+            selectAllBtn.classList.toggle('resource-source-manager-select-btn-active', isAllSelected);
+            selectAllBtn.textContent = isAllSelected ? '当前筛选结果已全选' : '全选当前筛选结果';
+            invertBtn.disabled = !hasFiltered;
+            invertBtn.classList.toggle('btn-disabled', !hasFiltered);
 
             if (resourceSourceTestBusy) {
                 const total = Number(resourceSourceTestResult.total || sources.length || 0);
@@ -4180,7 +4339,7 @@
             testBtn.disabled = resourceSourceTestBusy || sources.length <= 0;
 
             if (!filtered.length) {
-                listEl.innerHTML = '<div class="resource-source-empty"><div class="resource-source-empty-title">当前筛选无结果</div><div class="resource-source-empty-copy">可以切换资源类型或活跃时间范围。</div></div>';
+                listEl.innerHTML = '<div class="resource-source-empty"><div class="resource-source-empty-title">当前筛选无结果</div><div class="resource-source-empty-copy">可以切换资源类型、启用状态或活跃时间范围。</div></div>';
                 return;
             }
 
@@ -4635,7 +4794,6 @@
             });
             const data = await res.json();
             if (!res.ok || !data.ok) throw new Error(data.msg || '保存频道源失败');
-            resourceWarmupDone = false;
             applyResourceState({ ...resourceState, sources: data.sources || [] });
         }
 
@@ -6271,6 +6429,7 @@
             const data = await res.json();
             if (!res.ok || !data.ok) return alert(`❌ ${data.msg || '触发刷新失败'}`);
             await refreshResourceState();
+            if (isMonitorPageVisible()) refreshMonitorUserscriptJobs(true);
             alert('✅ 已触发文件夹监控任务');
         }
 
@@ -6287,6 +6446,7 @@
                 return;
             }
             await refreshResourceState();
+            if (isMonitorPageVisible()) refreshMonitorUserscriptJobs(true);
             showToast(`任务 #${jobId} 已取消`, { tone: 'success', duration: 2600, placement: 'top-center' });
         }
 
@@ -6302,6 +6462,7 @@
                 return;
             }
             await refreshResourceState();
+            if (isMonitorPageVisible()) refreshMonitorUserscriptJobs(true);
             showToast(`已创建重试任务 #${Number(data.job_id || 0) || '--'}`, { tone: 'success', duration: 2800, placement: 'top-center' });
         }
 
@@ -6508,6 +6669,14 @@
             resourceSourceFilter = nextFilter;
             renderResourceSourceManagerModal();
         });
+        document.getElementById('resource-source-manager-status-filters').addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-resource-source-manager-filter="status"]');
+            if (!btn) return;
+            const nextFilter = normalizeResourceSourceFilterValue(btn.dataset.filterValue || 'all');
+            if (resourceSourceEnabledFilter === nextFilter) return;
+            resourceSourceEnabledFilter = nextFilter;
+            renderResourceSourceManagerModal();
+        });
         document.getElementById('resource-source-manager-activity-filters').addEventListener('click', (e) => {
             const btn = e.target.closest('[data-resource-source-manager-filter="activity"]');
             if (!btn) return;
@@ -6515,9 +6684,6 @@
             if (resourceSourceActivityFilter === nextFilter) return;
             resourceSourceActivityFilter = nextFilter;
             renderResourceSourceManagerModal();
-        });
-        document.getElementById('resource-source-manager-select-all').addEventListener('change', (e) => {
-            toggleSelectAllFilteredResourceSources(!!e.target.checked);
         });
         document.getElementById('resource-source-manager-list').addEventListener('change', (e) => {
             const checkbox = e.target.closest('[data-resource-source-bulk-toggle]');
@@ -6598,6 +6764,16 @@
             if (action === 'stop') await stopMonitorTask(name);
             if (action === 'edit') editMonitorTask(name);
             if (action === 'delete') await deleteMonitorTask(name);
+        });
+        document.getElementById('monitor-userscript-job-list').addEventListener('click', async (e) => {
+            const btn = e.target.closest('[data-monitor-userscript-action]');
+            if (!btn) return;
+            const action = btn.dataset.monitorUserscriptAction || '';
+            const jobId = parseInt(btn.dataset.resourceJobId || '0', 10);
+            if (!jobId) return;
+            if (action === 'refresh') await triggerResourceJobRefresh(jobId);
+            if (action === 'cancel') await triggerResourceJobCancel(jobId);
+            if (action === 'retry') await triggerResourceJobRetry(jobId);
         });
         document.getElementById('monitor-modal').addEventListener('click', (e) => {
             if (e.target.id === 'monitor-modal') closeMonitorModal();

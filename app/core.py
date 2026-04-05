@@ -114,6 +114,7 @@ TMDB_REQUEST_TIMEOUT_SECONDS = max(5, int(os.environ.get("TMDB_REQUEST_TIMEOUT_S
 TMDB_SEARCH_LIMIT = max(1, min(20, int(os.environ.get("TMDB_SEARCH_LIMIT", 12) or 12)))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 FAVICON_PATH = os.path.join(STATIC_DIR, "icons", "favicon.svg")
+USERSCRIPT_MAGNET_HELPER_PATH = os.path.join(BASE_DIR, "115-magnet-helper-webhook.user.js")
 RESOURCE_MAGNET_REGEX = re.compile(r"magnet:\?xt=urn:btih:[A-Za-z0-9]{32,40}[^\s<>'\"]*", re.IGNORECASE)
 RESOURCE_ED2K_REGEX = re.compile(r"ed2k://[^\s<>'\"]+", re.IGNORECASE)
 RESOURCE_URL_REGEX = re.compile(r"https?://[^\s<>'\"]+", re.IGNORECASE)
@@ -219,6 +220,7 @@ def default_config() -> Dict[str, Any]:
     return {
         "username": "admin",
         "password": "admin123",
+        "webhook_secret": "",
         "alist_url": "",
         "alist_token": "",
         "cookie_115": "",
@@ -574,6 +576,8 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     merged = default_config()
     merged.update(cfg or {})
 
+    if "webhook_secret" not in merged:
+        merged["webhook_secret"] = ""
     if "alist_token" not in merged:
         merged["alist_token"] = ""
     if "cookie_115" not in merged:
@@ -656,6 +660,7 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     merged["resource_sources"] = normalized_sources
     merged["mount_path"] = normalize_remote_path(merged.get("mount_path", "/115"))
     merged["alist_url"] = str(merged.get("alist_url", "")).strip().rstrip("/")
+    merged["webhook_secret"] = str(merged.get("webhook_secret", "")).strip()
     merged["cookie_115"] = str(merged.get("cookie_115", "")).strip()
     merged["tg_proxy_enabled"] = bool(merged.get("tg_proxy_enabled", False))
     merged["tg_proxy_protocol"] = str(merged.get("tg_proxy_protocol", "http") or "http").strip().lower()
@@ -2415,10 +2420,28 @@ def list_resource_jobs(limit: int = 80) -> List[Dict[str, Any]]:
     ensure_db()
     conn = open_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM resource_jobs ORDER BY id DESC LIMIT ?", (max(1, min(limit, 200)),))
+    cursor.execute("SELECT * FROM resource_jobs ORDER BY id DESC LIMIT ?", (max(1, min(limit, 500)),))
     rows = cursor.fetchall()
     conn.close()
     return [serialize_resource_job_row(row) for row in rows]
+
+
+def list_resource_jobs_by_source(job_source: str, limit: int = 80, scan_limit: int = 400) -> List[Dict[str, Any]]:
+    source_key = str(job_source or "").strip()
+    if not source_key:
+        return []
+    query_limit = max(1, min(max(int(scan_limit or 0), int(limit or 0), 80), 800))
+    jobs = list_resource_jobs(limit=query_limit)
+    matched: List[Dict[str, Any]] = []
+    target_limit = max(1, int(limit or 1))
+    for job in jobs:
+        extra = job.get("extra") if isinstance(job.get("extra"), dict) else {}
+        if str(extra.get("job_source", "")).strip() != source_key:
+            continue
+        matched.append(job)
+        if len(matched) >= target_limit:
+            break
+    return matched
 
 
 def get_resource_job(job_id: int, include_private: bool = False) -> Dict[str, Any]:
@@ -3103,6 +3126,9 @@ def create_resource_job(resource: Dict[str, Any], data: Dict[str, Any]) -> int:
     folder_id = str(data.get("folder_id", "")).strip()
     savepath = normalize_relative_path(data.get("savepath", ""))
     extra = normalize_share_selection_meta(data.get("share_selection", {})) if link_type == "115share" else {}
+    custom_extra = data.get("extra", {})
+    if isinstance(custom_extra, dict):
+        extra = merge_json_object(extra, custom_extra)
     manual_receive_code = normalize_receive_code(data.get("receive_code", ""))
     if link_type == "115share" and manual_receive_code:
         extra["receive_code"] = manual_receive_code

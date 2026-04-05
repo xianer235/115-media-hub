@@ -316,7 +316,7 @@
                             </div>
                         </div>
                         <div class="resource-source-panel-body">
-                            <div class="resource-source-panel-note">频道列表已切换为紧凑模式；资源类型检测、活跃度筛选和批量启停/删除可在“管理频道”弹窗完成。</div>
+                            <div class="resource-source-panel-note">频道列表已切换为紧凑模式；资源类型检测、启用状态筛选、活跃度筛选和批量启停/删除可在“管理频道”弹窗完成。</div>
                             <div id="resource-source-list" class="space-y-3"></div>
                             <div class="resource-source-panel-footer">
                                 <div class="resource-source-panel-footer-copy">频道订阅会即时保存；其余参数仍然需要点击页面底部悬浮的“保存全部配置”。</div>
@@ -354,6 +354,27 @@
                             <label class="block"><span class="text-xs text-slate-500">管理账号</span><input id="username" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1"></label>
                             <label class="block"><span class="text-xs text-slate-500">管理密码</span><input id="password" type="password" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1"></label>
                         </div>
+                        <label class="block">
+                            <span class="text-xs text-slate-500 inline-flex items-center gap-2">
+                                Webhook 签名密钥（可选）
+                                <button type="button" class="info-dot" onclick="showHelp('用途：油猴脚本导入磁力链接时用于防伪签名。脚本和后台需配置同一个密钥。留空则不校验签名。')">i</button>
+                            </span>
+                            <input id="webhook_secret" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="建议 16 位以上随机字符串">
+                            <div class="mt-2 flex items-center gap-2 flex-wrap">
+                                <button type="button" onclick="generateWebhookSecret()" class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold">随机生成密钥</button>
+                                <span class="text-[11px] text-slate-500">生成后请点击“保存全部配置”。</span>
+                            </div>
+                        </label>
+                        <div class="text-xs text-slate-500 leading-6">
+                            主要用于“油猴脚本导入磁力链接”的请求防伪；脚本与后台填写同一个密钥即可长期校验。未配置则不校验。
+                            <br>当前支持：`X-Webhook-Token` 或 `X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign`。
+                        </div>
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <a href="/download/userscript/magnet-helper.user.js" target="_blank" rel="noopener noreferrer" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">
+                                下载油猴脚本（磁力助手）
+                            </a>
+                            <span class="text-xs text-slate-500">下载后在 Tampermonkey 中安装即可。</span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -384,6 +405,22 @@
                     </div>
                 </div>
                 <div id="monitor-task-list" class="space-y-3 mt-5"></div>
+            </div>
+
+            <div class="group-card">
+                <div class="flex flex-wrap justify-between gap-3 items-start">
+                    <div>
+                        <h3 class="group-title mb-2">油猴脚本导入磁力任务</h3>
+                        <div class="text-xs text-slate-400">展示最近由油猴脚本通过 webhook 创建的磁力任务，可直接取消、重试和手动触发刷新。</div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button onclick="refreshMonitorUserscriptJobs(true)" class="px-3 py-1 text-xs rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300">刷新列表</button>
+                    </div>
+                </div>
+                <div id="monitor-userscript-job-summary" class="mt-3 text-xs px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-300">
+                    暂无油猴脚本导入任务
+                </div>
+                <div id="monitor-userscript-job-list" class="space-y-3 mt-4"></div>
             </div>
 
             <div class="group-card">
@@ -460,16 +497,14 @@
                     <label class="flex items-center gap-3 cursor-pointer text-sm">
                         <input type="checkbox" id="monitor_webhook_enabled" class="ui-checkbox" onchange="refreshWebhookHint()">
                         开启 webhook
-                        <button type="button" class="info-dot" onclick="showHelp('CloudSaver Webhook 参数说明（本页面仅接收，不在此处配置触发规则）：\\n1) 接口地址：/webhook/任务名\\n   URL 中的任务名用于匹配并触发指定监控任务。\\n2) 请求类型：POST；请求体格式：JSON。\\n3) 参数用途：\\n   savepath：转存目标父路径，用于定位刷新范围。\\n   sharetitle：转存后的目录名或文件名。\\n   refresh_target_type：可选，folder / file / mixed；用于区分 sharetitle 是目录、文件，还是混合选择。\\n   delayTime：可选，单位秒；用于覆盖本次任务执行延时。\\n   title：可选；仅用于日志展示“转存内容”。\\n4) 触发条件、变量映射与请求体拼装请在 CloudSaver 中配置。')">i</button>
+                        <button type="button" class="info-dot" onclick="showHelp('Webhook 参数说明：\\n1) 接口地址：/webhook/任务名（任务名用于匹配并触发对应监控任务）\\n2) 请求方式：POST + JSON\\n3) 普通刷新参数：savepath、sharetitle、refresh_target_type、delayTime、title\\n4) 磁力导入参数：magnet 或 link_url（磁力链接）+ savepath（必填）\\n5) 签名校验（可选）：X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign，或 X-Webhook-Token\\n6) 签名密钥在“后台安全管理”中设置，留空表示不校验。')">i</button>
                     </label>
                     <div id="webhook-hint" class="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3 leading-5">
                         webhook 地址：IP:容器端口/webhook/任务名（用于触发指定任务）
-                        <br>savepath：转存目标父路径（用于定位刷新范围）
-                        <br>sharetitle：转存后的目录名或文件名
-                        <br>refresh_target_type：folder / file / mixed（用于更精确判断刷新范围）
-                        <br>delayTime：可选，单位秒（覆盖本次任务执行延时）
-                        <br>title：可选（仅日志展示）
-                        <br>说明：本页面仅接收参数；触发条件与映射规则请在 CloudSaver 中配置
+                        <br>普通刷新参数：savepath / sharetitle / refresh_target_type / delayTime / title
+                        <br>磁力任务参数：magnet 或 link_url（值为磁力链接） + savepath（必填）
+                        <br>签名校验（可选）：X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign 或 X-Webhook-Token
+                        <br>说明：签名密钥在「参数配置 -> 后台安全管理」中设置；为空时不校验
                     </div>
                     <label class="block">
                         <span class="text-xs text-slate-500 inline-flex items-center gap-2">
@@ -782,11 +817,11 @@
                     <div class="min-w-0">
                         <div class="resource-source-modal-eyebrow">Manage / Detect</div>
                         <div class="resource-source-modal-title">频道批量管理</div>
-                        <div class="resource-source-modal-subtitle">支持手动测试频道分类、按资源类型和活跃时间快捷筛选，再对选中频道批量启用、停用或删除。</div>
+                        <div class="resource-source-modal-subtitle">支持手动测试频道分类、按资源类型/启用状态/活跃时间快捷筛选，再对选中频道批量启用、停用或删除。</div>
                     </div>
                     <button type="button" class="resource-source-modal-close" onclick="closeResourceSourceManagerModal()" aria-label="关闭频道管理弹窗">✕</button>
                 </div>
-                <div class="resource-source-manager-body mt-5">
+                <div class="resource-source-manager-body">
                     <div class="resource-source-manager-side">
                         <div class="resource-source-manager-card">
                             <div class="resource-source-manager-card-title">测试分类</div>
@@ -803,6 +838,10 @@
                                 <div id="resource-source-manager-type-filters" class="resource-source-manager-filter-tabs"></div>
                             </div>
                             <div class="resource-source-manager-filter-block">
+                                <div class="resource-source-manager-filter-label">启用状态</div>
+                                <div id="resource-source-manager-status-filters" class="resource-source-manager-filter-tabs"></div>
+                            </div>
+                            <div class="resource-source-manager-filter-block">
                                 <div class="resource-source-manager-filter-label">最近活跃时间</div>
                                 <div id="resource-source-manager-activity-filters" class="resource-source-manager-filter-tabs"></div>
                             </div>
@@ -814,13 +853,10 @@
                             <div class="resource-source-manager-bulk-meta">
                                 已选频道 <span id="resource-source-manager-selected-count">0</span>
                             </div>
-                            <label class="ui-checkbox-field resource-source-manager-checkall">
-                                <span class="ui-checkbox">
-                                    <input type="checkbox" id="resource-source-manager-select-all">
-                                    <span></span>
-                                </span>
-                                <span class="resource-source-manager-checkall-text">全选当前筛选结果</span>
-                            </label>
+                            <div class="resource-source-manager-select-actions">
+                                <button id="resource-source-manager-select-all-btn" type="button" onclick="selectAllFilteredResourceSources()" class="resource-source-secondary-btn resource-source-manager-select-btn">全选当前筛选结果</button>
+                                <button id="resource-source-manager-invert-btn" type="button" onclick="invertFilteredResourceSourceSelections()" class="resource-source-secondary-btn resource-source-manager-select-btn">反选当前筛选结果</button>
+                            </div>
                             <div class="resource-source-manager-bulk-actions">
                                 <button type="button" onclick="clearResourceSourceSelections()" class="resource-source-secondary-btn">清空选择</button>
                                 <button type="button" onclick="bulkEnableResourceSources(true)" class="resource-source-manager-primary-btn">启用选中</button>

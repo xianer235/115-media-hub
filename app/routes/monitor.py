@@ -1,12 +1,119 @@
 import asyncio
+import hashlib
+import hmac
+import json
+import time
+import urllib.parse
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from ..core import *  # noqa: F401,F403
 from ..services.monitor import queue_monitor_job
+from ..services.resource import run_resource_job
 
 router = APIRouter()
+
+USERSCRIPT_WEBHOOK_SOURCE = "userscript_webhook"
+WEBHOOK_SIGNATURE_TTL_SECONDS = 10 * 60
+webhook_used_nonce_cache: Dict[str, int] = {}
+
+
+def _cleanup_webhook_nonce_cache(now_ts: int) -> None:
+    expire_before = now_ts - WEBHOOK_SIGNATURE_TTL_SECONDS
+    for key in list(webhook_used_nonce_cache.keys()):
+        if int(webhook_used_nonce_cache.get(key, 0) or 0) < expire_before:
+            webhook_used_nonce_cache.pop(key, None)
+
+
+def _verify_webhook_auth(request: Request, cfg: Dict[str, Any], body_text: str) -> str:
+    secret = str(cfg.get("webhook_secret", "")).strip()
+    if not secret:
+        return ""
+
+    token_header = str(request.headers.get("X-Webhook-Token", "") or "").strip()
+    if token_header:
+        if hmac.compare_digest(token_header, secret):
+            return ""
+        return "X-Webhook-Token 校验失败"
+
+    ts_text = str(request.headers.get("X-Webhook-Ts", "") or "").strip()
+    nonce = str(request.headers.get("X-Webhook-Nonce", "") or "").strip()
+    sign = str(request.headers.get("X-Webhook-Sign", "") or "").strip().lower()
+    if not ts_text or not nonce or not sign:
+        return "缺少签名头（X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign）"
+    if not re.fullmatch(r"\d{10,13}", ts_text):
+        return "X-Webhook-Ts 格式不正确"
+    if not re.fullmatch(r"[0-9a-f]{64}", sign):
+        return "X-Webhook-Sign 格式不正确"
+
+    ts_value = int(ts_text)
+    ts_seconds = ts_value // 1000 if ts_value > 10**11 else ts_value
+    now_ts = int(time.time())
+    if abs(now_ts - ts_seconds) > WEBHOOK_SIGNATURE_TTL_SECONDS:
+        return "Webhook 签名已过期"
+
+    nonce_key = f"{ts_text}:{nonce}"
+    _cleanup_webhook_nonce_cache(now_ts)
+    if nonce_key in webhook_used_nonce_cache:
+        return "Webhook 签名已被使用"
+
+    signature_base = f"{ts_text}.{nonce}.{body_text}"
+    expected_sign = hmac.new(secret.encode("utf-8"), signature_base.encode("utf-8"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected_sign, sign):
+        return "Webhook 签名校验失败"
+
+    webhook_used_nonce_cache[nonce_key] = now_ts
+    return ""
+
+
+def _extract_magnet_link(payload: Dict[str, Any]) -> str:
+    for key in ("magnet", "link_url", "url", "link"):
+        link = str(payload.get(key, "") or "").strip()
+        if link and detect_resource_link_type(link) == "magnet":
+            return link
+    return ""
+
+
+def _resolve_magnet_title(payload: Dict[str, Any], magnet_link: str) -> str:
+    title = normalize_resource_title(str(payload.get("title", "") or "").strip())
+    if title:
+        return title
+    try:
+        parsed = urllib.parse.urlparse(magnet_link)
+        name = urllib.parse.parse_qs(parsed.query).get("dn", [""])[0]
+        parsed_title = normalize_resource_title(urllib.parse.unquote_plus(str(name or "")))
+        if parsed_title:
+            return parsed_title
+    except Exception:
+        pass
+    return "磁力离线任务"
+
+
+def _build_userscript_job_counts(jobs: List[Dict[str, Any]]) -> Dict[str, int]:
+    statuses = [str(job.get("status", "") or "").strip().lower() for job in jobs]
+    return {
+        "total": len(jobs),
+        "active": sum(1 for status in statuses if status in ("pending", "running", "submitted")),
+        "submitted": sum(1 for status in statuses if status == "submitted"),
+        "completed": sum(1 for status in statuses if status == "completed"),
+        "failed": sum(1 for status in statuses if status == "failed"),
+    }
+
+
+@router.get("/monitor/userscript/jobs")
+async def list_monitor_userscript_jobs(request: Request) -> Dict[str, Any]:
+    limit = max(1, min(int(request.query_params.get("limit", 60) or 60), 120))
+    jobs = list_resource_jobs_by_source(
+        USERSCRIPT_WEBHOOK_SOURCE,
+        limit=limit,
+        scan_limit=max(200, limit * 5),
+    )
+    return {
+        "ok": True,
+        "jobs": jobs,
+        "counts": _build_userscript_job_counts(jobs),
+    }
 
 
 @router.get("/monitor/status")
@@ -96,17 +203,120 @@ async def delete_monitor(request: Request) -> Dict[str, Any]:
 
 @router.post("/webhook/{task_name}")
 async def webhook(task_name: str, request: Request) -> JSONResponse:
-    payload = await request.json()
+    body_bytes = await request.body()
+    body_text = body_bytes.decode("utf-8", errors="replace")
+    if not body_text.strip():
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "请求体不能为空"})
+    try:
+        payload = json.loads(body_text)
+    except Exception:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "请求体必须是 JSON"})
+    if not isinstance(payload, dict):
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "请求体必须是 JSON 对象"})
+
     cfg = get_config()
     task = next((task for task in cfg["monitor_tasks"] if task["name"] == task_name), None)
     if not task:
         return JSONResponse(status_code=404, content={"ok": False, "msg": "未找到对应监控任务"})
     if not task.get("webhook_enabled"):
         return JSONResponse(status_code=400, content={"ok": False, "msg": "该任务未开启 webhook"})
+
+    verify_error = _verify_webhook_auth(request, cfg, body_text)
+    if verify_error:
+        await write_monitor_log(f"Webhook 校验失败: {task_name} | {verify_error}", "warn")
+        return JSONResponse(status_code=401, content={"ok": False, "msg": verify_error})
+
     title = str(payload.get("title", "") or "").strip()
-    savepath = str(payload.get("savepath", "") or "").strip()
-    sharetitle = str(payload.get("sharetitle", "") or "").strip()
+    savepath = normalize_relative_path(payload.get("savepath", ""))
+    sharetitle = normalize_relative_path(payload.get("sharetitle", ""))
     refresh_target_type = str(payload.get("refresh_target_type", "") or "").strip()
+    magnet_link = _extract_magnet_link(payload)
+
+    if magnet_link:
+        if not refresh_target_type:
+            refresh_target_type = "file"
+        cookie_115 = str(cfg.get("cookie_115", "")).strip()
+        if not cookie_115:
+            return JSONResponse(status_code=400, content={"ok": False, "msg": "请先在参数配置中填写 115 Cookie"})
+        if not savepath:
+            return JSONResponse(status_code=400, content={"ok": False, "msg": "磁力任务缺少 savepath"})
+
+        parsed_delay = 0
+        try:
+            parsed_delay = max(0, int(payload.get("delayTime", 0) or 0))
+        except Exception:
+            parsed_delay = 0
+        refresh_delay_seconds = parsed_delay if parsed_delay > 0 else max(0, int(task.get("delay_seconds", 0) or 0))
+        resource_title = _resolve_magnet_title(payload, magnet_link)
+        resource = sanitize_resource_job_input(
+            {
+                "source_type": "webhook",
+                "source_name": "userscript",
+                "channel_name": "",
+                "title": resource_title,
+                "raw_text": f"{resource_title}\n{magnet_link}",
+                "link_url": magnet_link,
+                "link_type": "magnet",
+                "message_url": "",
+                "extra": {},
+            }
+        )
+        existing = find_existing_resource_job(resource, savepath)
+        if existing:
+            existing_status = str(existing.get("status", "")).strip().lower()
+            if existing_status == "completed":
+                msg = "该磁力已添加过。若需重新导入，请先清空“已完成导入记录”后再试。"
+            else:
+                msg = "该磁力已在处理中，请勿重复提交。"
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "ok": False,
+                    "msg": msg,
+                    "job_id": existing.get("id", 0),
+                    "status": existing_status,
+                },
+            )
+
+        try:
+            folder_id = await asyncio.to_thread(resolve_115_folder_id_by_path, cookie_115, savepath)
+        except Exception as exc:
+            return JSONResponse(status_code=400, content={"ok": False, "msg": f"保存路径无效：{exc}"})
+
+        job_id = create_resource_job(
+            resource,
+            {
+                "folder_id": folder_id,
+                "savepath": savepath,
+                "sharetitle": sharetitle,
+                "monitor_task_name": task_name,
+                "refresh_delay_seconds": refresh_delay_seconds,
+                "auto_refresh": True,
+                "extra": {
+                    "job_source": USERSCRIPT_WEBHOOK_SOURCE,
+                    "webhook_task_name": task_name,
+                    "refresh_target_type": refresh_target_type,
+                },
+            },
+        )
+        asyncio.create_task(run_resource_job(job_id))
+        await write_monitor_log(
+            f"Webhook 磁力任务已创建: {task_name} | job=#{job_id} | savepath={savepath} | delay={refresh_delay_seconds}s",
+            "info",
+        )
+        if title:
+            await write_monitor_log(f"Webhook 磁力标题：{title}", "info")
+        return JSONResponse(
+            content={
+                "ok": True,
+                "mode": "magnet",
+                "job_id": job_id,
+                "task_name": task_name,
+                "savepath": savepath,
+                "title": resource_title,
+                "auto_refresh": True,
+            }
+        )
 
     queue_monitor_job(task_name, "webhook", payload)
     await write_monitor_log(

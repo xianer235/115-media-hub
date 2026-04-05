@@ -38,6 +38,19 @@ async def favicon_ico() -> FileResponse:
     return FileResponse(FAVICON_PATH, media_type="image/svg+xml")
 
 
+@router.api_route("/download/userscript/magnet-helper.user.js", methods=["GET", "HEAD"], include_in_schema=False)
+async def download_magnet_userscript():
+    if not os.path.exists(USERSCRIPT_MAGNET_HELPER_PATH):
+        return JSONResponse(status_code=404, content={"ok": False, "msg": "脚本文件不存在"})
+    return FileResponse(
+        USERSCRIPT_MAGNET_HELPER_PATH,
+        media_type="application/javascript; charset=utf-8",
+        filename="115-magnet-helper-webhook.user.js",
+        content_disposition_type="inline",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @router.get("/logout")
 async def logout(request: Request) -> RedirectResponse:
     request.session.clear()
