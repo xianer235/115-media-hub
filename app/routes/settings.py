@@ -25,6 +25,9 @@ async def save_settings_endpoint(request: Request) -> Dict[str, Any]:
     cfg = get_config()
     cfg.update(incoming)
     cfg["monitor_tasks"] = [normalize_task(task) for task in incoming.get("monitor_tasks", cfg.get("monitor_tasks", []))]
+    cfg["subscription_tasks"] = [
+        normalize_subscription_task(task) for task in incoming.get("subscription_tasks", cfg.get("subscription_tasks", []))
+    ]
     save_config(cfg)
     schedule_ui_state_push(0)
     return {"ok": True}

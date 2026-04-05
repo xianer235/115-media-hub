@@ -4,7 +4,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
 from ..core import *  # noqa: F401,F403
-from ..services.resource import run_resource_job, trigger_resource_job_refresh
+from ..services.resource import cancel_resource_job, retry_resource_job, run_resource_job, trigger_resource_job_refresh
 
 router = APIRouter()
 
@@ -315,7 +315,17 @@ async def create_resource_job_endpoint(request: Request) -> Dict[str, Any]:
 
 @router.post("/resource/jobs/clear_completed")
 async def clear_completed_resource_jobs_endpoint(request: Request) -> Dict[str, Any]:
-    result = clear_completed_resource_jobs()
+    result = clear_resource_jobs("completed")
+    return {"ok": True, **result}
+
+
+@router.post("/resource/jobs/clear")
+async def clear_resource_jobs_endpoint(request: Request) -> Dict[str, Any]:
+    data = await request.json()
+    scope = normalize_resource_job_clear_scope(data.get("scope", "completed"))
+    if scope not in ("completed", "failed", "terminal"):
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "清理范围不支持"})
+    result = clear_resource_jobs(scope)
     return {"ok": True, **result}
 
 
@@ -492,6 +502,32 @@ async def refresh_resource_job_endpoint(request: Request) -> Dict[str, Any]:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "任务 ID 无效"})
     try:
         result = await trigger_resource_job_refresh(job_id, reason="manual")
+        return {"ok": True, **result}
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
+
+
+@router.post("/resource/jobs/cancel")
+async def cancel_resource_job_endpoint(request: Request) -> Dict[str, Any]:
+    data = await request.json()
+    job_id = int(data.get("job_id", 0) or 0)
+    if job_id <= 0:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "任务 ID 无效"})
+    try:
+        result = await cancel_resource_job(job_id, reason="manual")
+        return {"ok": True, **result}
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
+
+
+@router.post("/resource/jobs/retry")
+async def retry_resource_job_endpoint(request: Request) -> Dict[str, Any]:
+    data = await request.json()
+    job_id = int(data.get("job_id", 0) or 0)
+    if job_id <= 0:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "任务 ID 无效"})
+    try:
+        result = await retry_resource_job(job_id, reason="manual")
         return {"ok": True, **result}
     except Exception as exc:
         return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})

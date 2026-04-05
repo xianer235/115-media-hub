@@ -21,12 +21,19 @@
                     <button id="theme-toggle" class="text-xs bg-slate-700/40 text-slate-100 px-2 py-1 rounded-lg border border-slate-500/40 hover:bg-slate-600 transition-all" onclick="toggleTheme()" aria-label="切换夜间/日间模式" title="切换夜间/日间模式">🌙 夜间</button>
                 </div>
             </div>
-            <div id="tab-row" class="flex gap-4 text-sm font-bold overflow-x-auto nav-scroll pb-1">
-                <button onclick="switchTab('resource')" id="tab-resource" class="tab-active uppercase">资源中心</button>
-                <button onclick="switchTab('monitor')" id="tab-monitor" class="tab-inactive uppercase">文件夹监控任务</button>
-                <button onclick="switchTab('task')" id="tab-task" class="tab-inactive uppercase">目录树任务</button>
-                <button onclick="switchTab('settings')" id="tab-settings" class="tab-inactive uppercase">参数配置</button>
-                <button onclick="switchTab('about')" id="tab-about" class="tab-inactive uppercase">关于</button>
+            <div id="tab-row-shell" class="tab-row-shell">
+                <button id="tab-row-left" type="button" class="tab-row-arrow tab-row-arrow-left" aria-label="向左查看更多菜单" onclick="scrollMainTabs(-1)">‹</button>
+                <div id="tab-row" class="flex gap-4 text-sm font-bold overflow-x-auto nav-scroll pb-1">
+                    <button onclick="switchTab('resource')" id="tab-resource" class="tab-active uppercase">资源中心</button>
+                    <button onclick="switchTab('subscription')" id="tab-subscription" class="tab-inactive uppercase">影视订阅任务</button>
+                    <button onclick="switchTab('monitor')" id="tab-monitor" class="tab-inactive uppercase">文件夹监控任务</button>
+                    <button onclick="switchTab('task')" id="tab-task" class="tab-inactive uppercase">目录树任务</button>
+                    <button onclick="switchTab('settings')" id="tab-settings" class="tab-inactive uppercase">参数配置</button>
+                    <button onclick="switchTab('about')" id="tab-about" class="tab-inactive uppercase">关于</button>
+                </div>
+                <button id="tab-row-right" type="button" class="tab-row-arrow tab-row-arrow-right" aria-label="向右查看更多菜单" onclick="scrollMainTabs(1)">›</button>
+                <span class="tab-row-fade tab-row-fade-left" aria-hidden="true"></span>
+                <span class="tab-row-fade tab-row-fade-right" aria-hidden="true"></span>
             </div>
         </div>
     </nav>
@@ -108,6 +115,39 @@
             </div>
         </div>
         <button id="resource-back-top-btn" type="button" onclick="scrollResourceToTop()" class="resource-back-top-btn hidden" aria-label="回到资源页顶部">回到顶部</button>
+
+        <div id="page-subscription" class="hidden space-y-6">
+            <div class="group-card">
+                <div class="flex flex-wrap justify-between gap-3 items-center">
+                    <div>
+                        <h3 class="group-title mb-2">影视订阅任务</h3>
+                        <div class="text-xs text-slate-400">电影会在命中资源后自动创建导入任务；电视剧会识别季集并记录追更进度。</div>
+                    </div>
+                    <div class="flex items-center gap-3 flex-wrap">
+                        <button onclick="openNewSubscriptionTask()" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold min-h-[42px]">+ 新增订阅任务</button>
+                        <div class="text-xs px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-300">
+                            当前状态：<span id="subscription-summary-step" class="text-sky-400 font-bold">空闲</span>
+                            <span class="text-slate-500"> / </span>
+                            <span id="subscription-summary-detail">等待订阅任务</span>
+                        </div>
+                    </div>
+                </div>
+                <div id="subscription-task-list" class="space-y-3 mt-5"></div>
+            </div>
+
+            <div class="group-card">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="group-title mb-0">订阅日志</h3>
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <div class="text-xs text-slate-400">匹配评分、任务创建和追更状态都会记录在这里</div>
+                        <button onclick="clearSubscriptionLogs()" class="px-3 py-1 text-xs rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300">清空日志</button>
+                    </div>
+                </div>
+                <div class="bg-slate-950/80 rounded-3xl border border-slate-800 p-4 shadow-inner">
+                    <div id="subscription-log-box" class="overflow-y-auto font-mono text-[13px] p-2 scroll-smooth"></div>
+                </div>
+            </div>
+        </div>
 
         <div id="page-settings" class="hidden space-y-6">
             <div class="grid grid-cols-1 gap-6 settings-grid">
@@ -208,11 +248,44 @@
                 </div>
 
                 <div class="group-card settings-section-card">
+                    <h3 class="group-title">5. TMDB 元数据增强（可选）</h3>
+                    <div class="space-y-4">
+                        <label class="flex items-center gap-3 cursor-pointer text-sm">
+                            <input type="checkbox" id="tmdb_enabled" class="ui-checkbox">
+                            启用 TMDB 元数据增强（用于更准匹配与总集数补全）
+                        </label>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <label class="block">
+                                <span class="text-xs text-slate-500">TMDB API Key</span>
+                                <input id="tmdb_api_key" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx">
+                            </label>
+                            <label class="block">
+                                <span class="text-xs text-slate-500">缓存时长（小时）</span>
+                                <input id="tmdb_cache_ttl_hours" type="number" min="1" max="720" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="24">
+                            </label>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <label class="block">
+                                <span class="text-xs text-slate-500">语言（language）</span>
+                                <input id="tmdb_language" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="zh-CN">
+                            </label>
+                            <label class="block">
+                                <span class="text-xs text-slate-500">地区（region）</span>
+                                <input id="tmdb_region" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="CN">
+                            </label>
+                        </div>
+                        <div class="text-xs text-slate-500 leading-6">
+                            推荐：`language=zh-CN`、`region=CN`。开启后可在订阅任务里绑定 TMDB，自动补充别名、年份、总集数与连载模式，降低重名误匹配。
+                        </div>
+                    </div>
+                </div>
+
+                <div class="group-card settings-section-card">
                     <div class="resource-source-panel">
                         <div class="resource-source-panel-head">
                             <div class="min-w-0">
                                 <div class="settings-hero-eyebrow">Telegram Sources</div>
-                                <h3 class="group-title mb-0">5. TG 订阅源管理</h3>
+                                <h3 class="group-title mb-0">6. TG 订阅源管理</h3>
                                 <div class="resource-source-panel-copy">只需要填写公开频道 ID，例如 `QukanMovie`。支持直接粘贴 `@QukanMovie` 或完整的 `https://t.me/s/QukanMovie` 链接，保存时会自动规范化。</div>
                                 <div class="mt-3 max-w-xs">
                                     <label class="block">
@@ -259,7 +332,7 @@
                 </div>
 
                 <div class="group-card settings-section-card">
-                    <h3 class="group-title">6. 115 资源导入配置</h3>
+                    <h3 class="group-title">7. 115 资源导入配置</h3>
                     <div class="space-y-4">
                         <label class="block">
                             <span class="text-xs text-slate-500 inline-flex items-center gap-2">
@@ -275,7 +348,7 @@
                 </div>
 
                 <div class="group-card settings-section-card">
-                    <h3 class="group-title">7. 后台安全管理</h3>
+                    <h3 class="group-title">8. 后台安全管理</h3>
                     <div class="space-y-4">
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <label class="block"><span class="text-xs text-slate-500">管理账号</span><input id="username" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1"></label>
@@ -451,6 +524,192 @@
                         <button onclick="saveMonitorTask()" class="bg-sky-600 hover:bg-sky-500 rounded-xl py-3 font-bold text-white">保存任务</button>
                         <button onclick="closeMonitorModal()" class="bg-slate-700 hover:bg-slate-600 rounded-xl py-3 font-bold text-white">取消</button>
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="subscription-modal" class="hidden fixed inset-0 bg-black/60 z-50 p-4">
+            <div class="w-full max-w-2xl mx-auto mt-[4vh] max-h-[92vh] overflow-y-auto group-card modal-card">
+                <div class="flex items-center justify-between">
+                    <h3 id="subscription-modal-title" class="group-title mb-0">新增订阅任务</h3>
+                    <button onclick="closeSubscriptionModal()" class="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm">关闭</button>
+                </div>
+                <div class="space-y-4 mt-4">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <label class="block">
+                            <span class="text-xs text-slate-500">订阅类型</span>
+                            <select id="subscription_media_type" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" onchange="syncSubscriptionTypeUI()">
+                                <option value="movie">电影</option>
+                                <option value="tv">电视剧</option>
+                            </select>
+                        </label>
+                        <label class="block">
+                            <span class="text-xs text-slate-500">年份（可选）</span>
+                            <input id="subscription_year" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="如 2026">
+                        </label>
+                    </div>
+                    <label class="block">
+                        <span class="text-xs text-slate-500">影视名称</span>
+                        <input id="subscription_title" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：长安的荔枝">
+                        <div class="text-[11px] text-slate-500 mt-2">系统会自动把影视名称作为任务名。</div>
+                    </label>
+                    <label class="block">
+                        <span class="text-xs text-slate-500">别名（可选，逗号分隔）</span>
+                        <input id="subscription_aliases" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：The Long Night, 长夜难明">
+                    </label>
+                    <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 space-y-3">
+                        <div class="flex flex-wrap items-center justify-between gap-2">
+                            <div class="text-xs text-slate-500">TMDB 绑定（可选，推荐）</div>
+                            <div class="flex items-center gap-2">
+                                <button type="button" onclick="openSubscriptionTmdbSearchModal()" class="px-3 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold">搜索 TMDB</button>
+                                <button type="button" onclick="clearSubscriptionTmdbBinding()" class="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold">清除绑定</button>
+                            </div>
+                        </div>
+                        <div id="subscription_tmdb_summary" class="text-xs text-slate-400 leading-6">未绑定 TMDB。绑定后会自动补充别名/年份/总集数并增强匹配稳定性。</div>
+                        <input id="subscription_tmdb_id" class="hidden" value="0">
+                        <input id="subscription_tmdb_media_type" class="hidden" value="">
+                        <input id="subscription_tmdb_title" class="hidden" value="">
+                        <input id="subscription_tmdb_original_title" class="hidden" value="">
+                        <input id="subscription_tmdb_year" class="hidden" value="">
+                        <input id="subscription_tmdb_aliases" class="hidden" value="">
+                        <input id="subscription_tmdb_total_episodes" class="hidden" value="0">
+                        <input id="subscription_tmdb_total_seasons" class="hidden" value="0">
+                        <input id="subscription_tmdb_episode_mode" class="hidden" value="seasonal">
+                    </div>
+                    <div id="subscription-tv-fields" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <label class="block">
+                            <span class="text-xs text-slate-500">季数（电视剧）</span>
+                            <input id="subscription_season" type="number" min="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="1">
+                        </label>
+                        <label class="block">
+                            <span class="text-xs text-slate-500">总集数（可选，0 为自动识别）</span>
+                            <input id="subscription_total_episodes" type="number" min="0" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
+                        </label>
+                    </div>
+                    <label id="subscription-anime-mode-wrap" class="flex items-center gap-3 cursor-pointer text-sm">
+                        <input type="checkbox" id="subscription_anime_mode" class="ui-checkbox">
+                        动漫模式（多季连载兼容，放宽季信息要求）
+                    </label>
+                    <div class="space-y-2">
+                        <div class="text-xs text-slate-500">115 保存目录</div>
+                        <div class="resource-save-path-grid">
+                            <input id="subscription_savepath_display" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" value="请选择保存目录" readonly>
+                            <button type="button" onclick="openSubscriptionFolderModal()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">浏览目录</button>
+                        </div>
+                        <input id="subscription_folder_id" class="hidden" value="0">
+                        <input id="subscription_savepath" class="hidden" value="">
+                        <div id="subscription-savepath-hint" class="text-[11px] text-slate-500 leading-5 px-1">电影会自动保存到“目标目录/影片名”子文件夹；电视剧保存到所选目录。</div>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <label class="block">
+                            <span class="text-xs text-slate-500">定时检查（分钟，0 为关闭）</span>
+                            <input id="subscription_cron_minutes" type="number" min="0" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="30">
+                        </label>
+                        <label class="block">
+                            <span class="text-xs text-slate-500">匹配阈值（30-100）</span>
+                            <input id="subscription_min_score" type="number" min="30" max="100" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="55">
+                            <div class="text-[11px] text-slate-500 mt-2 leading-5">
+                                推荐：电影 58-68，电视剧 52-62。阈值越高越严格（更准但可能漏）；阈值越低更容易命中（更全但可能误匹配）。
+                            </div>
+                        </label>
+                    </div>
+                    <label class="block">
+                        <span class="text-xs text-slate-500">清晰度优先级（常见分辨率）</span>
+                        <select id="subscription_quality_priority" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1">
+                            <option value="balanced">均衡（1080P > 720P > 4K > 480P）</option>
+                            <option value="ultra">超清优先（4K > 1080P > 720P）</option>
+                            <option value="fhd">高清优先（1080P > 4K > 720P）</option>
+                            <option value="hd">流畅优先（720P > 1080P > 4K）</option>
+                            <option value="sd">小体积优先（480P > 720P > 1080P）</option>
+                        </select>
+                        <div class="text-[11px] text-slate-500 mt-2 leading-5">
+                            仅在标题匹配成功后参与排序加分。用于同名多资源时优先挑选你想要的清晰度。
+                        </div>
+                    </label>
+                    <label class="flex items-center gap-3 cursor-pointer text-sm">
+                        <input type="checkbox" id="subscription_enabled" class="ui-checkbox" checked>
+                        启用任务（关闭后不参与定时，但仍可手动运行）
+                    </label>
+                    <div class="text-xs text-slate-500 leading-6">
+                        匹配策略：执行时会主动在已启用频道按标题/别名搜索，再叠加年份、季集信息评分，超过阈值才会触发导入任务。
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                        <button onclick="saveSubscriptionTask()" class="bg-sky-600 hover:bg-sky-500 rounded-xl py-3 font-bold text-white">保存任务</button>
+                        <button onclick="closeSubscriptionModal()" class="bg-slate-700 hover:bg-slate-600 rounded-xl py-3 font-bold text-white">取消</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="subscription-folder-modal" class="hidden fixed inset-0 bg-black/60 z-[56] p-4">
+            <div class="w-full max-w-2xl mx-auto mt-[8vh] max-h-[88vh] overflow-y-auto group-card modal-card">
+                <div class="flex items-center justify-between">
+                    <h3 class="group-title mb-0">选择订阅保存目录</h3>
+                    <button onclick="closeSubscriptionFolderModal()" class="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm">关闭</button>
+                </div>
+                <div class="space-y-4 mt-4">
+                    <div class="resource-folder-pathbar">
+                        <div class="resource-folder-path-label">保存目录路径</div>
+                        <div id="subscription-folder-breadcrumbs" class="resource-folder-path-track">根目录</div>
+                    </div>
+                    <div id="subscription-folder-summary" class="text-xs text-slate-500">
+                        你可以先新建文件夹，再选择当前目录作为订阅目标路径。
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                        <button type="button" onclick="selectCurrentSubscriptionFolder()" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold">选择当前目录</button>
+                        <button type="button" onclick="goSubscriptionFolderBack()" class="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">返回上一级</button>
+                    </div>
+                    <div class="flex flex-col sm:flex-row gap-2">
+                        <input id="subscription-folder-create-name" class="w-full sm:flex-1 bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm" placeholder="在当前目录新建文件夹（例如：电影）">
+                        <button id="subscription-folder-create-btn" type="button" onclick="createSubscriptionFolderInCurrent()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold whitespace-nowrap">新建文件夹</button>
+                    </div>
+                    <div id="subscription-folder-list" class="space-y-3"></div>
+                </div>
+            </div>
+        </div>
+
+        <div id="subscription-tmdb-modal" class="hidden fixed inset-0 bg-black/60 z-[57] p-4">
+            <div class="w-full max-w-3xl mx-auto mt-[6vh] max-h-[88vh] overflow-y-auto group-card modal-card">
+                <div class="flex items-center justify-between">
+                    <h3 class="group-title mb-0">TMDB 影视匹配</h3>
+                    <button onclick="closeSubscriptionTmdbSearchModal()" class="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm">关闭</button>
+                </div>
+                <div class="space-y-4 mt-4">
+                    <div class="flex flex-col sm:flex-row gap-2">
+                        <input id="subscription_tmdb_search_keyword" class="w-full sm:flex-1 bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm" placeholder="输入影视名称后搜索 TMDB">
+                        <button id="subscription_tmdb_search_btn" type="button" onclick="searchSubscriptionTmdbBinding()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold whitespace-nowrap">搜索</button>
+                    </div>
+                    <div id="subscription_tmdb_search_hint" class="text-xs text-slate-500 leading-6">按当前订阅类型（电影/电视剧）检索 TMDB，选择后会写入任务绑定信息。</div>
+                    <div id="subscription_tmdb_result_list" class="space-y-3"></div>
+                </div>
+            </div>
+        </div>
+
+        <div id="subscription-episode-modal" class="hidden fixed inset-0 bg-black/60 z-[58] p-4">
+            <div class="w-full max-w-5xl mx-auto mt-[4vh] max-h-[92vh] overflow-hidden group-card modal-card">
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                    <div class="min-w-0">
+                        <h3 id="subscription-episode-modal-title" class="group-title mb-0">集数视图</h3>
+                        <div id="subscription-episode-modal-summary" class="text-xs text-slate-400 mt-2">点击任务卡片里的“集数视图”查看。</div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button type="button" onclick="refreshSubscriptionEpisodeView(true)" class="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-bold">刷新</button>
+                        <button type="button" onclick="closeSubscriptionEpisodeModal()" class="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-bold">关闭</button>
+                    </div>
+                </div>
+                <div class="mt-4 space-y-3">
+                    <div class="subscription-episode-legend">
+                        <div class="subscription-episode-legend-item">
+                            <span class="subscription-episode-dot is-present"></span>
+                            已存在资源
+                        </div>
+                        <div class="subscription-episode-legend-item">
+                            <span class="subscription-episode-dot"></span>
+                            缺失资源
+                        </div>
+                    </div>
+                    <div id="subscription-episode-modal-note" class="text-[11px] text-slate-500 leading-5">-</div>
+                    <div id="subscription-episode-grid" class="subscription-episode-grid"></div>
                 </div>
             </div>
         </div>
@@ -743,7 +1002,14 @@
                         <div id="resource-job-modal-summary" class="resource-job-modal-subtitle">等待导入任务</div>
                     </div>
                     <div class="resource-job-modal-actions">
-                        <button id="resource-clear-completed-btn" type="button" onclick="clearCompletedResourceJobs()" class="resource-job-modal-action">清空已完成</button>
+                        <div id="resource-job-clear-menu" class="resource-job-clear-menu">
+                            <button id="resource-job-clear-toggle" type="button" onclick="toggleResourceJobClearMenu()" class="resource-job-modal-action resource-job-clear-toggle" aria-haspopup="menu" aria-expanded="false">清空</button>
+                            <div id="resource-job-clear-dropdown" class="resource-job-clear-dropdown hidden" role="menu" aria-label="清理任务记录">
+                                <button id="resource-clear-completed-btn" type="button" onclick="clearCompletedResourceJobs()" class="resource-job-clear-item" role="menuitem">清空已完成</button>
+                                <button id="resource-clear-failed-btn" type="button" onclick="clearFailedResourceJobs()" class="resource-job-clear-item" role="menuitem">清空失败</button>
+                                <button id="resource-clear-terminal-btn" type="button" onclick="clearTerminalResourceJobs()" class="resource-job-clear-item" role="menuitem">清空完成+失败</button>
+                            </div>
+                        </div>
                         <button type="button" class="resource-job-modal-close" onclick="toggleResourceJobModal(false)" aria-label="关闭任务列表">✕</button>
                     </div>
                 </div>

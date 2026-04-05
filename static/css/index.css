@@ -11,10 +11,16 @@
         .nav-scroll { -ms-overflow-style: none; scrollbar-width: none; }
         .nav-scroll::-webkit-scrollbar { display: none; }
         #main-nav-actions { display: flex; align-items: center; gap: 0.5rem; flex-wrap: nowrap; }
-        #log-box::-webkit-scrollbar, #monitor-log-box::-webkit-scrollbar { width: 6px; }
-        #log-box::-webkit-scrollbar-thumb, #monitor-log-box::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
+        .tab-row-shell { position: relative; }
+        #tab-row { scroll-padding-inline: 2rem; }
+        #tab-row > button { flex: 0 0 auto; }
+        .tab-row-fade,
+        .tab-row-arrow { display: none; }
+        #log-box::-webkit-scrollbar, #monitor-log-box::-webkit-scrollbar, #subscription-log-box::-webkit-scrollbar { width: 6px; }
+        #log-box::-webkit-scrollbar-thumb, #monitor-log-box::-webkit-scrollbar-thumb, #subscription-log-box::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
         #log-box { height: min(48vh, 420px) !important; }
         #monitor-log-box { height: min(46vh, 390px) !important; }
+        #subscription-log-box { height: min(42vh, 340px) !important; }
         .btn-disabled { opacity: 0.5; cursor: not-allowed; pointer-events: none; filter: grayscale(1); }
         .group-card { background: linear-gradient(180deg, rgba(30,41,59,0.96), rgba(15,23,42,0.96)); border: 1px solid #334155; border-radius: 1.5rem; padding: 1.5rem; box-shadow: 0 10px 28px rgba(2, 6, 23, 0.35); }
         .group-title { color: #38bdf8; font-weight: 800; font-size: 0.875rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 1.25rem; border-left: 4px solid #38bdf8; padding-left: 0.75rem; }
@@ -56,6 +62,93 @@
         .summary-fail { color: #f87171; }
         .summary-delete { color: #38bdf8; }
         .summary-zero { opacity: 0.6; }
+        .subscription-episode-legend {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.75rem 1.25rem;
+        }
+        .subscription-episode-legend-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            font-size: 0.74rem;
+            color: #cbd5e1;
+        }
+        .subscription-episode-dot {
+            width: 0.62rem;
+            height: 0.62rem;
+            border-radius: 9999px;
+            background: rgba(148, 163, 184, 0.2);
+            border: 1px solid rgba(148, 163, 184, 0.55);
+            box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.15);
+        }
+        .subscription-episode-dot.is-present {
+            background: rgba(16, 185, 129, 0.85);
+            border-color: rgba(16, 185, 129, 0.95);
+            box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.18);
+        }
+        .subscription-episode-grid {
+            max-height: min(60vh, 560px);
+            overflow-y: auto;
+            padding: 0.22rem 0.1rem 0.22rem 0;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(2.45rem, 1fr));
+            gap: 0.36rem;
+        }
+        .subscription-episode-grid::-webkit-scrollbar {
+            width: 6px;
+        }
+        .subscription-episode-grid::-webkit-scrollbar-thumb {
+            background: rgba(71, 85, 105, 0.82);
+            border-radius: 999px;
+        }
+        .subscription-episode-cell {
+            position: relative;
+            border-radius: 0.62rem;
+            border: 1px solid rgba(71, 85, 105, 0.88);
+            background: rgba(15, 23, 42, 0.55);
+            color: #cbd5e1;
+            min-height: 2.45rem;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.72rem;
+            line-height: 1;
+            font-weight: 800;
+            letter-spacing: 0.01em;
+            user-select: none;
+        }
+        .subscription-episode-cell.is-present {
+            color: #dcfce7;
+            border-color: rgba(16, 185, 129, 0.7);
+            background: linear-gradient(180deg, rgba(16, 185, 129, 0.24), rgba(5, 150, 105, 0.22));
+            box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.2);
+        }
+        .subscription-episode-cell.is-present::after {
+            content: "";
+            position: absolute;
+            top: 0.24rem;
+            right: 0.24rem;
+            width: 0.34rem;
+            height: 0.34rem;
+            border-radius: 9999px;
+            background: rgba(16, 185, 129, 0.96);
+            box-shadow: 0 0 0 2px rgba(2, 6, 23, 0.35);
+        }
+        .subscription-episode-cell-no {
+            transform: translateY(0.01rem);
+        }
+        .subscription-episode-empty {
+            grid-column: 1 / -1;
+            padding: 1.1rem 0.9rem;
+            border-radius: 0.9rem;
+            border: 1px dashed rgba(100, 116, 139, 0.75);
+            background: rgba(15, 23, 42, 0.42);
+            color: #94a3b8;
+            font-size: 0.78rem;
+            text-align: center;
+        }
         .info-dot {
             width: 18px;
             height: 18px;
@@ -1180,6 +1273,8 @@
             display: flex;
             align-items: center;
             gap: 0.45rem;
+            flex-wrap: wrap;
+            justify-content: flex-end;
         }
         .resource-job-modal-action,
         .resource-job-modal-close {
@@ -1197,6 +1292,46 @@
         }
         .resource-job-modal-action:hover {
             background: rgba(51, 65, 85, 0.92);
+        }
+        .resource-job-clear-menu {
+            position: relative;
+        }
+        .resource-job-clear-toggle {
+            min-width: 6.6rem;
+            text-align: center;
+        }
+        .resource-job-clear-dropdown {
+            position: absolute;
+            top: calc(100% + 0.32rem);
+            right: 0;
+            min-width: 11.2rem;
+            padding: 0.36rem;
+            border-radius: 0.9rem;
+            border: 1px solid rgba(71, 85, 105, 0.9);
+            background: rgba(2, 6, 23, 0.96);
+            box-shadow: 0 18px 32px rgba(2, 6, 23, 0.45);
+            display: flex;
+            flex-direction: column;
+            gap: 0.24rem;
+            z-index: 8;
+        }
+        .resource-job-clear-item {
+            width: 100%;
+            border-radius: 0.62rem;
+            border: 1px solid rgba(51, 65, 85, 0.86);
+            background: rgba(15, 23, 42, 0.88);
+            color: #e2e8f0;
+            font-size: 0.72rem;
+            font-weight: 800;
+            line-height: 1.35;
+            padding: 0.44rem 0.62rem;
+            text-align: left;
+            white-space: nowrap;
+        }
+        .resource-job-clear-item:hover {
+            background: rgba(51, 65, 85, 0.95);
+            border-color: rgba(100, 116, 139, 0.95);
+            color: #f8fafc;
         }
         .resource-job-modal-close {
             width: 34px;
@@ -1432,6 +1567,23 @@
             -webkit-box-orient: vertical;
             overflow: hidden;
         }
+        .resource-card-subscribe-btn {
+            min-height: 34px;
+            padding: 0.36rem 0.9rem;
+            border-radius: 9999px;
+            font-size: 0.72rem;
+            font-weight: 800;
+            color: #fcd34d;
+            background: rgba(245, 158, 11, 0.14);
+            border: 1px solid rgba(245, 158, 11, 0.42);
+            white-space: nowrap;
+            transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+        }
+        .resource-card-subscribe-btn:hover {
+            background: rgba(245, 158, 11, 0.2);
+            border-color: rgba(251, 191, 36, 0.62);
+            color: #fde68a;
+        }
         .resource-card-actions {
             display: grid;
             grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1449,6 +1601,7 @@
             justify-content: center;
             text-align: center;
             text-decoration: none;
+            white-space: nowrap;
         }
         .resource-card-action-secondary {
             background: rgba(15, 23, 42, 0.7);
@@ -2282,7 +2435,73 @@
             #page-resource .resource-shell { padding: 0.98rem; }
             .group-title { font-size: 0.98rem; margin-bottom: 0.9rem; }
             .nav-title { font-size: 1.05rem !important; }
-            #tab-row { gap: 0.35rem; }
+            .tab-row-shell {
+                margin-left: -0.1rem;
+                margin-right: -0.1rem;
+            }
+            #tab-row {
+                gap: 0.35rem;
+                padding-left: 0.2rem;
+                padding-right: 1.45rem;
+            }
+            .tab-row-arrow,
+            .tab-row-fade {
+                display: block;
+                position: absolute;
+                top: 50%;
+                transform: translateY(-50%);
+                opacity: 0;
+                transition: opacity 0.2s ease;
+            }
+            .tab-row-arrow {
+                z-index: 3;
+                width: 1.2rem;
+                height: 1.2rem;
+                border-radius: 9999px;
+                border: 1px solid rgba(100, 116, 139, 0.75);
+                background: rgba(15, 23, 42, 0.94);
+                color: #cbd5e1;
+                font-size: 0.86rem;
+                font-weight: 800;
+                line-height: 1;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                padding: 0;
+                pointer-events: none;
+                visibility: hidden;
+            }
+            .tab-row-fade {
+                z-index: 2;
+                pointer-events: none;
+                width: 1.7rem;
+                height: calc(100% - 0.2rem);
+            }
+            .tab-row-arrow-left {
+                left: 0;
+            }
+            .tab-row-arrow-right {
+                right: 0;
+            }
+            .tab-row-fade-left {
+                left: 0;
+                background: linear-gradient(90deg, rgba(15, 23, 42, 0.96) 38%, rgba(15, 23, 42, 0));
+            }
+            .tab-row-fade-right {
+                right: 0;
+                background: linear-gradient(270deg, rgba(15, 23, 42, 0.96) 42%, rgba(15, 23, 42, 0));
+            }
+            .tab-row-shell.can-scroll-left .tab-row-fade-left,
+            .tab-row-shell.can-scroll-right .tab-row-fade-right,
+            .tab-row-shell.can-scroll-left .tab-row-arrow-left,
+            .tab-row-shell.can-scroll-right .tab-row-arrow-right {
+                opacity: 1;
+            }
+            .tab-row-shell.can-scroll-left .tab-row-arrow-left,
+            .tab-row-shell.can-scroll-right .tab-row-arrow-right {
+                pointer-events: auto;
+                visibility: visible;
+            }
             .tab-active, .tab-inactive {
                 font-size: 0.93rem;
                 padding: 0.58rem 0.5rem;
@@ -2315,8 +2534,14 @@
             #page-monitor .text-sm,
             #page-about .text-sm,
             #monitor-modal .text-sm { font-size: 0.95rem !important; }
-            #page-monitor .grid.grid-cols-1.sm\:grid-cols-2.md\:grid-cols-4 { grid-template-columns: 1fr 1fr; }
-            #page-monitor .grid.grid-cols-1.sm\:grid-cols-2.md\:grid-cols-4 button { min-height: 42px; }
+            #page-monitor .monitor-task-actions {
+                grid-template-columns: repeat(4, minmax(0, 1fr));
+            }
+            #page-monitor .monitor-task-actions button {
+                min-height: 40px;
+                font-size: 0.86rem;
+                white-space: nowrap;
+            }
             #log-box, #monitor-log-box {
                 font-size: 13px !important;
                 line-height: 1.55;
@@ -2336,7 +2561,20 @@
                 grid-template-columns: repeat(2, minmax(0, 1fr));
             }
             .resource-poster { width: 88px; height: 120px; }
-            .resource-card-actions { grid-template-columns: 1fr; }
+            .resource-card-subscribe-btn {
+                min-height: 31px;
+                padding: 0.3rem 0.72rem;
+                font-size: 0.68rem;
+            }
+            .resource-card-actions {
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+                gap: 0.42rem;
+            }
+            .resource-card-actions button,
+            .resource-card-actions a {
+                min-height: 34px;
+                font-size: 0.72rem;
+            }
             .resource-detail-grid { grid-template-columns: 1fr; }
             .resource-import-layout { grid-template-columns: 1fr; }
             .resource-import-side-column { position: static; }
@@ -2456,7 +2694,11 @@
             }
             .resource-job-modal-actions {
                 width: 100%;
-                justify-content: space-between;
+                justify-content: flex-start;
+            }
+            .resource-job-clear-dropdown {
+                left: 0;
+                right: auto;
             }
             .resource-job-modal-stats {
                 grid-template-columns: 1fr 1fr;
@@ -2646,7 +2888,7 @@
             --surface-soft: #f8fafc;
             --border: #d9e2ec;
             --text: #0f172a;
-            --muted: #64748b;
+            --muted: #475569;
             --primary: #1d4ed8;
             --success: #15803d;
             --warn: #b45309;
@@ -2817,6 +3059,16 @@
             color: #2563eb;
             border-color: rgba(37, 99, 235, 0.12);
         }
+        html.theme-day .resource-card-subscribe-btn {
+            color: #b45309;
+            background: #fff7ed;
+            border-color: rgba(245, 158, 11, 0.38);
+        }
+        html.theme-day .resource-card-subscribe-btn:hover {
+            color: #92400e;
+            background: #ffedd5;
+            border-color: rgba(245, 158, 11, 0.52);
+        }
         html.theme-day .resource-card-action-secondary:hover {
             background: #dbeafe;
             color: #1d4ed8;
@@ -2980,6 +3232,21 @@
             border-color: rgba(203, 213, 225, 0.88);
             color: #334155;
         }
+        html.theme-day .resource-job-clear-dropdown {
+            background: rgba(255, 255, 255, 0.98);
+            border-color: rgba(203, 213, 225, 0.92);
+            box-shadow: 0 14px 28px rgba(15, 23, 42, 0.14);
+        }
+        html.theme-day .resource-job-clear-item {
+            background: rgba(255, 255, 255, 0.98);
+            border-color: rgba(203, 213, 225, 0.92);
+            color: #334155;
+        }
+        html.theme-day .resource-job-clear-item:hover {
+            background: rgba(241, 245, 249, 0.98);
+            border-color: rgba(148, 163, 184, 0.9);
+            color: #0f172a;
+        }
         html.theme-day .resource-job-trigger-badge {
             background: rgba(14, 165, 233, 0.12);
             border-color: rgba(56, 189, 248, 0.22);
@@ -3130,6 +3397,38 @@
         html.theme-day .resource-folder-sep {
             color: #94a3b8;
         }
+        html.theme-day .subscription-episode-legend-item {
+            color: #475569;
+        }
+        html.theme-day .subscription-episode-dot {
+            background: rgba(203, 213, 225, 0.75);
+            border-color: rgba(148, 163, 184, 0.82);
+            box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.2);
+        }
+        html.theme-day .subscription-episode-dot.is-present {
+            background: rgba(16, 185, 129, 0.92);
+            border-color: rgba(5, 150, 105, 0.94);
+            box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
+        }
+        html.theme-day .subscription-episode-cell {
+            background: rgba(255, 255, 255, 0.98);
+            border-color: rgba(203, 213, 225, 0.95);
+            color: #334155;
+        }
+        html.theme-day .subscription-episode-cell.is-present {
+            background: linear-gradient(180deg, rgba(209, 250, 229, 0.95), rgba(167, 243, 208, 0.92));
+            border-color: rgba(16, 185, 129, 0.6);
+            color: #065f46;
+            box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.24);
+        }
+        html.theme-day .subscription-episode-cell.is-present::after {
+            box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.9);
+        }
+        html.theme-day .subscription-episode-empty {
+            background: rgba(248, 250, 252, 0.96);
+            border-color: rgba(203, 213, 225, 0.9);
+            color: #64748b;
+        }
         html.theme-day .resource-card-desc { color: #475569; }
         html.theme-day .resource-card-meta { color: #64748b; }
         html.theme-day .resource-save-section {
@@ -3146,6 +3445,11 @@
         }
         html.theme-day #page-resource .subtle { color: #64748b; }
         html.theme-day #page-resource .text-white:not(button):not(a),
+        html.theme-day #page-subscription .text-white:not(button):not(a),
+        html.theme-day #subscription-modal .text-white:not(button):not(a),
+        html.theme-day #subscription-tmdb-modal .text-white:not(button):not(a),
+        html.theme-day #subscription-folder-modal .text-white:not(button):not(a),
+        html.theme-day #subscription-episode-modal .text-white:not(button):not(a),
         html.theme-day #resource-import-modal .text-white:not(button):not(a),
         html.theme-day #resource-folder-modal .text-white:not(button):not(a) {
             color: #0f172a !important;
@@ -3155,6 +3459,7 @@
         html.theme-day #resource-import-modal button.bg-slate-700,
         html.theme-day #resource-import-modal button.bg-slate-800,
         html.theme-day #resource-import-modal a.bg-slate-800,
+        html.theme-day #subscription-folder-modal button.bg-slate-700,
         html.theme-day #resource-folder-modal button.bg-slate-700 {
             background: #e2e8f0 !important;
             border-color: #cbd5e1 !important;
@@ -3166,6 +3471,7 @@
         html.theme-day #resource-import-modal button.bg-slate-700:hover,
         html.theme-day #resource-import-modal button.bg-slate-800:hover,
         html.theme-day #resource-import-modal a.bg-slate-800:hover,
+        html.theme-day #subscription-folder-modal button.bg-slate-700:hover,
         html.theme-day #resource-folder-modal button.bg-slate-700:hover {
             background: #cbd5e1 !important;
             color: #1e293b !important;
@@ -3196,10 +3502,22 @@
             background: linear-gradient(135deg, rgba(240, 249, 255, 0.98), rgba(224, 242, 254, 0.98));
             color: #0c4a6e;
         }
+        html.theme-day .tab-row-arrow {
+            border-color: rgba(148, 163, 184, 0.66);
+            background: rgba(248, 250, 252, 0.96);
+            color: #334155;
+        }
+        html.theme-day .tab-row-fade-left {
+            background: linear-gradient(90deg, rgba(248, 250, 252, 0.98) 38%, rgba(248, 250, 252, 0));
+        }
+        html.theme-day .tab-row-fade-right {
+            background: linear-gradient(270deg, rgba(248, 250, 252, 0.98) 42%, rgba(248, 250, 252, 0));
+        }
         html.theme-day .tab-inactive { color: #475569 !important; }
         html.theme-day .tab-inactive:hover { color: var(--text) !important; }
         html.theme-day #log-box,
-        html.theme-day #monitor-log-box { color: #1f2937 !important; }
+        html.theme-day #monitor-log-box,
+        html.theme-day #subscription-log-box { color: #1f2937 !important; }
         html.theme-day .log-success { color: var(--success) !important; }
         html.theme-day .log-warn { color: var(--warn) !important; }
         html.theme-day .log-error { color: var(--danger) !important; }
@@ -3251,8 +3569,16 @@
         html.theme-day .text-red-400 { color: var(--danger) !important; }
         html.theme-day #prog-step,
         html.theme-day #page-settings .text-white,
+        html.theme-day #page-subscription .text-white,
         html.theme-day #page-monitor .text-white,
         html.theme-day #help-modal .text-white { color: var(--text) !important; }
+        html.theme-day #page-subscription .text-slate-300 { color: #334155 !important; }
+        html.theme-day #page-subscription .text-slate-400 { color: #475569 !important; }
+        html.theme-day #page-subscription .text-slate-500 { color: #475569 !important; }
+        html.theme-day #subscription-modal .text-slate-500,
+        html.theme-day #subscription-tmdb-modal .text-slate-500,
+        html.theme-day #subscription-folder-modal .text-slate-500,
+        html.theme-day #subscription-episode-modal .text-slate-500 { color: #475569 !important; }
         html.theme-day #page-about .text-white { color: var(--text) !important; }
         html.theme-day #page-about .text-sky-400 { color: #1d4ed8 !important; }
         html.theme-day #page-about .text-slate-400 { color: #475569 !important; }
@@ -3297,6 +3623,28 @@
             border: 1px solid #334155 !important;
         }
         html.theme-day #monitor-modal button.bg-slate-700:hover { background: #334155 !important; }
+        html.theme-day #page-subscription button.bg-slate-700 {
+            background: #475569 !important;
+            color: #ffffff !important;
+            border: 1px solid #334155 !important;
+        }
+        html.theme-day #page-subscription button.bg-slate-700:hover {
+            background: #334155 !important;
+            color: #ffffff !important;
+        }
+        html.theme-day #subscription-modal button.bg-slate-700,
+        html.theme-day #subscription-tmdb-modal button.bg-slate-700,
+        html.theme-day #subscription-episode-modal button.bg-slate-700 {
+            background: #475569 !important;
+            color: #ffffff !important;
+            border: 1px solid #334155 !important;
+        }
+        html.theme-day #subscription-modal button.bg-slate-700:hover,
+        html.theme-day #subscription-tmdb-modal button.bg-slate-700:hover,
+        html.theme-day #subscription-episode-modal button.bg-slate-700:hover {
+            background: #334155 !important;
+            color: #ffffff !important;
+        }
         html.theme-day .bg-amber-500\/15 {
             background: rgba(217, 119, 6, 0.2) !important;
             border: 1px solid rgba(180, 83, 9, 0.35) !important;

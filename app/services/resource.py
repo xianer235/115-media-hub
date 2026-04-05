@@ -1,6 +1,109 @@
 from ..core import *  # noqa: F401,F403
 from .monitor import queue_monitor_job
 
+
+class ResourceJobCancelledError(RuntimeError):
+    pass
+
+
+def _mark_resource_job_failed(job_id: int, resource_id: int, detail: str) -> None:
+    fail_detail = str(detail or "资源导入失败").strip() or "资源导入失败"
+    update_resource_job(job_id, status="failed", status_detail=fail_detail, finished_at=now_text())
+    if resource_id > 0:
+        conn = open_db()
+        update_resource_item_status(conn, resource_id, "failed")
+        conn.commit()
+        conn.close()
+
+
+def _build_retry_resource_from_job(job: Dict[str, Any]) -> Dict[str, Any]:
+    payload = job if isinstance(job, dict) else {}
+    resource_id = max(0, int(payload.get("resource_id", 0) or 0))
+    resource = get_resource_item(resource_id) if resource_id > 0 else {}
+    if resource and str(resource.get("link_url", "")).strip():
+        return resource
+    extra = payload.get("extra") if isinstance(payload.get("extra"), dict) else {}
+    return {
+        "id": resource_id,
+        "title": str(payload.get("title", "") or "").strip() or f"资源#{resource_id or '--'}",
+        "link_url": str(payload.get("link_url", "") or "").strip(),
+        "link_type": str(payload.get("link_type", "") or "").strip(),
+        "message_url": str(payload.get("message_url", "") or "").strip(),
+        "source_post_id": str(payload.get("source_post_id", "") or "").strip(),
+        "extra": {
+            "source_post_id": str(payload.get("source_post_id", "") or "").strip(),
+            "receive_code": str(extra.get("receive_code", "") or "").strip(),
+        },
+    }
+
+
+async def cancel_resource_job(job_id: int, reason: str = "manual") -> Dict[str, Any]:
+    job = get_resource_job(job_id, include_private=True)
+    if not job:
+        raise RuntimeError("资源任务不存在")
+    status = str(job.get("status", "") or "").strip().lower()
+    if status == "completed":
+        raise RuntimeError("任务已完成，无需取消")
+
+    resource_job_cancel_requested.add(job_id)
+    resource_refresh_pending.discard(job_id)
+    resource_id = max(0, int(job.get("resource_id", 0) or 0))
+    running_now = job_id in resource_job_running
+    if status == "failed":
+        return {"ok": True, "status": "already_failed", "running": running_now}
+
+    detail = "已手动取消导入任务"
+    if running_now:
+        detail = "已手动取消导入任务，等待当前步骤结束"
+    if str(reason or "").strip() and str(reason).strip().lower() != "manual":
+        detail += f"（{reason}）"
+    _mark_resource_job_failed(job_id, resource_id, detail)
+    return {"ok": True, "status": "cancelled", "running": running_now}
+
+
+async def retry_resource_job(job_id: int, reason: str = "manual") -> Dict[str, Any]:
+    job = get_resource_job(job_id, include_private=True)
+    if not job:
+        raise RuntimeError("资源任务不存在")
+    status = str(job.get("status", "") or "").strip().lower()
+    if status in ("pending", "running", "submitted"):
+        if job_id in resource_job_running:
+            raise RuntimeError("任务仍在执行，请先取消后再重试")
+        await cancel_resource_job(job_id, reason="retry")
+
+    resource = _build_retry_resource_from_job(job)
+    if not str(resource.get("link_url", "")).strip():
+        raise RuntimeError("原任务缺少可导入链接，无法重试")
+
+    link_type = resolve_resource_link_type(resource.get("link_type", ""), resource.get("link_url", ""))
+    payload = {
+        "folder_id": str(job.get("folder_id", "") or "").strip(),
+        "savepath": normalize_relative_path(job.get("savepath", "")),
+        "sharetitle": normalize_relative_path(job.get("sharetitle", "")),
+        "monitor_task_name": str(job.get("monitor_task_name", "") or "").strip(),
+        "refresh_delay_seconds": max(0, int(job.get("refresh_delay_seconds", 0) or 0)),
+        "auto_refresh": bool(job.get("auto_refresh")),
+    }
+    if not payload["savepath"]:
+        raise RuntimeError("原任务保存路径为空，无法重试")
+    if link_type == "115share":
+        job_extra = job.get("extra") if isinstance(job.get("extra"), dict) else {}
+        payload["share_selection"] = normalize_share_selection_meta(job_extra)
+        snapshot = job.get("_snapshot", {}) if isinstance(job.get("_snapshot"), dict) else {}
+        receive_code = normalize_receive_code(
+            str(snapshot.get("receive_code", "") or job_extra.get("receive_code", "")).strip()
+        )
+        if receive_code:
+            payload["receive_code"] = receive_code
+
+    new_job_id = create_resource_job(resource, payload)
+    if status == "failed":
+        update_resource_job(job_id, status_detail=f"已创建重试任务 #{new_job_id}（{reason}）")
+    resource_job_cancel_requested.discard(new_job_id)
+    asyncio.create_task(run_resource_job(new_job_id))
+    return {"ok": True, "job_id": new_job_id}
+
+
 async def trigger_resource_job_refresh(job_id: int, reason: str = "manual") -> Dict[str, Any]:
     job = get_resource_job(job_id, include_private=True)
     if not job:
@@ -71,6 +174,18 @@ async def run_resource_job(job_id: int) -> None:
         resource_id = int(job.get("resource_id", 0) or 0)
         resource = get_resource_item(resource_id) if resource_id > 0 else {}
         job_snapshot = job.get("_snapshot", {}) if isinstance(job.get("_snapshot"), dict) else {}
+        import_timeout_seconds = max(10, int(RESOURCE_IMPORT_TIMEOUT_SECONDS or 90))
+
+        def ensure_not_cancelled(stage: str = "") -> None:
+            if job_id not in resource_job_cancel_requested:
+                return
+            detail = "导入任务已取消"
+            if stage:
+                detail = f"{detail}（{stage}）"
+            _mark_resource_job_failed(job_id, resource_id, detail)
+            raise ResourceJobCancelledError(detail)
+
+        ensure_not_cancelled("启动前")
 
         cfg = get_config()
         if not str(cfg.get("cookie_115", "")).strip():
@@ -85,14 +200,21 @@ async def run_resource_job(job_id: int) -> None:
             update_resource_item_status(conn, resource_id, "importing")
             conn.commit()
             conn.close()
+        ensure_not_cancelled("提交前")
 
         if link_type == "magnet":
-            response = await asyncio.to_thread(
-                submit_115_offline_task,
-                str(cfg.get("cookie_115", "")).strip(),
-                str(job.get("link_url", "")).strip(),
-                str(job.get("folder_id", "")).strip(),
-            )
+            try:
+                response = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        submit_115_offline_task,
+                        str(cfg.get("cookie_115", "")).strip(),
+                        str(job.get("link_url", "")).strip(),
+                        str(job.get("folder_id", "")).strip(),
+                    ),
+                    timeout=import_timeout_seconds,
+                )
+            except asyncio.TimeoutError as exc:
+                raise RuntimeError(f"提交到 115 超时（>{import_timeout_seconds} 秒）") from exc
             detail = str(response.get("error_msg", "")).strip() or "115 已接收离线任务"
             if int(response.get("errcode", 0) or 0) == 10008:
                 detail = "115 提示任务已存在，已继续走刷新流程"
@@ -103,15 +225,21 @@ async def run_resource_job(job_id: int) -> None:
                 str(job.get("link_url", "")).strip(),
                 str(job_snapshot.get("receive_code", "") or "").strip(),
             )
-            response_bundle = await asyncio.to_thread(
-                submit_115_share_receive,
-                str(cfg.get("cookie_115", "")).strip(),
-                share_url,
-                str(job.get("folder_id", "")).strip(),
-                "",
-                job_selection.get("selected_ids", []),
-                str(job_snapshot.get("receive_code", "") or "").strip(),
-            )
+            try:
+                response_bundle = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        submit_115_share_receive,
+                        str(cfg.get("cookie_115", "")).strip(),
+                        share_url,
+                        str(job.get("folder_id", "")).strip(),
+                        "",
+                        job_selection.get("selected_ids", []),
+                        str(job_snapshot.get("receive_code", "") or "").strip(),
+                    ),
+                    timeout=import_timeout_seconds,
+                )
+            except asyncio.TimeoutError as exc:
+                raise RuntimeError(f"提交到 115 超时（>{import_timeout_seconds} 秒）") from exc
             response = response_bundle.get("response", {}) if isinstance(response_bundle, dict) else {}
             resolved_selection = merge_share_selection_meta(job_selection, response_bundle.get("selection", {}))
             detail = str(response.get("error", "")).strip() or str(response.get("msg", "")).strip() or "115 已接收转存任务"
@@ -126,6 +254,7 @@ async def run_resource_job(job_id: int) -> None:
                 if job_snapshot:
                     merged_extra["snapshot"] = job_snapshot
                 job["extra_json"] = safe_json_dumps(merged_extra)
+        ensure_not_cancelled("提交后")
 
         monitor_task_name = str(job.get("monitor_task_name", "") or "").strip()
         auto_refresh_enabled = bool(job.get("auto_refresh"))
@@ -148,6 +277,7 @@ async def run_resource_job(job_id: int) -> None:
             update_fields["extra_json"] = job.get("extra_json", safe_json_dumps({}))
             if str(job.get("sharetitle", "")).strip():
                 update_fields["sharetitle"] = str(job.get("sharetitle", "")).strip()
+        ensure_not_cancelled("状态写回前")
         update_resource_job(job_id, **update_fields)
         if resource_id > 0:
             conn = open_db()
@@ -157,15 +287,12 @@ async def run_resource_job(job_id: int) -> None:
 
         if bool(job.get("auto_refresh")) and str(job.get("monitor_task_name", "")).strip():
             asyncio.create_task(schedule_resource_job_refresh(job_id))
+    except ResourceJobCancelledError:
+        pass
     except Exception as exc:
-        update_resource_job(job_id, status="failed", status_detail=str(exc), finished_at=now_text())
         failed_job = get_resource_job(job_id, include_private=True)
-        if failed_job:
-            failed_resource_id = int(failed_job.get("resource_id", 0) or 0)
-            if failed_resource_id > 0:
-                conn = open_db()
-                update_resource_item_status(conn, failed_resource_id, "failed")
-                conn.commit()
-                conn.close()
+        failed_resource_id = int((failed_job or {}).get("resource_id", 0) or 0)
+        _mark_resource_job_failed(job_id, failed_resource_id, str(exc))
     finally:
         resource_job_running.discard(job_id)
+        resource_job_cancel_requested.discard(job_id)

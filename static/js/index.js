@@ -1,7 +1,9 @@
         let isRunning = false;
         let monitorState = { running: false, current_task: '', tasks: [], logs: [], summary: { step: '空闲', detail: '等待监控任务' }, queued: [], next_runs: {} };
+        let subscriptionState = { running: false, current_task: '', tasks: [], logs: [], summary: { step: '空闲', detail: '等待订阅任务' }, queued: [], next_runs: {} };
         let resourceState = { sources: [], items: [], jobs: [], channel_sections: [], channel_profiles: {}, search_sections: [], last_syncs: {}, monitor_tasks: [], stats: { source_count: 0, item_count: 0, filtered_item_count: 0, completed_job_count: 0 }, cookie_configured: false, search: '', search_meta: {} };
         let editingMonitorName = null;
+        let editingSubscriptionName = null;
         let editingResourceSourceIndex = null;
         let selectedResourceId = null;
         let selectedResourceItem = null;
@@ -11,6 +13,19 @@
         let resourceFolderSummary = { folder_count: 0, file_count: 0 };
         let resourceFolderLoading = false;
         let resourceFolderCreateBusy = false;
+        let subscriptionFolderTrail = [{ id: '0', name: '根目录' }];
+        let subscriptionFolderEntries = [];
+        let subscriptionFolderSummary = { folder_count: 0, file_count: 0 };
+        let subscriptionFolderLoading = false;
+        let subscriptionFolderCreateBusy = false;
+        let subscriptionTmdbSearchBusy = false;
+        let subscriptionTmdbSearchToken = 0;
+        let subscriptionTmdbResults = [];
+        let subscriptionEpisodeViewTaskName = '';
+        let subscriptionEpisodeViewLoading = false;
+        let subscriptionEpisodeViewError = '';
+        let subscriptionEpisodeViewData = null;
+        let subscriptionEpisodeViewCache = {};
         let resourceFolderValidationPromise = null;
         let resourceTargetPreviewEntries = [];
         let resourceTargetPreviewSummary = { folder_count: 0, file_count: 0 };
@@ -42,6 +57,7 @@
         let resourceClientIdSeed = -100000;
         let resourceClientIdsByIdentity = {};
         let resourceJobModalOpen = false;
+        let resourceJobClearMenuOpen = false;
         let resourceSourceModalOpen = false;
         let resourceSourceImportModalOpen = false;
         let resourceSourceManagerOpen = false;
@@ -57,7 +73,9 @@
         let resourceTgLastLatencyMs = 0;
         let lastLogSignature = '';
         let lastMonitorLogSignature = '';
+        let lastSubscriptionLogSignature = '';
         let lastMonitorRenderKey = '';
+        let lastSubscriptionRenderKey = '';
         let statusEventSource = null;
         let statusFallbackTimer = null;
         const monitorActionLocks = new Set();
@@ -74,7 +92,9 @@
         const VERSION_FALLBACK_CHANGELOG_URL = 'https://github.com/xianer235/115-strm-web/blob/main/CHANGELOG.md';
         const RESOURCE_FOLDER_MEMORY_KEY = 'resource-folder-selection-v1';
         const RESOURCE_IMPORT_DELAY_MEMORY_KEY = 'resource-import-delay-seconds-v1';
+        const MAIN_TAB_ROW_HINT_MEMORY_KEY = 'main-tab-row-hint-v1';
         const TOAST_DEFAULT_DURATION_MS = 3000;
+        const SUBSCRIPTION_EPISODE_CACHE_TTL_MS = 1000 * 60 * 3;
 
         function lockPageScroll() {
             if (modalScrollLockCount === 0) {
@@ -145,6 +165,64 @@
             settingsPage.classList.toggle('has-inline-save-dock', shouldInline);
         }
 
+        function syncMainTabRowState() {
+            const shell = document.getElementById('tab-row-shell');
+            const row = document.getElementById('tab-row');
+            if (!shell || !row) return;
+            const maxScrollLeft = Math.max(0, row.scrollWidth - row.clientWidth);
+            const canScrollLeft = row.scrollLeft > 2;
+            const canScrollRight = row.scrollLeft < maxScrollLeft - 2;
+            shell.classList.toggle('can-scroll-left', canScrollLeft);
+            shell.classList.toggle('can-scroll-right', canScrollRight);
+        }
+
+        function focusMainTab(tab, behavior = 'smooth') {
+            const row = document.getElementById('tab-row');
+            const button = document.getElementById(`tab-${tab}`);
+            if (!row || !button) return;
+            button.scrollIntoView({ inline: 'center', block: 'nearest', behavior });
+        }
+
+        function scrollMainTabs(direction = 1) {
+            const row = document.getElementById('tab-row');
+            if (!row) return;
+            const dir = Number(direction) < 0 ? -1 : 1;
+            const step = Math.max(140, Math.round(row.clientWidth * 0.72));
+            row.scrollBy({ left: dir * step, behavior: 'smooth' });
+        }
+
+        function nudgeMainTabRowOnFirstVisit() {
+            const row = document.getElementById('tab-row');
+            if (!row) return;
+            const isSmallScreen = window.matchMedia('(max-width: 768px)').matches;
+            if (!isSmallScreen) return;
+            const canScroll = row.scrollWidth > row.clientWidth + 8;
+            if (!canScroll) return;
+            if (row.scrollLeft > 1) return;
+            if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+            try {
+                if (sessionStorage.getItem(MAIN_TAB_ROW_HINT_MEMORY_KEY) === '1') return;
+                sessionStorage.setItem(MAIN_TAB_ROW_HINT_MEMORY_KEY, '1');
+            } catch (e) {}
+            window.setTimeout(() => {
+                row.scrollBy({ left: 28, behavior: 'smooth' });
+                window.setTimeout(() => {
+                    row.scrollBy({ left: -28, behavior: 'smooth' });
+                }, 260);
+            }, 260);
+        }
+
+        function initMainTabRow() {
+            const row = document.getElementById('tab-row');
+            if (!row) return;
+            row.addEventListener('scroll', syncMainTabRowState, { passive: true });
+            window.addEventListener('resize', syncMainTabRowState);
+            syncMainTabRowState();
+            focusMainTab('resource', 'auto');
+            syncMainTabRowState();
+            nudgeMainTabRowOnFirstVisit();
+        }
+
         function showLockedModal(modalId) {
             const modal = document.getElementById(modalId);
             if (!modal) return;
@@ -162,7 +240,7 @@
         }
 
         function switchTab(tab) {
-            ['task', 'resource', 'settings', 'monitor', 'about'].forEach(name => {
+            ['task', 'resource', 'subscription', 'settings', 'monitor', 'about'].forEach(name => {
                 document.getElementById(`page-${name}`).classList.toggle('hidden', tab !== name);
                 document.getElementById(`tab-${name}`).className = tab === name ? 'tab-active uppercase' : 'tab-inactive uppercase';
             });
@@ -170,6 +248,8 @@
             if (tab === 'resource') refreshResourceState();
             syncResourceBackTopButton();
             syncSettingsSaveDock();
+            focusMainTab(tab);
+            syncMainTabRowState();
         }
 
         function normalizeToastPlacement(placement) {
@@ -383,6 +463,7 @@
             statusFallbackTimer = window.setInterval(() => {
                 refreshMainLogs();
                 refreshMonitorState();
+                refreshSubscriptionState();
             }, STATUS_FALLBACK_INTERVAL);
         }
 
@@ -405,6 +486,7 @@
                     stopStatusFallbackPolling();
                     applyMainState(payload.main);
                     applyMonitorState(payload.monitor);
+                    applySubscriptionState(payload.subscription);
                 } catch (err) {
                     console.warn('Status stream parse failed', err);
                 }
@@ -911,7 +993,23 @@
 
         async function saveSettings() {
             const cfg = {};
-            const standardIds = ['alist_url', 'alist_token', 'cookie_115', 'tg_proxy_protocol', 'tg_proxy_host', 'tg_proxy_port', 'mount_path', 'cron_hour', 'sync_mode', 'extensions', 'username', 'password'];
+            const standardIds = [
+                'alist_url',
+                'alist_token',
+                'cookie_115',
+                'tg_proxy_protocol',
+                'tg_proxy_host',
+                'tg_proxy_port',
+                'tmdb_api_key',
+                'tmdb_language',
+                'tmdb_region',
+                'mount_path',
+                'cron_hour',
+                'sync_mode',
+                'extensions',
+                'username',
+                'password'
+            ];
             standardIds.forEach(id => {
                 const el = document.getElementById(id);
                 if (el) cfg[id] = el.value;
@@ -920,6 +1018,9 @@
             cfg.check_hash = document.getElementById('check_hash').checked;
             cfg.sync_clean = document.getElementById('sync_clean').checked;
             cfg.tg_proxy_enabled = document.getElementById('tg_proxy_enabled').checked;
+            cfg.tmdb_enabled = document.getElementById('tmdb_enabled').checked;
+            const rawTmdbCacheTtl = parseInt(document.getElementById('tmdb_cache_ttl_hours')?.value || '', 10);
+            cfg.tmdb_cache_ttl_hours = Math.min(720, Math.max(1, Number.isFinite(rawTmdbCacheTtl) ? rawTmdbCacheTtl : 24));
             const rawTgThreads = parseInt(document.getElementById('tg_channel_threads')?.value || '', 10);
             cfg.tg_channel_threads = Math.min(20, Math.max(1, Number.isFinite(rawTgThreads) ? rawTgThreads : 6));
             cfg.monitor_tasks = monitorState.tasks || [];
@@ -1205,11 +1306,11 @@
                                     <div>下次定时：${nextRun ? escapeHtml(nextRun) : '未开启'}</div>
                                 </div>
                             </div>
-                            <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2 shrink-0">
-                                <button type="button" data-monitor-action="start" data-task-name="${taskKey}" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold ${startDisabled ? 'btn-disabled' : ''}" ${startDisabled ? 'disabled' : ''}>${starting ? '启动中...' : '运行'}</button>
-                                <button type="button" data-monitor-action="stop" data-task-name="${taskKey}" class="px-4 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 text-sm font-bold ${stopDisabled ? 'btn-disabled' : ''}" ${stopDisabled ? 'disabled' : ''}>${stopping ? '中断中...' : '中断'}</button>
-                                <button type="button" data-monitor-action="edit" data-task-name="${taskKey}" class="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">编辑</button>
-                                <button type="button" data-monitor-action="delete" data-task-name="${taskKey}" class="px-4 py-2 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-300 text-sm font-bold ${deleteDisabled ? 'btn-disabled' : ''}" ${deleteDisabled ? 'disabled' : ''}>${deleting ? '删除中...' : '删除'}</button>
+                            <div class="monitor-task-actions grid grid-cols-4 gap-2 shrink-0 w-full lg:w-auto">
+                                <button type="button" data-monitor-action="start" data-task-name="${taskKey}" class="px-2 sm:px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold ${startDisabled ? 'btn-disabled' : ''}" ${startDisabled ? 'disabled' : ''}>${starting ? '启动中...' : '运行'}</button>
+                                <button type="button" data-monitor-action="stop" data-task-name="${taskKey}" class="px-2 sm:px-3 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 text-sm font-bold ${stopDisabled ? 'btn-disabled' : ''}" ${stopDisabled ? 'disabled' : ''}>${stopping ? '中断中...' : '中断'}</button>
+                                <button type="button" data-monitor-action="edit" data-task-name="${taskKey}" class="px-2 sm:px-3 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">编辑</button>
+                                <button type="button" data-monitor-action="delete" data-task-name="${taskKey}" class="px-2 sm:px-3 py-2 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-300 text-sm font-bold ${deleteDisabled ? 'btn-disabled' : ''}" ${deleteDisabled ? 'disabled' : ''}>${deleting ? '删除中...' : '删除'}</button>
                             </div>
                         </div>
                         ${task.webhook_enabled ? `<div class="mt-3 text-xs text-emerald-400">Webhook：IP:容器端口/webhook/${escapeHtml(task.name)}</div>` : ''}
@@ -1242,6 +1343,1002 @@
                 if (!res.ok) return;
                 applyMonitorState(await res.json());
             } catch (e) {}
+        }
+
+        function buildSubscriptionRenderKey(state) {
+            return JSON.stringify({
+                running: !!state?.running,
+                current_task: state?.current_task || '',
+                queued: Array.isArray(state?.queued) ? state.queued : [],
+                next_runs: state?.next_runs || {},
+                tasks: Array.isArray(state?.tasks) ? state.tasks : []
+            });
+        }
+
+        function getSubscriptionStatusLabel(status) {
+            const normalized = String(status || 'idle').trim().toLowerCase();
+            const map = {
+                idle: '待命',
+                running: '运行中',
+                waiting: '等待资源',
+                completed: '已完成',
+                failed: '失败',
+                cancelled: '已中断'
+            };
+            return map[normalized] || (normalized || '待命');
+        }
+
+        function buildSubscriptionStatusBadge(status) {
+            const normalized = String(status || 'idle').trim().toLowerCase();
+            const map = {
+                idle: 'bg-slate-700 text-slate-300',
+                running: 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/20',
+                waiting: 'bg-amber-500/15 text-amber-300 border border-amber-500/20',
+                completed: 'bg-sky-500/15 text-sky-300 border border-sky-500/20',
+                failed: 'bg-red-500/10 text-red-300 border border-red-500/20',
+                cancelled: 'bg-violet-500/15 text-violet-300 border border-violet-500/20'
+            };
+            const cls = map[normalized] || map.idle;
+            return `<span class="text-[10px] px-3 py-1 rounded-full ${cls}">${escapeHtml(getSubscriptionStatusLabel(normalized))}</span>`;
+        }
+
+        function applySubscriptionState(data, { forceRender = false } = {}) {
+            if (!data) return;
+            subscriptionState = {
+                ...subscriptionState,
+                ...data,
+                tasks: Array.isArray(data.tasks) ? data.tasks : (subscriptionState.tasks || []),
+                logs: Array.isArray(data.logs) ? data.logs : (subscriptionState.logs || []),
+                queued: Array.isArray(data.queued) ? data.queued : (subscriptionState.queued || []),
+                next_runs: data.next_runs || subscriptionState.next_runs || {},
+                summary: data.summary || subscriptionState.summary || { step: '空闲', detail: '等待订阅任务' }
+            };
+
+            const stepEl = document.getElementById('subscription-summary-step');
+            const detailEl = document.getElementById('subscription-summary-detail');
+            if (stepEl) stepEl.innerText = subscriptionState.summary?.step || '空闲';
+            if (detailEl) detailEl.innerText = subscriptionState.summary?.detail || '等待订阅任务';
+
+            const renderKey = buildSubscriptionRenderKey(subscriptionState);
+            if (forceRender || renderKey !== lastSubscriptionRenderKey) {
+                renderSubscriptionTasks();
+                lastSubscriptionRenderKey = renderKey;
+            }
+            renderSubscriptionLogs();
+        }
+
+        function renderSubscriptionLogs() {
+            const box = document.getElementById('subscription-log-box');
+            if (!box) return;
+            const logs = subscriptionState.logs || [];
+            const logSignature = buildLogSignature(logs, (item) => `${item?.level || 'info'}:${item?.text || ''}`);
+            if (logSignature === lastSubscriptionLogSignature) return;
+            box.innerHTML = logs.map(item => `<div class="log-${item.level || 'info'}">${formatMonitorLogHtml(item)}</div>`).join('');
+            box.scrollTop = box.scrollHeight;
+            lastSubscriptionLogSignature = logSignature;
+        }
+
+        function normalizeSubscriptionMediaType(value) {
+            const normalized = String(value || 'movie').trim().toLowerCase();
+            return normalized === 'tv' ? 'tv' : 'movie';
+        }
+
+        function normalizeSubscriptionQualityPriority(value) {
+            const normalized = String(value || 'balanced').trim().toLowerCase();
+            if (['balanced', 'ultra', 'fhd', 'hd', 'sd'].includes(normalized)) return normalized;
+            return 'balanced';
+        }
+
+        function getSubscriptionQualityPriorityLabel(value) {
+            const normalized = normalizeSubscriptionQualityPriority(value);
+            const map = {
+                balanced: '均衡',
+                ultra: '超清优先',
+                fhd: '高清优先',
+                hd: '流畅优先',
+                sd: '小体积优先'
+            };
+            return map[normalized] || '均衡';
+        }
+
+        function normalizeTmdbMediaType(value, fallback = '') {
+            const normalized = String(value || '').trim().toLowerCase();
+            if (normalized === 'movie' || normalized === 'tv') return normalized;
+            const fallbackNormalized = String(fallback || '').trim().toLowerCase();
+            if (fallbackNormalized === 'movie' || fallbackNormalized === 'tv') return fallbackNormalized;
+            return '';
+        }
+
+        function normalizeTmdbEpisodeMode(value) {
+            const normalized = String(value || '').trim().toLowerCase();
+            return normalized === 'absolute' ? 'absolute' : 'seasonal';
+        }
+
+        function normalizeTmdbYear(value) {
+            const normalized = String(value || '').trim();
+            return /^(19|20)\d{2}$/.test(normalized) ? normalized : '';
+        }
+
+        function parseSmallCjkNumber(value, fallback = 0) {
+            const raw = String(value || '').trim();
+            if (!raw) return fallback;
+            if (/^\d{1,4}$/.test(raw)) {
+                const parsed = parseInt(raw, 10);
+                return Number.isFinite(parsed) ? parsed : fallback;
+            }
+            if (!/^[零〇一二三四五六七八九十两兩]+$/.test(raw)) return fallback;
+            const digits = {
+                '零': 0,
+                '〇': 0,
+                '一': 1,
+                '二': 2,
+                '三': 3,
+                '四': 4,
+                '五': 5,
+                '六': 6,
+                '七': 7,
+                '八': 8,
+                '九': 9,
+                '两': 2,
+                '兩': 2,
+            };
+            if (raw === '十') return 10;
+            if (raw.includes('十')) {
+                const [head, tail] = raw.split('十');
+                const tens = head ? (digits[head] ?? -1) : 1;
+                const ones = tail ? (digits[tail] ?? -1) : 0;
+                if (tens < 0 || ones < 0) return fallback;
+                return tens * 10 + ones;
+            }
+            const single = digits[raw];
+            return Number.isFinite(single) ? single : fallback;
+        }
+
+        function extractYearFromResourceText(item) {
+            const knownYear = normalizeTmdbYear(item?.year || '');
+            if (knownYear) return knownYear;
+            const text = `${String(item?.title || '')} ${String(item?.raw_text || '')}`;
+            const matched = text.match(/\b(19|20)\d{2}\b/);
+            return normalizeTmdbYear(matched?.[0] || '');
+        }
+
+        function buildSubscriptionTitleFromResource(item) {
+            const fallback = String(item?.title || item?.normalized_title || '未命名资源').trim() || '未命名资源';
+            let title = String(item?.title || '').trim() || fallback;
+
+            title = title.split(/\s*[|｜丨]+\s*/)[0].trim() || title;
+            title = title
+                .replace(/[._]+/g, ' ')
+                .replace(/[\[\【(（][^\]\】)）]{0,90}(?:2160p|1080p|720p|4k|uhd|hdr|web(?:-|\s)?dl|bluray|x26[45]|h\.?26[45]|aac|ddp|atmos|中字|双语|國語|国语|粤语|简繁|完结|全集|更新|s\d{1,2}\s*e?\d{0,4}|第\s*[零〇一二三四五六七八九十两兩0-9]+\s*(?:季|集|话|話))[^\]\】)）]*[\]\】)）]/gi, ' ')
+                .replace(/\b(19|20)\d{2}\b/g, ' ')
+                .replace(/\b(?:S\d{1,2}\s*E?\d{0,4}|E\d{1,4}|EP?\s*\d{1,4})\b/gi, ' ')
+                .replace(/第\s*[零〇一二三四五六七八九十两兩0-9]{1,4}\s*(?:季|集|话|話)/g, ' ')
+                .replace(/(?:全|共)\s*\d{1,4}\s*(?:集|话|話)/g, ' ')
+                .replace(/\d{1,4}\s*(?:集|话|話)\s*(?:全|完|完结|完結)?/g, ' ')
+                .replace(/\s{2,}/g, ' ')
+                .trim();
+            return title || fallback;
+        }
+
+        function inferSubscriptionDraftFromResource(item) {
+            const payload = item && typeof item === 'object' ? item : {};
+            const text = `${String(payload?.title || '')} ${String(payload?.raw_text || '')}`;
+            const seasonMatch = text.match(/\bS(?:eason)?\s*0?(\d{1,2})\b/i);
+            const seasonCnMatch = text.match(/第\s*([零〇一二三四五六七八九十两兩0-9]{1,3})\s*季/i);
+            const rangeMatch = text.match(/(?:EP?|E)?\s*(\d{1,4})\s*[-~～—–至到]+\s*(?:EP?|E)?\s*(\d{1,4})/i)
+                || text.match(/第?\s*(\d{1,4})\s*[-~～—–至到]+\s*(\d{1,4})\s*(?:集|话|話)/i);
+            const totalMatch = text.match(/(?:全|共)\s*(\d{1,4})\s*(?:集|话|話)/i)
+                || text.match(/(\d{1,4})\s*(?:集|话|話)\s*(?:全|完|完结|完結)/i);
+            const episodeMatch = text.match(/\bS\d{1,2}\s*E(?:P)?\s*0?(\d{1,4})\b/i)
+                || text.match(/\bEP?\s*0?(\d{1,4})\b/i)
+                || text.match(/第\s*(\d{1,4})\s*(?:集|话|話)/i);
+
+            let season = Math.max(0, parseInt(seasonMatch?.[1] || '0', 10) || 0);
+            if (season <= 0 && seasonCnMatch) season = Math.max(0, parseSmallCjkNumber(seasonCnMatch[1], 0));
+            let episode = Math.max(0, parseInt(episodeMatch?.[1] || '0', 10) || 0);
+            let totalEpisodes = Math.max(0, parseInt(totalMatch?.[1] || '0', 10) || 0);
+            let rangeStart = Math.max(0, parseInt(rangeMatch?.[1] || '0', 10) || 0);
+            let rangeEnd = Math.max(0, parseInt(rangeMatch?.[2] || '0', 10) || 0);
+            if (rangeEnd > 0 && rangeStart > rangeEnd) [rangeStart, rangeEnd] = [rangeEnd, rangeStart];
+            if (rangeEnd > 0) {
+                episode = Math.max(episode, rangeEnd);
+                if (totalEpisodes <= 0 && rangeStart <= 1) totalEpisodes = rangeEnd;
+            }
+            if (totalEpisodes <= 0 && episode > 0 && /(?:完结|完結|全集|全\d{1,4}集)/i.test(text)) {
+                totalEpisodes = episode;
+            }
+
+            const hasEpisodeMeta = season > 0 || episode > 0 || totalEpisodes > 0 || rangeEnd > 0;
+            const tvHint = /(电视剧|剧集|番剧|动漫|第\s*[零〇一二三四五六七八九十两兩0-9]+\s*(?:季|集|话|話)|season\s*\d+|s\d{1,2}\s*e?\d{0,4}|ep\s*\d{1,4}|更新至\s*\d+\s*(?:集|话|話)|全\s*\d+\s*(?:集|话|話)|完结|完結)/i.test(text);
+            const movieHint = /(电影|movie|film|剧场版|電影)/i.test(text);
+            const animeMode = /(番剧|动漫|新番|动画|動畫|anime)/i.test(text);
+            const mediaType = (hasEpisodeMeta || tvHint) && !movieHint ? 'tv' : 'movie';
+
+            return {
+                media_type: mediaType,
+                title: buildSubscriptionTitleFromResource(payload),
+                year: extractYearFromResourceText(payload),
+                season: mediaType === 'tv' ? Math.max(1, season || 1) : 1,
+                total_episodes: mediaType === 'tv' ? Math.max(0, totalEpisodes || 0) : 0,
+                anime_mode: mediaType === 'tv' ? animeMode : false,
+            };
+        }
+
+        function applySubscriptionPrefill(prefill = {}) {
+            const payload = prefill && typeof prefill === 'object' ? prefill : {};
+            const mediaType = normalizeSubscriptionMediaType(payload.media_type || 'movie');
+            document.getElementById('subscription_media_type').value = mediaType;
+            document.getElementById('subscription_title').value = String(payload.title || '').trim();
+            document.getElementById('subscription_year').value = normalizeTmdbYear(payload.year || '');
+            document.getElementById('subscription_season').value = Math.max(1, parseInt(payload.season || '1', 10) || 1);
+            document.getElementById('subscription_total_episodes').value = Math.max(0, parseInt(payload.total_episodes || '0', 10) || 0);
+            document.getElementById('subscription_anime_mode').checked = mediaType === 'tv' ? !!payload.anime_mode : false;
+            const tmdbKeywordInput = document.getElementById('subscription_tmdb_search_keyword');
+            if (tmdbKeywordInput) tmdbKeywordInput.value = String(payload.title || '').trim();
+            syncSubscriptionTypeUI();
+        }
+
+        function parseSubscriptionAliases(value) {
+            return uniquePreserveOrder(String(value || '')
+                .split(/[,\n，|/]+/)
+                .map(item => item.trim())
+                .filter(Boolean));
+        }
+
+        function getSubscriptionTmdbBindingFromForm() {
+            const tmdbId = parseInt(document.getElementById('subscription_tmdb_id')?.value || '0', 10) || 0;
+            const tmdbMediaType = normalizeTmdbMediaType(document.getElementById('subscription_tmdb_media_type')?.value || '');
+            const tmdbAliases = parseSubscriptionAliases(document.getElementById('subscription_tmdb_aliases')?.value || '');
+            return {
+                tmdb_id: Math.max(0, tmdbId),
+                tmdb_media_type: tmdbMediaType,
+                tmdb_title: String(document.getElementById('subscription_tmdb_title')?.value || '').trim(),
+                tmdb_original_title: String(document.getElementById('subscription_tmdb_original_title')?.value || '').trim(),
+                tmdb_year: normalizeTmdbYear(document.getElementById('subscription_tmdb_year')?.value || ''),
+                tmdb_aliases: tmdbAliases,
+                tmdb_total_episodes: Math.max(0, parseInt(document.getElementById('subscription_tmdb_total_episodes')?.value || '0', 10) || 0),
+                tmdb_total_seasons: Math.max(0, parseInt(document.getElementById('subscription_tmdb_total_seasons')?.value || '0', 10) || 0),
+                tmdb_episode_mode: normalizeTmdbEpisodeMode(document.getElementById('subscription_tmdb_episode_mode')?.value || 'seasonal'),
+            };
+        }
+
+        function setSubscriptionTmdbBinding(binding = {}) {
+            const normalized = {
+                tmdb_id: Math.max(0, parseInt(binding.tmdb_id || binding.id || '0', 10) || 0),
+                tmdb_media_type: normalizeTmdbMediaType(
+                    binding.tmdb_media_type || binding.media_type || '',
+                    normalizeSubscriptionMediaType(document.getElementById('subscription_media_type')?.value || 'movie')
+                ),
+                tmdb_title: String(binding.tmdb_title || binding.title || '').trim(),
+                tmdb_original_title: String(binding.tmdb_original_title || binding.original_title || '').trim(),
+                tmdb_year: normalizeTmdbYear(binding.tmdb_year || binding.year || ''),
+                tmdb_aliases: parseSubscriptionAliases(Array.isArray(binding.tmdb_aliases) ? binding.tmdb_aliases.join(',') : (binding.tmdb_aliases || binding.aliases || '')),
+                tmdb_total_episodes: Math.max(0, parseInt(binding.tmdb_total_episodes || binding.total_episodes || '0', 10) || 0),
+                tmdb_total_seasons: Math.max(0, parseInt(binding.tmdb_total_seasons || binding.total_seasons || '0', 10) || 0),
+                tmdb_episode_mode: normalizeTmdbEpisodeMode(binding.tmdb_episode_mode || binding.episode_mode || 'seasonal'),
+            };
+            const useBinding = normalized.tmdb_id > 0;
+            document.getElementById('subscription_tmdb_id').value = useBinding ? String(normalized.tmdb_id) : '0';
+            document.getElementById('subscription_tmdb_media_type').value = useBinding ? normalized.tmdb_media_type : '';
+            document.getElementById('subscription_tmdb_title').value = useBinding ? normalized.tmdb_title : '';
+            document.getElementById('subscription_tmdb_original_title').value = useBinding ? normalized.tmdb_original_title : '';
+            document.getElementById('subscription_tmdb_year').value = useBinding ? normalized.tmdb_year : '';
+            document.getElementById('subscription_tmdb_aliases').value = useBinding ? normalized.tmdb_aliases.join(', ') : '';
+            document.getElementById('subscription_tmdb_total_episodes').value = useBinding ? String(normalized.tmdb_total_episodes) : '0';
+            document.getElementById('subscription_tmdb_total_seasons').value = useBinding ? String(normalized.tmdb_total_seasons) : '0';
+            document.getElementById('subscription_tmdb_episode_mode').value = useBinding ? normalized.tmdb_episode_mode : 'seasonal';
+            renderSubscriptionTmdbBinding();
+        }
+
+        function clearSubscriptionTmdbBinding({ silent = false } = {}) {
+            setSubscriptionTmdbBinding({});
+            if (!silent) showToast('已清除 TMDB 绑定', { tone: 'info', duration: 2200, placement: 'top-center' });
+        }
+
+        function renderSubscriptionTmdbBinding() {
+            const summaryEl = document.getElementById('subscription_tmdb_summary');
+            if (!summaryEl) return;
+            const binding = getSubscriptionTmdbBindingFromForm();
+            if (binding.tmdb_id <= 0) {
+                summaryEl.innerHTML = '未绑定 TMDB。绑定后会自动补充别名/年份/总集数并增强匹配稳定性。';
+                return;
+            }
+            const mediaLabel = binding.tmdb_media_type === 'tv' ? '电视剧' : '电影';
+            const yearSuffix = binding.tmdb_year ? ` (${escapeHtml(binding.tmdb_year)})` : '';
+            const aliasText = binding.tmdb_aliases.length > 0 ? `别名 ${escapeHtml(String(binding.tmdb_aliases.length))} 个` : '无别名';
+            const episodeModeText = binding.tmdb_episode_mode === 'absolute' ? '绝对集序' : '按季集序';
+            const totalText = binding.tmdb_media_type === 'tv'
+                ? `总集数 ${escapeHtml(String(binding.tmdb_total_episodes || 0))} / 季数 ${escapeHtml(String(binding.tmdb_total_seasons || 0))} / ${episodeModeText}`
+                : '电影元数据';
+            const subscriptionMediaType = normalizeSubscriptionMediaType(document.getElementById('subscription_media_type')?.value || 'movie');
+            const mismatch = binding.tmdb_media_type && binding.tmdb_media_type !== subscriptionMediaType;
+            summaryEl.innerHTML = `
+                <div>已绑定 <span class="text-sky-300">${mediaLabel} #${escapeHtml(String(binding.tmdb_id))}</span>：${escapeHtml(binding.tmdb_title || '--')}${yearSuffix}</div>
+                <div class="text-[11px] mt-1">${escapeHtml(aliasText)} / ${escapeHtml(totalText)}</div>
+                ${mismatch ? '<div class="text-[11px] mt-1 text-red-300">当前绑定类型与订阅类型不一致，保存前请重新绑定。</div>' : ''}
+            `;
+        }
+
+        function setSubscriptionTmdbSearchBusy(loading) {
+            subscriptionTmdbSearchBusy = !!loading;
+            const btn = document.getElementById('subscription_tmdb_search_btn');
+            if (!btn) return;
+            btn.disabled = subscriptionTmdbSearchBusy;
+            btn.classList.toggle('btn-disabled', subscriptionTmdbSearchBusy);
+            btn.innerText = subscriptionTmdbSearchBusy ? '搜索中...' : '搜索';
+        }
+
+        function renderSubscriptionTmdbResults() {
+            const listEl = document.getElementById('subscription_tmdb_result_list');
+            if (!listEl) return;
+            if (subscriptionTmdbSearchBusy) {
+                listEl.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">正在搜索 TMDB，请稍候...</div>';
+                return;
+            }
+            if (!subscriptionTmdbResults.length) {
+                listEl.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">暂无结果，请尝试更换关键词或年份。</div>';
+                return;
+            }
+            listEl.innerHTML = subscriptionTmdbResults.map((item, index) => {
+                const mediaLabel = normalizeTmdbMediaType(item.media_type, 'movie') === 'tv' ? '电视剧' : '电影';
+                const poster = item.poster_url
+                    ? `<img src="${escapeHtml(item.poster_url)}" alt="${escapeHtml(item.title || '--')}" class="w-14 h-20 rounded-lg object-cover border border-slate-700 bg-slate-900">`
+                    : '<div class="w-14 h-20 rounded-lg border border-dashed border-slate-700 text-[10px] text-slate-500 flex items-center justify-center bg-slate-900">无封面</div>';
+                const yearText = item.year ? ` / ${escapeHtml(item.year)}` : '';
+                const voteText = Number(item.vote_average || 0) > 0 ? ` / 评分 ${escapeHtml(String(item.vote_average))}` : '';
+                return `
+                    <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-3">
+                        <div class="flex items-start gap-3">
+                            ${poster}
+                            <div class="min-w-0 flex-1 text-xs text-slate-400 leading-6">
+                                <div class="text-sm font-bold text-white break-words">${escapeHtml(item.title || '--')}</div>
+                                <div>${escapeHtml(mediaLabel)}${yearText}${voteText}</div>
+                                <div>原名：${escapeHtml(item.original_title || '--')}</div>
+                                <div class="line-clamp-2">${escapeHtml(item.overview || '暂无简介')}</div>
+                            </div>
+                            <button
+                                type="button"
+                                data-subscription-tmdb-action="select"
+                                data-subscription-tmdb-index="${index}"
+                                class="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shrink-0"
+                            >绑定</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function searchSubscriptionTmdbBinding() {
+            const searchInput = document.getElementById('subscription_tmdb_search_keyword');
+            const hintEl = document.getElementById('subscription_tmdb_search_hint');
+            const fallbackQuery = document.getElementById('subscription_title')?.value || '';
+            const query = String(searchInput?.value || fallbackQuery || '').trim();
+            if (!query) {
+                alert('请先输入影视名称，再搜索 TMDB');
+                return;
+            }
+            const mediaType = normalizeSubscriptionMediaType(document.getElementById('subscription_media_type')?.value || 'movie');
+            const year = normalizeTmdbYear(document.getElementById('subscription_year')?.value || '');
+            const requestToken = ++subscriptionTmdbSearchToken;
+            setSubscriptionTmdbSearchBusy(true);
+            subscriptionTmdbResults = [];
+            renderSubscriptionTmdbResults();
+            if (hintEl) hintEl.innerText = `正在按 ${mediaType === 'tv' ? '电视剧' : '电影'} 搜索：${query}`;
+            try {
+                const qs = new URLSearchParams({ q: query, media_type: mediaType });
+                if (year) qs.set('year', year);
+                const res = await fetch(`/tmdb/search?${qs.toString()}`);
+                const data = await res.json();
+                if (requestToken !== subscriptionTmdbSearchToken) return;
+                if (!res.ok || !data.ok) throw new Error(data.msg || 'TMDB 搜索失败');
+                subscriptionTmdbResults = Array.isArray(data.items) ? data.items : [];
+                renderSubscriptionTmdbResults();
+                if (hintEl) {
+                    hintEl.innerText = subscriptionTmdbResults.length
+                        ? `已找到 ${subscriptionTmdbResults.length} 条结果，请选择要绑定的条目。`
+                        : '未找到可绑定条目，请调整关键词后重试。';
+                }
+            } catch (e) {
+                subscriptionTmdbResults = [];
+                renderSubscriptionTmdbResults();
+                if (hintEl) hintEl.innerText = `TMDB 搜索失败：${e.message || '未知错误'}`;
+            } finally {
+                if (requestToken === subscriptionTmdbSearchToken) {
+                    setSubscriptionTmdbSearchBusy(false);
+                    renderSubscriptionTmdbResults();
+                }
+            }
+        }
+
+        async function selectSubscriptionTmdbResult(index) {
+            const target = subscriptionTmdbResults[Number(index)];
+            if (!target) return;
+            const hintEl = document.getElementById('subscription_tmdb_search_hint');
+            const mediaType = normalizeSubscriptionMediaType(document.getElementById('subscription_media_type')?.value || 'movie');
+            if (hintEl) hintEl.innerText = `正在读取 TMDB 详情：${target.title || '--'}`;
+            try {
+                const qs = new URLSearchParams({
+                    tmdb_id: String(target.id || 0),
+                    media_type: normalizeTmdbMediaType(target.media_type, mediaType) || mediaType
+                });
+                const res = await fetch(`/tmdb/detail?${qs.toString()}`);
+                const data = await res.json();
+                if (!res.ok || !data.ok) throw new Error(data.msg || '读取 TMDB 详情失败');
+                const binding = data.task_binding || {};
+                const bindingMediaType = normalizeTmdbMediaType(binding.tmdb_media_type, mediaType);
+                if (bindingMediaType && bindingMediaType !== mediaType) {
+                    throw new Error('TMDB 类型与当前订阅类型不一致，请切换类型后再绑定');
+                }
+                setSubscriptionTmdbBinding(binding);
+                const titleInput = document.getElementById('subscription_title');
+                if (titleInput && !String(titleInput.value || '').trim()) {
+                    titleInput.value = String(binding.tmdb_title || target.title || '').trim();
+                }
+                const yearInput = document.getElementById('subscription_year');
+                if (yearInput && !normalizeTmdbYear(yearInput.value || '') && normalizeTmdbYear(binding.tmdb_year || '')) {
+                    yearInput.value = normalizeTmdbYear(binding.tmdb_year || '');
+                }
+                const aliasesInput = document.getElementById('subscription_aliases');
+                if (aliasesInput && !String(aliasesInput.value || '').trim()) {
+                    const defaultAliases = Array.isArray(binding.tmdb_aliases) ? binding.tmdb_aliases.slice(0, 4) : [];
+                    aliasesInput.value = defaultAliases.join(', ');
+                }
+                if (mediaType === 'tv') {
+                    const totalInput = document.getElementById('subscription_total_episodes');
+                    const currentTotal = parseInt(totalInput?.value || '0', 10) || 0;
+                    const tmdbTotal = Math.max(0, parseInt(binding.tmdb_total_episodes || '0', 10) || 0);
+                    if (totalInput && currentTotal <= 0 && tmdbTotal > 0) totalInput.value = String(tmdbTotal);
+                }
+                closeSubscriptionTmdbSearchModal();
+                showToast(`已绑定 TMDB：${binding.tmdb_title || target.title || '--'}`, { tone: 'success', duration: 2600, placement: 'top-center' });
+            } catch (e) {
+                if (hintEl) hintEl.innerText = `读取详情失败：${e.message || '未知错误'}`;
+            }
+        }
+
+        function openSubscriptionTmdbSearchModal() {
+            const keywordInput = document.getElementById('subscription_tmdb_search_keyword');
+            const title = String(document.getElementById('subscription_title')?.value || '').trim();
+            if (keywordInput) keywordInput.value = title || keywordInput.value || '';
+            subscriptionTmdbResults = [];
+            renderSubscriptionTmdbResults();
+            showLockedModal('subscription-tmdb-modal');
+            if (keywordInput && String(keywordInput.value || '').trim()) {
+                searchSubscriptionTmdbBinding();
+            }
+        }
+
+        function closeSubscriptionTmdbSearchModal() {
+            hideLockedModal('subscription-tmdb-modal');
+        }
+
+        function syncSubscriptionTypeUI() {
+            const mediaType = normalizeSubscriptionMediaType(document.getElementById('subscription_media_type')?.value || 'movie');
+            const tvFields = document.getElementById('subscription-tv-fields');
+            if (tvFields) tvFields.classList.toggle('hidden', mediaType !== 'tv');
+            const animeModeWrap = document.getElementById('subscription-anime-mode-wrap');
+            if (animeModeWrap) animeModeWrap.classList.toggle('hidden', mediaType !== 'tv');
+            const hintEl = document.getElementById('subscription-savepath-hint');
+            if (hintEl) {
+                hintEl.innerText = mediaType === 'movie'
+                    ? '电影会自动保存到“目标目录/影片名”子文件夹；电视剧保存到所选目录。'
+                    : '电视剧会直接保存到所选目录；请把目录设在剧集父文件夹下。';
+            }
+            renderSubscriptionTmdbBinding();
+        }
+
+        function setSubscriptionSavepath(folderId = '0', displayPath = '', { trail = null } = {}) {
+            const normalizedFolderId = String(folderId || '0').trim() || '0';
+            const normalizedPath = normalizeRelativePathInput(displayPath || '');
+            const hiddenFolderEl = document.getElementById('subscription_folder_id');
+            const hiddenSavepathEl = document.getElementById('subscription_savepath');
+            const displayEl = document.getElementById('subscription_savepath_display');
+            if (hiddenFolderEl) hiddenFolderEl.value = normalizedFolderId;
+            if (hiddenSavepathEl) hiddenSavepathEl.value = normalizedPath;
+            if (displayEl) displayEl.value = normalizedPath || '请选择保存目录';
+            if (Array.isArray(trail) && trail.length) {
+                subscriptionFolderTrail = trail;
+            }
+        }
+
+        function currentSubscriptionFormData() {
+            const title = document.getElementById('subscription_title').value.trim();
+            const tmdbBinding = getSubscriptionTmdbBindingFromForm();
+            return {
+                name: title,
+                media_type: normalizeSubscriptionMediaType(document.getElementById('subscription_media_type').value),
+                title,
+                aliases: document.getElementById('subscription_aliases').value.trim(),
+                year: document.getElementById('subscription_year').value.trim(),
+                season: parseInt(document.getElementById('subscription_season').value || '1', 10) || 1,
+                total_episodes: parseInt(document.getElementById('subscription_total_episodes').value || '0', 10) || 0,
+                anime_mode: document.getElementById('subscription_anime_mode').checked,
+                savepath: normalizeRelativePathInput(document.getElementById('subscription_savepath').value.trim()),
+                cron_minutes: parseInt(document.getElementById('subscription_cron_minutes').value || '30', 10) || 0,
+                min_score: parseInt(document.getElementById('subscription_min_score').value || '55', 10) || 55,
+                quality_priority: normalizeSubscriptionQualityPriority(document.getElementById('subscription_quality_priority').value || 'balanced'),
+                enabled: document.getElementById('subscription_enabled').checked,
+                tmdb_id: tmdbBinding.tmdb_id,
+                tmdb_media_type: tmdbBinding.tmdb_media_type,
+                tmdb_title: tmdbBinding.tmdb_title,
+                tmdb_original_title: tmdbBinding.tmdb_original_title,
+                tmdb_year: tmdbBinding.tmdb_year,
+                tmdb_aliases: tmdbBinding.tmdb_aliases,
+                tmdb_total_episodes: tmdbBinding.tmdb_total_episodes,
+                tmdb_total_seasons: tmdbBinding.tmdb_total_seasons,
+                tmdb_episode_mode: tmdbBinding.tmdb_episode_mode,
+            };
+        }
+
+        function resetSubscriptionForm() {
+            editingSubscriptionName = null;
+            const titleEl = document.getElementById('subscription-modal-title');
+            if (titleEl) titleEl.innerText = '新增订阅任务';
+            document.getElementById('subscription_media_type').value = 'movie';
+            document.getElementById('subscription_title').value = '';
+            document.getElementById('subscription_aliases').value = '';
+            document.getElementById('subscription_year').value = '';
+            document.getElementById('subscription_season').value = 1;
+            document.getElementById('subscription_total_episodes').value = 0;
+            document.getElementById('subscription_anime_mode').checked = false;
+            setSubscriptionSavepath('0', '');
+            subscriptionFolderTrail = [{ id: '0', name: '根目录' }];
+            subscriptionFolderEntries = [];
+            subscriptionFolderSummary = { folder_count: 0, file_count: 0 };
+            subscriptionFolderLoading = false;
+            subscriptionFolderCreateBusy = false;
+            document.getElementById('subscription_cron_minutes').value = 30;
+            document.getElementById('subscription_min_score').value = 55;
+            document.getElementById('subscription_quality_priority').value = 'balanced';
+            document.getElementById('subscription_enabled').checked = true;
+            clearSubscriptionTmdbBinding({ silent: true });
+            subscriptionTmdbResults = [];
+            subscriptionTmdbSearchToken += 1;
+            setSubscriptionTmdbSearchBusy(false);
+            const tmdbKeywordInput = document.getElementById('subscription_tmdb_search_keyword');
+            if (tmdbKeywordInput) tmdbKeywordInput.value = '';
+            const tmdbHintEl = document.getElementById('subscription_tmdb_search_hint');
+            if (tmdbHintEl) tmdbHintEl.innerText = '按当前订阅类型（电影/电视剧）检索 TMDB，选择后会写入任务绑定信息。';
+            renderSubscriptionTmdbResults();
+            syncSubscriptionTypeUI();
+        }
+
+        function openNewSubscriptionTask(prefill = null) {
+            resetSubscriptionForm();
+            if (prefill && typeof prefill === 'object') applySubscriptionPrefill(prefill);
+            showLockedModal('subscription-modal');
+            switchTab('subscription');
+        }
+
+        function openSubscriptionFromResource(resourceOrId) {
+            const directItem = resourceOrId && typeof resourceOrId === 'object' ? resourceOrId : null;
+            const resourceId = Number(directItem ? directItem.id : resourceOrId || 0);
+            let item = directItem;
+            if (!item && resourceId) item = findResourceItem(resourceId);
+            if (!item && selectedResourceItem && Number(selectedResourceItem?.id || 0) === resourceId) item = selectedResourceItem;
+            if (!item) {
+                showToast('未找到资源，无法转订阅', { tone: 'error', duration: 2600, placement: 'top-center' });
+                return;
+            }
+            const resourceModal = document.getElementById('resource-import-modal');
+            if (resourceModal && !resourceModal.classList.contains('hidden')) {
+                closeResourceJobModal();
+            }
+            openNewSubscriptionTask(inferSubscriptionDraftFromResource(item));
+            showToast('已预填订阅信息，请继续补充保存目录等配置后保存任务', {
+                tone: 'success',
+                duration: 3200,
+                placement: 'top-center'
+            });
+        }
+
+        function closeSubscriptionModal() {
+            hideLockedModal('subscription-modal');
+        }
+
+        async function persistSubscriptionTasks(tasks) {
+            const res = await fetch('/subscription/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tasks })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.ok) throw new Error(data.msg || '保存订阅任务失败');
+            applySubscriptionState({ ...subscriptionState, tasks: data.tasks || [] }, { forceRender: true });
+        }
+
+        async function saveSubscriptionTask() {
+            const task = currentSubscriptionFormData();
+            if (!task.title) return alert('订阅影视名称不能为空');
+            if (!task.savepath) return alert('请先从网盘选择保存目录');
+            if (task.year && !/^(19|20)\d{2}$/.test(task.year)) return alert('年份格式不正确，请输入四位年份');
+            if (task.cron_minutes < 0) return alert('定时检查分钟不能小于 0');
+            if (task.min_score < 30 || task.min_score > 100) return alert('匹配阈值需在 30-100 之间');
+            if (!['balanced', 'ultra', 'fhd', 'hd', 'sd'].includes(task.quality_priority)) return alert('清晰度优先级配置无效');
+            if (task.tmdb_id > 0 && task.tmdb_media_type && task.tmdb_media_type !== task.media_type) {
+                return alert('TMDB 绑定类型与订阅类型不一致，请重新绑定');
+            }
+            if (task.media_type !== 'tv') {
+                task.season = 1;
+                task.total_episodes = 0;
+                task.anime_mode = false;
+                task.tmdb_total_episodes = 0;
+                task.tmdb_total_seasons = 0;
+                task.tmdb_episode_mode = 'seasonal';
+            } else {
+                task.tmdb_episode_mode = normalizeTmdbEpisodeMode(task.tmdb_episode_mode || 'seasonal');
+            }
+            if (task.tmdb_id <= 0) {
+                task.tmdb_media_type = '';
+                task.tmdb_title = '';
+                task.tmdb_original_title = '';
+                task.tmdb_year = '';
+                task.tmdb_aliases = [];
+                task.tmdb_total_episodes = 0;
+                task.tmdb_total_seasons = 0;
+                task.tmdb_episode_mode = 'seasonal';
+            }
+
+            const tasks = [...(subscriptionState.tasks || [])].map(item => ({
+                ...item,
+                aliases: Array.isArray(item.aliases) ? item.aliases.join(', ') : (item.aliases || '')
+            }));
+            const dup = tasks.find(item => item.name === task.name && item.name !== editingSubscriptionName);
+            if (dup) return alert('影视名称重复，请修改标题或年份后再保存');
+            const idx = tasks.findIndex(item => item.name === editingSubscriptionName);
+            if (idx >= 0) tasks[idx] = task;
+            else tasks.push(task);
+
+            try {
+                await persistSubscriptionTasks(tasks);
+                closeSubscriptionModal();
+                resetSubscriptionForm();
+                alert('✅ 订阅任务已保存');
+            } catch (e) {
+                alert(`❌ ${e.message}`);
+            }
+        }
+
+        function editSubscriptionTask(name) {
+            const task = (subscriptionState.tasks || []).find(item => item.name === name);
+            if (!task) return;
+            editingSubscriptionName = task.name;
+            const titleEl = document.getElementById('subscription-modal-title');
+            if (titleEl) titleEl.innerText = `编辑订阅任务：${task.name}`;
+            document.getElementById('subscription_media_type').value = normalizeSubscriptionMediaType(task.media_type || 'movie');
+            document.getElementById('subscription_title').value = task.title || '';
+            document.getElementById('subscription_aliases').value = Array.isArray(task.aliases) ? task.aliases.join(', ') : (task.aliases || '');
+            document.getElementById('subscription_year').value = task.year || '';
+            document.getElementById('subscription_season').value = task.season || 1;
+            document.getElementById('subscription_total_episodes').value = task.total_episodes || 0;
+            document.getElementById('subscription_anime_mode').checked = !!task.anime_mode;
+            subscriptionFolderTrail = [{ id: '0', name: '根目录' }];
+            setSubscriptionSavepath('0', task.savepath || '');
+            document.getElementById('subscription_cron_minutes').value = task.cron_minutes ?? 30;
+            document.getElementById('subscription_min_score').value = task.min_score ?? 55;
+            document.getElementById('subscription_quality_priority').value = normalizeSubscriptionQualityPriority(task.quality_priority || 'balanced');
+            document.getElementById('subscription_enabled').checked = task.enabled !== false;
+            setSubscriptionTmdbBinding({
+                tmdb_id: task.tmdb_id || 0,
+                tmdb_media_type: task.tmdb_media_type || '',
+                tmdb_title: task.tmdb_title || '',
+                tmdb_original_title: task.tmdb_original_title || '',
+                tmdb_year: task.tmdb_year || '',
+                tmdb_aliases: Array.isArray(task.tmdb_aliases) ? task.tmdb_aliases : [],
+                tmdb_total_episodes: task.tmdb_total_episodes || 0,
+                tmdb_total_seasons: task.tmdb_total_seasons || 0,
+                tmdb_episode_mode: task.tmdb_episode_mode || 'seasonal',
+            });
+            syncSubscriptionTypeUI();
+            showLockedModal('subscription-modal');
+            switchTab('subscription');
+        }
+
+        async function deleteSubscriptionTask(name) {
+            if (!confirm(`确定删除订阅任务“${name}”吗？`)) return;
+            const res = await fetch('/subscription/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.ok) {
+                return alert(`❌ ${data.msg || '删除失败'}`);
+            }
+            await refreshSubscriptionState();
+            if (editingSubscriptionName === name) resetSubscriptionForm();
+        }
+
+        async function startSubscriptionTask(name) {
+            const res = await fetch('/subscription/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.ok) {
+                return alert(`❌ ${data.msg || '启动失败'}`);
+            }
+            if (data.status === 'queued') {
+                const queued = Array.isArray(subscriptionState.queued) ? [...subscriptionState.queued] : [];
+                if (!queued.includes(name)) queued.push(name);
+                applySubscriptionState({ ...subscriptionState, queued }, { forceRender: true });
+            } else {
+                applySubscriptionState({
+                    ...subscriptionState,
+                    running: true,
+                    current_task: name,
+                    summary: { step: '准备执行', detail: `${name} (manual)` }
+                }, { forceRender: true });
+            }
+            await refreshSubscriptionState();
+        }
+
+        async function stopSubscriptionTask(name) {
+            const res = await fetch('/subscription/stop', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name })
+            });
+            const data = await res.json();
+            if (!data.ok) {
+                alert('当前没有这个订阅任务在运行');
+                return;
+            }
+            applySubscriptionState({
+                ...subscriptionState,
+                summary: { step: '正在中断', detail: `${name} 已发送中断请求` }
+            }, { forceRender: true });
+            await refreshSubscriptionState();
+        }
+
+        function renderSubscriptionTasks() {
+            const container = document.getElementById('subscription-task-list');
+            if (!container) return;
+            const tasks = subscriptionState.tasks || [];
+            if (!tasks.length) {
+                container.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">还没有订阅任务，点击“新增订阅任务”即可创建。</div>';
+                return;
+            }
+            container.innerHTML = tasks.map(task => {
+                const taskName = String(task.name || '').trim();
+                const running = subscriptionState.running && subscriptionState.current_task === taskName;
+                const queued = (subscriptionState.queued || []).includes(taskName);
+                const status = running ? 'running' : (task.status || 'idle');
+                const nextRun = (subscriptionState.next_runs || {})[taskName];
+                const progress = Math.max(0, Math.min(100, Number(task.progress || 0)));
+                const isTv = normalizeSubscriptionMediaType(task.media_type || 'movie') === 'tv';
+                const episodeText = isTv
+                    ? `追更进度：E${Number(task.last_episode || 0)}${Number(task.total_episodes || 0) > 0 ? ` / E${Number(task.total_episodes || 0)}` : ''}`
+                    : '电影订阅：命中资源即执行';
+                const statusBadge = queued
+                    ? '<span class="text-[10px] px-3 py-1 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/20">已排队</span>'
+                    : buildSubscriptionStatusBadge(status);
+                const startDisabled = subscriptionState.running || running;
+                const stopDisabled = !running;
+                const actionGridClass = isTv
+                    ? 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 shrink-0'
+                    : 'grid grid-cols-2 md:grid-cols-4 gap-2 shrink-0';
+                const episodeViewButton = isTv
+                    ? `<button type="button" data-subscription-action="episodes" data-task-name="${encodeURIComponent(taskName)}" class="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">集数视图</button>`
+                    : '';
+                return `
+                    <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4">
+                        <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+                            <div class="space-y-3 min-w-0 flex-1">
+                                <div class="flex items-center gap-3 flex-wrap">
+                                    <div class="text-lg font-black text-white">${escapeHtml(taskName)}</div>
+                                    ${statusBadge}
+                                    <span class="text-[10px] px-3 py-1 rounded-full ${task.enabled === false ? 'bg-slate-700 text-slate-400' : 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20'}">${task.enabled === false ? '已停用' : '已启用'}</span>
+                                    <span class="text-[10px] px-3 py-1 rounded-full bg-slate-700 text-slate-100">${isTv ? '电视剧' : '电影'}</span>
+                                    ${Number(task.tmdb_id || 0) > 0 ? `<span class="text-[10px] px-3 py-1 rounded-full bg-sky-500/15 text-sky-300 border border-sky-500/20">TMDB #${escapeHtml(String(task.tmdb_id || 0))}</span>` : ''}
+                                </div>
+                                <div class="text-xs text-slate-400 leading-6">
+                                    <div>订阅名称：${escapeHtml(task.title || '--')}</div>
+                                    <div>保存路径：${escapeHtml(task.savepath || '--')}</div>
+                                    <div>${escapeHtml(episodeText)}</div>
+                                    ${isTv && task.anime_mode ? '<div>追更模式：动漫连载兼容</div>' : ''}
+                                    ${Number(task.tmdb_id || 0) > 0 ? `<div>TMDB：${escapeHtml(task.tmdb_title || task.title || '--')}${task.tmdb_year ? ` (${escapeHtml(task.tmdb_year)})` : ''}${isTv ? ` / ${task.tmdb_episode_mode === 'absolute' ? '绝对集序' : '按季集序'}` : ''}</div>` : ''}
+                                    <div>匹配阈值：${escapeHtml(String(task.min_score || 55))} / 清晰度：${escapeHtml(getSubscriptionQualityPriorityLabel(task.quality_priority || 'balanced'))}</div>
+                                    <div>定时：${Number(task.cron_minutes || 0)} 分钟 / 下次定时：${nextRun ? escapeHtml(nextRun) : '未开启'}</div>
+                                    <div>最新命中：${escapeHtml(task.matched_resource_title || '--')}</div>
+                                </div>
+                            </div>
+                            <div class="${actionGridClass}">
+                                <button type="button" data-subscription-action="start" data-task-name="${encodeURIComponent(taskName)}" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold ${startDisabled ? 'btn-disabled' : ''}" ${startDisabled ? 'disabled' : ''}>运行</button>
+                                <button type="button" data-subscription-action="stop" data-task-name="${encodeURIComponent(taskName)}" class="px-4 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 text-sm font-bold ${stopDisabled ? 'btn-disabled' : ''}" ${stopDisabled ? 'disabled' : ''}>中断</button>
+                                <button type="button" data-subscription-action="edit" data-task-name="${encodeURIComponent(taskName)}" class="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">编辑</button>
+                                <button type="button" data-subscription-action="delete" data-task-name="${encodeURIComponent(taskName)}" class="px-4 py-2 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-300 text-sm font-bold">删除</button>
+                                ${episodeViewButton}
+                            </div>
+                        </div>
+                        <div class="mt-3 space-y-2">
+                            <div class="w-full bg-slate-950 rounded-full h-3 p-[2px] overflow-hidden">
+                                <div class="bg-gradient-to-r from-sky-600 to-emerald-500 h-full rounded-full transition-width" style="width: ${progress}%"></div>
+                            </div>
+                            <div class="text-xs text-slate-500">${escapeHtml(task.detail || '等待执行')}</div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function getSubscriptionTaskByName(taskName) {
+            const normalizedName = String(taskName || '').trim();
+            if (!normalizedName) return null;
+            return (subscriptionState.tasks || []).find(item => String(item?.name || '').trim() === normalizedName) || null;
+        }
+
+        function normalizeEpisodeList(values) {
+            const result = [];
+            const seen = new Set();
+            (Array.isArray(values) ? values : []).forEach((item) => {
+                const episodeNo = parseInt(item || '0', 10) || 0;
+                if (episodeNo <= 0 || episodeNo > 5000 || seen.has(episodeNo)) return;
+                seen.add(episodeNo);
+                result.push(episodeNo);
+            });
+            result.sort((a, b) => a - b);
+            return result;
+        }
+
+        function renderSubscriptionEpisodeModal() {
+            const titleEl = document.getElementById('subscription-episode-modal-title');
+            const summaryEl = document.getElementById('subscription-episode-modal-summary');
+            const noteEl = document.getElementById('subscription-episode-modal-note');
+            const gridEl = document.getElementById('subscription-episode-grid');
+            if (!titleEl || !summaryEl || !noteEl || !gridEl) return;
+
+            const taskName = String(subscriptionEpisodeViewTaskName || '').trim();
+            if (!taskName) {
+                titleEl.innerText = '集数视图';
+                summaryEl.className = 'text-xs text-slate-400 mt-2';
+                summaryEl.innerText = '点击任务卡片里的“集数视图”查看。';
+                noteEl.innerText = '-';
+                gridEl.innerHTML = '<div class="subscription-episode-empty">暂无任务数据</div>';
+                return;
+            }
+
+            const task = getSubscriptionTaskByName(taskName);
+            titleEl.innerText = `${taskName} · 集数视图`;
+            if (subscriptionEpisodeViewLoading) {
+                summaryEl.className = 'text-xs text-slate-400 mt-2';
+                summaryEl.innerText = '正在读取目录集数，请稍候...';
+                noteEl.innerText = `保存路径：${task?.savepath || '--'}`;
+                gridEl.innerHTML = '<div class="subscription-episode-empty">正在扫描目录中的剧集文件...</div>';
+                return;
+            }
+
+            if (subscriptionEpisodeViewError) {
+                summaryEl.className = 'text-xs text-red-300 mt-2';
+                summaryEl.innerText = `读取失败：${subscriptionEpisodeViewError}`;
+                noteEl.innerText = `保存路径：${task?.savepath || '--'}`;
+                gridEl.innerHTML = '<div class="subscription-episode-empty">暂时无法加载集数视图，请点击“刷新”重试。</div>';
+                return;
+            }
+
+            const payload = subscriptionEpisodeViewData || {};
+            const existingEpisodes = normalizeEpisodeList(payload.existing_episodes);
+            const existingSet = new Set(existingEpisodes);
+            let displayTotal = parseInt(payload.display_total_episodes || '0', 10) || 0;
+            if (displayTotal <= 0) {
+                displayTotal = Math.max(
+                    parseInt(payload.total_episodes || '0', 10) || 0,
+                    parseInt(payload.last_episode || '0', 10) || 0,
+                    parseInt(payload.max_episode || '0', 10) || 0,
+                );
+            }
+            if (displayTotal <= 0) displayTotal = 60;
+            displayTotal = Math.max(1, Math.min(1200, displayTotal));
+
+            const presentInRange = existingEpisodes.filter((episodeNo) => episodeNo <= displayTotal).length;
+            const missingCount = Math.max(0, displayTotal - presentInRange);
+            const totalEpisodes = parseInt(payload.total_episodes || '0', 10) || 0;
+            const scanStats = payload.scan_stats && typeof payload.scan_stats === 'object' ? payload.scan_stats : {};
+            const scanDirs = parseInt(scanStats.scanned_dirs || '0', 10) || 0;
+            const scanEntries = parseInt(scanStats.scanned_entries || '0', 10) || 0;
+            const scanFailed = parseInt(scanStats.failed_dirs || '0', 10) || 0;
+            const scanTruncated = !!scanStats.truncated;
+
+            summaryEl.className = 'text-xs text-slate-300 mt-2';
+            summaryEl.innerText = `已存在 ${presentInRange} 集 / 展示 ${displayTotal} 集（缺失 ${missingCount} 集）`;
+            noteEl.innerText = [
+                `保存路径：${payload.savepath || task?.savepath || '--'}`,
+                totalEpisodes > 0 ? `总集数：E${totalEpisodes}` : '总集数：未配置（按已识别范围展示）',
+                `扫描目录 ${scanDirs} 个 / 条目 ${scanEntries} 条${scanFailed > 0 ? ` / 失败 ${scanFailed}` : ''}${scanTruncated ? ' / 已截断' : ''}`,
+            ].join('；');
+
+            const cells = [];
+            for (let episodeNo = 1; episodeNo <= displayTotal; episodeNo += 1) {
+                const present = existingSet.has(episodeNo);
+                cells.push(
+                    `<div class="subscription-episode-cell ${present ? 'is-present' : 'is-missing'}" title="E${episodeNo}${present ? ' 已存在资源' : ' 缺失资源'}"><span class="subscription-episode-cell-no">${episodeNo}</span></div>`
+                );
+            }
+            gridEl.innerHTML = cells.length ? cells.join('') : '<div class="subscription-episode-empty">没有可展示的集数</div>';
+        }
+
+        async function refreshSubscriptionEpisodeView(force = false) {
+            const taskName = String(subscriptionEpisodeViewTaskName || '').trim();
+            if (!taskName) return;
+
+            const cached = subscriptionEpisodeViewCache[taskName];
+            const nowTs = Date.now();
+            if (!force && cached && (nowTs - Number(cached.fetched_at || 0)) < SUBSCRIPTION_EPISODE_CACHE_TTL_MS) {
+                subscriptionEpisodeViewData = cached.data || null;
+                subscriptionEpisodeViewError = '';
+                subscriptionEpisodeViewLoading = false;
+                renderSubscriptionEpisodeModal();
+                return;
+            }
+
+            subscriptionEpisodeViewLoading = true;
+            subscriptionEpisodeViewError = '';
+            renderSubscriptionEpisodeModal();
+
+            const requestedTaskName = taskName;
+            try {
+                const res = await fetch(`/subscription/episodes?name=${encodeURIComponent(requestedTaskName)}`);
+                const data = await res.json();
+                if (!res.ok || !data.ok) throw new Error(data.msg || '读取集数视图失败');
+                if (subscriptionEpisodeViewTaskName !== requestedTaskName) return;
+                subscriptionEpisodeViewData = data;
+                subscriptionEpisodeViewCache[requestedTaskName] = {
+                    fetched_at: Date.now(),
+                    data,
+                };
+            } catch (error) {
+                if (subscriptionEpisodeViewTaskName !== requestedTaskName) return;
+                subscriptionEpisodeViewData = null;
+                subscriptionEpisodeViewError = error?.message || '读取集数视图失败';
+            } finally {
+                if (subscriptionEpisodeViewTaskName === requestedTaskName) {
+                    subscriptionEpisodeViewLoading = false;
+                    renderSubscriptionEpisodeModal();
+                }
+            }
+        }
+
+        async function openSubscriptionEpisodeModal(taskName) {
+            const normalizedName = String(taskName || '').trim();
+            if (!normalizedName) return;
+            const task = getSubscriptionTaskByName(normalizedName);
+            if (!task) {
+                alert('任务不存在或已被删除');
+                return;
+            }
+            if (normalizeSubscriptionMediaType(task.media_type || 'movie') !== 'tv') {
+                alert('仅电视剧任务支持集数视图');
+                return;
+            }
+
+            subscriptionEpisodeViewTaskName = normalizedName;
+            subscriptionEpisodeViewData = null;
+            subscriptionEpisodeViewError = '';
+            subscriptionEpisodeViewLoading = true;
+            showLockedModal('subscription-episode-modal');
+            renderSubscriptionEpisodeModal();
+            await refreshSubscriptionEpisodeView(false);
+        }
+
+        function closeSubscriptionEpisodeModal() {
+            hideLockedModal('subscription-episode-modal');
+        }
+
+        async function refreshSubscriptionState() {
+            try {
+                const res = await fetch('/subscription/status');
+                if (!res.ok) return;
+                applySubscriptionState(await res.json());
+            } catch (e) {}
+        }
+
+        async function clearSubscriptionLogs() {
+            const res = await fetch('/subscription/logs/clear', { method: 'POST' });
+            if (res.ok) {
+                lastSubscriptionLogSignature = '';
+                await refreshSubscriptionState();
+            }
         }
 
         function getResourceStatusLabel(status) {
@@ -1714,8 +2811,9 @@
             `;
         }
 
-        function buildResourceEntryRow(entry, { showOpenButton = false } = {}) {
+        function buildResourceEntryRow(entry, { showOpenButton = false, openActionPrefix = 'resource-folder' } = {}) {
             const isDir = !!entry?.is_dir;
+            const normalizedOpenActionPrefix = String(openActionPrefix || 'resource-folder').replace(/[^a-z0-9-]/gi, '') || 'resource-folder';
             const normalizedEntryId = String(entry?.id || '').trim();
             const name = escapeHtml(entry?.name || '--');
             const idText = escapeHtml(isDir ? (entry?.id || '--') : (entry?.pick_code || entry?.sha1 || '--'));
@@ -1723,7 +2821,7 @@
                 ? (showOpenButton ? '文件夹' : `CID: ${idText}`)
                 : `${escapeHtml(formatFileSizeText(entry?.size || 0))}${entry?.modified_at ? ` / ${escapeHtml(entry.modified_at)}` : ''}`;
             const actionHtml = showOpenButton && isDir
-                ? `<button type="button" data-resource-folder-action="open" data-resource-folder-id="${escapeHtml(entry?.id || '')}" data-resource-folder-name="${name}" class="resource-entry-action shrink-0">进入</button>`
+                ? `<button type="button" data-${normalizedOpenActionPrefix}-action="open" data-${normalizedOpenActionPrefix}-id="${escapeHtml(entry?.id || '')}" data-${normalizedOpenActionPrefix}-name="${name}" class="resource-entry-action shrink-0">进入</button>`
                 : `<span class="resource-entry-flag shrink-0">${isDir ? '目录' : escapeHtml(formatFileSizeText(entry?.size || 0))}</span>`;
             return `
                 <div class="resource-entry ${isDir ? 'resource-entry-dir' : 'resource-entry-file'}" data-resource-entry-id="${escapeHtml(normalizedEntryId)}">
@@ -1775,6 +2873,7 @@
                                         ${item?.year ? `<span class="text-[10px] px-3 py-1 rounded-full bg-violet-500/15 text-violet-300 border border-violet-500/20">${escapeHtml(item.year)}</span>` : ''}
                                     </div>
                             </div>
+                            <button type="button" data-resource-action="subscribe" data-resource-id="${item.id}" class="resource-card-subscribe-btn shrink-0">转订阅</button>
                         </div>
                         <div class="resource-card-meta mt-3">${buildResourceMeta(item)}</div>
                         <div class="resource-card-desc mt-3">${buildResourceDescription(item)}</div>
@@ -2164,7 +3263,8 @@
                 source_count: nextSources.length,
                 item_count: Number(resourceState?.stats?.item_count || 0),
                 filtered_item_count: nextItems.length,
-                completed_job_count: Number(resourceState?.stats?.completed_job_count ?? 0)
+                completed_job_count: Number(resourceState?.stats?.completed_job_count ?? 0),
+                failed_job_count: Number(resourceState?.stats?.failed_job_count ?? 0),
             };
             resourceState = {
                 ...resourceState,
@@ -2193,17 +3293,11 @@
             const stats = resourceState.stats || {};
             document.getElementById('resource-source-count').innerText = String(stats.source_count ?? resourceState.sources.length ?? 0);
             document.getElementById('resource-item-count').innerText = String(stats.item_count ?? 0);
-            const completedCount = Number(stats.completed_job_count ?? 0);
+            const jobCounts = getResourceJobCounts(resourceState.jobs || []);
+            const completedCount = Number(stats.completed_job_count ?? jobCounts.completed ?? 0);
             const completedCountEl = document.getElementById('resource-completed-job-count');
             if (completedCountEl) completedCountEl.innerText = String(completedCount);
-            const clearCompletedBtn = document.getElementById('resource-clear-completed-btn');
-            if (clearCompletedBtn) {
-                clearCompletedBtn.textContent = completedCount > 0
-                    ? `清空已完成（${completedCount}）`
-                    : '清空已完成';
-                clearCompletedBtn.disabled = completedCount <= 0;
-                clearCompletedBtn.classList.toggle('btn-disabled', completedCount <= 0);
-            }
+            syncResourceJobClearMenuState();
             document.getElementById('resource-cookie-hint').classList.toggle('hidden', !!resourceState.cookie_configured);
             syncResourceSourceSelect();
             syncResourceMonitorTaskOptions(document.getElementById('resource_job_savepath')?.value || '');
@@ -2286,7 +3380,6 @@
                     ? keywordOverride.trim()
                     : String(resourceState.search || '').trim();
                 const shouldSearchChannels = !!activeKeyword && !isDirectImportInput(activeKeyword) && allowSearch;
-                if (!!activeKeyword && !allowSearch && !isDirectImportInput(activeKeyword)) return null;
                 const params = new URLSearchParams();
                 if (shouldSearchChannels) params.set('q', activeKeyword);
                 const endpoint = params.toString() ? `/resource/state?${params.toString()}` : '/resource/state';
@@ -2294,6 +3387,32 @@
                 if (!res.ok) return null;
                 const data = await res.json();
                 applyResourceState(data);
+                return data;
+            } catch (e) {
+                return null;
+            }
+        }
+
+        async function refreshResourceJobsOnly() {
+            try {
+                const res = await fetch('/resource/state');
+                if (!res.ok) return null;
+                const data = await res.json();
+                const keptItems = Array.isArray(resourceState.items) ? resourceState.items : [];
+                const keptSections = Array.isArray(resourceState.search_sections) ? resourceState.search_sections : [];
+                const keptSearchMeta = resourceState.search_meta || {};
+                const keptFilteredCount = Number(resourceState?.stats?.filtered_item_count || 0);
+                applyResourceState({
+                    ...data,
+                    search: resourceState.search || '',
+                    items: keptItems,
+                    search_sections: keptSections,
+                    search_meta: keptSearchMeta,
+                    stats: {
+                        ...(data?.stats || {}),
+                        filtered_item_count: keptFilteredCount,
+                    },
+                });
                 return data;
             } catch (e) {
                 return null;
@@ -2423,27 +3542,72 @@
             }
         }
 
-        async function clearCompletedResourceJobs() {
-            const completedCount = Number(resourceState?.stats?.completed_job_count || 0);
-            if (completedCount <= 0) {
-                alert('当前没有可清空的已完成导入记录');
+        function getResourceJobClearMeta(scope = 'completed') {
+            const normalized = String(scope || 'completed').trim().toLowerCase();
+            const jobCounts = getResourceJobCounts(resourceState.jobs || []);
+            const completedCount = Number(resourceState?.stats?.completed_job_count ?? jobCounts.completed ?? 0);
+            const failedCount = Number(resourceState?.stats?.failed_job_count ?? jobCounts.failed ?? 0);
+            if (normalized === 'failed') {
+                return {
+                    scope: 'failed',
+                    count: failedCount,
+                    label: '失败',
+                    emptyText: '当前没有可清空的失败导入记录',
+                    confirmText: '将清空失败导入记录（不删除网盘文件；执行中/待处理任务不会清理）。继续吗？',
+                };
+            }
+            if (normalized === 'terminal') {
+                return {
+                    scope: 'terminal',
+                    count: completedCount + failedCount,
+                    label: '已完成和失败',
+                    emptyText: '当前没有可清空的已完成或失败导入记录',
+                    confirmText: '将清空已完成和失败导入记录（不删除网盘文件；执行中/待处理任务不会清理）。继续吗？',
+                };
+            }
+            return {
+                scope: 'completed',
+                count: completedCount,
+                label: '已完成',
+                emptyText: '当前没有可清空的已完成导入记录',
+                confirmText: '将清空已完成导入记录（不删除网盘文件；执行中/待处理任务不会清理）。继续吗？',
+            };
+        }
+
+        async function clearResourceJobs(scope = 'completed') {
+            const meta = getResourceJobClearMeta(scope);
+            closeResourceJobClearMenu();
+            if (meta.count <= 0) {
+                alert(meta.emptyText);
                 return;
             }
-            if (!confirm('将清空已完成导入记录（不删除网盘文件）。继续吗？')) return;
-            const res = await fetch('/resource/jobs/clear_completed', {
+            if (!confirm(meta.confirmText)) return;
+            const res = await fetch('/resource/jobs/clear', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({})
+                body: JSON.stringify({ scope: meta.scope })
             });
             const data = await res.json();
             if (!res.ok || !data.ok) return alert(`❌ ${data.msg || '清空失败'}`);
             await refreshResourceState();
             const deleted = Number(data.deleted || 0);
             if (deleted > 0) {
-                alert(`✅ 已清空 ${deleted} 条已完成导入记录`);
+                alert(`✅ 已清空 ${deleted} 条${meta.label}导入记录`);
             } else {
-                alert('✅ 当前没有可清空的已完成导入记录');
+                alert(`✅ ${meta.emptyText}`);
             }
+        }
+
+        async function clearCompletedResourceJobs() {
+            await clearResourceJobs('completed');
+        }
+
+        async function clearFailedResourceJobs() {
+            await clearResourceJobs('failed');
+        }
+
+        async function clearTerminalResourceJobs() {
+            await clearResourceJobs('terminal');
         }
 
         async function clearResourceSearch() {
@@ -3560,7 +4724,12 @@
             container.innerHTML = visibleJobs.map(job => {
                 const hasMonitorTask = !!String(job.monitor_task_name || '').trim();
                 const canManualRefresh = hasMonitorTask && !job.last_triggered_at && String(job.status || '').toLowerCase() === 'submitted';
+                const normalizedStatus = String(job.status || '').toLowerCase();
+                const canCancel = ['pending', 'running', 'submitted'].includes(normalizedStatus);
+                const canRetry = normalizedStatus === 'failed';
                 const manualRefreshLabel = !hasMonitorTask ? '当前目录不触发' : (canManualRefresh ? '立即触发刷新' : '无需手动刷新');
+                const cancelLabel = canCancel ? '取消任务' : '不可取消';
+                const retryLabel = canRetry ? '重试任务' : '不可重试';
                 const autoRefreshText = hasMonitorTask
                     ? (job.auto_refresh ? `自动刷新 ${escapeHtml(String(job.refresh_delay_seconds || 0))} 秒` : '手动刷新')
                     : '未绑定监控';
@@ -3600,6 +4769,8 @@
                         </div>
                         <div class="resource-job-card-actions">
                             <div class="flex flex-wrap gap-2 shrink-0">
+                                <button type="button" data-resource-job-action="cancel" data-resource-job-id="${job.id}" class="px-4 py-2 rounded-xl text-sm font-bold ${canCancel ? 'bg-amber-600 hover:bg-amber-500 text-white' : 'bg-slate-700 text-slate-400 btn-disabled'}" ${canCancel ? '' : 'disabled'}>${cancelLabel}</button>
+                                <button type="button" data-resource-job-action="retry" data-resource-job-id="${job.id}" class="px-4 py-2 rounded-xl text-sm font-bold ${canRetry ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-slate-700 text-slate-400 btn-disabled'}" ${canRetry ? '' : 'disabled'}>${retryLabel}</button>
                                 <button type="button" data-resource-job-action="refresh" data-resource-job-id="${job.id}" class="px-4 py-2 rounded-xl text-sm font-bold ${canManualRefresh ? 'bg-sky-600 hover:bg-sky-500 text-white' : 'bg-slate-700 text-slate-400 btn-disabled'}" ${canManualRefresh ? '' : 'disabled'}>${manualRefreshLabel}</button>
                             </div>
                         </div>
@@ -3621,11 +4792,70 @@
             btn.setAttribute('aria-expanded', resourceJobModalOpen ? 'true' : 'false');
         }
 
+        function closeResourceJobClearMenu() {
+            const menu = document.getElementById('resource-job-clear-menu');
+            const dropdown = document.getElementById('resource-job-clear-dropdown');
+            const toggleBtn = document.getElementById('resource-job-clear-toggle');
+            resourceJobClearMenuOpen = false;
+            if (!menu || !dropdown || !toggleBtn) return;
+            dropdown.classList.add('hidden');
+            toggleBtn.setAttribute('aria-expanded', 'false');
+        }
+
+        function toggleResourceJobClearMenu(force) {
+            const menu = document.getElementById('resource-job-clear-menu');
+            const dropdown = document.getElementById('resource-job-clear-dropdown');
+            const toggleBtn = document.getElementById('resource-job-clear-toggle');
+            if (!menu || !dropdown || !toggleBtn) return;
+            if (toggleBtn.disabled) return;
+            const nextOpen = typeof force === 'boolean' ? !!force : !resourceJobClearMenuOpen;
+            resourceJobClearMenuOpen = nextOpen;
+            dropdown.classList.toggle('hidden', !nextOpen);
+            toggleBtn.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
+        }
+
+        function syncResourceJobClearMenuState() {
+            const jobCounts = getResourceJobCounts(resourceState.jobs || []);
+            const completedCount = Number(resourceState?.stats?.completed_job_count ?? jobCounts.completed ?? 0);
+            const failedCount = Number(resourceState?.stats?.failed_job_count ?? jobCounts.failed ?? 0);
+            const terminalCount = completedCount + failedCount;
+
+            const toggleBtn = document.getElementById('resource-job-clear-toggle');
+            if (toggleBtn) {
+                toggleBtn.textContent = terminalCount > 0 ? `清空（${terminalCount}）` : '清空';
+                toggleBtn.disabled = terminalCount <= 0;
+                toggleBtn.classList.toggle('btn-disabled', terminalCount <= 0);
+            }
+
+            const completedBtn = document.getElementById('resource-clear-completed-btn');
+            if (completedBtn) {
+                completedBtn.textContent = completedCount > 0 ? `清空已完成（${completedCount}）` : '清空已完成';
+                completedBtn.disabled = completedCount <= 0;
+                completedBtn.classList.toggle('btn-disabled', completedCount <= 0);
+            }
+            const failedBtn = document.getElementById('resource-clear-failed-btn');
+            if (failedBtn) {
+                failedBtn.textContent = failedCount > 0 ? `清空失败（${failedCount}）` : '清空失败';
+                failedBtn.disabled = failedCount <= 0;
+                failedBtn.classList.toggle('btn-disabled', failedCount <= 0);
+            }
+            const terminalBtn = document.getElementById('resource-clear-terminal-btn');
+            if (terminalBtn) {
+                terminalBtn.textContent = terminalCount > 0 ? `清空完成+失败（${terminalCount}）` : '清空完成+失败';
+                terminalBtn.disabled = terminalCount <= 0;
+                terminalBtn.classList.toggle('btn-disabled', terminalCount <= 0);
+            }
+
+            if (terminalCount <= 0) closeResourceJobClearMenu();
+        }
+
         function toggleResourceJobModal(force) {
             const modal = document.getElementById('resource-job-modal');
             if (!modal) return;
             resourceJobModalOpen = typeof force === 'boolean' ? force : !resourceJobModalOpen;
             modal.classList.toggle('hidden', !resourceJobModalOpen);
+            if (!resourceJobModalOpen) closeResourceJobClearMenu();
+            else syncResourceJobClearMenuState();
             syncResourceJobModalTrigger();
         }
 
@@ -4406,6 +5636,9 @@
             if (linkUrl) {
                 actions.push(`<button type="button" onclick="copyResourceRecord(${Number(item?.id || 0)})" class="px-3 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-[11px] font-bold">复制链接</button>`);
             }
+            if (Number(item?.id || 0)) {
+                actions.push(`<button type="button" onclick="openSubscriptionFromResource(${Number(item?.id || 0)})" class="px-3 py-2 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 text-[11px] font-bold border border-amber-500/35">转订阅任务</button>`);
+            }
             if (!actions.length) {
                 actions.push('<span class="text-[11px] text-slate-400">暂无外部链接</span>');
             }
@@ -4774,6 +6007,153 @@
             closeResourceFolderModal();
         }
 
+        function renderSubscriptionFolderBreadcrumbs() {
+            const container = document.getElementById('subscription-folder-breadcrumbs');
+            if (!container) return;
+            container.innerHTML = subscriptionFolderTrail.map((item, index) => {
+                const isLast = index === subscriptionFolderTrail.length - 1;
+                return `
+                    ${index > 0 ? '<span class="resource-folder-sep">›</span>' : ''}
+                    <button
+                        type="button"
+                        data-subscription-folder-action="trail"
+                        data-subscription-folder-index="${index}"
+                        class="resource-folder-crumb ${isLast ? 'resource-folder-crumb-active' : ''}"
+                        ${isLast ? 'disabled' : ''}
+                    >${escapeHtml(item?.name || '根目录')}</button>
+                `;
+            }).join('');
+        }
+
+        function setSubscriptionFolderCreateBusy(loading = false) {
+            subscriptionFolderCreateBusy = !!loading;
+            const createBtn = document.getElementById('subscription-folder-create-btn');
+            const nameInput = document.getElementById('subscription-folder-create-name');
+            if (createBtn) {
+                createBtn.disabled = subscriptionFolderCreateBusy;
+                createBtn.classList.toggle('btn-disabled', subscriptionFolderCreateBusy);
+                createBtn.innerText = subscriptionFolderCreateBusy ? '新建中...' : '新建文件夹';
+            }
+            if (nameInput) nameInput.disabled = subscriptionFolderCreateBusy;
+        }
+
+        function renderSubscriptionFolderList() {
+            const container = document.getElementById('subscription-folder-list');
+            const summary = document.getElementById('subscription-folder-summary');
+            if (!container) return;
+            if (summary) {
+                summary.innerText = `当前目录下共有 ${Number(subscriptionFolderSummary?.folder_count || 0)} 个文件夹 / ${Number(subscriptionFolderSummary?.file_count || 0)} 个文件。`;
+            }
+            if (subscriptionFolderLoading) {
+                container.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">正在读取 115 目录...</div>';
+                return;
+            }
+            const folders = (subscriptionFolderEntries || []).filter(entry => !!entry?.is_dir);
+            if (!folders.length) {
+                container.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">当前目录没有子文件夹，可以直接选择这里作为保存位置。</div>';
+                return;
+            }
+            container.innerHTML = folders.map(entry => buildResourceEntryRow(entry, {
+                showOpenButton: true,
+                openActionPrefix: 'subscription-folder'
+            })).join('');
+        }
+
+        async function loadSubscriptionFolders(cid = '0') {
+            subscriptionFolderLoading = true;
+            renderSubscriptionFolderBreadcrumbs();
+            renderSubscriptionFolderList();
+            try {
+                const result = await fetchResourceFolderData(cid);
+                subscriptionFolderEntries = result.entries;
+                subscriptionFolderSummary = result.summary;
+            } catch (e) {
+                subscriptionFolderEntries = [];
+                subscriptionFolderSummary = { folder_count: 0, file_count: 0 };
+                showToast(`目录读取失败：${e.message || '请稍后重试'}`, { tone: 'error', duration: 3200 });
+            } finally {
+                subscriptionFolderLoading = false;
+                renderSubscriptionFolderBreadcrumbs();
+                renderSubscriptionFolderList();
+            }
+        }
+
+        async function openSubscriptionFolderModal() {
+            showLockedModal('subscription-folder-modal');
+            const createInput = document.getElementById('subscription-folder-create-name');
+            if (createInput) createInput.value = '';
+            setSubscriptionFolderCreateBusy(false);
+            renderSubscriptionFolderBreadcrumbs();
+            await loadSubscriptionFolders(subscriptionFolderTrail[subscriptionFolderTrail.length - 1]?.id || '0');
+        }
+
+        function closeSubscriptionFolderModal() {
+            hideLockedModal('subscription-folder-modal');
+            setSubscriptionFolderCreateBusy(false);
+        }
+
+        async function goSubscriptionFolderBack() {
+            if (subscriptionFolderTrail.length <= 1) return;
+            subscriptionFolderTrail = subscriptionFolderTrail.slice(0, -1);
+            await loadSubscriptionFolders(subscriptionFolderTrail[subscriptionFolderTrail.length - 1]?.id || '0');
+        }
+
+        async function openSubscriptionFolderTrail(index) {
+            const targetIndex = Math.max(0, Math.min(Number(index || 0), subscriptionFolderTrail.length - 1));
+            subscriptionFolderTrail = subscriptionFolderTrail.slice(0, targetIndex + 1);
+            await loadSubscriptionFolders(subscriptionFolderTrail[subscriptionFolderTrail.length - 1]?.id || '0');
+        }
+
+        async function openSubscriptionFolderChild(folderId, folderName) {
+            subscriptionFolderTrail = subscriptionFolderTrail.concat([{ id: String(folderId || '0'), name: String(folderName || '--') }]);
+            await loadSubscriptionFolders(folderId);
+        }
+
+        async function createSubscriptionFolderInCurrent() {
+            if (subscriptionFolderLoading || subscriptionFolderCreateBusy) return;
+            const nameInput = document.getElementById('subscription-folder-create-name');
+            const folderName = String(nameInput?.value || '').trim();
+            if (!folderName) {
+                showToast('请输入新文件夹名称', { tone: 'warn', duration: 2200, placement: 'top-center' });
+                return;
+            }
+
+            const current = subscriptionFolderTrail[subscriptionFolderTrail.length - 1] || { id: '0', name: '根目录' };
+            const currentCid = String(current.id || '0').trim() || '0';
+            try {
+                setSubscriptionFolderCreateBusy(true);
+                const result = await createResourceFolder(currentCid, folderName);
+                const folder = result.folder || {};
+                const createdFolderId = String(folder.id || '').trim();
+                const createdFolderName = String(folder.name || folderName).trim() || folderName;
+                if (nameInput) nameInput.value = '';
+
+                await loadSubscriptionFolders(currentCid);
+                if (createdFolderId) {
+                    const selectedTrail = normalizeResourceFolderTrail(subscriptionFolderTrail.concat([{ id: createdFolderId, name: createdFolderName }]));
+                    subscriptionFolderTrail = selectedTrail;
+                    await loadSubscriptionFolders(createdFolderId);
+                    setSubscriptionSavepath(
+                        createdFolderId,
+                        buildResourceFolderDisplayPathFromTrail(selectedTrail),
+                        { trail: selectedTrail }
+                    );
+                }
+                showToast(`已创建并进入文件夹：${createdFolderName}`, { tone: 'success', duration: 3000, placement: 'top-center' });
+            } catch (e) {
+                showToast(`新建文件夹失败：${e.message || '请稍后重试'}`, { tone: 'error', duration: 3600, placement: 'top-center' });
+            } finally {
+                setSubscriptionFolderCreateBusy(false);
+            }
+        }
+
+        function selectCurrentSubscriptionFolder() {
+            const current = subscriptionFolderTrail[subscriptionFolderTrail.length - 1] || { id: '0', name: '根目录' };
+            const displayPath = subscriptionFolderTrail.slice(1).map(item => item.name).join('/');
+            setSubscriptionSavepath(current.id || '0', displayPath, { trail: subscriptionFolderTrail });
+            closeSubscriptionFolderModal();
+        }
+
         async function triggerResourceJobRefresh(jobId) {
             const res = await fetch('/resource/jobs/refresh', {
                 method: 'POST',
@@ -4784,6 +6164,37 @@
             if (!res.ok || !data.ok) return alert(`❌ ${data.msg || '触发刷新失败'}`);
             await refreshResourceState();
             alert('✅ 已触发文件夹监控任务');
+        }
+
+        async function triggerResourceJobCancel(jobId) {
+            if (!confirm('确定要取消这个导入任务吗？')) return;
+            const res = await fetch('/resource/jobs/cancel', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ job_id: jobId })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.ok) {
+                showToast(`取消失败：${data.msg || '请稍后重试'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
+                return;
+            }
+            await refreshResourceState();
+            showToast(`任务 #${jobId} 已取消`, { tone: 'success', duration: 2600, placement: 'top-center' });
+        }
+
+        async function triggerResourceJobRetry(jobId) {
+            const res = await fetch('/resource/jobs/retry', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ job_id: jobId })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.ok) {
+                showToast(`重试失败：${data.msg || '请稍后重试'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
+                return;
+            }
+            await refreshResourceState();
+            showToast(`已创建重试任务 #${Number(data.job_id || 0) || '--'}`, { tone: 'success', duration: 2800, placement: 'top-center' });
         }
 
         function showVersionBanner(latest) {
@@ -4894,6 +6305,7 @@
                 else addTreeRow();
 
                 applyMonitorState({ ...monitorState, tasks: cfg.monitor_tasks || [] }, { forceRender: true });
+                applySubscriptionState({ ...subscriptionState, tasks: cfg.subscription_tasks || [] }, { forceRender: true });
                 applyResourceState({
                     ...resourceState,
                     sources: cfg.resource_sources || [],
@@ -4902,6 +6314,7 @@
                 });
                 renderTgProxyTestStatus();
                 resetMonitorForm();
+                resetSubscriptionForm();
                 resetResourceSourceForm();
                 syncResourceSourceSelect();
                 refreshWebhookHint();
@@ -4910,6 +6323,21 @@
         }
 
         document.getElementById('monitor_name').addEventListener('input', refreshWebhookHint);
+        ['subscription_title'].forEach(id => {
+            document.getElementById(id).addEventListener('keydown', async (e) => {
+                if (e.key !== 'Enter' || e.isComposing) return;
+                e.preventDefault();
+                await saveSubscriptionTask();
+            });
+        });
+        document.getElementById('subscription_tmdb_search_keyword').addEventListener('keydown', async (e) => {
+            if (e.key !== 'Enter' || e.isComposing) return;
+            e.preventDefault();
+            await searchSubscriptionTmdbBinding();
+        });
+        document.getElementById('subscription_media_type').addEventListener('change', () => {
+            syncSubscriptionTypeUI();
+        });
         ['resource_source_name', 'resource_source_channel'].forEach(id => {
             document.getElementById(id).addEventListener('keydown', async (e) => {
                 if (e.key !== 'Enter' || e.isComposing) return;
@@ -5013,6 +6441,7 @@
             if (action === 'preview') openResourceDetailModal(resourceId);
             if (action === 'import') openResourceImportModal(resourceId);
             if (action === 'copy') await copyResourceRecord(resourceId);
+            if (action === 'subscribe') openSubscriptionFromResource(resourceId);
         });
         document.getElementById('resource-job-list').addEventListener('click', async (e) => {
             const btn = e.target.closest('[data-resource-job-action]');
@@ -5021,6 +6450,8 @@
             const jobId = parseInt(btn.dataset.resourceJobId || '0', 10);
             if (!jobId) return;
             if (action === 'refresh') await triggerResourceJobRefresh(jobId);
+            if (action === 'cancel') await triggerResourceJobCancel(jobId);
+            if (action === 'retry') await triggerResourceJobRetry(jobId);
         });
         document.getElementById('resource-job-filter-tabs').addEventListener('click', (e) => {
             const btn = e.target.closest('[data-resource-job-filter]');
@@ -5029,6 +6460,18 @@
             if (resourceJobFilter === nextFilter) return;
             resourceJobFilter = nextFilter;
             renderResourceJobs();
+        });
+        document.getElementById('subscription-task-list').addEventListener('click', async (e) => {
+            const btn = e.target.closest('[data-subscription-action]');
+            if (!btn) return;
+            const action = btn.dataset.subscriptionAction || '';
+            const name = decodeURIComponent(btn.dataset.taskName || '');
+            if (!name) return;
+            if (action === 'start') await startSubscriptionTask(name);
+            if (action === 'stop') await stopSubscriptionTask(name);
+            if (action === 'edit') editSubscriptionTask(name);
+            if (action === 'delete') await deleteSubscriptionTask(name);
+            if (action === 'episodes') await openSubscriptionEpisodeModal(name);
         });
         document.getElementById('monitor-task-list').addEventListener('click', async (e) => {
             const btn = e.target.closest('[data-monitor-action]');
@@ -5043,6 +6486,18 @@
         });
         document.getElementById('monitor-modal').addEventListener('click', (e) => {
             if (e.target.id === 'monitor-modal') closeMonitorModal();
+        });
+        document.getElementById('subscription-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'subscription-modal') closeSubscriptionModal();
+        });
+        document.getElementById('subscription-tmdb-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'subscription-tmdb-modal') closeSubscriptionTmdbSearchModal();
+        });
+        document.getElementById('subscription-episode-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'subscription-episode-modal') closeSubscriptionEpisodeModal();
+        });
+        document.getElementById('subscription-folder-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'subscription-folder-modal') closeSubscriptionFolderModal();
         });
         document.getElementById('help-modal').addEventListener('click', (e) => {
             if (e.target.id === 'help-modal') closeHelpModal();
@@ -5067,12 +6522,33 @@
             e.preventDefault();
             createResourceFolderInCurrent();
         });
+        document.getElementById('subscription-folder-create-name').addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            createSubscriptionFolderInCurrent();
+        });
         document.getElementById('resource-folder-list').addEventListener('click', async (e) => {
             const btn = e.target.closest('[data-resource-folder-action]');
             if (!btn) return;
             const action = btn.dataset.resourceFolderAction || '';
             if (action === 'open') {
                 await openResourceFolderChild(btn.dataset.resourceFolderId || '0', btn.dataset.resourceFolderName || '--');
+            }
+        });
+        document.getElementById('subscription-folder-list').addEventListener('click', async (e) => {
+            const btn = e.target.closest('[data-subscription-folder-action]');
+            if (!btn) return;
+            const action = btn.dataset.subscriptionFolderAction || '';
+            if (action === 'open') {
+                await openSubscriptionFolderChild(btn.dataset.subscriptionFolderId || '0', btn.dataset.subscriptionFolderName || '--');
+            }
+        });
+        document.getElementById('subscription_tmdb_result_list').addEventListener('click', async (e) => {
+            const btn = e.target.closest('[data-subscription-tmdb-action]');
+            if (!btn) return;
+            const action = btn.dataset.subscriptionTmdbAction || '';
+            if (action === 'select') {
+                await selectSubscriptionTmdbResult(btn.dataset.subscriptionTmdbIndex || '0');
             }
         });
         document.getElementById('resource-folder-breadcrumbs').addEventListener('click', async (e) => {
@@ -5083,10 +6559,49 @@
                 await openResourceFolderTrail(btn.dataset.resourceFolderIndex || '0');
             }
         });
+        document.getElementById('subscription-folder-breadcrumbs').addEventListener('click', async (e) => {
+            const btn = e.target.closest('[data-subscription-folder-action]');
+            if (!btn) return;
+            const action = btn.dataset.subscriptionFolderAction || '';
+            if (action === 'trail') {
+                await openSubscriptionFolderTrail(btn.dataset.subscriptionFolderIndex || '0');
+            }
+        });
         document.getElementById('resource-job-modal').addEventListener('click', (e) => {
             if (e.target.id === 'resource-job-modal') toggleResourceJobModal(false);
         });
+        document.addEventListener('click', (e) => {
+            if (!resourceJobClearMenuOpen) return;
+            const menu = document.getElementById('resource-job-clear-menu');
+            if (!menu) return;
+            if (menu.contains(e.target)) return;
+            closeResourceJobClearMenu();
+        });
         document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && resourceJobClearMenuOpen) {
+                closeResourceJobClearMenu();
+                return;
+            }
+            const subscriptionEpisodeModal = document.getElementById('subscription-episode-modal');
+            if (e.key === 'Escape' && subscriptionEpisodeModal && !subscriptionEpisodeModal.classList.contains('hidden')) {
+                closeSubscriptionEpisodeModal();
+                return;
+            }
+            const subscriptionTmdbModal = document.getElementById('subscription-tmdb-modal');
+            if (e.key === 'Escape' && subscriptionTmdbModal && !subscriptionTmdbModal.classList.contains('hidden')) {
+                closeSubscriptionTmdbSearchModal();
+                return;
+            }
+            const subscriptionFolderModal = document.getElementById('subscription-folder-modal');
+            if (e.key === 'Escape' && subscriptionFolderModal && !subscriptionFolderModal.classList.contains('hidden')) {
+                closeSubscriptionFolderModal();
+                return;
+            }
+            const subscriptionModal = document.getElementById('subscription-modal');
+            if (e.key === 'Escape' && subscriptionModal && !subscriptionModal.classList.contains('hidden')) {
+                closeSubscriptionModal();
+                return;
+            }
             if (e.key === 'Escape' && resourceSourceManagerOpen) {
                 closeResourceSourceManagerModal();
                 return;
@@ -5169,18 +6684,24 @@
             } catch (e) {}
         }
         applyThemeFromStorage();
+        initMainTabRow();
         init();
         syncResourceBackTopButton();
         syncSettingsSaveDock();
+        syncMainTabRowState();
         refreshMainLogs();
         refreshMonitorState();
+        refreshSubscriptionState();
         refreshResourceState();
         connectStatusStream();
         refreshVersionInfo();
         setInterval(() => refreshVersionInfo(false), VERSION_REFRESH_INTERVAL);
         setInterval(() => {
             const keyword = document.getElementById('resource-search-input')?.value?.trim() || '';
-            if (keyword && !isDirectImportInput(keyword)) return;
+            if (keyword && !isDirectImportInput(keyword)) {
+                refreshResourceJobsOnly();
+                return;
+            }
             refreshResourceState();
         }, RESOURCE_REFRESH_INTERVAL);
     

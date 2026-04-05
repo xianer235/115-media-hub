@@ -34,9 +34,40 @@ STRM_ROOT = "/app/strm"
 LOG_DIR = "/app/logs"
 MAIN_LOG_PATH = os.path.join(LOG_DIR, "task.log")
 MONITOR_LOG_PATH = os.path.join(LOG_DIR, "monitor.log")
+SUBSCRIPTION_LOG_PATH = os.path.join(LOG_DIR, "subscription.log")
 DEFAULT_EXTENSIONS = "mp4,mkv,avi,mov,wmv,flv,webm,vob,mpg,mpeg,ts,m2ts,mts,rmvb,rm,asf,3gp,m4v,f4v,iso"
 LEGACY_DEFAULT_EXTENSIONS = "mp4,mkv,avi,mov,ts,iso,rmvb,wmv,m4v,mpg,flac,mp3,ass,srt"
 MAX_MONITOR_RETRIES = 5
+SUBSCRIPTION_MIN_SCORE = 55
+SUBSCRIPTION_MAX_CRON_MINUTES = 24 * 60
+SUBSCRIPTION_ATTEMPT_INTERVAL_SECONDS = max(
+    0.0,
+    min(5.0, float(os.environ.get("SUBSCRIPTION_ATTEMPT_INTERVAL_SECONDS", 1) or 1)),
+)
+SUBSCRIPTION_IMPORT_TIMEOUT_SECONDS = max(
+    10,
+    min(600, int(os.environ.get("SUBSCRIPTION_IMPORT_TIMEOUT_SECONDS", 90) or 90)),
+)
+SUBSCRIPTION_QUALITY_PRIORITY_DEFAULT = "balanced"
+SUBSCRIPTION_QUALITY_PRIORITY_ORDERS: Dict[str, List[int]] = {
+    "balanced": [1080, 720, 2160, 480, 360],
+    "ultra": [2160, 1080, 720, 480, 360],
+    "fhd": [1080, 2160, 720, 480, 360],
+    "hd": [720, 1080, 2160, 480, 360],
+    "sd": [480, 720, 1080, 2160, 360],
+}
+SUBSCRIPTION_QUALITY_PRIORITY_ALIASES: Dict[str, str] = {
+    "auto": "balanced",
+    "balanced": "balanced",
+    "ultra": "ultra",
+    "4k": "ultra",
+    "fhd": "fhd",
+    "1080p": "fhd",
+    "hd": "hd",
+    "720p": "hd",
+    "sd": "sd",
+    "480p": "sd",
+}
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 TEMPLATE_DIR = os.path.join(BASE_DIR, "templates")
 VERSION_FILE = os.path.join(BASE_DIR, "version.json")
@@ -72,6 +103,15 @@ TG_CHANNEL_THREADS_MAX = 20
 TG_CHANNEL_THREADS_DEFAULT = max(1, min(TG_CHANNEL_THREADS_MAX, int(os.environ.get("TG_CHANNEL_THREADS_DEFAULT", 6) or 6)))
 TG_FETCH_RETRY_ATTEMPTS = max(1, int(os.environ.get("TG_FETCH_RETRY_ATTEMPTS", 3) or 3))
 TG_FETCH_RETRY_DELAY_SECONDS = max(0.2, float(os.environ.get("TG_FETCH_RETRY_DELAY_SECONDS", 0.8) or 0.8))
+RESOURCE_IMPORT_TIMEOUT_SECONDS = max(10, min(900, int(os.environ.get("RESOURCE_IMPORT_TIMEOUT_SECONDS", 90) or 90)))
+RESOURCE_JOB_STALE_RECOVER_SECONDS = max(
+    30,
+    min(7 * 24 * 3600, int(os.environ.get("RESOURCE_JOB_STALE_RECOVER_SECONDS", 300) or 300)),
+)
+TMDB_API_BASE_URL = os.environ.get("TMDB_API_BASE_URL", "https://api.themoviedb.org/3").strip().rstrip("/")
+TMDB_IMAGE_BASE_URL = os.environ.get("TMDB_IMAGE_BASE_URL", "https://image.tmdb.org/t/p").strip().rstrip("/")
+TMDB_REQUEST_TIMEOUT_SECONDS = max(5, int(os.environ.get("TMDB_REQUEST_TIMEOUT_SECONDS", 20) or 20))
+TMDB_SEARCH_LIMIT = max(1, min(20, int(os.environ.get("TMDB_SEARCH_LIMIT", 12) or 12)))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 FAVICON_PATH = os.path.join(STATIC_DIR, "icons", "favicon.svg")
 RESOURCE_MAGNET_REGEX = re.compile(r"magnet:\?xt=urn:btih:[A-Za-z0-9]{32,40}[^\s<>'\"]*", re.IGNORECASE)
@@ -109,6 +149,63 @@ TG_EXTRACT_CODE_REGEX = re.compile(
     r"(?:提取码|提取碼|访问码|訪問碼|密码|密碼|访问密码|訪問密碼|口令|pwd|pass(?:word|code)?|code)\s*(?:[:：=]|是|为|為)?\s*([A-Za-z0-9]{4,8})\b",
     re.IGNORECASE,
 )
+RESOURCE_SEASON_EPISODE_REGEX = re.compile(r"\bS(\d{1,2})\s*[-_. ]?\s*E(\d{1,3})\b", re.IGNORECASE)
+RESOURCE_EPISODE_ONLY_REGEX = re.compile(r"(?:第\s*)(\d{1,3})\s*(?:集|話|话)\b", re.IGNORECASE)
+RESOURCE_EPISODE_CODE_REGEX = re.compile(r"\b(?:EP|E)\s*[-_. ]?\s*(\d{1,3})\b", re.IGNORECASE)
+RESOURCE_EPISODE_RANGE_REGEXES = [
+    re.compile(r"(?:第?\s*)(\d{1,3})\s*[-~～—–－至到]\s*(\d{1,3})\s*(?:集|話|话)\b", re.IGNORECASE),
+    re.compile(r"(?:EP|E)?\s*(\d{1,3})\s*[-~～—–－至到]\s*(?:EP|E)?\s*(\d{1,3})\b", re.IGNORECASE),
+]
+RESOURCE_SEASON_ONLY_REGEX = re.compile(r"(?:第\s*)(\d{1,2})\s*季\b", re.IGNORECASE)
+RESOURCE_SEASON_ONLY_CN_REGEX = re.compile(r"(?:第\s*)([零〇一二三四五六七八九十两兩\d]{1,4})\s*季\b", re.IGNORECASE)
+RESOURCE_TOTAL_EPISODES_REGEXES = [
+    re.compile(r"(?:全|共)\s*(\d{1,3})\s*(?:集|話|话)\b", re.IGNORECASE),
+    re.compile(r"(\d{1,3})\s*(?:集|話|话)\s*(?:全|完结|完結)\b", re.IGNORECASE),
+    re.compile(r"(?:更新至|更至)\s*(\d{1,3})\s*(?:集|話|话)\b", re.IGNORECASE),
+]
+RESOURCE_COLLECTION_HINT_REGEX = re.compile(
+    r"(全集|完结|完結|合集|合輯|全\s*\d{1,3}\s*(?:集|話|话)|\d{1,3}\s*(?:集|話|话)\s*全)",
+    re.IGNORECASE,
+)
+CJK_NUMERAL_DIGITS: Dict[str, int] = {
+    "零": 0,
+    "〇": 0,
+    "一": 1,
+    "二": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+    "两": 2,
+    "兩": 2,
+}
+SUBSCRIPTION_STOP_WORDS = {
+    "movie",
+    "movies",
+    "电视剧",
+    "电影",
+    "tv",
+    "web",
+    "webrip",
+    "webdl",
+    "bluray",
+    "x264",
+    "x265",
+    "h264",
+    "h265",
+    "hdr",
+    "4k",
+    "1080p",
+    "2160p",
+    "720p",
+    "中字",
+    "双语",
+    "国语",
+    "粤语",
+}
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -129,6 +226,11 @@ def default_config() -> Dict[str, Any]:
         "tg_proxy_host": "",
         "tg_proxy_port": "",
         "tg_channel_threads": TG_CHANNEL_THREADS_DEFAULT,
+        "tmdb_enabled": False,
+        "tmdb_api_key": "",
+        "tmdb_language": "zh-CN",
+        "tmdb_region": "CN",
+        "tmdb_cache_ttl_hours": 24,
         "mount_path": "/115",
         "extensions": DEFAULT_EXTENSIONS,
         "trees": [{"url": "", "prefix": "", "exclude": 1}],
@@ -138,6 +240,7 @@ def default_config() -> Dict[str, Any]:
         "cron_hour": "",
         "last_hash": "",
         "monitor_tasks": [],
+        "subscription_tasks": [],
         "resource_sources": [],
     }
 
@@ -162,6 +265,133 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         "min_file_size_mb": max(0, min_file_size_mb),
         "delay_seconds": max(0, delay_seconds),
         "cron_minutes": max(0, cron_minutes),
+    }
+
+
+def normalize_subscription_quality_priority(value: Any) -> str:
+    key = str(value or "").strip().lower()
+    normalized = SUBSCRIPTION_QUALITY_PRIORITY_ALIASES.get(key, key)
+    if normalized not in SUBSCRIPTION_QUALITY_PRIORITY_ORDERS:
+        return SUBSCRIPTION_QUALITY_PRIORITY_DEFAULT
+    return normalized
+
+
+def normalize_tmdb_media_type(value: Any, fallback: str = "") -> str:
+    media_type = str(value or "").strip().lower()
+    if media_type in ("movie", "tv"):
+        return media_type
+    if str(fallback or "").strip().lower() in ("movie", "tv"):
+        return str(fallback).strip().lower()
+    return ""
+
+
+def normalize_tmdb_episode_mode(value: Any) -> str:
+    mode = str(value or "").strip().lower()
+    return "absolute" if mode == "absolute" else "seasonal"
+
+
+def normalize_tmdb_year(value: Any) -> str:
+    year = str(value or "").strip()
+    return year if re.fullmatch(r"(19|20)\d{2}", year) else ""
+
+
+def extract_year_from_date(value: Any) -> str:
+    text = str(value or "").strip()
+    matched = re.match(r"((?:19|20)\d{2})", text)
+    return matched.group(1) if matched else ""
+
+
+def normalize_subscription_task(task: Dict[str, Any]) -> Dict[str, Any]:
+    media_type = str(task.get("media_type", "") or task.get("type", "movie")).strip().lower()
+    if media_type not in ("movie", "tv"):
+        media_type = "movie"
+    title = str(task.get("title", "")).strip()
+    name = title
+    aliases_raw = task.get("aliases", "")
+    if isinstance(aliases_raw, list):
+        aliases_joined = ",".join(str(item or "").strip() for item in aliases_raw)
+    else:
+        aliases_joined = str(aliases_raw or "")
+    aliases = unique_preserve_order(
+        [
+            token.strip()
+            for token in re.split(r"[,\n，|/]+", aliases_joined)
+            if token and token.strip()
+        ]
+    )
+    year = str(task.get("year", "")).strip()
+    if year and not re.fullmatch(r"(19|20)\d{2}", year):
+        year = ""
+    try:
+        season = int(task.get("season", 1) or 1)
+    except (TypeError, ValueError):
+        season = 1
+    try:
+        total_episodes = int(task.get("total_episodes", 0) or 0)
+    except (TypeError, ValueError):
+        total_episodes = 0
+    try:
+        cron_minutes = int(task.get("cron_minutes", 30) or 30)
+    except (TypeError, ValueError):
+        cron_minutes = 30
+    try:
+        min_score = int(task.get("min_score", SUBSCRIPTION_MIN_SCORE) or SUBSCRIPTION_MIN_SCORE)
+    except (TypeError, ValueError):
+        min_score = SUBSCRIPTION_MIN_SCORE
+    quality_priority = normalize_subscription_quality_priority(
+        task.get("quality_priority", SUBSCRIPTION_QUALITY_PRIORITY_DEFAULT)
+    )
+    anime_mode = bool(task.get("anime_mode", False))
+    tmdb_media_type = normalize_tmdb_media_type(task.get("tmdb_media_type", ""), fallback=media_type)
+    try:
+        tmdb_id = max(0, int(task.get("tmdb_id", 0) or 0))
+    except (TypeError, ValueError):
+        tmdb_id = 0
+    tmdb_title = str(task.get("tmdb_title", "") or "").strip()
+    tmdb_original_title = str(task.get("tmdb_original_title", "") or "").strip()
+    tmdb_year = normalize_tmdb_year(task.get("tmdb_year", ""))
+    tmdb_aliases_raw = task.get("tmdb_aliases", [])
+    if isinstance(tmdb_aliases_raw, list):
+        tmdb_aliases = unique_preserve_order([str(item or "").strip() for item in tmdb_aliases_raw if str(item or "").strip()])
+    else:
+        tmdb_aliases = unique_preserve_order(
+            [token.strip() for token in re.split(r"[,\n，|/]+", str(tmdb_aliases_raw or "")) if token and token.strip()]
+        )
+    try:
+        tmdb_total_episodes = max(0, int(task.get("tmdb_total_episodes", 0) or 0))
+    except (TypeError, ValueError):
+        tmdb_total_episodes = 0
+    try:
+        tmdb_total_seasons = max(0, int(task.get("tmdb_total_seasons", 0) or 0))
+    except (TypeError, ValueError):
+        tmdb_total_seasons = 0
+    tmdb_episode_mode = normalize_tmdb_episode_mode(task.get("tmdb_episode_mode", "seasonal"))
+    if media_type != "tv":
+        tmdb_episode_mode = "seasonal"
+    savepath = normalize_relative_path(task.get("savepath", ""))
+    return {
+        "name": name,
+        "media_type": media_type,
+        "title": title,
+        "aliases": aliases,
+        "year": year,
+        "season": max(1, season),
+        "total_episodes": max(0, total_episodes),
+        "savepath": savepath,
+        "enabled": bool(task.get("enabled", True)),
+        "cron_minutes": max(0, min(SUBSCRIPTION_MAX_CRON_MINUTES, cron_minutes)),
+        "min_score": max(30, min(100, min_score)),
+        "quality_priority": quality_priority,
+        "anime_mode": anime_mode,
+        "tmdb_id": tmdb_id,
+        "tmdb_media_type": tmdb_media_type if tmdb_id > 0 else "",
+        "tmdb_title": tmdb_title if tmdb_id > 0 else "",
+        "tmdb_original_title": tmdb_original_title if tmdb_id > 0 else "",
+        "tmdb_year": tmdb_year if tmdb_id > 0 else "",
+        "tmdb_aliases": tmdb_aliases if tmdb_id > 0 else [],
+        "tmdb_total_episodes": tmdb_total_episodes if tmdb_id > 0 else 0,
+        "tmdb_total_seasons": tmdb_total_seasons if tmdb_id > 0 else 0,
+        "tmdb_episode_mode": tmdb_episode_mode if tmdb_id > 0 else "seasonal",
     }
 
 
@@ -200,8 +430,20 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         merged["tg_proxy_port"] = ""
     if "tg_channel_threads" not in merged:
         merged["tg_channel_threads"] = TG_CHANNEL_THREADS_DEFAULT
+    if "tmdb_enabled" not in merged:
+        merged["tmdb_enabled"] = False
+    if "tmdb_api_key" not in merged:
+        merged["tmdb_api_key"] = ""
+    if "tmdb_language" not in merged:
+        merged["tmdb_language"] = "zh-CN"
+    if "tmdb_region" not in merged:
+        merged["tmdb_region"] = "CN"
+    if "tmdb_cache_ttl_hours" not in merged:
+        merged["tmdb_cache_ttl_hours"] = 24
     if "monitor_tasks" not in merged or not isinstance(merged["monitor_tasks"], list):
         merged["monitor_tasks"] = []
+    if "subscription_tasks" not in merged or not isinstance(merged["subscription_tasks"], list):
+        merged["subscription_tasks"] = []
     if "resource_sources" not in merged or not isinstance(merged["resource_sources"], list):
         merged["resource_sources"] = []
 
@@ -231,6 +473,14 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
             normalized_tasks.append(task)
             seen_names.add(task["name"])
     merged["monitor_tasks"] = normalized_tasks
+    normalized_subscription_tasks = []
+    seen_subscription_names = set()
+    for raw_task in merged["subscription_tasks"]:
+        task = normalize_subscription_task(raw_task or {})
+        if task["name"] and task["title"] and task["savepath"] and task["name"] not in seen_subscription_names:
+            normalized_subscription_tasks.append(task)
+            seen_subscription_names.add(task["name"])
+    merged["subscription_tasks"] = normalized_subscription_tasks
     normalized_sources = []
     seen_sources = set()
     for raw_source in merged["resource_sources"]:
@@ -255,6 +505,17 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         merged["tg_proxy_protocol"] = "http"
     merged["tg_proxy_host"] = str(merged.get("tg_proxy_host", "")).strip()
     merged["tg_proxy_port"] = str(merged.get("tg_proxy_port", "")).strip()
+    merged["tmdb_enabled"] = bool(merged.get("tmdb_enabled", False))
+    merged["tmdb_api_key"] = str(merged.get("tmdb_api_key", "")).strip()
+    tmdb_lang = str(merged.get("tmdb_language", "zh-CN") or "zh-CN").strip()
+    merged["tmdb_language"] = tmdb_lang if re.fullmatch(r"[a-z]{2}-[A-Z]{2}", tmdb_lang) else "zh-CN"
+    tmdb_region = str(merged.get("tmdb_region", "CN") or "CN").strip().upper()
+    merged["tmdb_region"] = tmdb_region if re.fullmatch(r"[A-Z]{2}", tmdb_region) else "CN"
+    try:
+        tmdb_cache_ttl_hours = int(merged.get("tmdb_cache_ttl_hours", 24) or 24)
+    except (TypeError, ValueError):
+        tmdb_cache_ttl_hours = 24
+    merged["tmdb_cache_ttl_hours"] = max(1, min(24 * 30, tmdb_cache_ttl_hours))
     try:
         tg_channel_threads = int(merged.get("tg_channel_threads", TG_CHANNEL_THREADS_DEFAULT) or TG_CHANNEL_THREADS_DEFAULT)
     except (TypeError, ValueError):
@@ -411,6 +672,45 @@ def ensure_db() -> None:
         )
         """
     )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS subscription_task_state (
+            task_name TEXT PRIMARY KEY,
+            media_type TEXT NOT NULL DEFAULT 'movie',
+            status TEXT NOT NULL DEFAULT 'idle',
+            progress INTEGER NOT NULL DEFAULT 0,
+            detail TEXT NOT NULL DEFAULT '',
+            last_run_at TEXT NOT NULL DEFAULT '',
+            last_success_at TEXT NOT NULL DEFAULT '',
+            last_error TEXT NOT NULL DEFAULT '',
+            last_episode INTEGER NOT NULL DEFAULT 0,
+            total_episodes INTEGER NOT NULL DEFAULT 0,
+            matched_resource_id INTEGER NOT NULL DEFAULT 0,
+            matched_resource_title TEXT NOT NULL DEFAULT '',
+            matched_score INTEGER NOT NULL DEFAULT 0,
+            queued_job_id INTEGER NOT NULL DEFAULT 0,
+            stats_json TEXT NOT NULL DEFAULT '{}',
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS subscription_matches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_name TEXT NOT NULL,
+            resource_id INTEGER NOT NULL,
+            job_id INTEGER NOT NULL DEFAULT 0,
+            media_type TEXT NOT NULL DEFAULT 'movie',
+            season INTEGER NOT NULL DEFAULT 0,
+            episode INTEGER NOT NULL DEFAULT 0,
+            total_episodes INTEGER NOT NULL DEFAULT 0,
+            score INTEGER NOT NULL DEFAULT 0,
+            matched_at TEXT NOT NULL,
+            UNIQUE(task_name, resource_id)
+        )
+        """
+    )
     cursor.execute("PRAGMA table_info(resource_jobs)")
     job_columns = {str(row[1]) for row in cursor.fetchall()}
     if "extra_json" not in job_columns:
@@ -425,6 +725,8 @@ def ensure_db() -> None:
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_resource_items_status ON resource_items(status)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_resource_jobs_created_at ON resource_jobs(created_at DESC)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_resource_jobs_status ON resource_jobs(status)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_subscription_state_status ON subscription_task_state(status)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_subscription_matches_task ON subscription_matches(task_name, matched_at DESC)")
     cursor.execute(
         """
         SELECT id, last_seen_at, extra_json
@@ -1210,6 +1512,688 @@ def get_resource_item_post_cursor(item: Dict[str, Any]) -> str:
     )
 
 
+def build_subscription_text_tokens(text: str) -> List[str]:
+    normalized = re.sub(r"[^\w\u4e00-\u9fff]+", " ", str(text or "").lower())
+    tokens: List[str] = []
+    for token in re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", normalized):
+        value = token.strip()
+        if not value:
+            continue
+        if value in SUBSCRIPTION_STOP_WORDS:
+            continue
+        if value.isdigit() and len(value) <= 1:
+            continue
+        if len(value) <= 1 and not value.isdigit():
+            continue
+        tokens.append(value)
+    return unique_preserve_order(tokens)
+
+
+def build_subscription_query_tokens(task: Dict[str, Any]) -> List[str]:
+    values = [task.get("title", ""), task.get("tmdb_title", ""), task.get("tmdb_original_title", "")]
+    aliases = task.get("aliases", [])
+    if isinstance(aliases, list):
+        values.extend(aliases)
+    tmdb_aliases = task.get("tmdb_aliases", [])
+    if isinstance(tmdb_aliases, list):
+        values.extend(tmdb_aliases)
+    return unique_preserve_order(
+        [token for value in values for token in build_subscription_text_tokens(str(value or ""))]
+    )
+
+
+def build_subscription_candidate_text(item: Dict[str, Any]) -> str:
+    payload = item if isinstance(item, dict) else {}
+    parts = [
+        payload.get("title", ""),
+        payload.get("raw_text", ""),
+        payload.get("source_name", ""),
+        payload.get("channel_name", ""),
+    ]
+    return re.sub(r"\s+", " ", " ".join(str(part or "").lower() for part in parts)).strip()
+
+
+def compact_subscription_text(text: str) -> str:
+    return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", str(text or "").lower())
+
+
+def strip_subscription_cjk_particles(text: str) -> str:
+    return re.sub(r"[的之与和及·・]", "", str(text or ""))
+
+
+def subscription_token_hit(token: str, text: str, text_compact: str) -> bool:
+    normalized_token = str(token or "").strip().lower()
+    if not normalized_token:
+        return False
+    if normalized_token in text:
+        return True
+
+    token_compact = compact_subscription_text(normalized_token)
+    if not token_compact:
+        return False
+    if token_compact in text_compact:
+        return True
+
+    if re.search(r"[\u4e00-\u9fff]", token_compact):
+        compact_without_particles = strip_subscription_cjk_particles(token_compact)
+        if len(compact_without_particles) >= 2 and compact_without_particles in text_compact:
+            return True
+    return False
+
+
+def detect_subscription_resolution(item: Dict[str, Any]) -> int:
+    payload = item if isinstance(item, dict) else {}
+    quality = str(payload.get("quality", "") or "").lower()
+    text = f"{quality} {payload.get('title', '')} {payload.get('raw_text', '')}".lower()
+    if re.search(r"\b(2160p|4k|uhd)\b", text):
+        return 2160
+    if re.search(r"\b(1080p|fhd)\b", text):
+        return 1080
+    if re.search(r"\b(720p|hd)\b", text):
+        return 720
+    if re.search(r"\b(480p|sd)\b", text):
+        return 480
+    if re.search(r"\b360p\b", text):
+        return 360
+    return 0
+
+
+def score_subscription_title_signal(
+    title: str,
+    text: str,
+    text_compact: str,
+    exact_bonus: int,
+    compact_bonus: int,
+    cjk_bonus: int,
+) -> int:
+    title_norm = str(title or "").strip().lower()
+    if not title_norm:
+        return 0
+    title_compact = compact_subscription_text(title_norm)
+    if title_norm and title_norm in text:
+        return int(exact_bonus)
+    if title_compact and title_compact in text_compact:
+        return int(compact_bonus)
+    if title_compact:
+        compact_without_particles = strip_subscription_cjk_particles(title_compact)
+        if len(compact_without_particles) >= 2 and compact_without_particles in text_compact:
+            return int(cjk_bonus)
+    return 0
+
+
+def score_subscription_quality_preference(task: Dict[str, Any], item: Dict[str, Any]) -> Tuple[int, int, str]:
+    resolution = detect_subscription_resolution(item)
+    quality_priority = normalize_subscription_quality_priority(
+        task.get("quality_priority", SUBSCRIPTION_QUALITY_PRIORITY_DEFAULT)
+    )
+    if resolution <= 0:
+        return 0, 0, quality_priority
+
+    normalized_resolution = 360
+    if resolution >= 2160:
+        normalized_resolution = 2160
+    elif resolution >= 1080:
+        normalized_resolution = 1080
+    elif resolution >= 720:
+        normalized_resolution = 720
+    elif resolution >= 480:
+        normalized_resolution = 480
+
+    order = SUBSCRIPTION_QUALITY_PRIORITY_ORDERS.get(
+        quality_priority, SUBSCRIPTION_QUALITY_PRIORITY_ORDERS[SUBSCRIPTION_QUALITY_PRIORITY_DEFAULT]
+    )
+    if normalized_resolution not in order:
+        return 0, normalized_resolution, quality_priority
+    index = order.index(normalized_resolution)
+    bonus_map = {0: 12, 1: 9, 2: 6, 3: 3, 4: 1}
+    return int(bonus_map.get(index, 0)), normalized_resolution, quality_priority
+
+
+def parse_small_cjk_number(value: Any, default: int = 0, max_value: int = 200) -> int:
+    text = str(value or "").strip()
+    if not text:
+        return default
+    if re.fullmatch(r"\d{1,4}", text):
+        parsed_int = int(text)
+        return parsed_int if 0 < parsed_int <= max_value else default
+    if not re.fullmatch(r"[零〇一二三四五六七八九十两兩]+", text):
+        return default
+
+    parsed = -1
+    if "十" in text:
+        parts = text.split("十")
+        if len(parts) <= 2:
+            head = parts[0]
+            tail = parts[1] if len(parts) == 2 else ""
+            if head:
+                tens = CJK_NUMERAL_DIGITS.get(head, -1)
+                if tens > 0:
+                    ones = 0
+                    if tail:
+                        ones = CJK_NUMERAL_DIGITS.get(tail, -1)
+                    if ones >= 0:
+                        parsed = tens * 10 + ones
+            else:
+                ones = 0
+                if tail:
+                    ones = CJK_NUMERAL_DIGITS.get(tail, -1)
+                if ones >= 0:
+                    parsed = 10 + ones
+    else:
+        parsed = CJK_NUMERAL_DIGITS.get(text, -1)
+
+    return parsed if 0 < parsed <= max_value else default
+
+
+def parse_resource_episode_meta(item: Dict[str, Any]) -> Dict[str, int]:
+    payload = item if isinstance(item, dict) else {}
+    text = f"{payload.get('title', '')} {payload.get('raw_text', '')}"
+    season = 0
+    episode = 0
+    total = 0
+    range_start = 0
+    range_end = 0
+
+    for pattern in RESOURCE_EPISODE_RANGE_REGEXES:
+        range_match = pattern.search(text)
+        if not range_match:
+            continue
+        start_episode = max(0, int(range_match.group(1) or 0))
+        end_episode = max(0, int(range_match.group(2) or 0))
+        if start_episode <= 0 and end_episode <= 0:
+            continue
+        if end_episode < start_episode:
+            start_episode, end_episode = end_episode, start_episode
+        range_start = start_episode
+        range_end = end_episode
+        break
+
+    se_match = RESOURCE_SEASON_EPISODE_REGEX.search(text)
+    if se_match:
+        season = max(0, int(se_match.group(1) or 0))
+        episode = max(0, int(se_match.group(2) or 0))
+    else:
+        season_match = RESOURCE_SEASON_ONLY_REGEX.search(text)
+        if season_match:
+            season = max(0, int(season_match.group(1) or 0))
+        else:
+            season_cn_match = RESOURCE_SEASON_ONLY_CN_REGEX.search(text)
+            if season_cn_match:
+                season = max(0, parse_small_cjk_number(season_cn_match.group(1), default=0, max_value=99))
+        episode_match = RESOURCE_EPISODE_ONLY_REGEX.search(text) or RESOURCE_EPISODE_CODE_REGEX.search(text)
+        if episode_match:
+            episode = max(0, int(episode_match.group(1) or 0))
+
+    if range_end > 0:
+        episode = max(episode, range_end)
+        if total <= 0 and range_start > 0 and range_start <= 1:
+            total = max(total, range_end)
+
+    for pattern in RESOURCE_TOTAL_EPISODES_REGEXES:
+        matched = pattern.search(text)
+        if matched:
+            total = max(0, int(matched.group(1) or 0))
+            break
+
+    has_collection_hint = bool(RESOURCE_COLLECTION_HINT_REGEX.search(text))
+    if total > 0 and has_collection_hint:
+        if range_end <= 0:
+            range_start = 1
+            range_end = total
+        episode = max(episode, total)
+    elif episode <= 0 and total > 0 and ("全集" in text or "完结" in text or "完結" in text):
+        episode = total
+    return {
+        "season": season,
+        "episode": episode,
+        "total": total,
+        "range_start": range_start,
+        "range_end": range_end,
+    }
+
+
+def match_subscription_media_type(task: Dict[str, Any], item: Dict[str, Any]) -> Tuple[bool, str]:
+    media_type = str(task.get("media_type", "movie") or "movie").strip().lower()
+    anime_mode = bool(task.get("anime_mode", False))
+    text = build_subscription_candidate_text(item)
+    meta = parse_resource_episode_meta(item)
+    has_episode_meta = bool(int(meta.get("season", 0) or 0) > 0 or int(meta.get("episode", 0) or 0) > 0 or int(meta.get("total", 0) or 0) > 0)
+    tv_hint = bool(
+        re.search(
+            r"(电视剧|剧集|番剧|动漫|第\s*[一二三四五六七八九十两兩0-9]+\s*(?:季|集|话|話)|season\s*\d+|s\d{1,2}\s*e?\d{0,3}|ep\s*\d{1,3}|更新至\s*\d+\s*(?:集|話|话)|全\s*\d+\s*(?:集|話|话)|完结|完結)",
+            text,
+            re.IGNORECASE,
+        )
+    )
+    movie_hint = bool(re.search(r"(电影|movie|film|剧场版|電影)", text, re.IGNORECASE))
+
+    if media_type == "movie":
+        if has_episode_meta:
+            return False, "episode_like"
+        if tv_hint:
+            return False, "tv_like"
+        return True, "ok"
+
+    # tv 强分区：默认必须具备剧集证据（季/集元信息或电视剧关键词）
+    if has_episode_meta or tv_hint:
+        return True, "ok"
+    if anime_mode and not movie_hint:
+        # 连载动漫资源有时不包含标准季集标记，动漫模式下允许放行到后续评分阶段。
+        return True, "anime_relaxed"
+    if movie_hint:
+        return False, "movie_like"
+    return False, "missing_episode_meta"
+
+
+def detect_resource_year(item: Dict[str, Any]) -> str:
+    payload = item if isinstance(item, dict) else {}
+    known_year = str(payload.get("year", "") or "").strip()
+    if re.fullmatch(r"(19|20)\d{2}", known_year):
+        return known_year
+    combined = f"{payload.get('title', '')} {payload.get('raw_text', '')}"
+    matched = RESOURCE_YEAR_REGEX.search(combined)
+    return matched.group(1) if matched else ""
+
+
+def score_subscription_candidate(
+    task: Dict[str, Any],
+    item: Dict[str, Any],
+    query_tokens: List[str],
+    last_episode: int,
+) -> Dict[str, Any]:
+    text = build_subscription_candidate_text(item)
+    text_compact = compact_subscription_text(text)
+    token_hits = sum(1 for token in query_tokens if subscription_token_hit(token, text, text_compact))
+    # 别名过多时 token 总数会显著变大，限制分母避免有效命中被稀释
+    token_denominator = max(1, min(8, len(query_tokens)))
+    token_score = int((min(token_hits, token_denominator) / token_denominator) * 70)
+    score = token_score
+
+    title_signals: List[Tuple[str, int, int, int]] = [
+        (str(task.get("title", "") or "").strip(), 14, 12, 10),
+        (str(task.get("tmdb_title", "") or "").strip(), 13, 11, 9),
+        (str(task.get("tmdb_original_title", "") or "").strip(), 12, 10, 8),
+    ]
+    aliases = task.get("aliases", [])
+    if isinstance(aliases, list):
+        title_signals.extend([(str(alias or "").strip(), 10, 8, 6) for alias in aliases[:6]])
+    tmdb_aliases = task.get("tmdb_aliases", [])
+    if isinstance(tmdb_aliases, list):
+        title_signals.extend([(str(alias or "").strip(), 10, 8, 6) for alias in tmdb_aliases[:8]])
+
+    seen_title_tokens: Set[str] = set()
+    title_bonus = 0
+    for title_value, exact_bonus, compact_bonus, cjk_bonus in title_signals:
+        normalized_title = str(title_value or "").strip()
+        normalized_key = compact_subscription_text(normalized_title)
+        if not normalized_title or not normalized_key or normalized_key in seen_title_tokens:
+            continue
+        seen_title_tokens.add(normalized_key)
+        signal_bonus = score_subscription_title_signal(
+            normalized_title,
+            text,
+            text_compact,
+            exact_bonus,
+            compact_bonus,
+            cjk_bonus,
+        )
+        title_bonus = max(title_bonus, signal_bonus)
+    score += int(title_bonus)
+
+    quality_bonus, resolution, quality_priority = score_subscription_quality_preference(task, item)
+    score += int(quality_bonus)
+
+    meta = parse_resource_episode_meta(item)
+    media_type = str(task.get("media_type", "movie") or "movie").strip().lower()
+    anime_mode_flag = bool(task.get("anime_mode", False))
+    task_year = normalize_tmdb_year(task.get("year", "")) or normalize_tmdb_year(task.get("tmdb_year", ""))
+    candidate_year = detect_resource_year(item)
+    if task_year:
+        if candidate_year == task_year:
+            score += 12
+        elif candidate_year:
+            # 动漫和长连载经常出现不同年份打包（首播年 / 当前年 / 重制年），年份冲突仅做轻惩罚。
+            if media_type == "tv" and anime_mode_flag:
+                score -= 2
+            elif media_type == "tv":
+                score -= 8
+            else:
+                score -= 16
+
+    if media_type == "movie":
+        if meta["episode"] > 0:
+            score -= 14
+        if "电影" in text or "movie" in text or "film" in text:
+            score += 6
+    else:
+        season = max(1, int(task.get("season", 1) or 1))
+        anime_mode = anime_mode_flag
+        episode_mode = normalize_tmdb_episode_mode(task.get("tmdb_episode_mode", "seasonal"))
+        range_start = max(0, int(meta.get("range_start", 0) or 0))
+        range_end = max(0, int(meta.get("range_end", 0) or 0))
+        has_episode_range = range_end > 0 and range_start > 0
+        if episode_mode == "absolute":
+            if meta["season"] > 0 and meta["season"] == season:
+                score += 6
+            elif meta["season"] <= 0:
+                score += 2 if season == 1 else 1
+        else:
+            if meta["season"] > 0:
+                if meta["season"] == season:
+                    score += 10
+                else:
+                    score -= 6 if anime_mode else 18
+            elif season == 1:
+                score += 2
+            elif anime_mode:
+                score += 1
+
+        if meta["episode"] <= 0:
+            score -= 4 if anime_mode else 8
+        else:
+            if meta["episode"] <= last_episode:
+                if has_episode_range and range_start <= max(1, last_episode):
+                    # 区间包常用于补档，不能因为末集偏旧被提前淘汰。
+                    score -= 1 if anime_mode else 2
+                else:
+                    # 旧集会在执行阶段被显式跳过，这里仅轻惩罚，避免评分阶段直接整体淘汰
+                    score -= 4 if anime_mode else 6
+            else:
+                gap = meta["episode"] - last_episode
+                if gap == 1:
+                    score += 16
+                elif gap <= 4:
+                    score += 11
+                else:
+                    score += 7
+        if has_episode_range:
+            range_size = max(1, range_end - range_start + 1)
+            if range_start <= 1 and range_end >= max(1, last_episode):
+                score += 14 if anime_mode else 8
+            elif range_end > last_episode:
+                score += 10 if anime_mode else 6
+            elif range_start <= max(1, last_episode):
+                score += 5 if anime_mode else 3
+            if range_start <= 1 and range_size >= 24:
+                score += 8 if anime_mode else 5
+            if range_size >= 12:
+                score += 4
+        total_episodes = max(
+            0,
+            int(task.get("total_episodes", 0) or task.get("tmdb_total_episodes", 0) or 0),
+        )
+        if total_episodes > 0 and meta["episode"] > total_episodes:
+            score -= 24
+
+    return {
+        "item": item,
+        "score": int(score),
+        "token_hits": token_hits,
+        "token_total": len(query_tokens),
+        "season": int(meta["season"] or 0),
+        "episode": int(meta["episode"] or 0),
+        "total": int(meta["total"] or 0),
+        "range_start": int(meta.get("range_start", 0) or 0),
+        "range_end": int(meta.get("range_end", 0) or 0),
+        "resolution": int(resolution or 0),
+        "quality_bonus": int(quality_bonus or 0),
+        "quality_priority": quality_priority,
+    }
+
+
+def has_subscription_match(task_name: str, resource_id: int) -> bool:
+    ensure_db()
+    conn = open_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT 1 FROM subscription_matches WHERE task_name = ? AND resource_id = ? LIMIT 1",
+        (str(task_name or "").strip(), int(resource_id or 0)),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return bool(row)
+
+
+def create_subscription_match(
+    task_name: str,
+    resource_id: int,
+    job_id: int,
+    media_type: str,
+    season: int = 0,
+    episode: int = 0,
+    total_episodes: int = 0,
+    score: int = 0,
+) -> None:
+    ensure_db()
+    conn = open_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT OR REPLACE INTO subscription_matches(
+            task_name, resource_id, job_id, media_type, season, episode, total_episodes, score, matched_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(task_name or "").strip(),
+            int(resource_id or 0),
+            int(job_id or 0),
+            str(media_type or "movie").strip().lower() or "movie",
+            max(0, int(season or 0)),
+            max(0, int(episode or 0)),
+            max(0, int(total_episodes or 0)),
+            int(score or 0),
+            now_text(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def prune_subscription_state_for_missing_tasks(task_names: List[str]) -> None:
+    normalized = {str(name or "").strip() for name in task_names if str(name or "").strip()}
+    ensure_db()
+    conn = open_db()
+    cursor = conn.cursor()
+    if not normalized:
+        cursor.execute("DELETE FROM subscription_task_state")
+        cursor.execute("DELETE FROM subscription_matches")
+        conn.commit()
+        conn.close()
+        return
+    placeholders = ",".join("?" for _ in normalized)
+    params = list(normalized)
+    cursor.execute(f"DELETE FROM subscription_task_state WHERE task_name NOT IN ({placeholders})", params)
+    cursor.execute(f"DELETE FROM subscription_matches WHERE task_name NOT IN ({placeholders})", params)
+    conn.commit()
+    conn.close()
+
+
+def load_subscription_task_state(task_name: str, media_type: str = "movie") -> Dict[str, Any]:
+    ensure_db()
+    conn = open_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM subscription_task_state WHERE task_name = ?", (str(task_name or "").strip(),))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return {
+            "task_name": str(task_name or "").strip(),
+            "media_type": str(media_type or "movie").strip().lower() or "movie",
+            "status": "idle",
+            "progress": 0,
+            "detail": "",
+            "last_run_at": "",
+            "last_success_at": "",
+            "last_error": "",
+            "last_episode": 0,
+            "total_episodes": 0,
+            "matched_resource_id": 0,
+            "matched_resource_title": "",
+            "matched_score": 0,
+            "queued_job_id": 0,
+            "stats": {},
+            "updated_at": "",
+        }
+    data = sqlite_row_to_dict(row)
+    data["stats"] = safe_json_loads(data.get("stats_json"), {})
+    return {
+        "task_name": str(data.get("task_name", "") or "").strip(),
+        "media_type": str(data.get("media_type", "movie") or "movie").strip().lower() or "movie",
+        "status": str(data.get("status", "idle") or "idle").strip().lower(),
+        "progress": max(0, min(100, int(data.get("progress", 0) or 0))),
+        "detail": str(data.get("detail", "") or "").strip(),
+        "last_run_at": str(data.get("last_run_at", "") or "").strip(),
+        "last_success_at": str(data.get("last_success_at", "") or "").strip(),
+        "last_error": str(data.get("last_error", "") or "").strip(),
+        "last_episode": max(0, int(data.get("last_episode", 0) or 0)),
+        "total_episodes": max(0, int(data.get("total_episodes", 0) or 0)),
+        "matched_resource_id": max(0, int(data.get("matched_resource_id", 0) or 0)),
+        "matched_resource_title": str(data.get("matched_resource_title", "") or "").strip(),
+        "matched_score": max(0, int(data.get("matched_score", 0) or 0)),
+        "queued_job_id": max(0, int(data.get("queued_job_id", 0) or 0)),
+        "stats": data["stats"] if isinstance(data["stats"], dict) else {},
+        "updated_at": str(data.get("updated_at", "") or "").strip(),
+    }
+
+
+def upsert_subscription_task_state(task_name: str, **fields: Any) -> None:
+    task_key = str(task_name or "").strip()
+    if not task_key:
+        return
+    current = load_subscription_task_state(task_key)
+    ensure_db()
+    conn = open_db()
+    cursor = conn.cursor()
+    payload = {**current}
+    payload.update(fields)
+    stats_value = payload.get("stats", {})
+    if not isinstance(stats_value, dict):
+        stats_value = {}
+    now = now_text()
+    cursor.execute(
+        """
+        INSERT OR REPLACE INTO subscription_task_state(
+            task_name, media_type, status, progress, detail, last_run_at, last_success_at, last_error,
+            last_episode, total_episodes, matched_resource_id, matched_resource_title, matched_score,
+            queued_job_id, stats_json, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            task_key,
+            str(payload.get("media_type", "movie") or "movie").strip().lower() or "movie",
+            str(payload.get("status", "idle") or "idle").strip().lower(),
+            max(0, min(100, int(payload.get("progress", 0) or 0))),
+            str(payload.get("detail", "") or "").strip(),
+            str(payload.get("last_run_at", "") or "").strip(),
+            str(payload.get("last_success_at", "") or "").strip(),
+            str(payload.get("last_error", "") or "").strip(),
+            max(0, int(payload.get("last_episode", 0) or 0)),
+            max(0, int(payload.get("total_episodes", 0) or 0)),
+            max(0, int(payload.get("matched_resource_id", 0) or 0)),
+            str(payload.get("matched_resource_title", "") or "").strip(),
+            max(0, int(payload.get("matched_score", 0) or 0)),
+            max(0, int(payload.get("queued_job_id", 0) or 0)),
+            safe_json_dumps(stats_value),
+            now,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def list_subscription_task_runtime(cfg: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    cfg = cfg or get_config()
+    tasks = cfg.get("subscription_tasks", []) if isinstance(cfg.get("subscription_tasks"), list) else []
+    result: List[Dict[str, Any]] = []
+    for raw_task in tasks:
+        task = normalize_subscription_task(raw_task or {})
+        if not task.get("name"):
+            continue
+        state = load_subscription_task_state(task["name"], task.get("media_type", "movie"))
+        merged = {
+            **task,
+            "status": state.get("status", "idle"),
+            "progress": state.get("progress", 0),
+            "detail": state.get("detail", ""),
+            "last_run_at": state.get("last_run_at", ""),
+            "last_success_at": state.get("last_success_at", ""),
+            "last_error": state.get("last_error", ""),
+            "last_episode": state.get("last_episode", 0),
+            "matched_resource_id": state.get("matched_resource_id", 0),
+            "matched_resource_title": state.get("matched_resource_title", ""),
+            "matched_score": state.get("matched_score", 0),
+            "queued_job_id": state.get("queued_job_id", 0),
+            "stats": state.get("stats", {}),
+            "next_run": subscription_next_run.get(task["name"], ""),
+        }
+        if merged["total_episodes"] <= 0:
+            merged["total_episodes"] = state.get("total_episodes", 0)
+        result.append(merged)
+    return result
+
+
+def find_subscription_task_match_candidate(task: Dict[str, Any], last_episode: int = 0, limit: int = 400) -> Dict[str, Any]:
+    query_tokens = build_subscription_query_tokens(task)
+    if not query_tokens:
+        return {}
+    ensure_db()
+    conn = open_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT * FROM resource_items
+        WHERE link_url <> ''
+        ORDER BY CASE WHEN published_at <> '' THEN published_at ELSE created_at END DESC, id DESC
+        LIMIT ?
+        """,
+        (max(80, min(1200, int(limit or 400))),),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+
+    min_score = max(30, min(100, int(task.get("min_score", SUBSCRIPTION_MIN_SCORE) or SUBSCRIPTION_MIN_SCORE)))
+    candidates: List[Dict[str, Any]] = []
+    for row in rows:
+        item = serialize_resource_item_row(row)
+        item_id = int(item.get("id", 0) or 0)
+        if item_id <= 0:
+            continue
+        media_match, _ = match_subscription_media_type(task, item)
+        if not media_match:
+            continue
+        if has_subscription_match(task.get("name", ""), item_id):
+            continue
+        scored = score_subscription_candidate(task, item, query_tokens, last_episode)
+        if scored["score"] < min_score:
+            continue
+        candidates.append(scored)
+
+    if not candidates:
+        return {}
+
+    media_type = str(task.get("media_type", "movie") or "movie").strip().lower()
+    if media_type == "tv":
+        candidates.sort(
+            key=lambda candidate: (
+                int(candidate.get("episode", 0) or 0),
+                int(candidate.get("score", 0) or 0),
+                get_resource_item_sort_key(candidate.get("item", {})),
+            ),
+            reverse=True,
+        )
+    else:
+        candidates.sort(
+            key=lambda candidate: (
+                int(candidate.get("score", 0) or 0),
+                get_resource_item_sort_key(candidate.get("item", {})),
+            ),
+            reverse=True,
+        )
+    return candidates[0]
+
+
 def list_resource_jobs(limit: int = 80) -> List[Dict[str, Any]]:
     ensure_db()
     conn = open_db()
@@ -1275,14 +2259,40 @@ def find_existing_resource_job(resource: Dict[str, Any], savepath: str) -> Dict[
     return {}
 
 
-def clear_completed_resource_jobs() -> Dict[str, int]:
+def normalize_resource_job_clear_scope(scope: Any) -> str:
+    normalized = str(scope or "").strip().lower()
+    if normalized in ("completed", "done", "success"):
+        return "completed"
+    if normalized in ("failed", "fail", "error"):
+        return "failed"
+    if normalized in ("terminal", "finished", "completed_failed", "completed+failed", "all_done"):
+        return "terminal"
+    return "completed"
+
+
+def clear_resource_jobs(scope: str = "completed") -> Dict[str, int]:
+    normalized_scope = normalize_resource_job_clear_scope(scope)
+    if normalized_scope == "failed":
+        target_statuses = ["failed"]
+    elif normalized_scope == "terminal":
+        target_statuses = ["completed", "failed"]
+    else:
+        target_statuses = ["completed"]
+
     ensure_db()
     conn = open_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT DISTINCT resource_id FROM resource_jobs WHERE status = 'completed'")
+    placeholders = ",".join(["?"] * len(target_statuses))
+    cursor.execute(
+        f"SELECT DISTINCT resource_id FROM resource_jobs WHERE status IN ({placeholders})",
+        tuple(target_statuses),
+    )
     affected_resource_ids = [int(row[0]) for row in cursor.fetchall() if row and row[0]]
 
-    cursor.execute("DELETE FROM resource_jobs WHERE status = 'completed'")
+    cursor.execute(
+        f"DELETE FROM resource_jobs WHERE status IN ({placeholders})",
+        tuple(target_statuses),
+    )
     deleted_count = int(cursor.rowcount or 0)
 
     reset_item_count = 0
@@ -1308,7 +2318,96 @@ def clear_completed_resource_jobs() -> Dict[str, int]:
 
     conn.commit()
     conn.close()
-    return {"deleted": deleted_count, "reset_items": reset_item_count}
+    return {
+        "scope": normalized_scope,
+        "deleted": deleted_count,
+        "reset_items": reset_item_count,
+    }
+
+
+def clear_completed_resource_jobs() -> Dict[str, int]:
+    # Backward compatibility for existing callers.
+    return clear_resource_jobs("completed")
+
+
+def recover_stale_resource_jobs(max_age_seconds: int = RESOURCE_JOB_STALE_RECOVER_SECONDS) -> Dict[str, int]:
+    ensure_db()
+    conn = open_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT id, resource_id, started_at, updated_at, created_at, status_detail
+        FROM resource_jobs
+        WHERE status = 'running'
+        ORDER BY id DESC
+        LIMIT 200
+        """
+    )
+    rows = cursor.fetchall()
+    if not rows:
+        conn.close()
+        return {"recovered": 0, "checked": 0}
+
+    now_ts = time.time()
+    limit_seconds = max(30, int(max_age_seconds or RESOURCE_JOB_STALE_RECOVER_SECONDS))
+    recovered = 0
+    checked = 0
+    now_iso = now_text()
+    recovered_resource_ids: Set[int] = set()
+
+    for row in rows:
+        data = sqlite_row_to_dict(row)
+        job_id = max(0, int(data.get("id", 0) or 0))
+        if job_id <= 0:
+            continue
+        if job_id in resource_job_running:
+            continue
+        checked += 1
+        started_at = str(data.get("started_at", "") or "").strip()
+        updated_at = str(data.get("updated_at", "") or "").strip()
+        created_at = str(data.get("created_at", "") or "").strip()
+        anchor_ts = (
+            parse_resource_datetime_to_timestamp(started_at)
+            or parse_resource_datetime_to_timestamp(updated_at)
+            or parse_resource_datetime_to_timestamp(created_at)
+        )
+        age_seconds = (now_ts - anchor_ts) if anchor_ts > 0 else (limit_seconds + 1)
+        if age_seconds < limit_seconds:
+            continue
+        detail = str(data.get("status_detail", "") or "").strip()
+        stale_detail = f"运行超时已自动回收（>{limit_seconds} 秒）"
+        if detail:
+            stale_detail = f"{stale_detail}；原状态：{detail[:80]}"
+        cursor.execute(
+            """
+            UPDATE resource_jobs
+            SET status = 'failed', status_detail = ?, finished_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (stale_detail, now_iso, now_iso, job_id),
+        )
+        if int(cursor.rowcount or 0) > 0:
+            recovered += 1
+            recovered_resource_ids.add(max(0, int(data.get("resource_id", 0) or 0)))
+            resource_refresh_pending.discard(job_id)
+            resource_job_cancel_requested.discard(job_id)
+
+    for resource_id in recovered_resource_ids:
+        if resource_id <= 0:
+            continue
+        cursor.execute("SELECT COUNT(1) FROM resource_jobs WHERE resource_id = ? AND status = 'running'", (resource_id,))
+        still_running_row = cursor.fetchone()
+        still_running = int(still_running_row[0] if still_running_row else 0)
+        if still_running > 0:
+            continue
+        cursor.execute(
+            "UPDATE resource_items SET status = 'failed', last_seen_at = ? WHERE id = ?",
+            (now_iso, resource_id),
+        )
+
+    conn.commit()
+    conn.close()
+    return {"recovered": recovered, "checked": checked}
 
 
 def prune_resource_channel_cache(conn: sqlite3.Connection, channel_id: str, keep: int = RESOURCE_CHANNEL_CACHE_LIMIT) -> int:
@@ -2003,6 +3102,57 @@ def clear_log_file(path: str, first_line: str) -> None:
         f.write(first_line + "\n")
 
 
+def read_log_tail(path: str, limit: int = 200) -> List[str]:
+    normalized_limit = max(1, int(limit or 200))
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = [line.rstrip("\n") for line in f.readlines()]
+    except Exception:
+        return []
+    compact = [line for line in lines if str(line or "").strip()]
+    if not compact:
+        return []
+    return compact[-normalized_limit:]
+
+
+def infer_log_level_from_text(text: str) -> str:
+    normalized = str(text or "")
+    if "━━━━━━━━━━" in normalized:
+        return "task-divider"
+    if "··" in normalized and normalized.count("··") >= 2:
+        return "section-divider"
+    lowered = normalized.lower()
+    if "error" in lowered or "fail" in lowered or "失败" in normalized or "❌" in normalized:
+        return "error"
+    if "warn" in lowered or "警告" in normalized or "⚠" in normalized:
+        return "warn"
+    if "success" in lowered or "完成" in normalized or "成功" in normalized or "✅" in normalized:
+        return "success"
+    return "info"
+
+
+def restore_runtime_logs_from_files() -> None:
+    main_lines = read_log_tail(MAIN_LOG_PATH, limit=500)
+    if main_lines:
+        task_status["logs"] = main_lines
+
+    monitor_lines = read_log_tail(MONITOR_LOG_PATH, limit=800)
+    if monitor_lines:
+        monitor_status["logs"] = [
+            {"text": line, "level": infer_log_level_from_text(line)}
+            for line in monitor_lines
+        ]
+
+    subscription_lines = read_log_tail(SUBSCRIPTION_LOG_PATH, limit=800)
+    if subscription_lines:
+        subscription_status["logs"] = [
+            {"text": line, "level": infer_log_level_from_text(line)}
+            for line in subscription_lines
+        ]
+
+
 def validate_tree_runtime_config(cfg: Dict[str, Any], use_local: bool) -> Optional[str]:
     if use_local:
         return None
@@ -2030,6 +3180,30 @@ def validate_monitor_runtime_config(cfg: Dict[str, Any], task: Dict[str, Any]) -
     return None
 
 
+def validate_subscription_runtime_config(cfg: Dict[str, Any], task: Dict[str, Any]) -> Optional[str]:
+    if not str(cfg.get("cookie_115", "")).strip():
+        return "请先在参数配置中填写 115 Cookie"
+    if not str(task.get("name", "")).strip():
+        return "任务名未填写"
+    if not str(task.get("title", "")).strip():
+        return "订阅影视名称未填写"
+    if not str(task.get("savepath", "")).strip():
+        return "保存路径未填写"
+    media_type = str(task.get("media_type", "movie") or "movie").strip().lower()
+    if media_type not in ("movie", "tv"):
+        return "订阅类型不支持"
+    return None
+
+
+def validate_tmdb_runtime_config(cfg: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    cfg = cfg or get_config()
+    if not bool(cfg.get("tmdb_enabled", False)):
+        return "TMDB 增强未启用，请先在参数配置中开启"
+    if not str(cfg.get("tmdb_api_key", "")).strip():
+        return "TMDB API Key 未填写"
+    return None
+
+
 task_status = {
     "running": False,
     "next_run": None,
@@ -2048,12 +3222,25 @@ monitor_control = {"cancel": False}
 monitor_queue: List[Dict[str, Any]] = []
 monitor_last_run: Dict[str, float] = {}
 monitor_next_run: Dict[str, str] = {}
+subscription_status = {
+    "running": False,
+    "current_task": "",
+    "queued": [],
+    "logs": [{"text": "系统已就绪", "level": "info"}],
+    "summary": {"step": "空闲", "detail": "等待订阅任务"},
+}
+subscription_control = {"cancel": False}
+subscription_queue: List[Dict[str, Any]] = []
+subscription_last_run: Dict[str, float] = {}
+subscription_next_run: Dict[str, str] = {}
 version_cache: Dict[str, Any] = {"latest": None, "checked_at": 0.0, "error": ""}
+tmdb_cache_entries: Dict[str, Dict[str, Any]] = {}
 ui_event_subscribers: Set[asyncio.Queue[str]] = set()
 ui_push_pending = False
 ui_push_task: Optional[asyncio.Task] = None
 resource_job_running: Set[int] = set()
 resource_refresh_pending: Set[int] = set()
+resource_job_cancel_requested: Set[int] = set()
 resource_channel_last_sync: Dict[str, float] = {}
 resource_channel_last_error: Dict[str, str] = {}
 resource_channel_syncing: Set[str] = set()
@@ -2087,15 +3274,30 @@ def build_monitor_status_payload(cfg: Optional[Dict[str, Any]] = None) -> Dict[s
     }
 
 
+def build_subscription_status_payload(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    cfg = cfg or get_config()
+    return {
+        "running": bool(subscription_status["running"]),
+        "current_task": str(subscription_status.get("current_task", "")),
+        "queued": clone_jsonable(subscription_status.get("queued", [])),
+        "logs": clone_jsonable(subscription_status.get("logs", [])),
+        "summary": clone_jsonable(subscription_status.get("summary", {})),
+        "tasks": clone_jsonable(list_subscription_task_runtime(cfg)),
+        "next_runs": clone_jsonable(subscription_next_run),
+    }
+
+
 def build_ui_state_payload(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     return {
         "main": build_main_status_payload(),
         "monitor": build_monitor_status_payload(cfg),
+        "subscription": build_subscription_status_payload(cfg),
     }
 
 
 async def build_resource_state_payload(search: str = "") -> Dict[str, Any]:
     cfg = get_config()
+    recover_stale_resource_jobs()
     keyword = str(search or "").strip()
     search_meta = await search_resource_sources(keyword) if keyword else {
         "items": [],
@@ -2111,6 +3313,7 @@ async def build_resource_state_payload(search: str = "") -> Dict[str, Any]:
     total_item_count = count_resource_items(source_type="tg")
     filtered_item_count = len(items)
     completed_job_count = count_resource_jobs(status="completed")
+    failed_job_count = count_resource_jobs(status="failed")
     sources = cfg.get("resource_sources", [])
     channel_sections = build_resource_channel_sections(sources, per_channel=10)
     channel_profiles = {
@@ -2143,6 +3346,7 @@ async def build_resource_state_payload(search: str = "") -> Dict[str, Any]:
             "item_count": total_item_count,
             "filtered_item_count": filtered_item_count,
             "completed_job_count": completed_job_count,
+            "failed_job_count": failed_job_count,
         },
     }
 
@@ -2396,8 +3600,23 @@ async def write_monitor_log(text: str, level: str = "info") -> None:
     await asyncio.sleep(0)
 
 
+async def write_subscription_log(text: str, level: str = "info") -> None:
+    line = f"{format_log_time(True)} {text}"
+    subscription_status["logs"].append({"text": line, "level": level})
+    if len(subscription_status["logs"]) > 800:
+        subscription_status["logs"].pop(0)
+    schedule_ui_state_push()
+    await asyncio.to_thread(append_log_file, SUBSCRIPTION_LOG_PATH, line)
+    await asyncio.sleep(0)
+
+
 def update_monitor_summary(step: str, detail: str) -> None:
     monitor_status["summary"] = {"step": step, "detail": detail}
+    schedule_ui_state_push()
+
+
+def update_subscription_summary(step: str, detail: str) -> None:
+    subscription_status["summary"] = {"step": step, "detail": detail}
     schedule_ui_state_push()
 
 
@@ -2406,6 +3625,15 @@ def format_monitor_trigger(trigger: str) -> str:
         "manual": "手动触发",
         "webhook": "Webhook 触发",
         "resource": "资源中心触发",
+        "cron": "定时触发",
+        "queued": "队列触发",
+    }
+    return labels.get(trigger, trigger or "未知触发")
+
+
+def format_subscription_trigger(trigger: str) -> str:
+    labels = {
+        "manual": "手动触发",
         "cron": "定时触发",
         "queued": "队列触发",
     }
@@ -2472,6 +3700,11 @@ def check_monitor_cancelled() -> None:
         raise asyncio.CancelledError()
 
 
+def check_subscription_cancelled() -> None:
+    if subscription_control["cancel"]:
+        raise asyncio.CancelledError()
+
+
 async def sleep_interruptible(seconds: float) -> None:
     end_at = time.time() + max(0, seconds)
     while time.time() < end_at:
@@ -2513,6 +3746,340 @@ def http_request_json(
         charset = resp.headers.get_content_charset() or "utf-8"
         body = resp.read().decode(charset, errors="ignore")
     return json.loads(body or "{}")
+
+
+def get_tmdb_runtime_config(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    cfg = cfg or get_config()
+    enabled = bool(cfg.get("tmdb_enabled", False))
+    api_key = str(cfg.get("tmdb_api_key", "")).strip()
+    language = str(cfg.get("tmdb_language", "zh-CN") or "zh-CN").strip()
+    if not re.fullmatch(r"[a-z]{2}-[A-Z]{2}", language):
+        language = "zh-CN"
+    region = str(cfg.get("tmdb_region", "CN") or "CN").strip().upper()
+    if not re.fullmatch(r"[A-Z]{2}", region):
+        region = "CN"
+    try:
+        cache_ttl_hours = int(cfg.get("tmdb_cache_ttl_hours", 24) or 24)
+    except (TypeError, ValueError):
+        cache_ttl_hours = 24
+    cache_ttl_hours = max(1, min(24 * 30, cache_ttl_hours))
+    return {
+        "enabled": enabled,
+        "api_key": api_key,
+        "language": language,
+        "region": region,
+        "cache_ttl_hours": cache_ttl_hours,
+        "cache_ttl_seconds": cache_ttl_hours * 3600,
+    }
+
+
+def build_tmdb_cache_key(path: str, params: Dict[str, Any]) -> str:
+    normalized_params = {
+        str(key): str(value)
+        for key, value in sorted((params or {}).items(), key=lambda kv: str(kv[0]))
+        if str(key).strip()
+    }
+    return safe_json_dumps(
+        {
+            "path": str(path or "").strip(),
+            "params": normalized_params,
+        }
+    )
+
+
+def prune_tmdb_cache(max_entries: int = 900) -> None:
+    if len(tmdb_cache_entries) <= max_entries:
+        return
+    keys = sorted(
+        tmdb_cache_entries.keys(),
+        key=lambda cache_key: float((tmdb_cache_entries.get(cache_key) or {}).get("saved_at", 0) or 0),
+    )
+    overflow = max(0, len(keys) - max_entries)
+    for key in keys[:overflow]:
+        tmdb_cache_entries.pop(key, None)
+
+
+def parse_tmdb_http_error(exc: Exception) -> str:
+    status_code = 0
+    if isinstance(exc, urllib.error.HTTPError):
+        status_code = int(exc.code or 0)
+    base = f"TMDB 请求失败（HTTP {status_code}）" if status_code > 0 else "TMDB 请求失败"
+    try:
+        body = exc.read().decode("utf-8", errors="ignore") if isinstance(exc, urllib.error.HTTPError) else ""
+    except Exception:
+        body = ""
+    payload = safe_json_loads(body, {})
+    if isinstance(payload, dict):
+        message = str(payload.get("status_message", "") or payload.get("message", "") or "").strip()
+        if message:
+            base = f"{base}：{message}"
+    if status_code == 401:
+        return "TMDB API Key 无效或未授权"
+    if status_code == 404:
+        return "TMDB 资源不存在"
+    if status_code == 429:
+        return "TMDB 请求过于频繁，请稍后重试"
+    return base
+
+
+def tmdb_request_json(
+    path: str,
+    params: Optional[Dict[str, Any]] = None,
+    cfg: Optional[Dict[str, Any]] = None,
+    force_refresh: bool = False,
+) -> Dict[str, Any]:
+    runtime = get_tmdb_runtime_config(cfg)
+    if not runtime["enabled"]:
+        raise RuntimeError("TMDB 增强未启用，请先在参数配置中开启")
+    if not runtime["api_key"]:
+        raise RuntimeError("TMDB API Key 未填写")
+
+    normalized_path = "/" + str(path or "").strip().lstrip("/")
+    raw_params = dict(params or {})
+    request_params: Dict[str, Any] = {}
+    for key, value in raw_params.items():
+        token_key = str(key or "").strip()
+        if not token_key:
+            continue
+        token_value = str(value or "").strip()
+        if token_value == "":
+            continue
+        request_params[token_key] = token_value
+    request_params.setdefault("language", runtime["language"])
+    if runtime["region"] and "region" not in request_params:
+        request_params["region"] = runtime["region"]
+
+    cache_key = build_tmdb_cache_key(normalized_path, request_params)
+    now = time.time()
+    cache_entry = tmdb_cache_entries.get(cache_key)
+    ttl_seconds = max(3600, int(runtime.get("cache_ttl_seconds", 24 * 3600) or 24 * 3600))
+    if cache_entry and not force_refresh:
+        cached_at = float(cache_entry.get("saved_at", 0) or 0)
+        if now - cached_at <= ttl_seconds:
+            cached_data = cache_entry.get("data")
+            if isinstance(cached_data, dict):
+                return clone_jsonable(cached_data)
+        else:
+            tmdb_cache_entries.pop(cache_key, None)
+
+    query_params = {**request_params, "api_key": runtime["api_key"]}
+    query = urllib.parse.urlencode(query_params, doseq=True)
+    request_url = f"{TMDB_API_BASE_URL}{normalized_path}"
+    if query:
+        request_url = f"{request_url}?{query}"
+    try:
+        payload = http_request_json(
+            request_url,
+            timeout=TMDB_REQUEST_TIMEOUT_SECONDS,
+            extra_headers={"Accept": "application/json"},
+        )
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(parse_tmdb_http_error(exc)) from exc
+    except urllib.error.URLError as exc:
+        reason = str(getattr(exc, "reason", "") or "").strip()
+        raise RuntimeError(f"TMDB 网络异常：{reason or '无法连接 TMDB'}") from exc
+    except Exception as exc:
+        raise RuntimeError(f"TMDB 请求失败：{exc}") from exc
+
+    if not isinstance(payload, dict):
+        raise RuntimeError("TMDB 返回格式异常")
+    if payload.get("success") is False:
+        message = str(payload.get("status_message", "") or payload.get("message", "") or "").strip()
+        raise RuntimeError(f"TMDB 返回错误：{message or '未知错误'}")
+
+    tmdb_cache_entries[cache_key] = {"saved_at": now, "data": clone_jsonable(payload)}
+    prune_tmdb_cache()
+    return payload
+
+
+def build_tmdb_image_url(path: Any, size: str = "w342") -> str:
+    raw_path = str(path or "").strip()
+    if not raw_path:
+        return ""
+    normalized_path = raw_path if raw_path.startswith("/") else f"/{raw_path}"
+    normalized_size = str(size or "w342").strip() or "w342"
+    if not re.fullmatch(r"(?:w\d+|original)", normalized_size):
+        normalized_size = "w342"
+    return f"{TMDB_IMAGE_BASE_URL}/{normalized_size}{normalized_path}"
+
+
+def normalize_tmdb_result_item(item: Dict[str, Any], media_type_hint: str = "") -> Dict[str, Any]:
+    payload = item if isinstance(item, dict) else {}
+    media_type = normalize_tmdb_media_type(payload.get("media_type", ""), fallback=media_type_hint)
+    if not media_type:
+        if payload.get("title") is not None or payload.get("release_date") is not None:
+            media_type = "movie"
+        elif payload.get("name") is not None or payload.get("first_air_date") is not None:
+            media_type = "tv"
+        else:
+            media_type = normalize_tmdb_media_type(media_type_hint, fallback="movie")
+
+    tmdb_id = max(0, parse_int(payload.get("id", 0), 0))
+    if tmdb_id <= 0:
+        return {}
+    if media_type == "movie":
+        title = str(payload.get("title", "") or "").strip()
+        original_title = str(payload.get("original_title", "") or "").strip()
+        date_field = str(payload.get("release_date", "") or "").strip()
+    else:
+        title = str(payload.get("name", "") or "").strip()
+        original_title = str(payload.get("original_name", "") or "").strip()
+        date_field = str(payload.get("first_air_date", "") or "").strip()
+    if not title:
+        return {}
+
+    year = extract_year_from_date(date_field)
+    try:
+        vote_average = float(payload.get("vote_average", 0) or 0)
+    except (TypeError, ValueError):
+        vote_average = 0.0
+    try:
+        popularity = float(payload.get("popularity", 0) or 0)
+    except (TypeError, ValueError):
+        popularity = 0.0
+
+    return {
+        "id": tmdb_id,
+        "media_type": media_type,
+        "title": title,
+        "original_title": original_title,
+        "year": year,
+        "overview": str(payload.get("overview", "") or "").strip(),
+        "poster_url": build_tmdb_image_url(payload.get("poster_path", ""), "w342"),
+        "backdrop_url": build_tmdb_image_url(payload.get("backdrop_path", ""), "w780"),
+        "vote_average": round(vote_average, 1),
+        "popularity": popularity,
+    }
+
+
+def search_tmdb_media(
+    query: str,
+    media_type: str = "",
+    year: str = "",
+    cfg: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    keyword = re.sub(r"\s+", " ", str(query or "").strip())
+    if not keyword:
+        return []
+
+    normalized_year = normalize_tmdb_year(year)
+    normalized_media_type = normalize_tmdb_media_type(media_type, fallback="")
+    endpoint = f"/search/{normalized_media_type}" if normalized_media_type else "/search/multi"
+    params: Dict[str, Any] = {"query": keyword, "include_adult": "false", "page": "1"}
+    if normalized_year:
+        if normalized_media_type == "movie":
+            params["year"] = normalized_year
+        elif normalized_media_type == "tv":
+            params["first_air_date_year"] = normalized_year
+    payload = tmdb_request_json(endpoint, params=params, cfg=cfg)
+    raw_results = payload.get("results", []) if isinstance(payload.get("results"), list) else []
+
+    items: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for raw_item in raw_results:
+        item = normalize_tmdb_result_item(raw_item if isinstance(raw_item, dict) else {}, normalized_media_type)
+        if not item:
+            continue
+        media = normalize_tmdb_media_type(item.get("media_type", ""), fallback="")
+        if media not in ("movie", "tv"):
+            continue
+        if normalized_media_type and media != normalized_media_type:
+            continue
+        key = f"{media}:{int(item.get('id', 0) or 0)}"
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append(item)
+
+    def sort_key(item: Dict[str, Any]) -> Tuple[int, float, float, int]:
+        year_matched = 1 if (normalized_year and str(item.get("year", "")) == normalized_year) else 0
+        return (
+            year_matched,
+            float(item.get("popularity", 0) or 0),
+            float(item.get("vote_average", 0) or 0),
+            int(item.get("id", 0) or 0),
+        )
+
+    items.sort(key=sort_key, reverse=True)
+    return items[: TMDB_SEARCH_LIMIT]
+
+
+def build_tmdb_aliases(detail: Dict[str, Any], media_type: str) -> List[str]:
+    aliases: List[str] = []
+    alternative_titles = detail.get("alternative_titles", {}) if isinstance(detail.get("alternative_titles"), dict) else {}
+    if media_type == "movie":
+        records = alternative_titles.get("titles", []) if isinstance(alternative_titles.get("titles"), list) else []
+        for item in records:
+            title = str((item or {}).get("title", "")).strip() if isinstance(item, dict) else ""
+            if title:
+                aliases.append(title)
+    else:
+        records = alternative_titles.get("results", []) if isinstance(alternative_titles.get("results"), list) else []
+        for item in records:
+            title = str((item or {}).get("title", "")).strip() if isinstance(item, dict) else ""
+            if title:
+                aliases.append(title)
+
+    translations_root = detail.get("translations", {}) if isinstance(detail.get("translations"), dict) else {}
+    translations = translations_root.get("translations", []) if isinstance(translations_root.get("translations"), list) else []
+    translation_fields = ("title", "name", "original_title", "original_name")
+    for item in translations:
+        if not isinstance(item, dict):
+            continue
+        data = item.get("data", {}) if isinstance(item.get("data"), dict) else {}
+        for field in translation_fields:
+            title = str(data.get(field, "") or "").strip()
+            if title:
+                aliases.append(title)
+    return unique_preserve_order(aliases)[:24]
+
+
+def infer_tmdb_episode_mode(detail: Dict[str, Any]) -> str:
+    genres = detail.get("genres", []) if isinstance(detail.get("genres"), list) else []
+    genre_names = " ".join(str((genre or {}).get("name", "") or "") for genre in genres if isinstance(genre, dict))
+    has_animation_genre = any(int((genre or {}).get("id", 0) or 0) == 16 for genre in genres if isinstance(genre, dict))
+    has_animation_keyword = bool(re.search(r"(动画|動畫|anime|animation)", genre_names, re.IGNORECASE))
+    number_of_seasons = max(0, parse_int(detail.get("number_of_seasons", 0), 0))
+    number_of_episodes = max(0, parse_int(detail.get("number_of_episodes", 0), 0))
+    if (has_animation_genre or has_animation_keyword) and number_of_seasons >= 2 and number_of_episodes >= 20:
+        return "absolute"
+    return "seasonal"
+
+
+def get_tmdb_media_detail(tmdb_id: int, media_type: str, cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    normalized_media_type = normalize_tmdb_media_type(media_type, fallback="")
+    if normalized_media_type not in ("movie", "tv"):
+        raise RuntimeError("TMDB 影视类型仅支持 movie 或 tv")
+    normalized_tmdb_id = max(0, int(tmdb_id or 0))
+    if normalized_tmdb_id <= 0:
+        raise RuntimeError("TMDB ID 无效")
+
+    detail = tmdb_request_json(
+        f"/{normalized_media_type}/{normalized_tmdb_id}",
+        params={"append_to_response": "alternative_titles,translations"},
+        cfg=cfg,
+    )
+    normalized = normalize_tmdb_result_item(detail, normalized_media_type)
+    if not normalized:
+        raise RuntimeError("TMDB 详情解析失败")
+
+    aliases = build_tmdb_aliases(detail, normalized_media_type)
+    title = str(normalized.get("title", "") or "").strip()
+    original_title = str(normalized.get("original_title", "") or "").strip()
+    aliases = [alias for alias in aliases if alias not in {title, original_title}]
+    payload = {
+        **normalized,
+        "aliases": aliases,
+        "status": str(detail.get("status", "") or "").strip(),
+        "total_episodes": 0,
+        "total_seasons": 0,
+        "episode_mode": "seasonal",
+    }
+    if normalized_media_type == "tv":
+        payload["total_episodes"] = max(0, parse_int(detail.get("number_of_episodes", 0), 0))
+        payload["total_seasons"] = max(0, parse_int(detail.get("number_of_seasons", 0), 0))
+        payload["episode_mode"] = infer_tmdb_episode_mode(detail)
+    return payload
 
 
 def http_request_form_json(
@@ -2786,6 +4353,38 @@ def create_115_folder(cookie: str, cid: str = "0", folder_name: str = "") -> Dic
         "cid": parent_cid,
         "created": success,
     }
+
+
+def sanitize_115_folder_name(value: str, fallback: str = "未命名") -> str:
+    cleaned = re.sub(r"[\\/:*?\"<>|]+", " ", str(value or "")).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(". ")
+    if not cleaned:
+        cleaned = fallback
+    return cleaned[:120]
+
+
+def ensure_115_folder_id_by_path(cookie: str, relative_path: str) -> str:
+    normalized_path = normalize_relative_path(relative_path)
+    if not normalized_path:
+        return "0"
+    current_cid = "0"
+    for raw_part in [segment for segment in normalized_path.split("/") if segment]:
+        part = sanitize_115_folder_name(raw_part, fallback="未命名")
+        entries = list_115_entries(cookie, current_cid)
+        matched = next(
+            (
+                entry
+                for entry in entries
+                if entry.get("is_dir") and str(entry.get("name", "")).strip() == part
+            ),
+            None,
+        )
+        if matched:
+            current_cid = str(matched.get("id", "") or matched.get("cid", "") or "").strip() or "0"
+            continue
+        created = create_115_folder(cookie, current_cid, part)
+        current_cid = str(created.get("id", "")).strip() or current_cid
+    return current_cid
 
 
 def resolve_115_folder_id_by_path(cookie: str, relative_path: str) -> str:

@@ -6,6 +6,7 @@ from datetime import datetime
 from .core import *  # noqa: F401,F403
 from .services.monitor import queue_monitor_job
 from .services.resource import schedule_resource_job_refresh
+from .services.subscription import queue_subscription_job
 from .services.tree import run_sync
 
 
@@ -13,6 +14,7 @@ from .services.tree import run_sync
 async def startup() -> None:
     ensure_db()
     os.makedirs(LOG_DIR, exist_ok=True)
+    restore_runtime_logs_from_files()
 
     for job in list_resource_jobs(limit=200):
         if job.get("status") == "submitted" and job.get("auto_refresh") and not str(job.get("last_triggered_at", "")).strip():
@@ -78,5 +80,38 @@ async def startup() -> None:
                 schedule_ui_state_push(0)
             await asyncio.sleep(5)
 
+    async def subscription_scheduler() -> None:
+        await asyncio.sleep(5)
+        while True:
+            now = time.time()
+            cfg = get_config()
+            prev_next_runs = dict(subscription_next_run)
+            tasks = [normalize_subscription_task(task or {}) for task in cfg.get("subscription_tasks", []) or []]
+            active_names = {task.get("name", "") for task in tasks if task.get("name")}
+
+            for dead_name in list(subscription_last_run.keys()):
+                if dead_name not in active_names:
+                    subscription_last_run.pop(dead_name, None)
+                    subscription_next_run.pop(dead_name, None)
+
+            for task in tasks:
+                name = str(task.get("name", "")).strip()
+                if not name:
+                    continue
+                cron_minutes = int(task.get("cron_minutes", 0) or 0)
+                if not task.get("enabled", True) or cron_minutes <= 0:
+                    subscription_next_run.pop(name, None)
+                    continue
+                if name not in subscription_last_run:
+                    subscription_last_run[name] = now
+                next_ts = subscription_last_run[name] + (cron_minutes * 60)
+                subscription_next_run[name] = datetime.fromtimestamp(next_ts).strftime("%H:%M:%S")
+                if now >= next_ts:
+                    queue_subscription_job(name, "cron")
+            if subscription_next_run != prev_next_runs:
+                schedule_ui_state_push(0)
+            await asyncio.sleep(5)
+
     asyncio.create_task(scheduler())
     asyncio.create_task(monitor_scheduler())
+    asyncio.create_task(subscription_scheduler())
