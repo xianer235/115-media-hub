@@ -62,11 +62,13 @@ async def get_tmdb_detail_endpoint(request: Request) -> Dict[str, Any]:
         "tmdb_aliases": detail.get("aliases", []) if isinstance(detail.get("aliases"), list) else [],
         "tmdb_total_episodes": max(0, parse_int(detail.get("total_episodes", 0) or 0, 0)),
         "tmdb_total_seasons": max(0, parse_int(detail.get("total_seasons", 0) or 0, 0)),
+        "tmdb_season_episode_map": detail.get("season_episode_map", {}) if isinstance(detail.get("season_episode_map"), dict) else {},
         "tmdb_episode_mode": normalize_tmdb_episode_mode(detail.get("episode_mode", "seasonal")),
     }
     if media_type != "tv":
         task_binding["tmdb_total_episodes"] = 0
         task_binding["tmdb_total_seasons"] = 0
+        task_binding["tmdb_season_episode_map"] = {}
         task_binding["tmdb_episode_mode"] = "seasonal"
 
     return {"ok": True, "detail": detail, "task_binding": task_binding}

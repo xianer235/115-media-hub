@@ -42,7 +42,7 @@ SUBSCRIPTION_MIN_SCORE = 55
 SUBSCRIPTION_MAX_CRON_MINUTES = 24 * 60
 SUBSCRIPTION_ATTEMPT_INTERVAL_SECONDS = max(
     0.0,
-    min(5.0, float(os.environ.get("SUBSCRIPTION_ATTEMPT_INTERVAL_SECONDS", 1) or 1)),
+    min(5.0, float(os.environ.get("SUBSCRIPTION_ATTEMPT_INTERVAL_SECONDS", 2) or 2)),
 )
 SUBSCRIPTION_IMPORT_TIMEOUT_SECONDS = max(
     10,
@@ -206,6 +206,7 @@ SUBSCRIPTION_STOP_WORDS = {
     "国语",
     "粤语",
 }
+SUBSCRIPTION_ANIME_TASK_HINT_REGEX = re.compile(r"(动漫|動畫|动画|番剧|新番|anime|animation)", re.IGNORECASE)
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -290,6 +291,157 @@ def normalize_tmdb_episode_mode(value: Any) -> str:
     return "absolute" if mode == "absolute" else "seasonal"
 
 
+def normalize_tmdb_season_episode_map(value: Any) -> Dict[str, int]:
+    payload = value
+    if isinstance(payload, str):
+        text = payload.strip()
+        if not text:
+            payload = {}
+        else:
+            try:
+                payload = json.loads(text)
+            except Exception:
+                payload = {}
+    normalized: Dict[str, int] = {}
+
+    def _assign(season_value: Any, episode_value: Any) -> None:
+        try:
+            season_no = int(season_value or 0)
+        except (TypeError, ValueError):
+            season_no = 0
+        try:
+            episode_count = int(episode_value or 0)
+        except (TypeError, ValueError):
+            episode_count = 0
+        if season_no <= 0 or episode_count <= 0:
+            return
+        normalized[str(season_no)] = max(0, episode_count)
+
+    if isinstance(payload, list):
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            _assign(
+                item.get("season_number", item.get("season", item.get("number", 0))),
+                item.get("episode_count", item.get("episodes", item.get("total_episodes", 0))),
+            )
+    elif isinstance(payload, dict):
+        for season_key, episode_value in payload.items():
+            _assign(season_key, episode_value)
+
+    return normalized
+
+
+def is_subscription_multi_season_mode(task: Dict[str, Any]) -> bool:
+    payload = task if isinstance(task, dict) else {}
+    return bool(payload.get("multi_season_mode", payload.get("anime_mode", False)))
+
+
+def resolve_subscription_tv_episode_mode(task: Dict[str, Any]) -> str:
+    media_type = str((task or {}).get("media_type", "movie") or "movie").strip().lower()
+    if media_type != "tv":
+        return "seasonal"
+    return "absolute" if is_subscription_multi_season_mode(task) else "seasonal"
+
+
+def get_subscription_tmdb_season_total_episodes(task: Dict[str, Any], season: int = 0) -> int:
+    payload = task if isinstance(task, dict) else {}
+    season_map = normalize_tmdb_season_episode_map(payload.get("tmdb_season_episode_map", {}))
+    if not season_map:
+        return 0
+    target_season = max(1, int(season or payload.get("season", 1) or 1))
+    return max(0, int(season_map.get(str(target_season), 0) or 0))
+
+
+def resolve_subscription_tv_total_episodes(task: Dict[str, Any], state_total: int = 0) -> int:
+    payload = task if isinstance(task, dict) else {}
+    media_type = str(payload.get("media_type", "movie") or "movie").strip().lower()
+    if media_type != "tv":
+        return 0
+
+    multi_season_mode = is_subscription_multi_season_mode(payload)
+    configured_total = max(0, int(payload.get("total_episodes", 0) or 0))
+    tmdb_total = max(0, int(payload.get("tmdb_total_episodes", 0) or 0))
+    season_total = get_subscription_tmdb_season_total_episodes(payload)
+    if configured_total > 0:
+        # 兼容历史任务：旧版本可能把 TMDB 全季总集数写进 total_episodes，
+        # 在“单季订阅”下应优先回落为当前季集数，避免显示和追更进度异常放大。
+        if (not multi_season_mode) and season_total > 0 and tmdb_total > 0 and configured_total == tmdb_total and season_total != tmdb_total:
+            return season_total
+        return configured_total
+
+    if multi_season_mode:
+        if tmdb_total > 0:
+            return tmdb_total
+    else:
+        if season_total > 0:
+            return season_total
+
+    return max(0, int(state_total or 0))
+
+
+def convert_subscription_episode_to_absolute(task: Dict[str, Any], season: int, episode: int) -> int:
+    target_season = max(0, int(season or 0))
+    target_episode = max(0, int(episode or 0))
+    if target_season <= 0 or target_episode <= 0:
+        return 0
+
+    season_map = normalize_tmdb_season_episode_map((task or {}).get("tmdb_season_episode_map", {}))
+    if not season_map:
+        return 0
+
+    absolute_offset = 0
+    for season_no in range(1, target_season):
+        season_total = max(0, int(season_map.get(str(season_no), 0) or 0))
+        if season_total <= 0:
+            return 0
+        absolute_offset += season_total
+    return absolute_offset + target_episode
+
+
+def convert_subscription_episode_range_to_absolute(
+    task: Dict[str, Any], season: int, range_start: int, range_end: int
+) -> Tuple[int, int]:
+    start = max(0, int(range_start or 0))
+    end = max(0, int(range_end or 0))
+    if end > 0 and start > end:
+        start, end = end, start
+
+    absolute_start = convert_subscription_episode_to_absolute(task, season, start) if start > 0 else 0
+    absolute_end = convert_subscription_episode_to_absolute(task, season, end) if end > 0 else 0
+    if absolute_start <= 0 and absolute_end > 0:
+        absolute_start = absolute_end
+    if absolute_end <= 0 and absolute_start > 0:
+        absolute_end = absolute_start
+    if absolute_end > 0 and absolute_start > absolute_end:
+        absolute_start, absolute_end = absolute_end, absolute_start
+    return absolute_start, absolute_end
+
+
+def is_subscription_anime_compatible_task(task: Dict[str, Any]) -> bool:
+    payload = task if isinstance(task, dict) else {}
+    media_type = str(payload.get("media_type", "movie") or "movie").strip().lower()
+    if media_type != "tv":
+        return False
+
+    if normalize_tmdb_episode_mode(payload.get("tmdb_episode_mode", "seasonal")) == "absolute":
+        return True
+
+    title_values: List[str] = [
+        str(payload.get("title", "") or "").strip(),
+        str(payload.get("tmdb_title", "") or "").strip(),
+        str(payload.get("tmdb_original_title", "") or "").strip(),
+    ]
+    aliases = payload.get("aliases", [])
+    if isinstance(aliases, list):
+        title_values.extend([str(alias or "").strip() for alias in aliases])
+    tmdb_aliases = payload.get("tmdb_aliases", [])
+    if isinstance(tmdb_aliases, list):
+        title_values.extend([str(alias or "").strip() for alias in tmdb_aliases])
+
+    return any(SUBSCRIPTION_ANIME_TASK_HINT_REGEX.search(value) for value in title_values if value)
+
+
 def normalize_tmdb_year(value: Any) -> str:
     year = str(value or "").strip()
     return year if re.fullmatch(r"(19|20)\d{2}", year) else ""
@@ -342,6 +494,7 @@ def normalize_subscription_task(task: Dict[str, Any]) -> Dict[str, Any]:
         task.get("quality_priority", SUBSCRIPTION_QUALITY_PRIORITY_DEFAULT)
     )
     anime_mode = bool(task.get("anime_mode", False))
+    multi_season_mode = bool(task.get("multi_season_mode", anime_mode))
     tmdb_media_type = normalize_tmdb_media_type(task.get("tmdb_media_type", ""), fallback=media_type)
     try:
         tmdb_id = max(0, int(task.get("tmdb_id", 0) or 0))
@@ -365,8 +518,10 @@ def normalize_subscription_task(task: Dict[str, Any]) -> Dict[str, Any]:
         tmdb_total_seasons = max(0, int(task.get("tmdb_total_seasons", 0) or 0))
     except (TypeError, ValueError):
         tmdb_total_seasons = 0
+    tmdb_season_episode_map = normalize_tmdb_season_episode_map(task.get("tmdb_season_episode_map", {}))
     tmdb_episode_mode = normalize_tmdb_episode_mode(task.get("tmdb_episode_mode", "seasonal"))
     if media_type != "tv":
+        multi_season_mode = False
         tmdb_episode_mode = "seasonal"
     savepath = normalize_relative_path(task.get("savepath", ""))
     return {
@@ -382,7 +537,9 @@ def normalize_subscription_task(task: Dict[str, Any]) -> Dict[str, Any]:
         "cron_minutes": max(0, min(SUBSCRIPTION_MAX_CRON_MINUTES, cron_minutes)),
         "min_score": max(30, min(100, min_score)),
         "quality_priority": quality_priority,
-        "anime_mode": anime_mode,
+        # 向后兼容：anime_mode 为旧字段，语义已等同于 multi_season_mode。
+        "anime_mode": multi_season_mode,
+        "multi_season_mode": multi_season_mode,
         "tmdb_id": tmdb_id,
         "tmdb_media_type": tmdb_media_type if tmdb_id > 0 else "",
         "tmdb_title": tmdb_title if tmdb_id > 0 else "",
@@ -391,6 +548,7 @@ def normalize_subscription_task(task: Dict[str, Any]) -> Dict[str, Any]:
         "tmdb_aliases": tmdb_aliases if tmdb_id > 0 else [],
         "tmdb_total_episodes": tmdb_total_episodes if tmdb_id > 0 else 0,
         "tmdb_total_seasons": tmdb_total_seasons if tmdb_id > 0 else 0,
+        "tmdb_season_episode_map": tmdb_season_episode_map if tmdb_id > 0 else {},
         "tmdb_episode_mode": tmdb_episode_mode if tmdb_id > 0 else "seasonal",
     }
 
@@ -596,7 +754,7 @@ def save_config(cfg: Dict[str, Any]) -> None:
 
 def ensure_db() -> None:
     ensure_parent(DB_PATH)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     cursor = conn.cursor()
     cursor.execute(
         "CREATE TABLE IF NOT EXISTS local_files (path_hash TEXT PRIMARY KEY, relative_path TEXT)"
@@ -752,7 +910,7 @@ def ensure_db() -> None:
 
 
 def open_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -1754,7 +1912,7 @@ def parse_resource_episode_meta(item: Dict[str, Any]) -> Dict[str, int]:
 
 def match_subscription_media_type(task: Dict[str, Any], item: Dict[str, Any]) -> Tuple[bool, str]:
     media_type = str(task.get("media_type", "movie") or "movie").strip().lower()
-    anime_mode = bool(task.get("anime_mode", False))
+    anime_mode = is_subscription_anime_compatible_task(task)
     text = build_subscription_candidate_text(item)
     meta = parse_resource_episode_meta(item)
     has_episode_meta = bool(int(meta.get("season", 0) or 0) > 0 or int(meta.get("episode", 0) or 0) > 0 or int(meta.get("total", 0) or 0) > 0)
@@ -1778,7 +1936,7 @@ def match_subscription_media_type(task: Dict[str, Any], item: Dict[str, Any]) ->
     if has_episode_meta or tv_hint:
         return True, "ok"
     if anime_mode and not movie_hint:
-        # 连载动漫资源有时不包含标准季集标记，动漫模式下允许放行到后续评分阶段。
+        # 连载动漫资源有时不包含标准季集标记，动漫兼容模式下允许放行到后续评分阶段。
         return True, "anime_relaxed"
     if movie_hint:
         return False, "movie_like"
@@ -1845,7 +2003,8 @@ def score_subscription_candidate(
 
     meta = parse_resource_episode_meta(item)
     media_type = str(task.get("media_type", "movie") or "movie").strip().lower()
-    anime_mode_flag = bool(task.get("anime_mode", False))
+    anime_mode_flag = is_subscription_anime_compatible_task(task)
+    multi_season_mode = is_subscription_multi_season_mode(task)
     task_year = normalize_tmdb_year(task.get("year", "")) or normalize_tmdb_year(task.get("tmdb_year", ""))
     candidate_year = detect_resource_year(item)
     if task_year:
@@ -1868,18 +2027,31 @@ def score_subscription_candidate(
     else:
         season = max(1, int(task.get("season", 1) or 1))
         anime_mode = anime_mode_flag
-        episode_mode = normalize_tmdb_episode_mode(task.get("tmdb_episode_mode", "seasonal"))
+        episode_mode = resolve_subscription_tv_episode_mode(task)
+        candidate_season = max(0, int(meta.get("season", 0) or 0))
+        candidate_episode = max(0, int(meta.get("episode", 0) or 0))
         range_start = max(0, int(meta.get("range_start", 0) or 0))
         range_end = max(0, int(meta.get("range_end", 0) or 0))
+        if multi_season_mode and candidate_season > 0:
+            absolute_episode = convert_subscription_episode_to_absolute(task, candidate_season, candidate_episode)
+            if absolute_episode > 0:
+                candidate_episode = absolute_episode
+            absolute_range_start, absolute_range_end = convert_subscription_episode_range_to_absolute(
+                task, candidate_season, range_start, range_end
+            )
+            if absolute_range_end > 0:
+                range_start = absolute_range_start
+                range_end = absolute_range_end
         has_episode_range = range_end > 0 and range_start > 0
         if episode_mode == "absolute":
-            if meta["season"] > 0 and meta["season"] == season:
-                score += 6
-            elif meta["season"] <= 0:
-                score += 2 if season == 1 else 1
+            if candidate_season > 0:
+                score += 4
+            elif candidate_season <= 0:
+                # 多季合一或绝对集序下，不对任务季数做偏置。
+                score += 2
         else:
-            if meta["season"] > 0:
-                if meta["season"] == season:
+            if candidate_season > 0:
+                if candidate_season == season:
                     score += 10
                 else:
                     score -= 6 if anime_mode else 18
@@ -1888,10 +2060,10 @@ def score_subscription_candidate(
             elif anime_mode:
                 score += 1
 
-        if meta["episode"] <= 0:
+        if candidate_episode <= 0:
             score -= 4 if anime_mode else 8
         else:
-            if meta["episode"] <= last_episode:
+            if candidate_episode <= last_episode:
                 if has_episode_range and range_start <= max(1, last_episode):
                     # 区间包常用于补档，不能因为末集偏旧被提前淘汰。
                     score -= 1 if anime_mode else 2
@@ -1899,7 +2071,7 @@ def score_subscription_candidate(
                     # 旧集会在执行阶段被显式跳过，这里仅轻惩罚，避免评分阶段直接整体淘汰
                     score -= 4 if anime_mode else 6
             else:
-                gap = meta["episode"] - last_episode
+                gap = candidate_episode - last_episode
                 if gap == 1:
                     score += 16
                 elif gap <= 4:
@@ -1918,11 +2090,8 @@ def score_subscription_candidate(
                 score += 8 if anime_mode else 5
             if range_size >= 12:
                 score += 4
-        total_episodes = max(
-            0,
-            int(task.get("total_episodes", 0) or task.get("tmdb_total_episodes", 0) or 0),
-        )
-        if total_episodes > 0 and meta["episode"] > total_episodes:
+        total_episodes = resolve_subscription_tv_total_episodes(task, state_total=0)
+        if total_episodes > 0 and candidate_episode > total_episodes:
             score -= 24
 
     return {
@@ -1930,11 +2099,11 @@ def score_subscription_candidate(
         "score": int(score),
         "token_hits": token_hits,
         "token_total": len(query_tokens),
-        "season": int(meta["season"] or 0),
-        "episode": int(meta["episode"] or 0),
+        "season": int(meta.get("season", 0) or 0),
+        "episode": int(candidate_episode if media_type == "tv" else max(0, int(meta.get("episode", 0) or 0))),
         "total": int(meta["total"] or 0),
-        "range_start": int(meta.get("range_start", 0) or 0),
-        "range_end": int(meta.get("range_end", 0) or 0),
+        "range_start": int(range_start if media_type == "tv" else max(0, int(meta.get("range_start", 0) or 0))),
+        "range_end": int(range_end if media_type == "tv" else max(0, int(meta.get("range_end", 0) or 0))),
         "resolution": int(resolution or 0),
         "quality_bonus": int(quality_bonus or 0),
         "quality_priority": quality_priority,
@@ -2061,57 +2230,95 @@ def upsert_subscription_task_state(task_name: str, **fields: Any) -> None:
     task_key = str(task_name or "").strip()
     if not task_key:
         return
-    current = load_subscription_task_state(task_key)
-    ensure_db()
-    conn = open_db()
-    cursor = conn.cursor()
-    payload = {**current}
-    payload.update(fields)
-    stats_value = payload.get("stats", {})
-    if not isinstance(stats_value, dict):
-        stats_value = {}
-    now = now_text()
-    cursor.execute(
-        """
-        INSERT OR REPLACE INTO subscription_task_state(
-            task_name, media_type, status, progress, detail, last_run_at, last_success_at, last_error,
-            last_episode, total_episodes, matched_resource_id, matched_resource_title, matched_score,
-            queued_job_id, stats_json, updated_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            task_key,
-            str(payload.get("media_type", "movie") or "movie").strip().lower() or "movie",
-            str(payload.get("status", "idle") or "idle").strip().lower(),
-            max(0, min(100, int(payload.get("progress", 0) or 0))),
-            str(payload.get("detail", "") or "").strip(),
-            str(payload.get("last_run_at", "") or "").strip(),
-            str(payload.get("last_success_at", "") or "").strip(),
-            str(payload.get("last_error", "") or "").strip(),
-            max(0, int(payload.get("last_episode", 0) or 0)),
-            max(0, int(payload.get("total_episodes", 0) or 0)),
-            max(0, int(payload.get("matched_resource_id", 0) or 0)),
-            str(payload.get("matched_resource_title", "") or "").strip(),
-            max(0, int(payload.get("matched_score", 0) or 0)),
-            max(0, int(payload.get("queued_job_id", 0) or 0)),
-            safe_json_dumps(stats_value),
-            now,
-        ),
-    )
-    conn.commit()
-    conn.close()
+    max_attempts = 4
+    for attempt in range(max_attempts):
+        conn: Optional[sqlite3.Connection] = None
+        try:
+            current = load_subscription_task_state(task_key)
+            ensure_db()
+            conn = open_db()
+            cursor = conn.cursor()
+            payload = {**current}
+            payload.update(fields)
+            stats_value = payload.get("stats", {})
+            if not isinstance(stats_value, dict):
+                stats_value = {}
+            now = now_text()
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO subscription_task_state(
+                    task_name, media_type, status, progress, detail, last_run_at, last_success_at, last_error,
+                    last_episode, total_episodes, matched_resource_id, matched_resource_title, matched_score,
+                    queued_job_id, stats_json, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    task_key,
+                    str(payload.get("media_type", "movie") or "movie").strip().lower() or "movie",
+                    str(payload.get("status", "idle") or "idle").strip().lower(),
+                    max(0, min(100, int(payload.get("progress", 0) or 0))),
+                    str(payload.get("detail", "") or "").strip(),
+                    str(payload.get("last_run_at", "") or "").strip(),
+                    str(payload.get("last_success_at", "") or "").strip(),
+                    str(payload.get("last_error", "") or "").strip(),
+                    max(0, int(payload.get("last_episode", 0) or 0)),
+                    max(0, int(payload.get("total_episodes", 0) or 0)),
+                    max(0, int(payload.get("matched_resource_id", 0) or 0)),
+                    str(payload.get("matched_resource_title", "") or "").strip(),
+                    max(0, int(payload.get("matched_score", 0) or 0)),
+                    max(0, int(payload.get("queued_job_id", 0) or 0)),
+                    safe_json_dumps(stats_value),
+                    now,
+                ),
+            )
+            conn.commit()
+            return
+        except sqlite3.OperationalError as exc:
+            message = str(exc or "").lower()
+            retryable = "locked" in message
+            if (not retryable) or attempt >= max_attempts - 1:
+                raise
+            time.sleep(0.15 * (attempt + 1))
+        finally:
+            if conn is not None:
+                conn.close()
 
 
 def list_subscription_task_runtime(cfg: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     cfg = cfg or get_config()
     tasks = cfg.get("subscription_tasks", []) if isinstance(cfg.get("subscription_tasks"), list) else []
+    global_running = bool(subscription_status.get("running"))
+    current_running_task = str(subscription_status.get("current_task", "") or "").strip()
     result: List[Dict[str, Any]] = []
     for raw_task in tasks:
         task = normalize_subscription_task(raw_task or {})
         if not task.get("name"):
             continue
         state = load_subscription_task_state(task["name"], task.get("media_type", "movie"))
+        state_status = str(state.get("status", "idle") or "idle").strip().lower()
+        if state_status == "running":
+            is_current_active_task = global_running and current_running_task == task["name"]
+            if not is_current_active_task:
+                stale_detail = "检测到历史运行状态残留，已自动回收（可重新运行）"
+                try:
+                    upsert_subscription_task_state(
+                        task["name"],
+                        media_type=task.get("media_type", "movie"),
+                        status="failed",
+                        progress=100,
+                        detail=stale_detail,
+                        last_error=stale_detail,
+                    )
+                    state = load_subscription_task_state(task["name"], task.get("media_type", "movie"))
+                except Exception:
+                    state = {
+                        **state,
+                        "status": "failed",
+                        "progress": 100,
+                        "detail": stale_detail,
+                        "last_error": stale_detail,
+                    }
         merged = {
             **task,
             "status": state.get("status", "idle"),
@@ -2128,7 +2335,12 @@ def list_subscription_task_runtime(cfg: Optional[Dict[str, Any]] = None) -> List
             "stats": state.get("stats", {}),
             "next_run": subscription_next_run.get(task["name"], ""),
         }
-        if merged["total_episodes"] <= 0:
+        if str(task.get("media_type", "movie") or "movie").strip().lower() == "tv":
+            merged["total_episodes"] = resolve_subscription_tv_total_episodes(
+                task,
+                state_total=max(0, int(state.get("total_episodes", 0) or 0)),
+            )
+        elif merged["total_episodes"] <= 0:
             merged["total_episodes"] = state.get("total_episodes", 0)
         result.append(merged)
     return result
@@ -2154,6 +2366,7 @@ def find_subscription_task_match_candidate(task: Dict[str, Any], last_episode: i
     conn.close()
 
     min_score = max(30, min(100, int(task.get("min_score", SUBSCRIPTION_MIN_SCORE) or SUBSCRIPTION_MIN_SCORE)))
+    media_type = str(task.get("media_type", "movie") or "movie").strip().lower()
     candidates: List[Dict[str, Any]] = []
     for row in rows:
         item = serialize_resource_item_row(row)
@@ -2163,9 +2376,14 @@ def find_subscription_task_match_candidate(task: Dict[str, Any], last_episode: i
         media_match, _ = match_subscription_media_type(task, item)
         if not media_match:
             continue
-        if has_subscription_match(task.get("name", ""), item_id):
-            continue
+        matched_before = has_subscription_match(task.get("name", ""), item_id)
         scored = score_subscription_candidate(task, item, query_tokens, last_episode)
+        if matched_before:
+            if media_type != "tv":
+                continue
+            if int(scored.get("episode", 0) or 0) <= 0 and int(scored.get("range_end", 0) or 0) <= 0:
+                continue
+            scored["matched_before"] = True
         if scored["score"] < min_score:
             continue
         candidates.append(scored)
@@ -2173,7 +2391,6 @@ def find_subscription_task_match_candidate(task: Dict[str, Any], last_episode: i
     if not candidates:
         return {}
 
-    media_type = str(task.get("media_type", "movie") or "movie").strip().lower()
     if media_type == "tv":
         candidates.sort(
             key=lambda candidate: (
@@ -3606,7 +3823,15 @@ async def write_subscription_log(text: str, level: str = "info") -> None:
     if len(subscription_status["logs"]) > 800:
         subscription_status["logs"].pop(0)
     schedule_ui_state_push()
-    await asyncio.to_thread(append_log_file, SUBSCRIPTION_LOG_PATH, line)
+    try:
+        await asyncio.to_thread(append_log_file, SUBSCRIPTION_LOG_PATH, line)
+    except Exception as exc:
+        # 日志写盘失败不应中断主流程，保留内存日志并继续执行任务。
+        fallback_line = f"{format_log_time(True)} [WARN] 订阅日志写盘失败：{str(exc)[:180]}"
+        subscription_status["logs"].append({"text": fallback_line, "level": "warn"})
+        if len(subscription_status["logs"]) > 800:
+            subscription_status["logs"].pop(0)
+        schedule_ui_state_push()
     await asyncio.sleep(0)
 
 
@@ -4073,11 +4298,23 @@ def get_tmdb_media_detail(tmdb_id: int, media_type: str, cfg: Optional[Dict[str,
         "status": str(detail.get("status", "") or "").strip(),
         "total_episodes": 0,
         "total_seasons": 0,
+        "season_episode_map": {},
         "episode_mode": "seasonal",
     }
     if normalized_media_type == "tv":
         payload["total_episodes"] = max(0, parse_int(detail.get("number_of_episodes", 0), 0))
         payload["total_seasons"] = max(0, parse_int(detail.get("number_of_seasons", 0), 0))
+        season_records = detail.get("seasons", []) if isinstance(detail.get("seasons"), list) else []
+        season_episode_map: Dict[str, int] = {}
+        for raw_season in season_records:
+            if not isinstance(raw_season, dict):
+                continue
+            season_no = max(0, parse_int(raw_season.get("season_number", 0), 0))
+            episode_count = max(0, parse_int(raw_season.get("episode_count", 0), 0))
+            if season_no <= 0 or episode_count <= 0:
+                continue
+            season_episode_map[str(season_no)] = episode_count
+        payload["season_episode_map"] = season_episode_map
         payload["episode_mode"] = infer_tmdb_episode_mode(detail)
     return payload
 

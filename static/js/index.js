@@ -1454,6 +1454,50 @@
             return normalized === 'absolute' ? 'absolute' : 'seasonal';
         }
 
+        function normalizeTmdbSeasonEpisodeMap(value) {
+            const result = {};
+            const assign = (seasonValue, episodeValue) => {
+                const seasonNo = parseInt(seasonValue || '0', 10) || 0;
+                const episodeCount = parseInt(episodeValue || '0', 10) || 0;
+                if (seasonNo <= 0 || episodeCount <= 0) return;
+                result[String(seasonNo)] = episodeCount;
+            };
+            let payload = value;
+            if (typeof payload === 'string') {
+                const text = payload.trim();
+                if (!text) payload = {};
+                else {
+                    try {
+                        payload = JSON.parse(text);
+                    } catch (_) {
+                        payload = {};
+                    }
+                }
+            }
+            if (Array.isArray(payload)) {
+                payload.forEach((item) => {
+                    if (!item || typeof item !== 'object') return;
+                    assign(item.season_number ?? item.season ?? item.number, item.episode_count ?? item.episodes ?? item.total_episodes);
+                });
+                return result;
+            }
+            if (!payload || typeof payload !== 'object') return result;
+            Object.entries(payload).forEach(([seasonKey, episodeValue]) => {
+                assign(seasonKey, episodeValue);
+            });
+            return result;
+        }
+
+        function getTmdbSeasonEpisodeTotal(seasonMap, season) {
+            const normalizedMap = normalizeTmdbSeasonEpisodeMap(seasonMap);
+            const targetSeason = Math.max(1, parseInt(season || '1', 10) || 1);
+            return Math.max(0, parseInt(normalizedMap[String(targetSeason)] || '0', 10) || 0);
+        }
+
+        function resolveTaskMultiSeasonMode(task) {
+            return !!(task?.multi_season_mode ?? task?.anime_mode);
+        }
+
         function normalizeTmdbYear(value) {
             const normalized = String(value || '').trim();
             return /^(19|20)\d{2}$/.test(normalized) ? normalized : '';
@@ -1561,6 +1605,7 @@
                 season: mediaType === 'tv' ? Math.max(1, season || 1) : 1,
                 total_episodes: mediaType === 'tv' ? Math.max(0, totalEpisodes || 0) : 0,
                 anime_mode: mediaType === 'tv' ? animeMode : false,
+                multi_season_mode: mediaType === 'tv' ? animeMode : false,
             };
         }
 
@@ -1572,7 +1617,9 @@
             document.getElementById('subscription_year').value = normalizeTmdbYear(payload.year || '');
             document.getElementById('subscription_season').value = Math.max(1, parseInt(payload.season || '1', 10) || 1);
             document.getElementById('subscription_total_episodes').value = Math.max(0, parseInt(payload.total_episodes || '0', 10) || 0);
-            document.getElementById('subscription_anime_mode').checked = mediaType === 'tv' ? !!payload.anime_mode : false;
+            document.getElementById('subscription_anime_mode').checked = mediaType === 'tv'
+                ? !!(payload.multi_season_mode ?? payload.anime_mode)
+                : false;
             const tmdbKeywordInput = document.getElementById('subscription_tmdb_search_keyword');
             if (tmdbKeywordInput) tmdbKeywordInput.value = String(payload.title || '').trim();
             syncSubscriptionTypeUI();
@@ -1598,6 +1645,7 @@
                 tmdb_aliases: tmdbAliases,
                 tmdb_total_episodes: Math.max(0, parseInt(document.getElementById('subscription_tmdb_total_episodes')?.value || '0', 10) || 0),
                 tmdb_total_seasons: Math.max(0, parseInt(document.getElementById('subscription_tmdb_total_seasons')?.value || '0', 10) || 0),
+                tmdb_season_episode_map: normalizeTmdbSeasonEpisodeMap(document.getElementById('subscription_tmdb_season_episode_map')?.value || ''),
                 tmdb_episode_mode: normalizeTmdbEpisodeMode(document.getElementById('subscription_tmdb_episode_mode')?.value || 'seasonal'),
             };
         }
@@ -1615,6 +1663,7 @@
                 tmdb_aliases: parseSubscriptionAliases(Array.isArray(binding.tmdb_aliases) ? binding.tmdb_aliases.join(',') : (binding.tmdb_aliases || binding.aliases || '')),
                 tmdb_total_episodes: Math.max(0, parseInt(binding.tmdb_total_episodes || binding.total_episodes || '0', 10) || 0),
                 tmdb_total_seasons: Math.max(0, parseInt(binding.tmdb_total_seasons || binding.total_seasons || '0', 10) || 0),
+                tmdb_season_episode_map: normalizeTmdbSeasonEpisodeMap(binding.tmdb_season_episode_map || binding.season_episode_map || {}),
                 tmdb_episode_mode: normalizeTmdbEpisodeMode(binding.tmdb_episode_mode || binding.episode_mode || 'seasonal'),
             };
             const useBinding = normalized.tmdb_id > 0;
@@ -1626,6 +1675,7 @@
             document.getElementById('subscription_tmdb_aliases').value = useBinding ? normalized.tmdb_aliases.join(', ') : '';
             document.getElementById('subscription_tmdb_total_episodes').value = useBinding ? String(normalized.tmdb_total_episodes) : '0';
             document.getElementById('subscription_tmdb_total_seasons').value = useBinding ? String(normalized.tmdb_total_seasons) : '0';
+            document.getElementById('subscription_tmdb_season_episode_map').value = useBinding ? JSON.stringify(normalized.tmdb_season_episode_map) : '';
             document.getElementById('subscription_tmdb_episode_mode').value = useBinding ? normalized.tmdb_episode_mode : 'seasonal';
             renderSubscriptionTmdbBinding();
         }
@@ -1647,14 +1697,21 @@
             const yearSuffix = binding.tmdb_year ? ` (${escapeHtml(binding.tmdb_year)})` : '';
             const aliasText = binding.tmdb_aliases.length > 0 ? `别名 ${escapeHtml(String(binding.tmdb_aliases.length))} 个` : '无别名';
             const episodeModeText = binding.tmdb_episode_mode === 'absolute' ? '绝对集序' : '按季集序';
+            const selectedSeason = Math.max(1, parseInt(document.getElementById('subscription_season')?.value || '1', 10) || 1);
+            const seasonEpisodeTotal = getTmdbSeasonEpisodeTotal(binding.tmdb_season_episode_map, selectedSeason);
+            const multiSeasonMode = !!document.getElementById('subscription_anime_mode')?.checked;
             const totalText = binding.tmdb_media_type === 'tv'
-                ? `总集数 ${escapeHtml(String(binding.tmdb_total_episodes || 0))} / 季数 ${escapeHtml(String(binding.tmdb_total_seasons || 0))} / ${episodeModeText}`
+                ? `总集数 ${escapeHtml(String(binding.tmdb_total_episodes || 0))} / 季数 ${escapeHtml(String(binding.tmdb_total_seasons || 0))} / S${escapeHtml(String(selectedSeason))}集数 ${escapeHtml(String(seasonEpisodeTotal || 0))} / ${episodeModeText}`
                 : '电影元数据';
+            const totalHint = binding.tmdb_media_type === 'tv'
+                ? (multiSeasonMode ? '当前模式：多季合一（默认采用 TMDB 总集数）' : '当前模式：单季订阅（优先采用所选季集数）')
+                : '';
             const subscriptionMediaType = normalizeSubscriptionMediaType(document.getElementById('subscription_media_type')?.value || 'movie');
             const mismatch = binding.tmdb_media_type && binding.tmdb_media_type !== subscriptionMediaType;
             summaryEl.innerHTML = `
                 <div>已绑定 <span class="text-sky-300">${mediaLabel} #${escapeHtml(String(binding.tmdb_id))}</span>：${escapeHtml(binding.tmdb_title || '--')}${yearSuffix}</div>
                 <div class="text-[11px] mt-1">${escapeHtml(aliasText)} / ${escapeHtml(totalText)}</div>
+                ${totalHint ? `<div class="text-[11px] mt-1">${escapeHtml(totalHint)}</div>` : ''}
                 ${mismatch ? '<div class="text-[11px] mt-1 text-red-300">当前绑定类型与订阅类型不一致，保存前请重新绑定。</div>' : ''}
             `;
         }
@@ -1786,8 +1843,14 @@
                 if (mediaType === 'tv') {
                     const totalInput = document.getElementById('subscription_total_episodes');
                     const currentTotal = parseInt(totalInput?.value || '0', 10) || 0;
+                    const selectedSeason = Math.max(1, parseInt(document.getElementById('subscription_season')?.value || '1', 10) || 1);
+                    const seasonTotal = getTmdbSeasonEpisodeTotal(binding.tmdb_season_episode_map || {}, selectedSeason);
+                    const multiSeasonMode = !!document.getElementById('subscription_anime_mode')?.checked;
                     const tmdbTotal = Math.max(0, parseInt(binding.tmdb_total_episodes || '0', 10) || 0);
-                    if (totalInput && currentTotal <= 0 && tmdbTotal > 0) totalInput.value = String(tmdbTotal);
+                    const suggestedTotal = multiSeasonMode
+                        ? (tmdbTotal > 0 ? tmdbTotal : seasonTotal)
+                        : (seasonTotal > 0 ? seasonTotal : 0);
+                    if (totalInput && currentTotal <= 0 && suggestedTotal > 0) totalInput.value = String(suggestedTotal);
                 }
                 closeSubscriptionTmdbSearchModal();
                 showToast(`已绑定 TMDB：${binding.tmdb_title || target.title || '--'}`, { tone: 'success', duration: 2600, placement: 'top-center' });
@@ -1812,18 +1875,46 @@
             hideLockedModal('subscription-tmdb-modal');
         }
 
-        function syncSubscriptionTypeUI() {
+        function suggestSubscriptionTotalEpisodesFromTmdb({ force = false } = {}) {
+            const mediaType = normalizeSubscriptionMediaType(document.getElementById('subscription_media_type')?.value || 'movie');
+            if (mediaType !== 'tv') return;
+            const totalInput = document.getElementById('subscription_total_episodes');
+            if (!totalInput) return;
+            const currentTotal = parseInt(totalInput.value || '0', 10) || 0;
+            if (!force && currentTotal > 0) return;
+            const binding = getSubscriptionTmdbBindingFromForm();
+            if ((parseInt(binding.tmdb_id || '0', 10) || 0) <= 0) return;
+            const selectedSeason = Math.max(1, parseInt(document.getElementById('subscription_season')?.value || '1', 10) || 1);
+            const seasonTotal = getTmdbSeasonEpisodeTotal(binding.tmdb_season_episode_map, selectedSeason);
+            const multiSeasonMode = !!document.getElementById('subscription_anime_mode')?.checked;
+            const tmdbTotal = Math.max(0, parseInt(binding.tmdb_total_episodes || '0', 10) || 0);
+            const suggestedTotal = multiSeasonMode
+                ? (tmdbTotal > 0 ? tmdbTotal : seasonTotal)
+                : (seasonTotal > 0 ? seasonTotal : 0);
+            if (suggestedTotal > 0 && (force || currentTotal <= 0)) totalInput.value = String(suggestedTotal);
+        }
+
+        function syncSubscriptionTypeUI({ forceSuggestTotal = false } = {}) {
             const mediaType = normalizeSubscriptionMediaType(document.getElementById('subscription_media_type')?.value || 'movie');
             const tvFields = document.getElementById('subscription-tv-fields');
             if (tvFields) tvFields.classList.toggle('hidden', mediaType !== 'tv');
             const animeModeWrap = document.getElementById('subscription-anime-mode-wrap');
             if (animeModeWrap) animeModeWrap.classList.toggle('hidden', mediaType !== 'tv');
+            const seasonInput = document.getElementById('subscription_season');
+            const multiSeasonMode = !!document.getElementById('subscription_anime_mode')?.checked;
+            if (seasonInput) {
+                const disableSeason = mediaType !== 'tv' || multiSeasonMode;
+                seasonInput.disabled = disableSeason;
+                if (disableSeason) seasonInput.setAttribute('title', '多季合一已开启时，季数不参与订阅过滤');
+                else seasonInput.removeAttribute('title');
+            }
             const hintEl = document.getElementById('subscription-savepath-hint');
             if (hintEl) {
                 hintEl.innerText = mediaType === 'movie'
                     ? '电影会自动保存到“目标目录/影片名”子文件夹；电视剧保存到所选目录。'
                     : '电视剧会直接保存到所选目录；请把目录设在剧集父文件夹下。';
             }
+            suggestSubscriptionTotalEpisodesFromTmdb({ force: !!forceSuggestTotal });
             renderSubscriptionTmdbBinding();
         }
 
@@ -1844,6 +1935,7 @@
         function currentSubscriptionFormData() {
             const title = document.getElementById('subscription_title').value.trim();
             const tmdbBinding = getSubscriptionTmdbBindingFromForm();
+            const multiSeasonMode = !!document.getElementById('subscription_anime_mode').checked;
             return {
                 name: title,
                 media_type: normalizeSubscriptionMediaType(document.getElementById('subscription_media_type').value),
@@ -1852,7 +1944,8 @@
                 year: document.getElementById('subscription_year').value.trim(),
                 season: parseInt(document.getElementById('subscription_season').value || '1', 10) || 1,
                 total_episodes: parseInt(document.getElementById('subscription_total_episodes').value || '0', 10) || 0,
-                anime_mode: document.getElementById('subscription_anime_mode').checked,
+                anime_mode: multiSeasonMode,
+                multi_season_mode: multiSeasonMode,
                 savepath: normalizeRelativePathInput(document.getElementById('subscription_savepath').value.trim()),
                 cron_minutes: parseInt(document.getElementById('subscription_cron_minutes').value || '30', 10) || 0,
                 min_score: parseInt(document.getElementById('subscription_min_score').value || '55', 10) || 55,
@@ -1866,6 +1959,7 @@
                 tmdb_aliases: tmdbBinding.tmdb_aliases,
                 tmdb_total_episodes: tmdbBinding.tmdb_total_episodes,
                 tmdb_total_seasons: tmdbBinding.tmdb_total_seasons,
+                tmdb_season_episode_map: tmdbBinding.tmdb_season_episode_map,
                 tmdb_episode_mode: tmdbBinding.tmdb_episode_mode,
             };
         }
@@ -1962,11 +2056,22 @@
                 task.season = 1;
                 task.total_episodes = 0;
                 task.anime_mode = false;
+                task.multi_season_mode = false;
                 task.tmdb_total_episodes = 0;
                 task.tmdb_total_seasons = 0;
+                task.tmdb_season_episode_map = {};
                 task.tmdb_episode_mode = 'seasonal';
             } else {
+                task.multi_season_mode = !!(task.multi_season_mode ?? task.anime_mode);
+                task.anime_mode = !!task.multi_season_mode;
                 task.tmdb_episode_mode = normalizeTmdbEpisodeMode(task.tmdb_episode_mode || 'seasonal');
+                if (!task.multi_season_mode) {
+                    const seasonTotal = getTmdbSeasonEpisodeTotal(task.tmdb_season_episode_map || {}, task.season);
+                    const tmdbTotal = Math.max(0, parseInt(task.tmdb_total_episodes || '0', 10) || 0);
+                    if (seasonTotal > 0 && (task.total_episodes <= 0 || (tmdbTotal > 0 && task.total_episodes === tmdbTotal && seasonTotal !== tmdbTotal))) {
+                        task.total_episodes = seasonTotal;
+                    }
+                }
             }
             if (task.tmdb_id <= 0) {
                 task.tmdb_media_type = '';
@@ -1976,6 +2081,7 @@
                 task.tmdb_aliases = [];
                 task.tmdb_total_episodes = 0;
                 task.tmdb_total_seasons = 0;
+                task.tmdb_season_episode_map = {};
                 task.tmdb_episode_mode = 'seasonal';
             }
 
@@ -2011,7 +2117,7 @@
             document.getElementById('subscription_year').value = task.year || '';
             document.getElementById('subscription_season').value = task.season || 1;
             document.getElementById('subscription_total_episodes').value = task.total_episodes || 0;
-            document.getElementById('subscription_anime_mode').checked = !!task.anime_mode;
+            document.getElementById('subscription_anime_mode').checked = resolveTaskMultiSeasonMode(task);
             subscriptionFolderTrail = [{ id: '0', name: '根目录' }];
             setSubscriptionSavepath('0', task.savepath || '');
             document.getElementById('subscription_cron_minutes').value = task.cron_minutes ?? 30;
@@ -2027,6 +2133,7 @@
                 tmdb_aliases: Array.isArray(task.tmdb_aliases) ? task.tmdb_aliases : [],
                 tmdb_total_episodes: task.tmdb_total_episodes || 0,
                 tmdb_total_seasons: task.tmdb_total_seasons || 0,
+                tmdb_season_episode_map: task.tmdb_season_episode_map || {},
                 tmdb_episode_mode: task.tmdb_episode_mode || 'seasonal',
             });
             syncSubscriptionTypeUI();
@@ -2108,6 +2215,7 @@
                 const nextRun = (subscriptionState.next_runs || {})[taskName];
                 const progress = Math.max(0, Math.min(100, Number(task.progress || 0)));
                 const isTv = normalizeSubscriptionMediaType(task.media_type || 'movie') === 'tv';
+                const multiSeasonMode = resolveTaskMultiSeasonMode(task);
                 const episodeText = isTv
                     ? `追更进度：E${Number(task.last_episode || 0)}${Number(task.total_episodes || 0) > 0 ? ` / E${Number(task.total_episodes || 0)}` : ''}`
                     : '电影订阅：命中资源即执行';
@@ -2137,7 +2245,7 @@
                                     <div>订阅名称：${escapeHtml(task.title || '--')}</div>
                                     <div>保存路径：${escapeHtml(task.savepath || '--')}</div>
                                     <div>${escapeHtml(episodeText)}</div>
-                                    ${isTv && task.anime_mode ? '<div>追更模式：动漫连载兼容</div>' : ''}
+                                    ${isTv ? `<div>订阅模式：${multiSeasonMode ? '多季合一' : '单季订阅'}</div>` : ''}
                                     ${Number(task.tmdb_id || 0) > 0 ? `<div>TMDB：${escapeHtml(task.tmdb_title || task.title || '--')}${task.tmdb_year ? ` (${escapeHtml(task.tmdb_year)})` : ''}${isTv ? ` / ${task.tmdb_episode_mode === 'absolute' ? '绝对集序' : '按季集序'}` : ''}</div>` : ''}
                                     <div>匹配阈值：${escapeHtml(String(task.min_score || 55))} / 清晰度：${escapeHtml(getSubscriptionQualityPriorityLabel(task.quality_priority || 'balanced'))}</div>
                                     <div>定时：${Number(task.cron_minutes || 0)} 分钟 / 下次定时：${nextRun ? escapeHtml(nextRun) : '未开启'}</div>
@@ -6337,6 +6445,13 @@
         });
         document.getElementById('subscription_media_type').addEventListener('change', () => {
             syncSubscriptionTypeUI();
+        });
+        document.getElementById('subscription_season').addEventListener('change', () => {
+            suggestSubscriptionTotalEpisodesFromTmdb({ force: false });
+            renderSubscriptionTmdbBinding();
+        });
+        document.getElementById('subscription_anime_mode').addEventListener('change', () => {
+            syncSubscriptionTypeUI({ forceSuggestTotal: true });
         });
         ['resource_source_name', 'resource_source_channel'].forEach(id => {
             document.getElementById(id).addEventListener('keydown', async (e) => {

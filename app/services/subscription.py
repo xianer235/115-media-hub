@@ -1,7 +1,7 @@
 import asyncio
 
 from ..core import *  # noqa: F401,F403
-from .resource import run_resource_job
+from .resource import cancel_resource_job, run_resource_job
 
 
 def _load_subscription_task(cfg: Dict[str, Any], task_name: str) -> Dict[str, Any]:
@@ -45,10 +45,9 @@ def get_subscription_task_episode_view(task_name: str) -> Dict[str, Any]:
     )
 
     state = load_subscription_task_state(normalized_task_name, "tv")
-    known_total = max(
-        max(0, int(task.get("total_episodes", 0) or 0)),
-        max(0, int(task.get("tmdb_total_episodes", 0) or 0)),
-        max(0, int(state.get("total_episodes", 0) or 0)),
+    known_total = resolve_subscription_tv_total_episodes(
+        task,
+        state_total=max(0, int(state.get("total_episodes", 0) or 0)),
     )
     last_episode = max(0, int(state.get("last_episode", 0) or 0))
     max_episode = existing_episodes[-1] if existing_episodes else 0
@@ -95,6 +94,11 @@ def _sync_task_total_episodes(task_name: str, total_episodes: int) -> None:
     for raw_task in tasks:
         task = normalize_subscription_task(raw_task or {})
         if task.get("name") == task_name and int(task.get("total_episodes", 0) or 0) <= 0:
+            if not is_subscription_multi_season_mode(task):
+                tmdb_season_total = get_subscription_tmdb_season_total_episodes(task)
+                if tmdb_season_total > 0:
+                    updated.append(task)
+                    continue
             task["total_episodes"] = normalized_total
             changed = True
         updated.append(task)
@@ -110,7 +114,8 @@ def _build_subscription_search_keywords(task: Dict[str, Any], limit: int = 4) ->
     tmdb_original_title = re.sub(r"\s+", " ", str(task.get("tmdb_original_title", "") or "").strip())
     tmdb_aliases = task.get("tmdb_aliases", []) if isinstance(task.get("tmdb_aliases"), list) else []
     media_type = str(task.get("media_type", "movie") or "movie").strip().lower()
-    anime_mode = bool(task.get("anime_mode", False))
+    anime_mode = is_subscription_anime_compatible_task(task)
+    multi_season_mode = is_subscription_multi_season_mode(task)
     year = normalize_tmdb_year(task.get("year", "")) or normalize_tmdb_year(task.get("tmdb_year", ""))
     season = max(1, int(task.get("season", 1) or 1))
 
@@ -119,7 +124,7 @@ def _build_subscription_search_keywords(task: Dict[str, Any], limit: int = 4) ->
         keywords.append(title)
         if media_type == "movie" and year and re.fullmatch(r"(19|20)\d{2}", year):
             keywords.append(f"{title} {year}")
-        if media_type == "tv" and season > 1:
+        if media_type == "tv" and season > 1 and not multi_season_mode:
             keywords.append(f"{title} S{season:02d}")
             keywords.append(f"{title} 第{season}季")
         if media_type == "tv" and anime_mode:
@@ -128,7 +133,7 @@ def _build_subscription_search_keywords(task: Dict[str, Any], limit: int = 4) ->
         keywords.append(tmdb_title)
         if media_type == "movie" and year:
             keywords.append(f"{tmdb_title} {year}")
-        if media_type == "tv" and season > 1:
+        if media_type == "tv" and season > 1 and not multi_season_mode:
             keywords.append(f"{tmdb_title} S{season:02d}")
     if tmdb_original_title:
         keywords.append(tmdb_original_title)
@@ -202,14 +207,24 @@ def _extract_task_episodes_from_name(task: Dict[str, Any], name: str, max_expand
     episode = max(0, int(meta.get("episode", 0) or 0))
     range_start = max(0, int(meta.get("range_start", 0) or 0))
     range_end = max(0, int(meta.get("range_end", 0) or 0))
-    if normalize_tmdb_episode_mode(task.get("tmdb_episode_mode", "seasonal")) == "absolute":
+    season = max(0, int(meta.get("season", 0) or 0))
+    if is_subscription_multi_season_mode(task):
+        if season > 0:
+            absolute_episode = convert_subscription_episode_to_absolute(task, season, episode)
+            if absolute_episode > 0:
+                episode = absolute_episode
+            absolute_range_start, absolute_range_end = convert_subscription_episode_range_to_absolute(
+                task, season, range_start, range_end
+            )
+            if absolute_range_end > 0:
+                range_start = absolute_range_start
+                range_end = absolute_range_end
         if range_end > 0:
             expanded = _expand_episode_values(range_start, range_end, max_expand=max_expand)
             if expanded:
                 return expanded
         return {episode} if 0 < episode <= 5000 else set()
 
-    season = max(0, int(meta.get("season", 0) or 0))
     target_season = max(1, int(task.get("season", 1) or 1))
     if season > 0 and season != target_season:
         return set()
@@ -241,6 +256,25 @@ def _candidate_anchor_episode(candidate: Dict[str, Any]) -> int:
     if values:
         return max(values)
     return max(0, int((candidate or {}).get("episode", 0) or 0))
+
+
+def _candidate_confident_episode_values(candidate: Dict[str, Any]) -> Set[int]:
+    """
+    候选命名中的大范围区间（如 E1-E26）并不总能代表目录里每一集都完整可用。
+    为避免“先命中一个大包后把后续补档候选全部跳过”，大区间仅保留锚点集做本轮去重。
+    """
+    values = _candidate_episode_values(candidate)
+    if not values:
+        return set()
+    range_start = max(0, int((candidate or {}).get("range_start", 0) or 0))
+    range_end = max(0, int((candidate or {}).get("range_end", 0) or 0))
+    if range_start > 0 and range_end > 0:
+        if range_end < range_start:
+            range_start, range_end = range_end, range_start
+        range_size = max(1, range_end - range_start + 1)
+        if range_size > 6:
+            return {max(values)}
+    return values
 
 
 def _format_candidate_episode_label(candidate: Dict[str, Any]) -> str:
@@ -390,6 +424,144 @@ def _prioritize_tv_candidates_by_missing_episodes(
     return prioritized_with_episode + without_episode + existing_candidates
 
 
+async def _build_tv_share_selection_for_missing_episodes(
+    cookie: str,
+    task: Dict[str, Any],
+    item: Dict[str, Any],
+    missing_episodes: Set[int],
+    max_depth: int = 4,
+    max_dirs: int = 80,
+    max_entries: int = 3000,
+    per_request_timeout: int = 25,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    normalized_cookie = str(cookie or "").strip()
+    share_url = str(item.get("link_url", "") or "").strip()
+    raw_text = str(item.get("raw_text", "") or "")
+    target_missing = {max(0, int(value or 0)) for value in missing_episodes if max(0, int(value or 0)) > 0}
+    if not normalized_cookie:
+        return {}, {"reason": "cookie_missing"}
+    if not share_url:
+        return {}, {"reason": "share_url_missing"}
+    if not target_missing:
+        return {}, {"reason": "missing_episodes_empty"}
+
+    item_extra = item.get("extra") if isinstance(item.get("extra"), dict) else safe_json_loads(item.get("extra_json"), {})
+    receive_code = (
+        normalize_receive_code(item.get("receive_code", ""))
+        or normalize_receive_code((item_extra or {}).get("receive_code", ""))
+    )
+
+    queue: List[Tuple[str, int, str]] = [("0", 0, "")]
+    visited: Set[str] = set()
+    selected_entries: List[Dict[str, Any]] = []
+    selected_ids: Set[str] = set()
+    covered_missing: Set[int] = set()
+    share_root_title = ""
+    scanned_dirs = 0
+    scanned_entries = 0
+    failed_dirs = 0
+
+    request_timeout = max(10, int(per_request_timeout or 25))
+    while queue and scanned_dirs < max_dirs and scanned_entries < max_entries and covered_missing != target_missing:
+        cid, depth, parent_path = queue.pop(0)
+        normalized_cid = str(cid or "0").strip() or "0"
+        if normalized_cid in visited:
+            continue
+        visited.add(normalized_cid)
+        check_subscription_cancelled()
+        try:
+            branch = await asyncio.wait_for(
+                asyncio.to_thread(
+                    list_115_share_entries,
+                    normalized_cookie,
+                    share_url,
+                    raw_text,
+                    normalized_cid,
+                    receive_code,
+                ),
+                timeout=request_timeout,
+            )
+        except Exception:
+            failed_dirs += 1
+            continue
+
+        scanned_dirs += 1
+        if not share_root_title:
+            share_root_title = normalize_relative_path(str(branch.get("share_title", "") or ""))
+        entries = branch.get("entries", []) if isinstance(branch.get("entries"), list) else []
+        for entry in entries:
+            if scanned_entries >= max_entries:
+                break
+            scanned_entries += 1
+            entry_name = str(entry.get("name", "") or "").strip()
+            if not entry_name:
+                continue
+
+            is_dir = bool(entry.get("is_dir"))
+            child_cid = str(entry.get("cid", "") or entry.get("id", "") or "").strip()
+            rel_name = normalize_relative_path(entry_name)
+            full_name = normalize_relative_path(join_relative_path(parent_path, rel_name))
+
+            if is_dir and depth < max_depth and child_cid and child_cid not in visited:
+                queue.append((child_cid, depth + 1, full_name or rel_name))
+            if is_dir:
+                continue
+
+            matched_episodes = _extract_task_episodes_from_name(task, full_name or rel_name)
+            if not matched_episodes:
+                continue
+            episode_hit = matched_episodes.intersection(target_missing)
+            if not episode_hit:
+                continue
+
+            entry_id = str(entry.get("id", "") or entry.get("fid", "") or "").strip()
+            if not entry_id:
+                continue
+            if entry_id in selected_ids:
+                covered_missing.update(episode_hit)
+                continue
+            selected_ids.add(entry_id)
+            selected_entries.append(
+                {
+                    "id": entry_id,
+                    "name": full_name or rel_name,
+                    "is_dir": False,
+                    "parent_id": str(entry.get("parent_id", normalized_cid) or normalized_cid).strip() or "0",
+                    "cid": "",
+                    "fid": str(entry.get("fid", "") or entry_id).strip(),
+                }
+            )
+            covered_missing.update(episode_hit)
+
+    stats = {
+        "reason": "",
+        "scanned_dirs": scanned_dirs,
+        "scanned_entries": scanned_entries,
+        "failed_dirs": failed_dirs,
+        "truncated": bool(queue) or scanned_dirs >= max_dirs or scanned_entries >= max_entries,
+        "missing_total": len(target_missing),
+        "covered_total": len(covered_missing),
+        "covered_episodes": sorted(covered_missing)[:300],
+        "covered_preview": _format_episode_preview(covered_missing) if covered_missing else "--",
+        "selected_count": len(selected_ids),
+    }
+
+    if not selected_ids:
+        stats["reason"] = "no_precise_episode_match"
+        return {}, stats
+
+    selection = normalize_share_selection_meta(
+        {
+            "selected_ids": sorted(selected_ids),
+            "selected_entries": selected_entries,
+            "refresh_target_type": "file" if len(selected_ids) == 1 else "mixed",
+            "share_root_title": share_root_title,
+            "auto_sharetitle": "",
+        }
+    )
+    return selection, stats
+
+
 async def find_subscription_task_match_candidate_by_search(
     task: Dict[str, Any], last_episode: int = 0
 ) -> Dict[str, Any]:
@@ -446,6 +618,7 @@ async def find_subscription_task_match_candidate_by_search(
     media_guard_filtered = 0
     media_guard_reasons: Dict[str, int] = {}
     supported_link_types = {"magnet", "115share"}
+    media_type = str(task.get("media_type", "movie") or "movie").strip().lower()
     for item in persisted_items:
         link_url = str(item.get("link_url", "") or "").strip()
         link_type = resolve_resource_link_type(item.get("link_type", ""), link_url)
@@ -460,12 +633,18 @@ async def find_subscription_task_match_candidate_by_search(
             continue
         supported_items += 1
         item_id = int(item.get("id", 0) or 0)
-        if has_subscription_match(task.get("name", ""), item_id):
-            continue
+        matched_before = has_subscription_match(task.get("name", ""), item_id)
         scored = score_subscription_candidate(task, item, query_tokens, last_episode)
+        if matched_before:
+            # 电影保持“同资源仅命中一次”；电视剧允许历史命中资源再次进入候选，
+            # 后续由目录缺失判定决定是否需要重导（覆盖手动删档、补档场景）。
+            if media_type != "tv":
+                continue
+            if int(scored.get("episode", 0) or 0) <= 0 and int(scored.get("range_end", 0) or 0) <= 0:
+                continue
+            scored["matched_before"] = True
         scored_candidates.append(scored)
         if scored["score"] < min_score:
-            media_type = str(task.get("media_type", "movie") or "movie").strip().lower()
             if media_type == "tv":
                 episode_no = int(scored.get("episode", 0) or 0)
                 token_hits = int(scored.get("token_hits", 0) or 0)
@@ -474,7 +653,6 @@ async def find_subscription_task_match_candidate_by_search(
             continue
         candidates.append(scored)
 
-    media_type = str(task.get("media_type", "movie") or "movie").strip().lower()
     if media_type == "tv":
         candidates.sort(
             key=lambda candidate: (
@@ -592,33 +770,22 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 "info",
             )
         if task["media_type"] == "tv":
-            configured_total = max(
-                0,
-                int(
-                    task.get("total_episodes", 0)
-                    or task.get("tmdb_total_episodes", 0)
-                    or 0
-                ),
-            )
-            tv_mode_text = "动漫兼容" if bool(task.get("anime_mode", False)) else "标准剧集"
-            if normalize_tmdb_episode_mode(task.get("tmdb_episode_mode", "seasonal")) == "absolute":
-                tv_mode_text += " / 绝对集序"
+            configured_total = resolve_subscription_tv_total_episodes(task, state_total=0)
+            tv_mode_text = "多季合一" if is_subscription_multi_season_mode(task) else "单季订阅"
+            if is_subscription_anime_compatible_task(task):
+                tv_mode_text += " / 动漫兼容"
+            season_label = "全季" if is_subscription_multi_season_mode(task) else f"S{int(task.get('season', 1) or 1):02d}"
             await write_subscription_log(
-                f"季: S{int(task.get('season', 1) or 1):02d} | 总集数: {configured_total or '自动识别'} | 模式: {tv_mode_text}",
+                f"季: {season_label} | 总集数: {configured_total or '自动识别'} | 模式: {tv_mode_text}",
                 "info",
             )
         check_subscription_cancelled()
 
         state = load_subscription_task_state(task_name, task.get("media_type", "movie"))
         last_episode = max(0, int(state.get("last_episode", 0) or 0))
-        known_total = max(
-            0,
-            int(
-                task.get("total_episodes", 0)
-                or task.get("tmdb_total_episodes", 0)
-                or state.get("total_episodes", 0)
-                or 0
-            ),
+        known_total = resolve_subscription_tv_total_episodes(
+            task,
+            state_total=max(0, int(state.get("total_episodes", 0) or 0)),
         )
         completed_locked = task["media_type"] == "tv" and known_total > 0 and last_episode >= known_total
 
@@ -919,6 +1086,14 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             check_subscription_cancelled()
             await asyncio.sleep(attempt_interval_seconds)
 
+        def consume_background_task_result(task: asyncio.Task) -> None:
+            try:
+                task.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+
         for index, candidate in enumerate(attempt_candidates, start=1):
             if attempted_candidates >= max_attempts:
                 break
@@ -935,6 +1110,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             total_detected = max(0, int(candidate.get("total", 0) or 0))
             candidate_episode_values = _candidate_episode_values(candidate)
             episode_label = _format_candidate_episode_label(candidate)
+            candidate_link_type = resolve_resource_link_type(item.get("link_type", ""), str(item.get("link_url", "")).strip())
 
             if task["media_type"] == "tv" and episode > 0:
                 if candidate_episode_values and candidate_episode_values.issubset(imported_episodes):
@@ -976,6 +1152,18 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             job_id = 0
             auto_refresh = bool(monitor_task_name)
             reused_existing = False
+            selected_share_episode_values: Set[int] = set()
+            if existing and task["media_type"] == "tv" and existing_episode_scan_ready:
+                # 历史任务复用前先看目录是否仍缺集，避免“手动删文件后仍复用旧任务”。
+                needs_reimport = False
+                if candidate_episode_values:
+                    needs_reimport = any(episode_no not in existing_folder_episodes for episode_no in candidate_episode_values)
+                if needs_reimport:
+                    existing = {}
+                    await write_subscription_log(
+                        f"候选资源 #{index} 检测到目录仍缺失 {episode_label}，本次不复用历史任务，改为重新导入",
+                        "info",
+                    )
             if existing:
                 job_id = int(existing.get("id", 0) or 0)
                 existing_status = str(existing.get("status", "") or "").strip().lower()
@@ -992,16 +1180,59 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 reused_existing = True
                 await write_subscription_log(f"候选资源 #{index} 命中历史任务 #{job_id}，复用执行记录", "warn")
             else:
+                job_payload = {
+                    "folder_id": folder_id,
+                    "savepath": effective_savepath,
+                    "sharetitle": "",
+                    "monitor_task_name": monitor_task_name,
+                    "refresh_delay_seconds": 4,
+                    "auto_refresh": bool(monitor_task_name),
+                }
+                if (
+                    task["media_type"] == "tv"
+                    and existing_episode_scan_ready
+                    and candidate_link_type == "115share"
+                    and candidate_episode_values
+                ):
+                    overlap_existing = any(episode_no in existing_folder_episodes for episode_no in candidate_episode_values)
+                    missing_for_candidate = {
+                        episode_no
+                        for episode_no in candidate_episode_values
+                        if episode_no not in existing_folder_episodes
+                    }
+                    if overlap_existing and missing_for_candidate:
+                        share_selection, selection_stats = await _build_tv_share_selection_for_missing_episodes(
+                            cookie_115,
+                            task,
+                            item,
+                            missing_for_candidate,
+                        )
+                        selected_ids = share_selection.get("selected_ids", []) if isinstance(share_selection, dict) else []
+                        if selected_ids:
+                            job_payload["share_selection"] = share_selection
+                            selected_share_episode_values = {
+                                max(0, int(value or 0))
+                                for value in (selection_stats.get("covered_episodes", []) if isinstance(selection_stats, dict) else [])
+                                if max(0, int(value or 0)) > 0
+                            }
+                            await write_subscription_log(
+                                (
+                                    f"候选资源 #{index} 检测到大包与目录重叠，缺失 {_format_episode_preview(missing_for_candidate)}；"
+                                    f"已自动选中 {len(selected_ids)} 个文件精细转存"
+                                ),
+                                "info",
+                            )
+                        else:
+                            await write_subscription_log(
+                                (
+                                    f"候选资源 #{index} 尝试按缺失集精细转存未命中（扫描目录 {int(selection_stats.get('scanned_dirs', 0) or 0)} 个，"
+                                    f"条目 {int(selection_stats.get('scanned_entries', 0) or 0)} 条），回退整包转存"
+                                ),
+                                "warn",
+                            )
                 job_id = create_resource_job(
                     item,
-                    {
-                        "folder_id": folder_id,
-                        "savepath": effective_savepath,
-                        "sharetitle": "",
-                        "monitor_task_name": monitor_task_name,
-                        "refresh_delay_seconds": 4,
-                        "auto_refresh": bool(monitor_task_name),
-                    },
+                    job_payload,
                 )
                 await write_subscription_log(
                     (
@@ -1010,22 +1241,27 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                     ),
                     "info",
                 )
-                try:
-                    await asyncio.wait_for(run_resource_job(job_id), timeout=import_timeout_seconds)
-                except asyncio.TimeoutError:
+                job_runner = asyncio.create_task(run_resource_job(job_id))
+                done, _ = await asyncio.wait({job_runner}, timeout=import_timeout_seconds)
+                if not done:
+                    job_runner.add_done_callback(consume_background_task_result)
+                    job_runner.cancel()
                     timed_out_attempts += 1
                     timeout_detail = f"执行超时（>{import_timeout_seconds} 秒）"
-                    update_resource_job(
-                        job_id,
-                        status="failed",
-                        status_detail=timeout_detail,
-                        finished_at=now_text(),
-                    )
-                    if resource_id > 0:
-                        conn = open_db()
-                        update_resource_item_status(conn, resource_id, "failed")
-                        conn.commit()
-                        conn.close()
+                    try:
+                        await cancel_resource_job(job_id, reason="timeout")
+                    except Exception:
+                        update_resource_job(
+                            job_id,
+                            status="failed",
+                            status_detail=timeout_detail,
+                            finished_at=now_text(),
+                        )
+                        if resource_id > 0:
+                            conn = open_db()
+                            update_resource_item_status(conn, resource_id, "failed")
+                            conn.commit()
+                            conn.close()
                     failed_attempts += 1
                     last_failed_detail = timeout_detail
                     await write_subscription_log(
@@ -1034,6 +1270,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                     )
                     await maybe_wait_between_attempts()
                     continue
+                await job_runner
                 latest_job = get_resource_job(job_id, include_private=True)
                 latest_status = str((latest_job or {}).get("status", "") or "").strip().lower()
                 auto_refresh = bool((latest_job or {}).get("auto_refresh", bool(monitor_task_name)))
@@ -1060,10 +1297,15 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             successful_count += 1
             max_total_detected = max(max_total_detected, total_detected)
             successful_job_ids.append(job_id)
-            if candidate_episode_values:
-                imported_episodes.update(candidate_episode_values)
+            if selected_share_episode_values:
+                imported_episodes.update(selected_share_episode_values)
                 if existing_episode_scan_ready:
-                    existing_folder_episodes.update(candidate_episode_values)
+                    existing_folder_episodes.update(selected_share_episode_values)
+            confident_episode_values = _candidate_confident_episode_values(candidate)
+            if candidate_episode_values:
+                imported_episodes.update(confident_episode_values or {max(candidate_episode_values)})
+                if existing_episode_scan_ready:
+                    existing_folder_episodes.update(confident_episode_values or {max(candidate_episode_values)})
             elif episode > 0:
                 imported_episodes.add(episode)
                 if existing_episode_scan_ready:
@@ -1262,15 +1504,26 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                     detail=fallback_detail,
                     last_error=fallback_detail,
                 )
-                await write_subscription_log(fallback_detail, "warn")
+                try:
+                    await write_subscription_log(fallback_detail, "warn")
+                except Exception:
+                    pass
         except Exception:
             pass
-        await write_subscription_log(f"━━━━━━━━━━【订阅结束 | {task_name}】━━━━━━━━━━", "task-divider")
+
+        # 优先回收运行态，避免日志写入异常导致 UI 长时间停在“运行中”。
         subscription_status["running"] = False
         subscription_status["current_task"] = ""
         subscription_control["cancel"] = False
         schedule_ui_state_push(0)
-        await start_next_subscription_job()
+        try:
+            await write_subscription_log(f"━━━━━━━━━━【订阅结束 | {task_name}】━━━━━━━━━━", "task-divider")
+        except Exception:
+            pass
+        try:
+            await start_next_subscription_job()
+        except Exception:
+            pass
 
 
 async def start_next_subscription_job() -> None:
