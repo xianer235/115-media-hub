@@ -1,29 +1,23 @@
 <svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <linearGradient id="bgMain" x1="64" y1="64" x2="448" y2="448" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#0B1220"/>
-      <stop offset="1" stop-color="#0F2A44"/>
+    <linearGradient id="bg" x1="64" y1="64" x2="448" y2="448" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0A1E2D"/>
+      <stop offset="1" stop-color="#11354E"/>
     </linearGradient>
-    <linearGradient id="card" x1="112" y1="112" x2="400" y2="400" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#0F3A5C"/>
-      <stop offset="1" stop-color="#075985"/>
-    </linearGradient>
-    <linearGradient id="textFill" x1="140" y1="160" x2="372" y2="368" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#E0F2FE"/>
-      <stop offset="1" stop-color="#BAE6FD"/>
-    </linearGradient>
-    <filter id="shadow" x="74" y="82" width="364" height="364" filterUnits="userSpaceOnUse">
-      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#020617" flood-opacity="0.35"/>
-    </filter>
   </defs>
 
-  <rect x="64" y="64" width="384" height="384" rx="98" fill="url(#bgMain)"/>
-  <g filter="url(#shadow)">
-    <rect x="112" y="112" width="288" height="288" rx="70" fill="url(#card)" stroke="#38BDF8" stroke-opacity="0.45" stroke-width="8"/>
-    <rect x="134" y="248" width="244" height="6" rx="3" fill="#7DD3FC" fill-opacity="0.55"/>
-    <g fill="url(#textFill)" font-family="Arial Black, Impact, sans-serif" font-weight="900" text-anchor="middle">
-      <text x="256" y="236" font-size="154" letter-spacing="4">ST</text>
-      <text x="256" y="374" font-size="154" letter-spacing="4">RM</text>
-    </g>
+  <rect x="56" y="56" width="400" height="400" rx="112" fill="url(#bg)"/>
+  <rect x="68" y="68" width="376" height="376" rx="100" stroke="#8FC6E8" stroke-opacity="0.18" stroke-width="2"/>
+
+  <g stroke="#EAF6FF" stroke-width="28" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M114 156V356"/>
+    <path d="M162 156V356"/>
+    <path d="M114 256H162"/>
+
+    <path d="M214 156V298C214 338 231 356 248 356C265 356 282 338 282 298V156"/>
+
+    <path d="M328 156V356"/>
+    <path d="M328 156H368C392 156 406 170 406 194C406 218 392 232 368 232H328"/>
+    <path d="M328 248H372C398 248 414 264 414 292C414 330 392 356 362 356H328"/>
   </g>
 </svg>
