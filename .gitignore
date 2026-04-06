@@ -16,6 +16,7 @@ config/
 .codex/
 .cursor/
 .codex-ui-check/
+preview-runtime/
 
 # macOS Finder metadata
 .DS_Store
