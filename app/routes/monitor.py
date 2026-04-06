@@ -170,10 +170,21 @@ async def start_monitor(request: Request) -> Dict[str, Any]:
 async def stop_monitor(request: Request) -> Dict[str, Any]:
     data = await request.json()
     task_name = str(data.get("name", "")).strip()
+    queued_before = len(monitor_queue)
+    monitor_queue[:] = [item for item in monitor_queue if item.get("task_name") != task_name]
+    cleared_queued = max(0, queued_before - len(monitor_queue))
+    if cleared_queued > 0:
+        monitor_status["queued"] = [item["task_name"] for item in monitor_queue]
+        schedule_ui_state_push(0)
+
     if monitor_status["running"] and monitor_status["current_task"] == task_name:
         monitor_control["cancel"] = True
-        return {"ok": True, "status": "stopping"}
-    return {"ok": False, "status": "idle"}
+        status = "stopping_and_cleared" if cleared_queued > 0 else "stopping"
+        return {"ok": True, "status": status, "cleared": cleared_queued}
+
+    if cleared_queued > 0:
+        return {"ok": True, "status": "cleared", "cleared": cleared_queued}
+    return {"ok": False, "status": "idle", "cleared": 0}
 
 
 @router.post("/monitor/delete")

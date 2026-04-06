@@ -1,6 +1,20 @@
         let isRunning = false;
         let monitorState = { running: false, current_task: '', tasks: [], logs: [], summary: { step: '空闲', detail: '等待监控任务' }, queued: [], next_runs: {} };
         let subscriptionState = { running: false, current_task: '', tasks: [], logs: [], summary: { step: '空闲', detail: '等待订阅任务' }, queued: [], next_runs: {} };
+        let sign115State = {
+            enabled: false,
+            cron_time: '09:00',
+            next_run: '',
+            running: false,
+            state: 'idle',
+            message: '尚未检查签到状态',
+            signed_today: null,
+            reward_leaf: 0,
+            balance_leaf: null,
+            last_checked_at: '',
+            last_sign_at: '',
+            last_trigger: ''
+        };
         let resourceState = { sources: [], items: [], jobs: [], channel_sections: [], channel_profiles: {}, search_sections: [], last_syncs: {}, monitor_tasks: [], stats: { source_count: 0, item_count: 0, filtered_item_count: 0, completed_job_count: 0 }, cookie_configured: false, search: '', search_meta: {} };
         let editingMonitorName = null;
         let editingSubscriptionName = null;
@@ -26,6 +40,8 @@
         let subscriptionEpisodeViewError = '';
         let subscriptionEpisodeViewData = null;
         let subscriptionEpisodeViewCache = {};
+        let subscriptionIntroEpisodeLookupLoading = {};
+        let subscriptionIntroEpisodeLookupFailedAt = {};
         let resourceFolderValidationPromise = null;
         let resourceTargetPreviewEntries = [];
         let resourceTargetPreviewSummary = { folder_count: 0, file_count: 0 };
@@ -67,9 +83,6 @@
         let resourceSourceTestBusy = false;
         let resourceSourceTestResult = { total: 0, done: 0, success: 0, failed: 0, running: false, last_name: '', error: '' };
         let resourceJobFilter = 'all';
-        let monitorUserscriptJobs = [];
-        let monitorUserscriptJobCounts = { total: 0, active: 0, submitted: 0, completed: 0, failed: 0 };
-        let monitorUserscriptJobsLoading = false;
         let tgProxyTestState = { loading: false, ok: null, message: '', latency_ms: 0, mode: '', proxy_url: '', target_url: '' };
         let resourceBoardHintText = '';
         let resourceTgHealthState = { visible: false, tone: 'loading', title: '', meta: '', note: '' };
@@ -79,6 +92,8 @@
         let lastSubscriptionLogSignature = '';
         let lastMonitorRenderKey = '';
         let lastSubscriptionRenderKey = '';
+        let monitorTaskIntroExpanded = {};
+        let subscriptionTaskIntroExpanded = {};
         let statusEventSource = null;
         let statusFallbackTimer = null;
         const monitorActionLocks = new Set();
@@ -91,6 +106,7 @@
         const STATUS_FALLBACK_INTERVAL = 15000;
         const RESOURCE_REFRESH_INTERVAL = 15000;
         const VERSION_REFRESH_INTERVAL = 1000 * 60 * 15;
+        const SIGN115_REFRESH_INTERVAL = 1000 * 60;
         const VERSION_FALLBACK_PROJECT_URL = 'https://github.com/xianer235/115-media-hub';
         const VERSION_FALLBACK_CHANGELOG_URL = 'https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md';
         const RESOURCE_FOLDER_MEMORY_KEY = 'resource-folder-selection-v1';
@@ -98,7 +114,7 @@
         const MAIN_TAB_ROW_HINT_MEMORY_KEY = 'main-tab-row-hint-v1';
         const TOAST_DEFAULT_DURATION_MS = 3000;
         const SUBSCRIPTION_EPISODE_CACHE_TTL_MS = 1000 * 60 * 3;
-        const MONITOR_USERSCRIPT_JOB_LIMIT = 60;
+        const SUBSCRIPTION_INTRO_EPISODE_RETRY_MS = 1000 * 60;
 
         function lockPageScroll() {
             if (modalScrollLockCount === 0) {
@@ -250,7 +266,6 @@
             });
             if (tab !== 'resource') toggleResourceJobModal(false);
             if (tab === 'resource') refreshResourceState();
-            if (tab === 'monitor') refreshMonitorUserscriptJobs();
             syncResourceBackTopButton();
             syncSettingsSaveDock();
             focusMainTab(tab);
@@ -440,6 +455,179 @@
             });
         }
 
+        function pruneTaskIntroExpanded(expandedMap, tasks) {
+            const validNames = new Set(
+                (Array.isArray(tasks) ? tasks : [])
+                    .map(item => String(item?.name || '').trim())
+                    .filter(Boolean)
+            );
+            const next = {};
+            Object.keys(expandedMap || {}).forEach((name) => {
+                if (validNames.has(name) && expandedMap[name]) next[name] = true;
+            });
+            return next;
+        }
+
+        function isTaskIntroExpanded(expandedMap, taskName) {
+            const normalizedName = String(taskName || '').trim();
+            if (!normalizedName) return false;
+            return !!expandedMap?.[normalizedName];
+        }
+
+        function toggleTaskIntroExpanded(expandedMap, taskName) {
+            const normalizedName = String(taskName || '').trim();
+            if (!normalizedName) return expandedMap;
+            const next = { ...(expandedMap || {}) };
+            if (next[normalizedName]) delete next[normalizedName];
+            else next[normalizedName] = true;
+            return next;
+        }
+
+        function normalizeSign115State(data) {
+            const payload = data || {};
+            return {
+                ...sign115State,
+                ...payload,
+                enabled: !!payload?.enabled,
+                running: !!payload?.running,
+                state: String(payload?.state || sign115State.state || 'idle'),
+                message: String(payload?.message || sign115State.message || ''),
+                cron_time: String(payload?.cron_time || sign115State.cron_time || '09:00'),
+                next_run: String(payload?.next_run || ''),
+                reward_leaf: Math.max(0, Number(payload?.reward_leaf || 0) || 0),
+                balance_leaf: payload?.balance_leaf === null || payload?.balance_leaf === undefined
+                    ? null
+                    : Math.max(0, Number(payload?.balance_leaf || 0) || 0),
+                signed_today: payload?.signed_today === null || payload?.signed_today === undefined
+                    ? null
+                    : !!payload?.signed_today,
+                last_checked_at: String(payload?.last_checked_at || ''),
+                last_sign_at: String(payload?.last_sign_at || ''),
+                last_trigger: String(payload?.last_trigger || '')
+            };
+        }
+
+        function renderSign115Indicator() {
+            const chip = document.getElementById('sign115-indicator');
+            const textEl = document.getElementById('sign115-indicator-text');
+            if (!chip || !textEl) return;
+
+            const state = String(sign115State.state || 'idle');
+            const enabled = !!sign115State.enabled;
+            const running = !!sign115State.running;
+            const rewardLeaf = Math.max(0, Number(sign115State.reward_leaf || 0) || 0);
+            const balanceLeaf = sign115State.balance_leaf === null || sign115State.balance_leaf === undefined
+                ? null
+                : Math.max(0, Number(sign115State.balance_leaf || 0) || 0);
+
+            const toneClasses = [
+                'bg-slate-700/50',
+                'text-slate-100',
+                'border-slate-500/40',
+                'hover:bg-slate-600'
+            ];
+            let label = '签到状态';
+            if (running || state === 'checking') {
+                label = '签到中...';
+                toneClasses.splice(0, toneClasses.length, 'bg-sky-500/20', 'text-sky-200', 'border-sky-400/40', 'hover:bg-sky-500/30');
+            } else if (state === 'signed' || sign115State.signed_today === true) {
+                label = rewardLeaf > 0 ? `已签 +${rewardLeaf}` : '今日已签';
+                toneClasses.splice(0, toneClasses.length, 'bg-emerald-500/20', 'text-emerald-200', 'border-emerald-400/40', 'hover:bg-emerald-500/30');
+            } else if (state === 'unsigned' || sign115State.signed_today === false) {
+                label = '今日未签';
+                toneClasses.splice(0, toneClasses.length, 'bg-amber-500/20', 'text-amber-200', 'border-amber-400/40', 'hover:bg-amber-500/30');
+            } else if (state === 'error') {
+                label = '签到异常';
+                toneClasses.splice(0, toneClasses.length, 'bg-rose-500/20', 'text-rose-200', 'border-rose-400/40', 'hover:bg-rose-500/30');
+            }
+
+            textEl.innerText = label;
+            chip.classList.remove(
+                'bg-slate-700/50', 'text-slate-100', 'border-slate-500/40', 'hover:bg-slate-600',
+                'bg-sky-500/20', 'text-sky-200', 'border-sky-400/40', 'hover:bg-sky-500/30',
+                'bg-emerald-500/20', 'text-emerald-200', 'border-emerald-400/40', 'hover:bg-emerald-500/30',
+                'bg-amber-500/20', 'text-amber-200', 'border-amber-400/40', 'hover:bg-amber-500/30',
+                'bg-rose-500/20', 'text-rose-200', 'border-rose-400/40', 'hover:bg-rose-500/30'
+            );
+            chip.classList.add(...toneClasses);
+
+            const titleBits = [];
+            if (sign115State.message) titleBits.push(sign115State.message);
+            if (balanceLeaf !== null) titleBits.push(`当前枫叶：${balanceLeaf}`);
+            if (sign115State.next_run) titleBits.push(`下次自动签到：${sign115State.next_run}`);
+            if (!enabled) titleBits.push('定时签到未启用，可手动点击签到');
+            chip.title = titleBits.join(' | ') || '115 每日签到状态';
+        }
+
+        function renderSign115SettingsHint() {
+            const hintEl = document.getElementById('sign115-settings-hint');
+            const cardEl = document.getElementById('sign115-settings-status-card');
+            if (!hintEl) return;
+            const bits = [];
+            let tone = 'idle';
+            if (sign115State.running || sign115State.state === 'checking') {
+                bits.push('正在执行签到...');
+                tone = 'checking';
+            } else if (sign115State.state === 'signed' || sign115State.signed_today === true) {
+                bits.push('今天已签到');
+                tone = 'signed';
+            } else if (sign115State.state === 'unsigned' || sign115State.signed_today === false) {
+                bits.push('今天未签到');
+                tone = 'unsigned';
+            } else if (sign115State.state === 'error') {
+                bits.push('签到异常');
+                tone = 'error';
+            }
+            if (!sign115State.enabled) bits.push('未启用定时签到（可手动签到）');
+            if (sign115State.reward_leaf > 0) bits.push(`本次获得 ${Math.max(0, Number(sign115State.reward_leaf || 0))} 枫叶`);
+            if (sign115State.balance_leaf !== null && sign115State.balance_leaf !== undefined) {
+                bits.push(`当前枫叶 ${Math.max(0, Number(sign115State.balance_leaf || 0))}`);
+            }
+            if (sign115State.next_run) bits.push(`下次自动签到 ${sign115State.next_run}`);
+            if (sign115State.message) bits.push(sign115State.message);
+            if (cardEl) cardEl.dataset.signTone = tone;
+            hintEl.innerText = bits.join('；') || '尚未检查签到状态';
+        }
+
+        function applySign115State(data) {
+            if (!data) return;
+            sign115State = normalizeSign115State(data);
+            renderSign115Indicator();
+            renderSign115SettingsHint();
+        }
+
+        async function refreshSign115Status(force = false) {
+            try {
+                const endpoint = force ? '/settings/115/sign/status?refresh=1' : '/settings/115/sign/status';
+                const res = await fetch(endpoint);
+                if (!res.ok) return;
+                const data = await res.json();
+                applySign115State(data);
+            } catch (err) {
+                console.warn('Sign115 status refresh failed', err);
+            }
+        }
+
+        async function manualSign115(notify = false) {
+            if (sign115State.running) return;
+            try {
+                const res = await fetch('/settings/115/sign/run', { method: 'POST' });
+                const data = await res.json();
+                if (!res.ok || !data.ok) {
+                    if (data?.state) applySign115State(data.state);
+                    if (notify) showToast(`签到失败：${data?.msg || '请稍后重试'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
+                    return;
+                }
+                if (data?.state) applySign115State(data.state);
+                if (notify) {
+                    const message = String(data?.state?.message || '签到完成');
+                    showToast(message, { tone: 'success', duration: 3000, placement: 'top-center' });
+                }
+            } catch (err) {
+                if (notify) showToast(`签到失败：${err?.message || '请稍后重试'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
+            }
+        }
+
         function applyMainState(data) {
             if (!data) return;
             if (data.running !== isRunning) updateButtonState(!!data.running);
@@ -478,6 +666,7 @@
                 next_runs: data.next_runs || monitorState.next_runs || {},
                 summary: data.summary || monitorState.summary || { step: '空闲', detail: '等待监控任务' }
             };
+            monitorTaskIntroExpanded = pruneTaskIntroExpanded(monitorTaskIntroExpanded, monitorState.tasks);
 
             document.getElementById('monitor-summary-step').innerText = monitorState.summary?.step || '空闲';
             document.getElementById('monitor-summary-detail').innerText = monitorState.summary?.detail || '等待监控任务';
@@ -498,6 +687,7 @@
                 refreshMainLogs();
                 refreshMonitorState();
                 refreshSubscriptionState();
+                refreshSign115Status(false);
             }, STATUS_FALLBACK_INTERVAL);
         }
 
@@ -521,6 +711,7 @@
                     applyMainState(payload.main);
                     applyMonitorState(payload.monitor);
                     applySubscriptionState(payload.subscription);
+                    applySign115State(payload.sign115);
                 } catch (err) {
                     console.warn('Status stream parse failed', err);
                 }
@@ -1031,6 +1222,7 @@
                 'alist_url',
                 'alist_token',
                 'cookie_115',
+                'sign115_cron_time',
                 'tg_proxy_protocol',
                 'tg_proxy_host',
                 'tg_proxy_port',
@@ -1052,6 +1244,8 @@
 
             cfg.check_hash = document.getElementById('check_hash').checked;
             cfg.sync_clean = document.getElementById('sync_clean').checked;
+            cfg.sign115_enabled = document.getElementById('sign115_enabled').checked;
+            cfg.subscription_batch_refresh_enabled = document.getElementById('subscription_batch_refresh_enabled').checked;
             cfg.tg_proxy_enabled = document.getElementById('tg_proxy_enabled').checked;
             cfg.tmdb_enabled = document.getElementById('tmdb_enabled').checked;
             const rawTmdbCacheTtl = parseInt(document.getElementById('tmdb_cache_ttl_hours')?.value || '', 10);
@@ -1080,6 +1274,7 @@
 
             if (res.ok) {
                 alert('✅ 配置已保存');
+                refreshSign115Status(false);
             } else {
                 alert('❌ 保存失败');
             }
@@ -1288,14 +1483,39 @@
                     alert('当前没有这个任务在运行');
                     return;
                 }
+                const clearedCount = Math.max(0, Number(data.cleared || 0));
+                let detailText = `${name} 已发送中断请求`;
+                if (data.status === 'cleared') {
+                    detailText = `${name} 未在运行，已清空排队 ${clearedCount} 项`;
+                } else if (data.status === 'stopping_and_cleared' && clearedCount > 0) {
+                    detailText = `${name} 已发送中断请求，并清空排队 ${clearedCount} 项`;
+                }
                 applyMonitorState({
                     ...monitorState,
-                    summary: { step: '正在中断', detail: `${name} 已发送中断请求` }
+                    summary: { step: '正在中断', detail: detailText }
                 }, { forceRender: true });
                 await refreshMonitorState();
             } finally {
                 setMonitorActionLock('stop', name, false);
             }
+        }
+
+        function buildMonitorTaskIntro(task, { running = false, queued = false, nextRun = '' } = {}) {
+            const statusText = running ? '运行中' : (queued ? '已排队' : '待命');
+            const scanPath = String(task?.scan_path || '').trim() || '--';
+            const targetPath = String(task?.target_path || '').trim() || '--';
+            const modeText = task?.incremental ? '增量刷新' : '全量刷新';
+            const scheduleMinutes = Math.max(0, Number(task?.cron_minutes || 0) || 0);
+            const scheduleText = scheduleMinutes > 0
+                ? `每 ${scheduleMinutes} 分钟自动执行一次，下次定时 ${String(nextRun || '计算中')}`
+                : '未开启定时，仅手动运行或通过 Webhook 触发';
+            const webhookText = task?.webhook_enabled ? '已启用 Webhook 触发' : '未启用 Webhook';
+            return `状态：${statusText}。该任务会扫描 ${scanPath}，输出到 /strm/${targetPath}，采用 ${modeText} 策略；${scheduleText}；${webhookText}。`;
+        }
+
+        function toggleMonitorTaskIntro(taskName) {
+            monitorTaskIntroExpanded = toggleTaskIntroExpanded(monitorTaskIntroExpanded, taskName);
+            renderMonitorTasks();
         }
 
         function renderMonitorTasks() {
@@ -1307,37 +1527,37 @@
             }
 
             container.innerHTML = tasks.map(task => {
-                const taskKey = encodeURIComponent(task.name || '');
-                const running = monitorState.running && monitorState.current_task === task.name;
-                const queued = (monitorState.queued || []).includes(task.name);
-                const starting = isMonitorActionLocked('start', task.name);
-                const stopping = isMonitorActionLocked('stop', task.name);
-                const deleting = isMonitorActionLocked('delete', task.name);
+                const taskName = String(task?.name || '').trim();
+                const taskKey = encodeURIComponent(taskName);
+                const running = monitorState.running && monitorState.current_task === taskName;
+                const queued = (monitorState.queued || []).includes(taskName);
+                const starting = isMonitorActionLocked('start', taskName);
+                const stopping = isMonitorActionLocked('stop', taskName);
+                const deleting = isMonitorActionLocked('delete', taskName);
                 const startDisabled = monitorState.running || starting || stopping || deleting;
                 const stopDisabled = !running || starting || stopping || deleting;
                 const deleteDisabled = running || starting || stopping || deleting;
-                const badge = running
-                    ? '<span class="text-[10px] px-3 py-1 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/20">运行中</span>'
-                    : queued
-                        ? '<span class="text-[10px] px-3 py-1 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/20">已排队</span>'
-                        : '<span class="text-[10px] px-3 py-1 rounded-full bg-slate-700 text-slate-300">待命</span>';
-                const nextRun = (monitorState.next_runs || {})[task.name];
+                const nextRun = (monitorState.next_runs || {})[taskName];
+                const introExpanded = isTaskIntroExpanded(monitorTaskIntroExpanded, taskName);
+                const introText = buildMonitorTaskIntro(task, { running, queued, nextRun });
                 return `
-                    <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4">
-                        <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
-                            <div class="space-y-2">
-                                <div class="flex items-center gap-3 flex-wrap">
-                                    <div class="text-lg font-black text-white">${escapeHtml(task.name)}</div>
-                                    ${badge}
-                                    ${task.webhook_enabled ? '<span class="text-[10px] px-3 py-1 rounded-full bg-sky-500/15 text-sky-300 border border-sky-500/20">Webhook</span>' : ''}
-                                    ${task.incremental ? '<span class="text-[10px] px-3 py-1 rounded-full bg-violet-500/15 text-violet-300 border border-violet-500/20">增量</span>' : '<span class="text-[10px] px-3 py-1 rounded-full bg-red-500/10 text-red-300 border border-red-500/20">全量</span>'}
-                                </div>
-                                <div class="text-xs text-slate-400 leading-6">
-                                    <div>扫描路径：${escapeHtml(task.scan_path)}</div>
-                                    <div>目标路径：/strm/${escapeHtml(task.target_path)}</div>
-                                    <div>参数：重试 ${task.retries} 次 / 列目录延时 ${task.list_delay_ms}ms / 体积过滤 ${task.min_file_size_mb}MB / 执行延时 ${task.delay_seconds}s / 定时 ${task.cron_minutes || 0} 分钟</div>
-                                    <div>下次定时：${nextRun ? escapeHtml(nextRun) : '未开启'}</div>
-                                </div>
+                    <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-3 sm:p-4">
+                        <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
+                            <div class="min-w-0 flex-1 flex items-center justify-between gap-3">
+                                <button
+                                    type="button"
+                                    data-monitor-toggle-intro="${taskKey}"
+                                    aria-expanded="${introExpanded ? 'true' : 'false'}"
+                                    class="min-w-0 flex-1 text-left rounded-lg border border-transparent hover:border-slate-700/75 focus:outline-none focus:ring-2 focus:ring-sky-500/45 px-1 py-0.5"
+                                >
+                                    <div class="text-lg font-black text-white break-all leading-tight">${escapeHtml(taskName)}</div>
+                                </button>
+                                <button
+                                    type="button"
+                                    data-monitor-toggle-intro="${taskKey}"
+                                    aria-expanded="${introExpanded ? 'true' : 'false'}"
+                                    class="shrink-0 text-[11px] sm:text-xs font-bold text-sky-300 hover:text-sky-200 hover:underline underline-offset-2 rounded-lg px-1.5 py-1 focus:outline-none focus:ring-2 focus:ring-sky-500/45"
+                                >${introExpanded ? '收起简介' : '展开简介'}</button>
                             </div>
                             <div class="monitor-task-actions grid grid-cols-4 gap-2 shrink-0 w-full lg:w-auto">
                                 <button type="button" data-monitor-action="start" data-task-name="${taskKey}" class="px-2 sm:px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold ${startDisabled ? 'btn-disabled' : ''}" ${startDisabled ? 'disabled' : ''}>${starting ? '启动中...' : '运行'}</button>
@@ -1346,93 +1566,10 @@
                                 <button type="button" data-monitor-action="delete" data-task-name="${taskKey}" class="px-2 sm:px-3 py-2 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-300 text-sm font-bold ${deleteDisabled ? 'btn-disabled' : ''}" ${deleteDisabled ? 'disabled' : ''}>${deleting ? '删除中...' : '删除'}</button>
                             </div>
                         </div>
-                        ${task.webhook_enabled ? `<div class="mt-3 text-xs text-emerald-400">Webhook：IP:容器端口/webhook/${escapeHtml(task.name)}</div>` : ''}
+                        ${introExpanded ? `<div class="mt-3 text-xs text-slate-300 leading-6 rounded-xl border border-slate-700/90 bg-slate-950/45 px-3 py-2">${escapeHtml(introText)}</div>` : ''}
                     </div>
                 `;
             }).join('');
-        }
-
-        function isMonitorPageVisible() {
-            return !document.getElementById('page-monitor')?.classList.contains('hidden');
-        }
-
-        function renderMonitorUserscriptJobs() {
-            const container = document.getElementById('monitor-userscript-job-list');
-            const summaryEl = document.getElementById('monitor-userscript-job-summary');
-            if (!container || !summaryEl) return;
-
-            const jobs = Array.isArray(monitorUserscriptJobs) ? monitorUserscriptJobs : [];
-            const counts = monitorUserscriptJobCounts || getResourceJobCounts(jobs);
-            summaryEl.innerText = jobs.length
-                ? `最近 ${counts.total || jobs.length} 条油猴任务，处理中 ${counts.active || 0} 条，已完成 ${counts.completed || 0} 条${counts.failed ? `，失败 ${counts.failed} 条` : ''}`
-                : (monitorUserscriptJobsLoading ? '正在读取油猴导入任务...' : '暂无油猴脚本导入任务');
-
-            if (!jobs.length) {
-                container.innerHTML = monitorUserscriptJobsLoading
-                    ? `<div class="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">正在加载任务列表...</div>`
-                    : `<div class="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">暂无记录。油猴脚本推送成功后会在这里显示。</div>`;
-                return;
-            }
-
-            container.innerHTML = jobs.map(job => {
-                const hasMonitorTask = !!String(job.monitor_task_name || '').trim();
-                const normalizedStatus = String(job.status || '').toLowerCase();
-                const canManualRefresh = hasMonitorTask && !job.last_triggered_at && normalizedStatus === 'submitted';
-                const canCancel = ['pending', 'running', 'submitted'].includes(normalizedStatus);
-                const canRetry = normalizedStatus === 'failed';
-                const autoRefreshText = hasMonitorTask
-                    ? (job.auto_refresh ? `自动刷新 ${escapeHtml(String(job.refresh_delay_seconds || 0))} 秒` : '手动刷新')
-                    : '未绑定监控';
-                return `
-                    <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4">
-                        <div class="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
-                            <div class="min-w-0 space-y-2">
-                                <div class="flex items-center gap-2 flex-wrap">
-                                    <div class="text-sm font-black text-white">${escapeHtml(job.title || `任务 #${job.id}`)}</div>
-                                    ${buildResourceStatusBadge(job.status)}
-                                    <span class="text-[10px] px-2 py-1 rounded-full bg-slate-700 text-slate-100">#${job.id}</span>
-                                </div>
-                                <div class="text-xs text-slate-400 leading-6">
-                                    <div>保存路径：${escapeHtml(job.savepath || '--')}</div>
-                                    <div>监控任务：${escapeHtml(job.monitor_task_name || '--')}</div>
-                                    <div>刷新策略：${escapeHtml(getResourceRefreshTargetLabel(job.refresh_target_type))} · ${autoRefreshText}</div>
-                                    <div>创建时间：${escapeHtml(formatTimeText(job.created_at || '--'))}</div>
-                                </div>
-                                <div class="text-xs text-slate-300 break-all">${escapeHtml(job.status_detail || '--')}</div>
-                            </div>
-                            <div class="flex flex-wrap gap-2 shrink-0">
-                                <button type="button" data-monitor-userscript-action="cancel" data-resource-job-id="${job.id}" class="px-3 py-2 rounded-xl text-xs font-bold ${canCancel ? 'bg-amber-600 hover:bg-amber-500 text-white' : 'bg-slate-700 text-slate-400 btn-disabled'}" ${canCancel ? '' : 'disabled'}>取消</button>
-                                <button type="button" data-monitor-userscript-action="retry" data-resource-job-id="${job.id}" class="px-3 py-2 rounded-xl text-xs font-bold ${canRetry ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-slate-700 text-slate-400 btn-disabled'}" ${canRetry ? '' : 'disabled'}>重试</button>
-                                <button type="button" data-monitor-userscript-action="refresh" data-resource-job-id="${job.id}" class="px-3 py-2 rounded-xl text-xs font-bold ${canManualRefresh ? 'bg-sky-600 hover:bg-sky-500 text-white' : 'bg-slate-700 text-slate-400 btn-disabled'}" ${canManualRefresh ? '' : 'disabled'}>刷新</button>
-                            </div>
-                        </div>
-                    </div>
-                `;
-            }).join('');
-        }
-
-        async function refreshMonitorUserscriptJobs(force = false) {
-            if (monitorUserscriptJobsLoading) return;
-            if (!force && !isMonitorPageVisible()) return;
-            monitorUserscriptJobsLoading = true;
-            renderMonitorUserscriptJobs();
-            try {
-                const res = await fetch(`/monitor/userscript/jobs?limit=${encodeURIComponent(String(MONITOR_USERSCRIPT_JOB_LIMIT))}`);
-                const data = await res.json();
-                if (!res.ok || !data.ok) {
-                    throw new Error(data.msg || '读取油猴任务失败');
-                }
-                monitorUserscriptJobs = Array.isArray(data.jobs) ? data.jobs : [];
-                monitorUserscriptJobCounts = data.counts || getResourceJobCounts(monitorUserscriptJobs);
-            } catch (e) {
-                if (!monitorUserscriptJobs.length) {
-                    const summaryEl = document.getElementById('monitor-userscript-job-summary');
-                    if (summaryEl) summaryEl.innerText = `读取失败：${e.message || '请稍后重试'}`;
-                }
-            } finally {
-                monitorUserscriptJobsLoading = false;
-                renderMonitorUserscriptJobs();
-            }
         }
 
         function renderMonitorLogs() {
@@ -1458,7 +1595,6 @@
                 const res = await fetch('/monitor/status');
                 if (!res.ok) return;
                 applyMonitorState(await res.json());
-                if (isMonitorPageVisible()) refreshMonitorUserscriptJobs();
             } catch (e) {}
         }
 
@@ -1510,6 +1646,7 @@
                 next_runs: data.next_runs || subscriptionState.next_runs || {},
                 summary: data.summary || subscriptionState.summary || { step: '空闲', detail: '等待订阅任务' }
             };
+            subscriptionTaskIntroExpanded = pruneTaskIntroExpanded(subscriptionTaskIntroExpanded, subscriptionState.tasks);
 
             const stepEl = document.getElementById('subscription-summary-step');
             const detailEl = document.getElementById('subscription-summary-detail');
@@ -1522,6 +1659,53 @@
                 lastSubscriptionRenderKey = renderKey;
             }
             renderSubscriptionLogs();
+        }
+
+        function buildSubscriptionTaskIntro(task, {
+            status = 'idle',
+            queued = false,
+            nextRun = '',
+            isTv = false,
+            episodeText = '',
+            multiSeasonMode = false,
+        } = {}) {
+            const statusText = queued ? '已排队' : getSubscriptionStatusLabel(status);
+            const enabledText = task?.enabled === false ? '已停用' : '已启用';
+            const mediaText = isTv ? '电视剧' : '电影';
+            const titleText = String(task?.title || task?.name || '').trim() || '未命名影视';
+            const savepath = String(task?.savepath || '').trim() || '--';
+            const scheduleMinutes = Math.max(0, Number(task?.cron_minutes || 0) || 0);
+            const scheduleText = scheduleMinutes > 0
+                ? `每 ${scheduleMinutes} 分钟自动检索一次，下次定时 ${String(nextRun || '计算中')}`
+                : '未开启定时，仅支持手动运行';
+            const latestMatched = String(task?.matched_resource_title || '').trim();
+            const latestText = latestMatched ? `最近命中：${latestMatched}` : '最近尚未命中资源';
+            const modeText = isTv ? (multiSeasonMode ? '多季合一追更' : '单季追更') : '命中资源后即执行';
+            return `状态：${statusText}（${enabledText}）。${mediaText}《${titleText}》保存到 ${savepath}，${modeText}，${episodeText}；${scheduleText}；${latestText}。`;
+        }
+
+        function buildSubscriptionTaskProgressBar({ progress = 0, detail = '' } = {}) {
+            const progressValue = Math.max(0, Math.min(100, Number(progress || 0) || 0));
+            const progressWidth = progressValue <= 0 ? 2 : progressValue;
+            const detailText = String(detail || '').trim();
+            const detailLine = detailText ? `<div class="mt-1 text-[11px] text-slate-300 break-all">${escapeHtml(detailText)}</div>` : '';
+            return `
+                <div class="mt-2 rounded-xl border border-sky-500/25 bg-sky-500/10 px-3 py-2">
+                    <div class="flex items-center justify-between text-[11px] text-sky-200">
+                        <span>运行进度</span>
+                        <span class="font-bold">${progressValue}%</span>
+                    </div>
+                    <div class="mt-1.5 h-2 rounded-full bg-slate-800/80 overflow-hidden">
+                        <div class="h-full rounded-full bg-gradient-to-r from-sky-400 to-emerald-400 transition-width prog-glow" style="width: ${progressWidth}%"></div>
+                    </div>
+                    ${detailLine}
+                </div>
+            `;
+        }
+
+        function toggleSubscriptionTaskIntro(taskName) {
+            subscriptionTaskIntroExpanded = toggleTaskIntroExpanded(subscriptionTaskIntroExpanded, taskName);
+            renderSubscriptionTasks();
         }
 
         function renderSubscriptionLogs() {
@@ -2316,6 +2500,50 @@
             await refreshSubscriptionState();
         }
 
+        async function rebuildSubscriptionTask(name, { refreshEpisodeModal = false } = {}) {
+            const normalizedName = String(name || '').trim();
+            if (!normalizedName) return;
+            if (!confirm(`按当前保存目录重建“${normalizedName}”的追更进度和集数账本吗？`)) return;
+            try {
+                const res = await fetch('/subscription/rebuild', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: normalizedName })
+                });
+                const data = await res.json();
+                if (!res.ok || !data.ok) throw new Error(data.msg || '重建失败');
+                const episodeView = data.episode_view && typeof data.episode_view === 'object' ? data.episode_view : null;
+                if (episodeView) {
+                    subscriptionEpisodeViewCache[normalizedName] = {
+                        fetched_at: Date.now(),
+                        data: episodeView,
+                    };
+                    if (subscriptionEpisodeViewTaskName === normalizedName) {
+                        subscriptionEpisodeViewData = episodeView;
+                        subscriptionEpisodeViewError = '';
+                        subscriptionEpisodeViewLoading = false;
+                        if (refreshEpisodeModal) renderSubscriptionEpisodeModal();
+                    }
+                } else {
+                    delete subscriptionEpisodeViewCache[normalizedName];
+                }
+                delete subscriptionIntroEpisodeLookupFailedAt[normalizedName];
+                showToast(data.msg || '已完成目录重建', { tone: 'success', duration: 3200, placement: 'top-center' });
+                await refreshSubscriptionState();
+                if (refreshEpisodeModal && subscriptionEpisodeViewTaskName === normalizedName) {
+                    await refreshSubscriptionEpisodeView(true);
+                }
+            } catch (error) {
+                showToast(`重建失败：${error?.message || '请稍后重试'}`, { tone: 'error', duration: 3600, placement: 'top-center' });
+            }
+        }
+
+        async function rebuildCurrentSubscriptionEpisodeView() {
+            const taskName = String(subscriptionEpisodeViewTaskName || '').trim();
+            if (!taskName) return;
+            await rebuildSubscriptionTask(taskName, { refreshEpisodeModal: true });
+        }
+
         function renderSubscriptionTasks() {
             const container = document.getElementById('subscription-task-list');
             if (!container) return;
@@ -2333,56 +2561,60 @@
                 const progress = Math.max(0, Math.min(100, Number(task.progress || 0)));
                 const isTv = normalizeSubscriptionMediaType(task.media_type || 'movie') === 'tv';
                 const multiSeasonMode = resolveTaskMultiSeasonMode(task);
+                const introExpanded = isTaskIntroExpanded(subscriptionTaskIntroExpanded, taskName);
+                if (isTv && introExpanded) ensureSubscriptionIntroEpisode(taskName);
                 const episodeText = isTv
-                    ? `追更进度：E${Number(task.last_episode || 0)}${Number(task.total_episodes || 0) > 0 ? ` / E${Number(task.total_episodes || 0)}` : ''}`
+                    ? buildSubscriptionTaskEpisodeText(task, taskName, { introExpanded })
                     : '电影订阅：命中资源即执行';
-                const statusBadge = queued
-                    ? '<span class="text-[10px] px-3 py-1 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/20">已排队</span>'
-                    : buildSubscriptionStatusBadge(status);
+                const progressBarHtml = status === 'running'
+                    ? buildSubscriptionTaskProgressBar({
+                        progress,
+                        detail: String(task?.detail || '').trim(),
+                    })
+                    : '';
                 const startDisabled = subscriptionState.running || running;
                 const stopDisabled = !running;
+                const rebuildDisabled = running;
                 const actionGridClass = isTv
-                    ? 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 shrink-0'
-                    : 'grid grid-cols-2 md:grid-cols-4 gap-2 shrink-0';
+                    ? 'subscription-task-actions subscription-task-actions-tv grid grid-cols-3 sm:grid-cols-6 gap-2 shrink-0 w-full lg:w-auto'
+                    : 'subscription-task-actions subscription-task-actions-movie grid grid-cols-2 sm:grid-cols-4 gap-2 shrink-0 w-full lg:w-auto';
+                const rebuildButton = isTv
+                    ? `<button type="button" data-subscription-action="rebuild" data-task-name="${encodeURIComponent(taskName)}" class="px-4 py-2 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 text-sky-200 text-sm font-bold ${rebuildDisabled ? 'btn-disabled' : ''}" ${rebuildDisabled ? 'disabled' : ''}>校准</button>`
+                    : '';
                 const episodeViewButton = isTv
                     ? `<button type="button" data-subscription-action="episodes" data-task-name="${encodeURIComponent(taskName)}" class="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">集数视图</button>`
                     : '';
+                const introText = buildSubscriptionTaskIntro(task, { status, queued, nextRun, progress, isTv, episodeText, multiSeasonMode });
                 return `
-                    <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4">
-                        <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
-                            <div class="space-y-3 min-w-0 flex-1">
-                                <div class="flex items-center gap-3 flex-wrap">
-                                    <div class="text-lg font-black text-white">${escapeHtml(taskName)}</div>
-                                    ${statusBadge}
-                                    <span class="text-[10px] px-3 py-1 rounded-full ${task.enabled === false ? 'bg-slate-700 text-slate-400' : 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20'}">${task.enabled === false ? '已停用' : '已启用'}</span>
-                                    <span class="text-[10px] px-3 py-1 rounded-full bg-slate-700 text-slate-100">${isTv ? '电视剧' : '电影'}</span>
-                                    ${Number(task.tmdb_id || 0) > 0 ? `<span class="text-[10px] px-3 py-1 rounded-full bg-sky-500/15 text-sky-300 border border-sky-500/20">TMDB #${escapeHtml(String(task.tmdb_id || 0))}</span>` : ''}
-                                </div>
-                                <div class="text-xs text-slate-400 leading-6">
-                                    <div>订阅名称：${escapeHtml(task.title || '--')}</div>
-                                    <div>保存路径：${escapeHtml(task.savepath || '--')}</div>
-                                    <div>${escapeHtml(episodeText)}</div>
-                                    ${isTv ? `<div>订阅模式：${multiSeasonMode ? '多季合一' : '单季订阅'}</div>` : ''}
-                                    ${Number(task.tmdb_id || 0) > 0 ? `<div>TMDB：${escapeHtml(task.tmdb_title || task.title || '--')}${task.tmdb_year ? ` (${escapeHtml(task.tmdb_year)})` : ''}${isTv ? ` / ${task.tmdb_episode_mode === 'absolute' ? '绝对集序' : '按季集序'}` : ''}</div>` : ''}
-                                    <div>匹配阈值：${escapeHtml(String(task.min_score || 55))} / 清晰度：${escapeHtml(getSubscriptionQualityPriorityLabel(task.quality_priority || 'balanced'))}</div>
-                                    <div>定时：${Number(task.cron_minutes || 0)} 分钟 / 下次定时：${nextRun ? escapeHtml(nextRun) : '未开启'}</div>
-                                    <div>最新命中：${escapeHtml(task.matched_resource_title || '--')}</div>
-                                </div>
+                    <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-3 sm:p-4">
+                        <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
+                            <div class="min-w-0 flex-1 flex items-center justify-between gap-3">
+                                <button
+                                    type="button"
+                                    data-subscription-toggle-intro="${encodeURIComponent(taskName)}"
+                                    aria-expanded="${introExpanded ? 'true' : 'false'}"
+                                    class="min-w-0 flex-1 text-left rounded-lg border border-transparent hover:border-slate-700/75 focus:outline-none focus:ring-2 focus:ring-sky-500/45 px-1 py-0.5"
+                                >
+                                    <div class="text-lg font-black text-white break-all leading-tight">${escapeHtml(taskName)}</div>
+                                </button>
+                                <button
+                                    type="button"
+                                    data-subscription-toggle-intro="${encodeURIComponent(taskName)}"
+                                    aria-expanded="${introExpanded ? 'true' : 'false'}"
+                                    class="shrink-0 text-[11px] sm:text-xs font-bold text-sky-300 hover:text-sky-200 hover:underline underline-offset-2 rounded-lg px-1.5 py-1 focus:outline-none focus:ring-2 focus:ring-sky-500/45"
+                                >${introExpanded ? '收起简介' : '展开简介'}</button>
                             </div>
                             <div class="${actionGridClass}">
                                 <button type="button" data-subscription-action="start" data-task-name="${encodeURIComponent(taskName)}" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold ${startDisabled ? 'btn-disabled' : ''}" ${startDisabled ? 'disabled' : ''}>运行</button>
                                 <button type="button" data-subscription-action="stop" data-task-name="${encodeURIComponent(taskName)}" class="px-4 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 text-sm font-bold ${stopDisabled ? 'btn-disabled' : ''}" ${stopDisabled ? 'disabled' : ''}>中断</button>
                                 <button type="button" data-subscription-action="edit" data-task-name="${encodeURIComponent(taskName)}" class="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">编辑</button>
                                 <button type="button" data-subscription-action="delete" data-task-name="${encodeURIComponent(taskName)}" class="px-4 py-2 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-300 text-sm font-bold">删除</button>
+                                ${rebuildButton}
                                 ${episodeViewButton}
                             </div>
                         </div>
-                        <div class="mt-3 space-y-2">
-                            <div class="w-full bg-slate-950 rounded-full h-3 p-[2px] overflow-hidden">
-                                <div class="bg-gradient-to-r from-sky-600 to-emerald-500 h-full rounded-full transition-width" style="width: ${progress}%"></div>
-                            </div>
-                            <div class="text-xs text-slate-500">${escapeHtml(task.detail || '等待执行')}</div>
-                        </div>
+                        ${progressBarHtml}
+                        ${introExpanded ? `<div class="mt-3 text-xs text-slate-300 leading-6 rounded-xl border border-slate-700/90 bg-slate-950/45 px-3 py-2">${escapeHtml(introText)}</div>` : ''}
                     </div>
                 `;
             }).join('');
@@ -2405,6 +2637,74 @@
             });
             result.sort((a, b) => a - b);
             return result;
+        }
+
+        function getCachedSubscriptionEpisodePayload(taskName) {
+            const normalizedName = String(taskName || '').trim();
+            if (!normalizedName) return null;
+            const cached = subscriptionEpisodeViewCache[normalizedName];
+            if (!cached) return null;
+            const fetchedAt = Number(cached.fetched_at || 0) || 0;
+            if (fetchedAt <= 0) return null;
+            if ((Date.now() - fetchedAt) >= SUBSCRIPTION_EPISODE_CACHE_TTL_MS) return null;
+            return cached.data || null;
+        }
+
+        function resolveSubscriptionTaskSavedEpisode(taskName, task) {
+            const cachedPayload = getCachedSubscriptionEpisodePayload(taskName);
+            if (cachedPayload && typeof cachedPayload === 'object') {
+                return {
+                    episode: Math.max(0, parseInt(cachedPayload?.max_episode || '0', 10) || 0),
+                    confirmed: true,
+                };
+            }
+            const stats = task?.stats && typeof task.stats === 'object' ? task.stats : {};
+            const statsMaxEpisode = Math.max(0, parseInt(stats?.existing_episode_max || '0', 10) || 0);
+            return {
+                episode: statsMaxEpisode,
+                confirmed: statsMaxEpisode > 0,
+            };
+        }
+
+        function buildSubscriptionTaskEpisodeText(task, taskName, { introExpanded = false } = {}) {
+            const totalEpisodes = Math.max(0, parseInt(task?.total_episodes || '0', 10) || 0);
+            const stateEpisode = Math.max(0, parseInt(task?.last_episode || '0', 10) || 0);
+            const savedEpisode = resolveSubscriptionTaskSavedEpisode(taskName, task);
+            const progressEpisode = savedEpisode.confirmed ? savedEpisode.episode : stateEpisode;
+            let suffix = '';
+            if (savedEpisode.confirmed) suffix = '（按保存文件确认）';
+            else if (introExpanded && subscriptionIntroEpisodeLookupLoading[taskName]) suffix = '（正在按保存文件核对）';
+            return `追更进度：E${progressEpisode}${totalEpisodes > 0 ? ` / E${totalEpisodes}` : ''}${suffix}`;
+        }
+
+        async function ensureSubscriptionIntroEpisode(taskName) {
+            const normalizedName = String(taskName || '').trim();
+            if (!normalizedName) return;
+            const task = getSubscriptionTaskByName(normalizedName);
+            if (!task || normalizeSubscriptionMediaType(task.media_type || 'movie') !== 'tv') return;
+            if (getCachedSubscriptionEpisodePayload(normalizedName)) return;
+            if (subscriptionIntroEpisodeLookupLoading[normalizedName]) return;
+            const failedAt = Number(subscriptionIntroEpisodeLookupFailedAt[normalizedName] || 0) || 0;
+            if (failedAt > 0 && (Date.now() - failedAt) < SUBSCRIPTION_INTRO_EPISODE_RETRY_MS) return;
+
+            subscriptionIntroEpisodeLookupLoading[normalizedName] = true;
+            try {
+                const res = await fetch(`/subscription/episodes?name=${encodeURIComponent(normalizedName)}`);
+                const data = await res.json();
+                if (!res.ok || !data.ok) throw new Error(data.msg || '读取集数失败');
+                subscriptionEpisodeViewCache[normalizedName] = {
+                    fetched_at: Date.now(),
+                    data,
+                };
+                delete subscriptionIntroEpisodeLookupFailedAt[normalizedName];
+            } catch (_) {
+                subscriptionIntroEpisodeLookupFailedAt[normalizedName] = Date.now();
+            } finally {
+                delete subscriptionIntroEpisodeLookupLoading[normalizedName];
+                if (isTaskIntroExpanded(subscriptionTaskIntroExpanded, normalizedName)) {
+                    renderSubscriptionTasks();
+                }
+            }
         }
 
         function renderSubscriptionEpisodeModal() {
@@ -2731,6 +3031,15 @@
             if (normalized === 'file') return '文件';
             if (normalized === 'mixed') return '混合';
             return '未指定';
+        }
+
+        function getResourceJobSourceLabel(source) {
+            const normalized = String(source || '').trim().toLowerCase();
+            if (normalized === 'manual_import') return '手动导入';
+            if (normalized === 'subscription_auto') return '订阅自动';
+            if (normalized === 'userscript_webhook') return '油猴脚本';
+            if (normalized === 'webhook') return 'Webhook';
+            return '未知来源';
         }
 
         function formatResourceSyncTime(value) {
@@ -4965,15 +5274,6 @@
             const counts = getResourceJobCounts(jobs);
             if (!container) return;
 
-            const totalEl = document.getElementById('resource-job-stat-total');
-            const activeEl = document.getElementById('resource-job-stat-active');
-            const completedEl = document.getElementById('resource-job-stat-completed');
-            const failedEl = document.getElementById('resource-job-stat-failed');
-            if (totalEl) totalEl.innerText = String(counts.total);
-            if (activeEl) activeEl.innerText = String(counts.active);
-            if (completedEl) completedEl.innerText = String(counts.completed);
-            if (failedEl) failedEl.innerText = String(counts.failed);
-
             renderResourceJobFilters(counts);
 
             if (summary) {
@@ -4999,6 +5299,8 @@
                 const autoRefreshText = hasMonitorTask
                     ? (job.auto_refresh ? `自动刷新 ${escapeHtml(String(job.refresh_delay_seconds || 0))} 秒` : '手动刷新')
                     : '未绑定监控';
+                const linkTypeLabel = getResourceLinkTypeLabel(job.link_type || '');
+                const sourceLabel = getResourceJobSourceLabel(job.job_source || '');
                 return `
                     <div class="resource-job-card">
                         <div class="resource-job-card-head">
@@ -5006,6 +5308,8 @@
                                 <div class="flex flex-wrap items-center gap-2">
                                     <div class="resource-job-card-title">${escapeHtml(job.title || `任务 #${job.id}`)}</div>
                                     ${buildResourceStatusBadge(job.status)}
+                                    <span class="text-[10px] px-3 py-1 rounded-full bg-sky-500/10 text-sky-200 border border-sky-500/20">${escapeHtml(linkTypeLabel)}</span>
+                                    <span class="text-[10px] px-3 py-1 rounded-full bg-violet-500/10 text-violet-200 border border-violet-500/20">${escapeHtml(sourceLabel)}</span>
                                     <span class="text-[10px] px-3 py-1 rounded-full bg-slate-700 text-slate-100">#${job.id}</span>
                                 </div>
                                 <div class="resource-job-card-grid">
@@ -5055,6 +5359,7 @@
             badge.classList.toggle('hidden', activeCount <= 0);
             btn.classList.toggle('border-sky-500', activeCount > 0);
             btn.classList.toggle('text-sky-100', activeCount > 0);
+            btn.classList.toggle('resource-job-trigger-active', activeCount > 0 || resourceJobModalOpen);
             btn.setAttribute('aria-expanded', resourceJobModalOpen ? 'true' : 'false');
         }
 
@@ -5118,10 +5423,20 @@
         function toggleResourceJobModal(force) {
             const modal = document.getElementById('resource-job-modal');
             if (!modal) return;
-            resourceJobModalOpen = typeof force === 'boolean' ? force : !resourceJobModalOpen;
+            const nextOpen = typeof force === 'boolean' ? !!force : !resourceJobModalOpen;
+            if (nextOpen === resourceJobModalOpen) {
+                syncResourceJobModalTrigger();
+                return;
+            }
+            resourceJobModalOpen = nextOpen;
             modal.classList.toggle('hidden', !resourceJobModalOpen);
-            if (!resourceJobModalOpen) closeResourceJobClearMenu();
-            else syncResourceJobClearMenuState();
+            if (resourceJobModalOpen) {
+                lockPageScroll();
+                syncResourceJobClearMenuState();
+            } else {
+                closeResourceJobClearMenu();
+                unlockPageScroll();
+            }
             syncResourceJobModalTrigger();
         }
 
@@ -6429,7 +6744,6 @@
             const data = await res.json();
             if (!res.ok || !data.ok) return alert(`❌ ${data.msg || '触发刷新失败'}`);
             await refreshResourceState();
-            if (isMonitorPageVisible()) refreshMonitorUserscriptJobs(true);
             alert('✅ 已触发文件夹监控任务');
         }
 
@@ -6446,7 +6760,6 @@
                 return;
             }
             await refreshResourceState();
-            if (isMonitorPageVisible()) refreshMonitorUserscriptJobs(true);
             showToast(`任务 #${jobId} 已取消`, { tone: 'success', duration: 2600, placement: 'top-center' });
         }
 
@@ -6462,7 +6775,6 @@
                 return;
             }
             await refreshResourceState();
-            if (isMonitorPageVisible()) refreshMonitorUserscriptJobs(true);
             showToast(`已创建重试任务 #${Number(data.job_id || 0) || '--'}`, { tone: 'success', duration: 2800, placement: 'top-center' });
         }
 
@@ -6581,6 +6893,11 @@
                     monitor_tasks: cfg.monitor_tasks || [],
                     cookie_configured: !!String(cfg.cookie_115 || '').trim()
                 });
+                applySign115State({
+                    ...sign115State,
+                    enabled: !!cfg.sign115_enabled,
+                    cron_time: String(cfg.sign115_cron_time || '09:00')
+                });
                 renderTgProxyTestStatus();
                 resetMonitorForm();
                 resetSubscriptionForm();
@@ -6588,6 +6905,7 @@
                 syncResourceSourceSelect();
                 refreshWebhookHint();
                 renderVersionInfoPanel();
+                await refreshSign115Status(true);
             } catch (e) {}
         }
 
@@ -6743,6 +7061,13 @@
             renderResourceJobs();
         });
         document.getElementById('subscription-task-list').addEventListener('click', async (e) => {
+            const introBtn = e.target.closest('[data-subscription-toggle-intro]');
+            if (introBtn) {
+                const name = decodeURIComponent(introBtn.dataset.subscriptionToggleIntro || '');
+                if (!name) return;
+                toggleSubscriptionTaskIntro(name);
+                return;
+            }
             const btn = e.target.closest('[data-subscription-action]');
             if (!btn) return;
             const action = btn.dataset.subscriptionAction || '';
@@ -6752,9 +7077,17 @@
             if (action === 'stop') await stopSubscriptionTask(name);
             if (action === 'edit') editSubscriptionTask(name);
             if (action === 'delete') await deleteSubscriptionTask(name);
+            if (action === 'rebuild') await rebuildSubscriptionTask(name);
             if (action === 'episodes') await openSubscriptionEpisodeModal(name);
         });
         document.getElementById('monitor-task-list').addEventListener('click', async (e) => {
+            const introBtn = e.target.closest('[data-monitor-toggle-intro]');
+            if (introBtn) {
+                const name = decodeURIComponent(introBtn.dataset.monitorToggleIntro || '');
+                if (!name) return;
+                toggleMonitorTaskIntro(name);
+                return;
+            }
             const btn = e.target.closest('[data-monitor-action]');
             if (!btn) return;
             const action = btn.dataset.monitorAction || '';
@@ -6764,16 +7097,6 @@
             if (action === 'stop') await stopMonitorTask(name);
             if (action === 'edit') editMonitorTask(name);
             if (action === 'delete') await deleteMonitorTask(name);
-        });
-        document.getElementById('monitor-userscript-job-list').addEventListener('click', async (e) => {
-            const btn = e.target.closest('[data-monitor-userscript-action]');
-            if (!btn) return;
-            const action = btn.dataset.monitorUserscriptAction || '';
-            const jobId = parseInt(btn.dataset.resourceJobId || '0', 10);
-            if (!jobId) return;
-            if (action === 'refresh') await triggerResourceJobRefresh(jobId);
-            if (action === 'cancel') await triggerResourceJobCancel(jobId);
-            if (action === 'retry') await triggerResourceJobRetry(jobId);
         });
         document.getElementById('monitor-modal').addEventListener('click', (e) => {
             if (e.target.id === 'monitor-modal') closeMonitorModal();
@@ -6976,7 +7299,7 @@
         }
         applyThemeFromStorage();
         initMainTabRow();
-        init();
+        const initPromise = init();
         syncResourceBackTopButton();
         syncSettingsSaveDock();
         syncMainTabRowState();
@@ -6984,9 +7307,12 @@
         refreshMonitorState();
         refreshSubscriptionState();
         refreshResourceState();
-        connectStatusStream();
+        initPromise.finally(() => {
+            connectStatusStream();
+        });
         refreshVersionInfo();
         setInterval(() => refreshVersionInfo(false), VERSION_REFRESH_INTERVAL);
+        setInterval(() => refreshSign115Status(false), SIGN115_REFRESH_INTERVAL);
         setInterval(() => {
             const keyword = document.getElementById('resource-search-input')?.value?.trim() || '';
             if (keyword && !isDirectImportInput(keyword)) {

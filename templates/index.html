@@ -17,8 +17,32 @@
             <div class="flex items-center justify-between gap-2">
                 <h1 class="nav-title text-xl font-bold bg-gradient-to-r from-sky-400 to-emerald-400 bg-clip-text text-transparent">115 Media Hub</h1>
                 <div id="main-nav-actions" class="flex items-center gap-2">
-                    <a href="/logout" class="text-xs bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white px-3 py-1 rounded-lg border border-red-500/20 transition-all font-bold" aria-label="退出登录">退出登录</a>
-                    <button id="theme-toggle" class="text-xs bg-slate-700/40 text-slate-100 px-2 py-1 rounded-lg border border-slate-500/40 hover:bg-slate-600 transition-all" onclick="toggleTheme()" aria-label="切换夜间/日间模式" title="切换夜间/日间模式">🌙 夜间</button>
+                    <button
+                        id="sign115-indicator"
+                        type="button"
+                        onclick="manualSign115(true)"
+                        class="nav-action-btn text-xs bg-slate-700/50 text-slate-100 hover:bg-slate-600 px-3 py-1 rounded-lg border border-slate-500/40 transition-all font-bold inline-flex items-center gap-1.5"
+                        title="115 每日签到状态"
+                    >
+                        <span aria-hidden="true">🍁</span>
+                        <span id="sign115-indicator-text">签到状态</span>
+                    </button>
+                    <button
+                        id="resource-job-modal-toggle"
+                        type="button"
+                        class="nav-action-btn nav-task-center-btn resource-job-trigger"
+                        aria-expanded="false"
+                        aria-label="打开任务列表"
+                        title="任务列表"
+                    >
+                        <svg class="nav-task-center-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <path d="M4 6h16M4 12h16M4 18h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                        </svg>
+                        <span class="nav-task-center-text">任务</span>
+                        <span id="resource-job-modal-badge" class="resource-job-trigger-badge hidden">0</span>
+                    </button>
+                    <a href="/logout" class="nav-action-btn text-xs bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white px-3 py-1 rounded-lg border border-red-500/20 transition-all font-bold" aria-label="退出登录">退出登录</a>
+                    <button id="theme-toggle" class="nav-action-btn text-xs bg-slate-700/40 text-slate-100 px-2 py-1 rounded-lg border border-slate-500/40 hover:bg-slate-600 transition-all" onclick="toggleTheme()" aria-label="切换夜间/日间模式" title="切换夜间/日间模式">🌙 夜间</button>
                 </div>
             </div>
             <div id="tab-row-shell" class="tab-row-shell">
@@ -102,10 +126,6 @@
                         </div>
                         <button id="resource-search-btn" type="button" onclick="searchResources()" class="resource-search-btn bg-sky-600 hover:bg-sky-500 text-white shadow-lg">搜索</button>
                         <button id="resource-sync-btn" type="button" onclick="syncResourceChannels(true)" class="resource-search-btn bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700">同步频道</button>
-                        <button id="resource-job-modal-toggle" type="button" class="resource-search-btn resource-job-trigger bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700" aria-expanded="false">
-                            任务列表
-                            <span id="resource-job-modal-badge" class="resource-job-trigger-badge hidden">0</span>
-                        </button>
                     </div>
                 </div>
             </div>
@@ -344,6 +364,38 @@
                         <div class="text-xs text-slate-500 leading-6">
                             当前支持 magnet 离线下载与 115 分享链接转存；保存路径会自动映射到 OpenList 挂载目录，并按路径命中文件夹监控任务。
                         </div>
+                        <div class="rounded-2xl border border-slate-700/80 bg-slate-900/50 p-4 space-y-3">
+                            <label class="flex items-center gap-3 cursor-pointer text-sm">
+                                <input type="checkbox" id="subscription_batch_refresh_enabled" class="ui-checkbox">
+                                订阅导入启用批次收口刷新（灰度）
+                            </label>
+                            <div class="text-xs text-slate-500 leading-6">
+                                开启后，订阅任务会为本次执行打批次号（run_id），仅统计本批次成功入库任务，并按“监控任务 + 保存路径”合并后统一触发刷新；关闭后恢复当前“逐任务触发刷新”的行为。
+                            </div>
+                        </div>
+
+                        <div class="rounded-2xl border border-slate-700/80 bg-slate-900/50 p-4 space-y-4">
+                            <div class="flex flex-wrap justify-between gap-3 items-center">
+                                <label class="flex items-center gap-3 cursor-pointer text-sm">
+                                    <input type="checkbox" id="sign115_enabled" class="ui-checkbox">
+                                    启用 115 每日签到
+                                </label>
+                                <button type="button" onclick="manualSign115(true)" class="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold">立即签到</button>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">签到时间（每天）</span>
+                                    <input id="sign115_cron_time" type="time" step="60" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="09:00">
+                                </label>
+                                <div id="sign115-settings-status-card" class="sign115-settings-status-card text-xs text-slate-400 leading-6 rounded-xl border border-slate-700/70 bg-slate-950/70 px-3 py-3" data-sign-tone="idle">
+                                    <div class="sign115-settings-status-title text-slate-300 font-bold mb-1">签到状态</div>
+                                    <div id="sign115-settings-hint" class="sign115-settings-status-hint">尚未检查签到状态</div>
+                                </div>
+                            </div>
+                            <div class="text-xs text-slate-500 leading-6">
+                                使用当前填写的 115 Cookie 执行签到。开启后每天会在指定时间自动签到，也可点击“立即签到”手动执行。
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -396,31 +448,15 @@
                         <div class="text-xs text-slate-400">执行前会先触发 `reload(refresh=true)`。Webhook 优先尝试定位变动子目录，只刷新对应目录。</div>
                     </div>
                     <div class="flex items-center gap-3 flex-wrap">
-                        <button onclick="openNewMonitorTask()" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold min-h-[42px]">+ 新增任务</button>
                         <div class="text-xs px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-300">
                             当前状态：<span id="monitor-summary-step" class="text-sky-400 font-bold">空闲</span>
                             <span class="text-slate-500"> / </span>
                             <span id="monitor-summary-detail">等待监控任务</span>
                         </div>
+                        <button onclick="openNewMonitorTask()" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold min-h-[42px]">+ 新增任务</button>
                     </div>
                 </div>
                 <div id="monitor-task-list" class="space-y-3 mt-5"></div>
-            </div>
-
-            <div class="group-card">
-                <div class="flex flex-wrap justify-between gap-3 items-start">
-                    <div>
-                        <h3 class="group-title mb-2">油猴脚本导入磁力任务</h3>
-                        <div class="text-xs text-slate-400">展示最近由油猴脚本通过 webhook 创建的磁力任务，可直接取消、重试和手动触发刷新。</div>
-                    </div>
-                    <div class="flex items-center gap-2">
-                        <button onclick="refreshMonitorUserscriptJobs(true)" class="px-3 py-1 text-xs rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300">刷新列表</button>
-                    </div>
-                </div>
-                <div id="monitor-userscript-job-summary" class="mt-3 text-xs px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-300">
-                    暂无油猴脚本导入任务
-                </div>
-                <div id="monitor-userscript-job-list" class="space-y-3 mt-4"></div>
             </div>
 
             <div class="group-card">
@@ -729,6 +765,7 @@
                         <div id="subscription-episode-modal-summary" class="text-xs text-slate-400 mt-2">点击任务卡片里的“集数视图”查看。</div>
                     </div>
                     <div class="flex items-center gap-2">
+                        <button type="button" onclick="rebuildCurrentSubscriptionEpisodeView()" class="px-3 py-2 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 text-sky-200 text-xs font-bold">按目录重建</button>
                         <button type="button" onclick="refreshSubscriptionEpisodeView(true)" class="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-bold">刷新</button>
                         <button type="button" onclick="closeSubscriptionEpisodeModal()" class="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-bold">关闭</button>
                     </div>
@@ -1048,24 +1085,6 @@
                             </div>
                         </div>
                         <button type="button" class="resource-job-modal-close" onclick="toggleResourceJobModal(false)" aria-label="关闭任务列表">✕</button>
-                    </div>
-                </div>
-                <div class="resource-job-modal-stats">
-                    <div class="resource-job-stat-card">
-                        <div class="resource-job-stat-label">最近任务</div>
-                        <div id="resource-job-stat-total" class="resource-job-stat-value">0</div>
-                    </div>
-                    <div class="resource-job-stat-card">
-                        <div class="resource-job-stat-label">处理中</div>
-                        <div id="resource-job-stat-active" class="resource-job-stat-value">0</div>
-                    </div>
-                    <div class="resource-job-stat-card">
-                        <div class="resource-job-stat-label">已完成</div>
-                        <div id="resource-job-stat-completed" class="resource-job-stat-value">0</div>
-                    </div>
-                    <div class="resource-job-stat-card">
-                        <div class="resource-job-stat-label">失败</div>
-                        <div id="resource-job-stat-failed" class="resource-job-stat-value">0</div>
                     </div>
                 </div>
                 <div class="resource-job-modal-toolbar">

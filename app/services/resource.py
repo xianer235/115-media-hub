@@ -250,6 +250,8 @@ async def run_resource_job(job_id: int) -> None:
             response = response_bundle.get("response", {}) if isinstance(response_bundle, dict) else {}
             resolved_selection = merge_share_selection_meta(job_selection, response_bundle.get("selection", {}))
             detail = str(response.get("error", "")).strip() or str(response.get("msg", "")).strip() or "115 已接收转存任务"
+            if bool(response_bundle.get("duplicate_receive", False)):
+                detail = f"{detail}（已按幂等结果处理）"
 
             resource_title_rel = normalize_relative_path(job.get("title", "") or resource.get("title", ""))
             current_sharetitle = normalize_relative_path(job.get("sharetitle", ""))

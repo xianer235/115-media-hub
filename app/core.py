@@ -10,7 +10,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 from html import unescape
 from typing import Any, AsyncIterator, Dict, List, Optional, Set, Tuple
 
@@ -224,6 +224,9 @@ def default_config() -> Dict[str, Any]:
         "alist_url": "",
         "alist_token": "",
         "cookie_115": "",
+        "sign115_enabled": False,
+        "sign115_cron_time": "09:00",
+        "subscription_batch_refresh_enabled": False,
         "tg_proxy_enabled": False,
         "tg_proxy_protocol": "http",
         "tg_proxy_host": "",
@@ -364,12 +367,29 @@ def resolve_subscription_tv_total_episodes(task: Dict[str, Any], state_total: in
     multi_season_mode = is_subscription_multi_season_mode(payload)
     configured_total = max(0, int(payload.get("total_episodes", 0) or 0))
     tmdb_total = max(0, int(payload.get("tmdb_total_episodes", 0) or 0))
+    tmdb_total_seasons = max(0, int(payload.get("tmdb_total_seasons", 0) or 0))
     season_total = get_subscription_tmdb_season_total_episodes(payload)
-    if configured_total > 0:
-        # 兼容历史任务：旧版本可能把 TMDB 全季总集数写进 total_episodes，
-        # 在“单季订阅”下应优先回落为当前季集数，避免显示和追更进度异常放大。
-        if (not multi_season_mode) and season_total > 0 and tmdb_total > 0 and configured_total == tmdb_total and season_total != tmdb_total:
+    state_total_value = max(0, int(state_total or 0))
+
+    # 历史任务兼容：单季任务但季映射缺失时，旧数据可能把全剧总集数写入 total/state。
+    if (not multi_season_mode) and season_total <= 0 and tmdb_total > 0 and tmdb_total_seasons > 1:
+        if configured_total == tmdb_total:
+            configured_total = 0
+        if state_total_value == tmdb_total:
+            state_total_value = 0
+
+    if (not multi_season_mode) and season_total > 0:
+        if configured_total <= 0:
             return season_total
+        # 单季模式下，若任务总集数被历史流程写成“全剧总集数”，应回落到当前季集数。
+        if tmdb_total > 0:
+            if configured_total == tmdb_total and season_total != tmdb_total:
+                return season_total
+            if configured_total > season_total and configured_total <= tmdb_total:
+                return season_total
+        return configured_total
+
+    if configured_total > 0:
         return configured_total
 
     if multi_season_mode:
@@ -379,7 +399,7 @@ def resolve_subscription_tv_total_episodes(task: Dict[str, Any], state_total: in
         if season_total > 0:
             return season_total
 
-    return max(0, int(state_total or 0))
+    return state_total_value
 
 
 def convert_subscription_episode_to_absolute(task: Dict[str, Any], season: int, episode: int) -> int:
@@ -572,6 +592,18 @@ def normalize_resource_source(source: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def normalize_sign115_cron_time(value: Any, fallback: str = "09:00") -> str:
+    text = str(value or "").strip()
+    if not text:
+        text = str(fallback or "09:00").strip() or "09:00"
+    match = re.fullmatch(r"([01]?\d|2[0-3]):([0-5]\d)", text)
+    if not match:
+        return "09:00"
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    return f"{hour:02d}:{minute:02d}"
+
+
 def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     merged = default_config()
     merged.update(cfg or {})
@@ -582,6 +614,12 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         merged["alist_token"] = ""
     if "cookie_115" not in merged:
         merged["cookie_115"] = ""
+    if "sign115_enabled" not in merged:
+        merged["sign115_enabled"] = False
+    if "sign115_cron_time" not in merged:
+        merged["sign115_cron_time"] = "09:00"
+    if "subscription_batch_refresh_enabled" not in merged:
+        merged["subscription_batch_refresh_enabled"] = False
     if "tg_proxy_enabled" not in merged:
         merged["tg_proxy_enabled"] = False
     if "tg_proxy_protocol" not in merged:
@@ -662,6 +700,9 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     merged["alist_url"] = str(merged.get("alist_url", "")).strip().rstrip("/")
     merged["webhook_secret"] = str(merged.get("webhook_secret", "")).strip()
     merged["cookie_115"] = str(merged.get("cookie_115", "")).strip()
+    merged["sign115_enabled"] = bool(merged.get("sign115_enabled", False))
+    merged["sign115_cron_time"] = normalize_sign115_cron_time(merged.get("sign115_cron_time", "09:00"))
+    merged["subscription_batch_refresh_enabled"] = bool(merged.get("subscription_batch_refresh_enabled", False))
     merged["tg_proxy_enabled"] = bool(merged.get("tg_proxy_enabled", False))
     merged["tg_proxy_protocol"] = str(merged.get("tg_proxy_protocol", "http") or "http").strip().lower()
     if merged["tg_proxy_protocol"] not in ("http", "https"):
@@ -874,6 +915,28 @@ def ensure_db() -> None:
         )
         """
     )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS subscription_episode_ledger (
+            task_name TEXT NOT NULL,
+            episode INTEGER NOT NULL,
+            season INTEGER NOT NULL DEFAULT 0,
+            media_type TEXT NOT NULL DEFAULT 'tv',
+            best_score INTEGER NOT NULL DEFAULT 0,
+            best_resolution INTEGER NOT NULL DEFAULT 0,
+            source_fp TEXT NOT NULL DEFAULT '',
+            content_fp TEXT NOT NULL DEFAULT '',
+            link_type TEXT NOT NULL DEFAULT '',
+            link_url TEXT NOT NULL DEFAULT '',
+            resource_id INTEGER NOT NULL DEFAULT 0,
+            job_id INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'active',
+            first_seen_at TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (task_name, episode)
+        )
+        """
+    )
     cursor.execute("PRAGMA table_info(resource_jobs)")
     job_columns = {str(row[1]) for row in cursor.fetchall()}
     if "extra_json" not in job_columns:
@@ -890,6 +953,9 @@ def ensure_db() -> None:
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_resource_jobs_status ON resource_jobs(status)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_subscription_state_status ON subscription_task_state(status)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_subscription_matches_task ON subscription_matches(task_name, matched_at DESC)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_subscription_episode_ledger_task_status ON subscription_episode_ledger(task_name, status)"
+    )
     cursor.execute(
         """
         SELECT id, last_seen_at, extra_json
@@ -1515,6 +1581,7 @@ def serialize_resource_job_row(row: Optional[sqlite3.Row], include_private: bool
     if include_private:
         data["_snapshot"] = snapshot
     data["auto_refresh"] = bool(data.get("auto_refresh"))
+    data["job_source"] = str(data["extra"].get("job_source", "") or "").strip()
     data["refresh_target_type"] = str(data["extra"].get("refresh_target_type", "") or "").strip()
     data["share_root_title"] = str(data["extra"].get("share_root_title", "") or "").strip()
     data["message_url"] = str(snapshot.get("message_url", "") or "").strip()
@@ -2164,6 +2231,254 @@ def create_subscription_match(
     conn.close()
 
 
+def load_subscription_episode_ledger(task_name: str, include_stale: bool = False) -> Dict[int, Dict[str, Any]]:
+    normalized_task_name = str(task_name or "").strip()
+    if not normalized_task_name:
+        return {}
+    ensure_db()
+    conn = open_db()
+    cursor = conn.cursor()
+    if include_stale:
+        cursor.execute(
+            """
+            SELECT *
+            FROM subscription_episode_ledger
+            WHERE task_name = ?
+            ORDER BY episode ASC
+            """,
+            (normalized_task_name,),
+        )
+    else:
+        cursor.execute(
+            """
+            SELECT *
+            FROM subscription_episode_ledger
+            WHERE task_name = ? AND status = 'active'
+            ORDER BY episode ASC
+            """,
+            (normalized_task_name,),
+        )
+    rows = cursor.fetchall()
+    conn.close()
+
+    ledger: Dict[int, Dict[str, Any]] = {}
+    for row in rows:
+        data = sqlite_row_to_dict(row)
+        episode_no = max(0, int(data.get("episode", 0) or 0))
+        if episode_no <= 0:
+            continue
+        ledger[episode_no] = {
+            "task_name": str(data.get("task_name", "") or "").strip(),
+            "episode": episode_no,
+            "season": max(0, int(data.get("season", 0) or 0)),
+            "media_type": str(data.get("media_type", "tv") or "tv").strip().lower() or "tv",
+            "best_score": max(0, int(data.get("best_score", 0) or 0)),
+            "best_resolution": max(0, int(data.get("best_resolution", 0) or 0)),
+            "source_fp": str(data.get("source_fp", "") or "").strip(),
+            "content_fp": str(data.get("content_fp", "") or "").strip(),
+            "link_type": str(data.get("link_type", "") or "").strip().lower(),
+            "link_url": str(data.get("link_url", "") or "").strip(),
+            "resource_id": max(0, int(data.get("resource_id", 0) or 0)),
+            "job_id": max(0, int(data.get("job_id", 0) or 0)),
+            "status": str(data.get("status", "active") or "active").strip().lower(),
+            "first_seen_at": str(data.get("first_seen_at", "") or "").strip(),
+            "updated_at": str(data.get("updated_at", "") or "").strip(),
+        }
+    return ledger
+
+
+def reconcile_subscription_episode_ledger(task_name: str, existing_episodes: Set[int]) -> Dict[str, int]:
+    normalized_task_name = str(task_name or "").strip()
+    if not normalized_task_name:
+        return {"activated": 0, "staled": 0}
+    normalized_existing = {max(0, int(value or 0)) for value in (existing_episodes or set()) if max(0, int(value or 0)) > 0}
+
+    ensure_db()
+    conn = open_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT episode, status
+        FROM subscription_episode_ledger
+        WHERE task_name = ?
+        """,
+        (normalized_task_name,),
+    )
+    rows = cursor.fetchall()
+    if not rows:
+        conn.close()
+        return {"activated": 0, "staled": 0}
+
+    now_iso = now_text()
+    activate_rows: List[Tuple[str, str, int]] = []
+    stale_rows: List[Tuple[str, str, int]] = []
+    for row in rows:
+        episode_no = max(0, int(row["episode"] or 0))
+        if episode_no <= 0:
+            continue
+        current_status = str(row["status"] or "active").strip().lower() or "active"
+        target_status = "active" if episode_no in normalized_existing else "stale"
+        if current_status == target_status:
+            continue
+        payload = (target_status, now_iso, normalized_task_name, episode_no)
+        if target_status == "active":
+            activate_rows.append(payload)
+        else:
+            stale_rows.append(payload)
+
+    if activate_rows:
+        cursor.executemany(
+            """
+            UPDATE subscription_episode_ledger
+            SET status = ?, updated_at = ?
+            WHERE task_name = ? AND episode = ?
+            """,
+            activate_rows,
+        )
+    if stale_rows:
+        cursor.executemany(
+            """
+            UPDATE subscription_episode_ledger
+            SET status = ?, updated_at = ?
+            WHERE task_name = ? AND episode = ?
+            """,
+            stale_rows,
+        )
+    conn.commit()
+    conn.close()
+    return {"activated": len(activate_rows), "staled": len(stale_rows)}
+
+
+def upsert_subscription_episode_ledger(
+    task_name: str,
+    episodes: Set[int],
+    media_type: str = "tv",
+    season: int = 0,
+    score: int = 0,
+    resolution: int = 0,
+    source_fp: str = "",
+    content_fp: str = "",
+    link_type: str = "",
+    link_url: str = "",
+    resource_id: int = 0,
+    job_id: int = 0,
+) -> int:
+    normalized_task_name = str(task_name or "").strip()
+    if not normalized_task_name:
+        return 0
+    normalized_episodes = sorted({max(0, int(value or 0)) for value in (episodes or set()) if max(0, int(value or 0)) > 0})
+    if not normalized_episodes:
+        return 0
+
+    normalized_media_type = str(media_type or "tv").strip().lower() or "tv"
+    normalized_season = max(0, int(season or 0))
+    normalized_score = max(0, int(score or 0))
+    normalized_resolution = max(0, int(resolution or 0))
+    normalized_source_fp = str(source_fp or "").strip()
+    normalized_content_fp = str(content_fp or "").strip()
+    normalized_link_type = str(link_type or "").strip().lower()
+    normalized_link_url = str(link_url or "").strip()
+    normalized_resource_id = max(0, int(resource_id or 0))
+    normalized_job_id = max(0, int(job_id or 0))
+    now_iso = now_text()
+
+    ensure_db()
+    conn = open_db()
+    cursor = conn.cursor()
+    changed = 0
+    for episode_no in normalized_episodes:
+        cursor.execute(
+            """
+            SELECT best_score, best_resolution, first_seen_at, status
+            FROM subscription_episode_ledger
+            WHERE task_name = ? AND episode = ?
+            """,
+            (normalized_task_name, episode_no),
+        )
+        row = cursor.fetchone()
+        if row:
+            existing_score = max(0, int(row["best_score"] or 0))
+            existing_resolution = max(0, int(row["best_resolution"] or 0))
+            existing_first_seen = str(row["first_seen_at"] or "").strip() or now_iso
+            existing_status = str(row["status"] or "active").strip().lower() or "active"
+
+            best_score_value = existing_score
+            best_resolution_value = existing_resolution
+            if normalized_resolution > existing_resolution:
+                best_resolution_value = normalized_resolution
+                best_score_value = max(existing_score, normalized_score)
+            elif normalized_resolution == existing_resolution:
+                best_score_value = max(existing_score, normalized_score)
+            elif existing_resolution <= 0:
+                best_score_value = max(existing_score, normalized_score)
+
+            status_value = "active"
+            cursor.execute(
+                """
+                UPDATE subscription_episode_ledger
+                SET season = ?, media_type = ?, best_score = ?, best_resolution = ?,
+                    source_fp = ?, content_fp = ?, link_type = ?, link_url = ?,
+                    resource_id = ?, job_id = ?, status = ?, first_seen_at = ?, updated_at = ?
+                WHERE task_name = ? AND episode = ?
+                """,
+                (
+                    normalized_season,
+                    normalized_media_type,
+                    best_score_value,
+                    best_resolution_value,
+                    normalized_source_fp,
+                    normalized_content_fp,
+                    normalized_link_type,
+                    normalized_link_url,
+                    normalized_resource_id,
+                    normalized_job_id,
+                    status_value,
+                    existing_first_seen,
+                    now_iso,
+                    normalized_task_name,
+                    episode_no,
+                ),
+            )
+            if cursor.rowcount > 0 and (
+                best_score_value != existing_score
+                or best_resolution_value != existing_resolution
+                or existing_status != "active"
+            ):
+                changed += 1
+        else:
+            cursor.execute(
+                """
+                INSERT INTO subscription_episode_ledger(
+                    task_name, episode, season, media_type, best_score, best_resolution,
+                    source_fp, content_fp, link_type, link_url, resource_id, job_id,
+                    status, first_seen_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+                """,
+                (
+                    normalized_task_name,
+                    episode_no,
+                    normalized_season,
+                    normalized_media_type,
+                    normalized_score,
+                    normalized_resolution,
+                    normalized_source_fp,
+                    normalized_content_fp,
+                    normalized_link_type,
+                    normalized_link_url,
+                    normalized_resource_id,
+                    normalized_job_id,
+                    now_iso,
+                    now_iso,
+                ),
+            )
+            if cursor.rowcount > 0:
+                changed += 1
+    conn.commit()
+    conn.close()
+    return changed
+
+
 def prune_subscription_state_for_missing_tasks(task_names: List[str]) -> None:
     normalized = {str(name or "").strip() for name in task_names if str(name or "").strip()}
     ensure_db()
@@ -2172,6 +2487,7 @@ def prune_subscription_state_for_missing_tasks(task_names: List[str]) -> None:
     if not normalized:
         cursor.execute("DELETE FROM subscription_task_state")
         cursor.execute("DELETE FROM subscription_matches")
+        cursor.execute("DELETE FROM subscription_episode_ledger")
         conn.commit()
         conn.close()
         return
@@ -2179,6 +2495,7 @@ def prune_subscription_state_for_missing_tasks(task_names: List[str]) -> None:
     params = list(normalized)
     cursor.execute(f"DELETE FROM subscription_task_state WHERE task_name NOT IN ({placeholders})", params)
     cursor.execute(f"DELETE FROM subscription_matches WHERE task_name NOT IN ({placeholders})", params)
+    cursor.execute(f"DELETE FROM subscription_episode_ledger WHERE task_name NOT IN ({placeholders})", params)
     conn.commit()
     conn.close()
 
@@ -3129,6 +3446,12 @@ def create_resource_job(resource: Dict[str, Any], data: Dict[str, Any]) -> int:
     custom_extra = data.get("extra", {})
     if isinstance(custom_extra, dict):
         extra = merge_json_object(extra, custom_extra)
+    job_source = str(data.get("job_source", "") or "").strip()
+    if job_source:
+        extra["job_source"] = job_source
+    elif not str(extra.get("job_source", "") or "").strip():
+        # 默认归类为手动导入。自动化来源（订阅、Webhook 等）应在调用侧显式覆盖。
+        extra["job_source"] = "manual_import"
     manual_receive_code = normalize_receive_code(data.get("receive_code", ""))
     if link_type == "115share" and manual_receive_code:
         extra["receive_code"] = manual_receive_code
@@ -3476,6 +3799,21 @@ subscription_control = {"cancel": False}
 subscription_queue: List[Dict[str, Any]] = []
 subscription_last_run: Dict[str, float] = {}
 subscription_next_run: Dict[str, str] = {}
+sign115_status = {
+    "state": "idle",
+    "message": "尚未检查签到状态",
+    "signed_today": None,
+    "reward_leaf": 0,
+    "balance_leaf": None,
+    "last_checked_at": "",
+    "last_sign_at": "",
+    "last_trigger": "",
+}
+sign115_runtime = {
+    "running": False,
+    "last_auto_date": "",
+    "last_checked_ts": 0.0,
+}
 version_cache: Dict[str, Any] = {"latest": None, "checked_at": 0.0, "error": ""}
 tmdb_cache_entries: Dict[str, Dict[str, Any]] = {}
 ui_event_subscribers: Set[asyncio.Queue[str]] = set()
@@ -3530,11 +3868,57 @@ def build_subscription_status_payload(cfg: Optional[Dict[str, Any]] = None) -> D
     }
 
 
+def compute_sign115_next_run_text(cron_time: str, now: Optional[datetime] = None) -> str:
+    normalized_time = normalize_sign115_cron_time(cron_time)
+    now_dt = now or datetime.now()
+    hour, minute = [int(part) for part in normalized_time.split(":", 1)]
+    next_dt = now_dt.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if next_dt <= now_dt:
+        next_dt = next_dt + timedelta(days=1)
+    return next_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def set_sign115_status(**fields: Any) -> None:
+    changed = False
+    for key, value in fields.items():
+        if sign115_status.get(key) == value:
+            continue
+        sign115_status[key] = value
+        changed = True
+    if changed:
+        schedule_ui_state_push(0)
+
+
+def build_sign115_status_payload(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    cfg = cfg or get_config()
+    enabled = bool(cfg.get("sign115_enabled", False))
+    cron_time = normalize_sign115_cron_time(cfg.get("sign115_cron_time", "09:00"))
+    return {
+        "enabled": enabled,
+        "cron_time": cron_time,
+        "next_run": compute_sign115_next_run_text(cron_time) if enabled else "",
+        "running": bool(sign115_runtime.get("running", False)),
+        "state": str(sign115_status.get("state", "idle") or "idle"),
+        "message": str(sign115_status.get("message", "") or ""),
+        "signed_today": sign115_status.get("signed_today", None),
+        "reward_leaf": max(0, int(sign115_status.get("reward_leaf", 0) or 0)),
+        "balance_leaf": (
+            None
+            if sign115_status.get("balance_leaf", None) is None
+            else max(0, int(sign115_status.get("balance_leaf", 0) or 0))
+        ),
+        "last_checked_at": str(sign115_status.get("last_checked_at", "") or ""),
+        "last_sign_at": str(sign115_status.get("last_sign_at", "") or ""),
+        "last_trigger": str(sign115_status.get("last_trigger", "") or ""),
+    }
+
+
 def build_ui_state_payload(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     return {
         "main": build_main_status_payload(),
         "monitor": build_monitor_status_payload(cfg),
         "subscription": build_subscription_status_payload(cfg),
+        "sign115": build_sign115_status_payload(cfg),
     }
 
 
@@ -4987,6 +5371,34 @@ def prepare_115_share_receive(
     }
 
 
+def is_115_share_receive_duplicate_response(response: Any) -> bool:
+    payload = response if isinstance(response, dict) else {}
+    errno = parse_int(payload.get("errno") or payload.get("errNo") or payload.get("err_no"), default=0)
+    if errno == 4100024:
+        return True
+
+    message = " ".join(
+        [
+            str(payload.get("error", "") or "").strip(),
+            str(payload.get("msg", "") or "").strip(),
+            str(payload.get("message", "") or "").strip(),
+            str(payload.get("error_msg", "") or "").strip(),
+        ]
+    ).strip()
+    if not message:
+        return False
+    normalized_message = message.lower()
+    duplicate_hints = (
+        "文件已接收",
+        "无需重复接收",
+        "已接收，无需重复接收",
+        "already received",
+        "already saved",
+        "duplicate receive",
+    )
+    return any(hint.lower() in normalized_message for hint in duplicate_hints)
+
+
 def submit_115_share_receive(
     cookie: str,
     share_url: str,
@@ -5020,7 +5432,7 @@ def submit_115_share_receive(
         timeout=45,
         extra_headers=headers,
     )
-    success = bool(response.get("state")) or int(response.get("errno", 0) or 0) == 4100024
+    success = bool(response.get("state")) or is_115_share_receive_duplicate_response(response)
     if not success:
         detail = (
             str(response.get("error", "")).strip()
@@ -5032,6 +5444,7 @@ def submit_115_share_receive(
     return {
         "response": response,
         "selection": prepared.get("selection", {}),
+        "duplicate_receive": is_115_share_receive_duplicate_response(response),
     }
 
 

@@ -6,6 +6,7 @@ from datetime import datetime
 from .core import *  # noqa: F401,F403
 from .services.monitor import queue_monitor_job
 from .services.resource import schedule_resource_job_refresh
+from .services.sign115 import refresh_sign115_status, run_sign115_job
 from .services.subscription import queue_subscription_job
 from .services.tree import run_sync
 
@@ -19,6 +20,7 @@ async def startup() -> None:
     for job in list_resource_jobs(limit=200):
         if job.get("status") == "submitted" and job.get("auto_refresh") and not str(job.get("last_triggered_at", "")).strip():
             asyncio.create_task(schedule_resource_job_refresh(int(job["id"])))
+    asyncio.create_task(refresh_sign115_status(force_remote=False, trigger="startup"))
 
     async def scheduler() -> None:
         await asyncio.sleep(5)
@@ -112,6 +114,24 @@ async def startup() -> None:
                 schedule_ui_state_push(0)
             await asyncio.sleep(5)
 
+    async def sign115_scheduler() -> None:
+        await asyncio.sleep(8)
+        while True:
+            cfg = get_config()
+            enabled = bool(cfg.get("sign115_enabled", False))
+            cron_time = normalize_sign115_cron_time(cfg.get("sign115_cron_time", "09:00"))
+            hour, minute = [int(part) for part in cron_time.split(":", 1)]
+            now = datetime.now()
+            today = now.strftime("%Y-%m-%d")
+            scheduled_today = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+            if enabled and str(cfg.get("cookie_115", "")).strip():
+                if sign115_runtime.get("last_auto_date", "") != today and now >= scheduled_today:
+                    sign115_runtime["last_auto_date"] = today
+                    asyncio.create_task(run_sign115_job("cron"))
+            await asyncio.sleep(20)
+
     asyncio.create_task(scheduler())
     asyncio.create_task(monitor_scheduler())
     asyncio.create_task(subscription_scheduler())
+    asyncio.create_task(sign115_scheduler())

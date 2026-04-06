@@ -45,7 +45,12 @@ async def mark_cached_dir_as_seen(
     await asyncio.sleep(0)
 
 
-async def run_monitor_task(task_name: str, trigger: str = "manual", payload: Optional[Dict[str, Any]] = None) -> None:
+async def run_monitor_task(
+    task_name: str,
+    trigger: str = "manual",
+    payload: Optional[Dict[str, Any]] = None,
+    merged_count: int = 0,
+) -> None:
     cfg = get_config()
     task = next((t for t in cfg["monitor_tasks"] if t["name"] == task_name), None)
     if not task:
@@ -87,6 +92,12 @@ async def run_monitor_task(task_name: str, trigger: str = "manual", payload: Opt
 
     try:
         await write_monitor_task_header(task, trigger, payload)
+        if int(merged_count or 0) > 0:
+            merge_times = max(1, int(merged_count or 0))
+            await write_monitor_log(
+                f"本次为合并触发：合并次数 {merge_times}（累计触发 {merge_times + 1} 次）",
+                "info",
+            )
         if run_delay > 0:
             update_monitor_summary("等待延时", f"{run_delay} 秒后执行")
             await write_monitor_log(f"任务执行延时: {run_delay} 秒", "warn")
@@ -138,6 +149,8 @@ async def run_monitor_task(task_name: str, trigger: str = "manual", payload: Opt
         start_local_rel = build_local_dir_rel(start_remote_path)
         queue: List[Tuple[str, str]] = [(start_remote_path, start_local_rel)]
         scanned_dirs = set()
+        fallback_guard_expected_path = ""
+        fallback_guard_parent_path = ""
 
         await write_monitor_section("扫描生成")
 
@@ -165,12 +178,18 @@ async def run_monitor_task(task_name: str, trigger: str = "manual", payload: Opt
                 ):
                     fallback_remote_path = normalize_remote_path(os.path.dirname(remote_dir))
                     if fallback_remote_path != remote_dir and is_subpath(fallback_remote_path, task_scan_path):
+                        fallback_guard_expected_path = remote_dir
+                        fallback_guard_parent_path = fallback_remote_path
                         start_remote_path = fallback_remote_path
                         start_local_rel = build_local_dir_rel(start_remote_path)
                         if not any(item[0] == start_remote_path for item in queue):
                             queue.insert(0, (start_remote_path, start_local_rel))
                         await write_monitor_log(
                             f"{refresh_source_label} 起始目录暂不可见，回退父目录重试: {start_remote_path}",
+                            "warn",
+                        )
+                        await write_monitor_log(
+                            f"{refresh_source_label} 回退后将仅扫描目标子树: {fallback_guard_expected_path}",
                             "warn",
                         )
                 continue
@@ -196,6 +215,7 @@ async def run_monitor_task(task_name: str, trigger: str = "manual", payload: Opt
                 (task_name, dir_rel, modified),
             )
 
+            fallback_target_branch_found = False
             for item in items:
                 check_monitor_cancelled()
                 name = item.get("name") or ""
@@ -209,9 +229,20 @@ async def run_monitor_task(task_name: str, trigger: str = "manual", payload: Opt
                 size = int(item.get("size") or 0)
 
                 if is_dir:
+                    if fallback_guard_expected_path:
+                        in_target_tree = is_subpath(item_remote_path, fallback_guard_expected_path)
+                        is_target_ancestor = is_subpath(fallback_guard_expected_path, item_remote_path)
+                        if not in_target_tree and not is_target_ancestor:
+                            stats["skipped_dirs"] += 1
+                            continue
+                        if remote_dir == fallback_guard_parent_path:
+                            fallback_target_branch_found = True
                     queue.append((item_remote_path, item_local_rel))
                     continue
 
+                if fallback_guard_expected_path and not is_subpath(item_remote_path, fallback_guard_expected_path):
+                    stats["skipped"] += 1
+                    continue
                 if not is_video_file(name, extensions):
                     stats["skipped"] += 1
                     continue
@@ -236,6 +267,16 @@ async def run_monitor_task(task_name: str, trigger: str = "manual", payload: Opt
                     VALUES (?, ?, ?, ?)
                     """,
                     (item_local_rel, remote_rel, modified_at, size),
+                )
+
+            if (
+                fallback_guard_expected_path
+                and remote_dir == fallback_guard_parent_path
+                and not fallback_target_branch_found
+            ):
+                await write_monitor_log(
+                    f"{refresh_source_label} 回退父目录未发现目标子目录，已跳过同级目录避免误扫",
+                    "warn",
                 )
 
             if task["list_delay_ms"] > 0:
@@ -353,22 +394,123 @@ async def start_next_monitor_job() -> None:
             next_job["task_name"],
             trigger=next_job.get("trigger", "queued"),
             payload=next_job.get("payload"),
+            merged_count=max(0, int(next_job.get("merge_count", 0) or 0)),
         )
     )
 
 
+def _normalize_monitor_queue_payload(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    raw_payload = payload if isinstance(payload, dict) else {}
+    normalized: Dict[str, Any] = {}
+
+    savepath = normalize_relative_path(raw_payload.get("savepath", ""))
+    if savepath:
+        normalized["savepath"] = savepath
+
+    sharetitle = normalize_relative_path(raw_payload.get("sharetitle", ""))
+    if sharetitle:
+        normalized["sharetitle"] = sharetitle
+
+    title = str(raw_payload.get("title", "") or "").strip()
+    if title:
+        normalized["title"] = title[:200]
+
+    refresh_target_type = str(raw_payload.get("refresh_target_type", "") or "").strip().lower()
+    if refresh_target_type:
+        normalized["refresh_target_type"] = refresh_target_type
+
+    try:
+        delay_seconds = max(0, int(raw_payload.get("delayTime", 0) or 0))
+    except Exception:
+        delay_seconds = 0
+    if delay_seconds > 0:
+        normalized["delayTime"] = delay_seconds
+
+    return normalized
+
+
+def _monitor_queue_scope(payload: Optional[Dict[str, Any]]) -> str:
+    normalized_payload = _normalize_monitor_queue_payload(payload)
+    savepath = normalize_relative_path(normalized_payload.get("savepath", ""))
+    if not savepath:
+        return ""
+    return normalize_remote_path("/" + savepath)
+
+
+def _merge_monitor_queue_payload(existing: Optional[Dict[str, Any]], incoming: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    existing_payload = _normalize_monitor_queue_payload(existing)
+    incoming_payload = _normalize_monitor_queue_payload(incoming)
+    if not existing_payload:
+        return incoming_payload
+    if not incoming_payload:
+        return existing_payload
+
+    existing_scope = _monitor_queue_scope(existing_payload)
+    incoming_scope = _monitor_queue_scope(incoming_payload)
+    merged_delay = max(
+        int(existing_payload.get("delayTime", 0) or 0),
+        int(incoming_payload.get("delayTime", 0) or 0),
+    )
+
+    merged_payload: Dict[str, Any]
+    if not existing_scope or not incoming_scope:
+        merged_payload = {}
+    elif existing_scope == incoming_scope:
+        # 同目录短时间多次触发时，统一提升为父目录刷新，避免因 sharetitle 不同造成风暴排队。
+        merged_payload = {"savepath": normalize_relative_path(existing_scope.lstrip("/"))}
+    elif is_subpath(existing_scope, incoming_scope):
+        merged_payload = {"savepath": normalize_relative_path(incoming_scope.lstrip("/"))}
+    elif is_subpath(incoming_scope, existing_scope):
+        merged_payload = {"savepath": normalize_relative_path(existing_scope.lstrip("/"))}
+    else:
+        # 不同分支目录并发触发时，回退全任务刷新，保证不漏刷。
+        merged_payload = {}
+
+    if merged_delay > 0:
+        merged_payload["delayTime"] = merged_delay
+    return merged_payload
+
+
+def _pick_monitor_trigger(existing_trigger: str, new_trigger: str) -> str:
+    trigger_priority = {
+        "queued": 0,
+        "resource": 1,
+        "webhook": 2,
+        "cron": 3,
+        "manual": 4,
+    }
+    existing = str(existing_trigger or "").strip().lower() or "queued"
+    incoming = str(new_trigger or "").strip().lower() or "queued"
+    if trigger_priority.get(incoming, 0) >= trigger_priority.get(existing, 0):
+        return incoming
+    return existing
+
+
 def queue_monitor_job(task_name: str, trigger: str, payload: Optional[Dict[str, Any]] = None) -> str:
-    normalized_payload = payload or {}
-    job_signature = safe_json_dumps({"task_name": task_name, "trigger": trigger, "payload": normalized_payload})
-    if any(item.get("job_signature") == job_signature for item in monitor_queue):
+    normalized_task_name = str(task_name or "").strip()
+    if not normalized_task_name:
         schedule_ui_state_push(0)
         return "queued"
+
+    normalized_trigger = str(trigger or "").strip().lower() or "manual"
+    normalized_payload = _normalize_monitor_queue_payload(payload)
+
+    for queued_item in monitor_queue:
+        if str(queued_item.get("task_name", "")).strip() != normalized_task_name:
+            continue
+        queued_item["payload"] = _merge_monitor_queue_payload(queued_item.get("payload"), normalized_payload)
+        queued_item["trigger"] = _pick_monitor_trigger(queued_item.get("trigger", "queued"), normalized_trigger)
+        queued_item["merge_count"] = max(0, int(queued_item.get("merge_count", 0) or 0)) + 1
+        monitor_status["queued"] = [item["task_name"] for item in monitor_queue]
+        schedule_ui_state_push(0)
+        return "queued"
+
     monitor_queue.append(
         {
-            "task_name": task_name,
-            "trigger": trigger,
+            "task_name": normalized_task_name,
+            "trigger": normalized_trigger,
             "payload": normalized_payload,
-            "job_signature": job_signature,
+            "merge_count": 0,
         }
     )
     monitor_status["queued"] = [item["task_name"] for item in monitor_queue]

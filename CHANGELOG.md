@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.1] - 2026-04-07
+- 恢复并保留新版功能界面相关改动，避免运行环境展示旧页面。
+- 新增 115 签到状态入口与资源任务中心交互，完善页面操作流。
+- 同步更新 `version.json` 与版本说明，保存当前迭代状态。
+
 ## [0.1.0] - 2026-04-06
 - 作为新仓库首个版本发布，版本号从 `0.1.0` 重新开始。
 - 统一项目名称、页面展示文案、版本检查地址和仓库链接为 `115 Media Hub`。

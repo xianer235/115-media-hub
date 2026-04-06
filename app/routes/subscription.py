@@ -4,7 +4,11 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from ..core import *  # noqa: F401,F403
-from ..services.subscription import get_subscription_task_episode_view, queue_subscription_job
+from ..services.subscription import (
+    get_subscription_task_episode_view,
+    queue_subscription_job,
+    rebuild_subscription_task_progress,
+)
 
 router = APIRouter()
 
@@ -97,6 +101,30 @@ async def stop_subscription_task(request: Request) -> Dict[str, Any]:
         subscription_control["cancel"] = True
         return {"ok": True, "status": "stopping"}
     return {"ok": False, "status": "idle"}
+
+
+@router.post("/subscription/rebuild")
+async def rebuild_subscription_task(request: Request) -> Dict[str, Any]:
+    data = await request.json()
+    task_name = str(data.get("name", "") or "").strip()
+    if not task_name:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "任务名称不能为空"})
+    try:
+        payload = await asyncio.to_thread(rebuild_subscription_task_progress, task_name)
+        schedule_ui_state_push(0)
+        await write_subscription_log(
+            f"手动重建完成 | {task_name} | {str(payload.get('detail', '') or '').strip()}",
+            "info",
+        )
+        return {"ok": True, "msg": str(payload.get("detail", "") or "已完成重建"), **payload}
+    except KeyError:
+        return JSONResponse(status_code=404, content={"ok": False, "msg": "任务不存在"})
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
+    except RuntimeError as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
 
 
 @router.post("/subscription/delete")

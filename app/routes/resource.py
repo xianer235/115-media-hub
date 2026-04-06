@@ -297,6 +297,9 @@ async def create_resource_job_endpoint(request: Request) -> Dict[str, Any]:
         "monitor_task_name": monitor_task_name,
         "refresh_delay_seconds": max(0, int(data.get("refresh_delay_seconds", 0) or 0)),
         "auto_refresh": auto_refresh_requested and bool(monitor_task_name),
+        "extra": {
+            "job_source": "manual_import",
+        },
     }
     if link_type == "115share":
         payload["share_selection"] = data.get("share_selection", {})

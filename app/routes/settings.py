@@ -4,6 +4,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from ..core import *  # noqa: F401,F403
+from ..services.sign115 import refresh_sign115_status, run_sign115_job
 
 router = APIRouter()
 
@@ -29,6 +30,7 @@ async def save_settings_endpoint(request: Request) -> Dict[str, Any]:
         normalize_subscription_task(task) for task in incoming.get("subscription_tasks", cfg.get("subscription_tasks", []))
     ]
     save_config(cfg)
+    await refresh_sign115_status(force_remote=False, trigger="settings_save")
     schedule_ui_state_push(0)
     return {"ok": True}
 
@@ -50,3 +52,22 @@ async def test_tg_proxy(request: Request) -> JSONResponse:
     except Exception as exc:
         return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
     return JSONResponse(content=result)
+
+
+@router.get("/settings/115/sign/status")
+async def get_sign115_status(request: Request) -> Dict[str, Any]:
+    refresh = request.query_params.get("refresh") == "1"
+    await refresh_sign115_status(
+        force_remote=refresh,
+        trigger="manual_refresh" if refresh else "status_poll",
+    )
+    return {"ok": True, **build_sign115_status_payload()}
+
+
+@router.post("/settings/115/sign/run")
+async def run_sign115(request: Request) -> JSONResponse:
+    result = await run_sign115_job("manual")
+    if not result.get("ok", False):
+        message = str(result.get("message", "") or result.get("msg", "") or "签到失败").strip() or "签到失败"
+        return JSONResponse(status_code=400, content={"ok": False, "msg": message, "state": result})
+    return JSONResponse(content={"ok": True, "state": result})
