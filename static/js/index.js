@@ -1245,7 +1245,6 @@
             cfg.check_hash = document.getElementById('check_hash').checked;
             cfg.sync_clean = document.getElementById('sync_clean').checked;
             cfg.sign115_enabled = document.getElementById('sign115_enabled').checked;
-            cfg.subscription_batch_refresh_enabled = document.getElementById('subscription_batch_refresh_enabled').checked;
             cfg.tg_proxy_enabled = document.getElementById('tg_proxy_enabled').checked;
             cfg.tmdb_enabled = document.getElementById('tmdb_enabled').checked;
             const rawTmdbCacheTtl = parseInt(document.getElementById('tmdb_cache_ttl_hours')?.value || '', 10);

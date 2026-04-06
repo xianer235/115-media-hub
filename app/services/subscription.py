@@ -1712,6 +1712,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
         update_subscription_summary("任务失败", config_error)
         return
     subscription_run_id = _build_subscription_run_id(task_name)
+    # 批次收口刷新改为固定内置策略，不再由设置项切换。
     batch_refresh_enabled = True
 
     if subscription_status["running"]:
@@ -1760,7 +1761,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             "info",
         )
         await write_subscription_log(
-            f"执行批次: {subscription_run_id} | 批次收口刷新: {'开启' if batch_refresh_enabled else '关闭'}",
+            f"执行批次: {subscription_run_id} | 批次收口刷新: 开启（内置固定）",
             "info",
         )
         if int(task.get("tmdb_id", 0) or 0) > 0:

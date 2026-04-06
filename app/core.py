@@ -226,7 +226,6 @@ def default_config() -> Dict[str, Any]:
         "cookie_115": "",
         "sign115_enabled": False,
         "sign115_cron_time": "09:00",
-        "subscription_batch_refresh_enabled": False,
         "tg_proxy_enabled": False,
         "tg_proxy_protocol": "http",
         "tg_proxy_host": "",
@@ -618,8 +617,6 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         merged["sign115_enabled"] = False
     if "sign115_cron_time" not in merged:
         merged["sign115_cron_time"] = "09:00"
-    if "subscription_batch_refresh_enabled" not in merged:
-        merged["subscription_batch_refresh_enabled"] = False
     if "tg_proxy_enabled" not in merged:
         merged["tg_proxy_enabled"] = False
     if "tg_proxy_protocol" not in merged:
@@ -702,7 +699,8 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     merged["cookie_115"] = str(merged.get("cookie_115", "")).strip()
     merged["sign115_enabled"] = bool(merged.get("sign115_enabled", False))
     merged["sign115_cron_time"] = normalize_sign115_cron_time(merged.get("sign115_cron_time", "09:00"))
-    merged["subscription_batch_refresh_enabled"] = bool(merged.get("subscription_batch_refresh_enabled", False))
+    # 订阅批次收口刷新已固定为内置策略，不再保留配置项。
+    merged.pop("subscription_batch_refresh_enabled", None)
     merged["tg_proxy_enabled"] = bool(merged.get("tg_proxy_enabled", False))
     merged["tg_proxy_protocol"] = str(merged.get("tg_proxy_protocol", "http") or "http").strip().lower()
     if merged["tg_proxy_protocol"] not in ("http", "https"):
