@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.2] - 2026-04-07
+- 增强订阅任务重跑可靠性：单季集数上限裁剪、115 重复接收延迟复核、全季覆盖后自动收口，降低二次误导入概率。
+- 订阅导入批次收口刷新改为固定内置策略，移除设置页开关与对应配置项，避免“有开关但不生效”的混淆。
+- 优化夜间模式下签到时间输入框（`type="time"`）的文字与图标对比度，提升可读性。
+
 ## [0.1.1] - 2026-04-07
 - 恢复并保留新版功能界面相关改动，避免运行环境展示旧页面。
 - 新增 115 签到状态入口与资源任务中心交互，完善页面操作流。
