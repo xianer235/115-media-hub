@@ -100,6 +100,8 @@
         const monitorActionLocks = new Set();
         let versionInfo = { local: null, latest: null, has_update: false, checked_at: 0, error: '', source: '' };
         let versionBannerDismissed = false;
+        let aboutWorkflowImageLoaded = false;
+        let aboutWorkflowImageLoadingPromise = null;
         let modalScrollLockCount = 0;
         let modalScrollLockY = 0;
         const btnTexts = ["🌐 联网同步更新", "🛠 本地调试解析", "🔥 强制全量重刷"];
@@ -110,6 +112,7 @@
         const SIGN115_REFRESH_INTERVAL = 1000 * 60;
         const VERSION_FALLBACK_PROJECT_URL = 'https://github.com/xianer235/115-media-hub';
         const VERSION_FALLBACK_CHANGELOG_URL = 'https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md';
+        const ABOUT_WORKFLOW_IMAGE_URL = '/static/images/about-workflow-cookie-openlist.png';
         const RESOURCE_FOLDER_MEMORY_KEY = 'resource-folder-selection-v1';
         const RESOURCE_IMPORT_DELAY_MEMORY_KEY = 'resource-import-delay-seconds-v1';
         const MAIN_TAB_ROW_HINT_MEMORY_KEY = 'main-tab-row-hint-v1';
@@ -843,8 +846,71 @@
             document.getElementById('help-modal').classList.add('hidden');
         }
 
+        async function ensureAboutWorkflowImageLoaded() {
+            if (aboutWorkflowImageLoaded) return true;
+            if (aboutWorkflowImageLoadingPromise) return aboutWorkflowImageLoadingPromise;
+
+            const modalImage = document.getElementById('about-workflow-modal-image');
+            const thumbImage = document.getElementById('about-workflow-thumb-image');
+            const thumbPlaceholder = document.getElementById('about-workflow-thumb-placeholder');
+            const thumbHint = document.getElementById('about-workflow-thumb-hint');
+            const loadingEl = document.getElementById('about-workflow-modal-loading');
+            const errorEl = document.getElementById('about-workflow-modal-error');
+            if (!modalImage) return false;
+
+            if (loadingEl) loadingEl.classList.remove('hidden');
+            if (errorEl) errorEl.classList.add('hidden');
+            if (thumbHint) thumbHint.textContent = '正在加载流程图...';
+
+            const targetSrc = String(modalImage.dataset.src || ABOUT_WORKFLOW_IMAGE_URL).trim() || ABOUT_WORKFLOW_IMAGE_URL;
+            aboutWorkflowImageLoadingPromise = new Promise((resolve) => {
+                let done = false;
+                const finish = (ok) => {
+                    if (done) return;
+                    done = true;
+                    if (ok) {
+                        aboutWorkflowImageLoaded = true;
+                        if (loadingEl) loadingEl.classList.add('hidden');
+                        if (errorEl) errorEl.classList.add('hidden');
+                        modalImage.classList.remove('hidden');
+                        if (thumbImage) {
+                            thumbImage.classList.remove('hidden');
+                        }
+                        if (thumbPlaceholder) thumbPlaceholder.classList.add('hidden');
+                        if (thumbHint) thumbHint.textContent = '已加载，点击可放大查看';
+                    } else {
+                        if (loadingEl) loadingEl.classList.add('hidden');
+                        if (errorEl) errorEl.classList.remove('hidden');
+                        if (thumbHint) thumbHint.textContent = '加载失败，点击重试';
+                    }
+                    aboutWorkflowImageLoadingPromise = null;
+                    resolve(ok);
+                };
+
+                const handleLoad = () => finish(true);
+                const handleError = () => finish(false);
+
+                modalImage.addEventListener('load', handleLoad, { once: true });
+                modalImage.addEventListener('error', handleError, { once: true });
+
+                if (thumbImage && !thumbImage.src) {
+                    thumbImage.src = String(thumbImage.dataset.src || targetSrc).trim() || targetSrc;
+                }
+                if (!modalImage.src) {
+                    modalImage.src = targetSrc;
+                }
+                if (modalImage.complete) {
+                    if (modalImage.naturalWidth > 0) finish(true);
+                    else finish(false);
+                }
+            });
+
+            return aboutWorkflowImageLoadingPromise;
+        }
+
         function openAboutWorkflowModal() {
             showLockedModal('about-workflow-modal');
+            void ensureAboutWorkflowImageLoaded();
         }
 
         function closeAboutWorkflowModal() {

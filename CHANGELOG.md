@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.4] - 2026-04-07
+- 关于页“流程图设计”改为按需加载，默认进入页面不再请求流程图图片资源。
+- 流程图弹窗新增加载中与失败提示，首次点击再下载并展示大图。
+- 保留“新窗口打开”能力，方便独立查看 Cookie 与 OpenList 覆盖范围流程图。
+
 ## [0.1.3] - 2026-04-07
 - 资源中心“快速识别”支持一次粘贴多条磁力链接，并按同一保存目录批量提交导入任务。
 - 导入弹窗新增批量模式提示与提交结果汇总，支持成功/重复/失败统计反馈。

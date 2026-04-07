@@ -2589,6 +2589,28 @@
             border: 1px solid rgba(148, 163, 184, 0.3);
             background: #fff;
         }
+        #about-workflow-thumb .about-workflow-thumb-placeholder {
+            width: 100%;
+            min-height: 220px;
+            border-radius: 0.7rem;
+            border: 1px dashed rgba(148, 163, 184, 0.42);
+            background: linear-gradient(145deg, rgba(15, 23, 42, 0.28), rgba(15, 23, 42, 0.14));
+            display: grid;
+            place-content: center;
+            gap: 0.38rem;
+            text-align: center;
+            color: #cbd5e1;
+            padding: 1rem;
+        }
+        #about-workflow-thumb .about-workflow-thumb-title {
+            font-size: 0.95rem;
+            font-weight: 800;
+            letter-spacing: 0.01em;
+        }
+        #about-workflow-thumb .about-workflow-thumb-hint {
+            font-size: 0.74rem;
+            color: #94a3b8;
+        }
         #about-workflow-modal .about-workflow-modal-body {
             margin-top: 1rem;
             max-height: 82vh;
@@ -2606,6 +2628,26 @@
             border-radius: 0.7rem;
             border: 1px solid rgba(148, 163, 184, 0.3);
             background: #fff;
+        }
+        #about-workflow-modal .about-workflow-modal-loading,
+        #about-workflow-modal .about-workflow-modal-error {
+            min-height: 180px;
+            border-radius: 0.8rem;
+            border: 1px dashed rgba(148, 163, 184, 0.42);
+            background: rgba(15, 23, 42, 0.22);
+            display: grid;
+            place-content: center;
+            text-align: center;
+            padding: 1rem;
+            line-height: 1.6;
+            font-size: 0.84rem;
+        }
+        #about-workflow-modal .about-workflow-modal-loading {
+            color: #cbd5e1;
+        }
+        #about-workflow-modal .about-workflow-modal-error {
+            color: #fca5a5;
+            border-color: rgba(248, 113, 113, 0.45);
         }
 
         @media (max-width: 1024px) {
@@ -3365,9 +3407,29 @@
         html.theme-day #page-about .about-workflow-copy {
             color: #475569;
         }
+        html.theme-day #about-workflow-thumb .about-workflow-thumb-placeholder {
+            background: linear-gradient(145deg, rgba(226, 232, 240, 0.85), rgba(241, 245, 249, 0.9));
+            border-color: rgba(148, 163, 184, 0.5);
+            color: #1e293b;
+        }
+        html.theme-day #about-workflow-thumb .about-workflow-thumb-hint {
+            color: #64748b;
+        }
         html.theme-day #about-workflow-modal .about-workflow-modal-body {
             background: rgba(241, 245, 249, 0.95);
             border-color: rgba(148, 163, 184, 0.42);
+        }
+        html.theme-day #about-workflow-modal .about-workflow-modal-loading,
+        html.theme-day #about-workflow-modal .about-workflow-modal-error {
+            background: rgba(226, 232, 240, 0.72);
+            border-color: rgba(148, 163, 184, 0.52);
+        }
+        html.theme-day #about-workflow-modal .about-workflow-modal-loading {
+            color: #334155;
+        }
+        html.theme-day #about-workflow-modal .about-workflow-modal-error {
+            color: #b91c1c;
+            border-color: rgba(248, 113, 113, 0.55);
         }
         html.theme-day .resource-source-manager-select-btn-active {
             background: rgba(14, 165, 233, 0.14);

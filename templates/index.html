@@ -518,7 +518,11 @@
                         </div>
                     </div>
                     <button id="about-workflow-thumb" type="button" onclick="openAboutWorkflowModal()" aria-label="查看流程图大图">
-                        <img src="/static/images/about-workflow-cookie-openlist.png" alt="115 Cookie 与 OpenList 覆盖范围流程图">
+                        <div id="about-workflow-thumb-placeholder" class="about-workflow-thumb-placeholder">
+                            <div class="about-workflow-thumb-title">流程图预览</div>
+                            <div id="about-workflow-thumb-hint" class="about-workflow-thumb-hint">点击后加载（约 100 KB）</div>
+                        </div>
+                        <img id="about-workflow-thumb-image" data-src="/static/images/about-workflow-cookie-openlist.png" alt="115 Cookie 与 OpenList 覆盖范围流程图" class="hidden">
                     </button>
                 </div>
             </div>
@@ -531,7 +535,9 @@
                     <button type="button" onclick="closeAboutWorkflowModal()" class="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm">关闭</button>
                 </div>
                 <div class="about-workflow-modal-body">
-                    <img src="/static/images/about-workflow-cookie-openlist.png" alt="115 Cookie 与 OpenList 覆盖范围流程图大图">
+                    <div id="about-workflow-modal-loading" class="about-workflow-modal-loading">首次打开时加载流程图，请稍候...</div>
+                    <div id="about-workflow-modal-error" class="about-workflow-modal-error hidden">流程图加载失败，请稍后重试或使用“新窗口打开”。</div>
+                    <img id="about-workflow-modal-image" data-src="/static/images/about-workflow-cookie-openlist.png" alt="115 Cookie 与 OpenList 覆盖范围流程图大图" class="hidden">
                 </div>
             </div>
         </div>

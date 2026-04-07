@@ -1,10 +1,10 @@
 {
-  "version": "0.1.3",
-  "buildDate": "2026-04-07T11:29:18+08:00",
+  "version": "0.1.4",
+  "buildDate": "2026-04-07T11:51:35+08:00",
   "notes": [
-    "资源中心“快速识别”支持一次粘贴多条磁力链接，并按同一保存目录批量提交导入任务。",
-    "导入弹窗新增批量模式文案与结果汇总提示，支持成功/重复/失败统计反馈。",
-    "关于页新增“流程图设计”预览入口与大图弹窗，可快速查看 Cookie 与 OpenList 覆盖范围。"
+    "关于页“流程图设计”改为按需加载：默认不下载图片，点击查看时再请求大图资源。",
+    "流程图弹窗新增加载中与失败提示，减少首屏资源请求并提升弱网场景体验。",
+    "保留新窗口打开能力，便于独立查看 Cookie 与 OpenList 覆盖范围流程图。"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"
