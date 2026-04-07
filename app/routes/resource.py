@@ -7,6 +7,7 @@ from ..core import *  # noqa: F401,F403
 from ..services.resource import cancel_resource_job, retry_resource_job, run_resource_job, trigger_resource_job_refresh
 
 router = APIRouter()
+resource_job_create_lock = asyncio.Lock()
 
 
 @router.get("/resource/state")
@@ -263,49 +264,55 @@ async def create_resource_job_endpoint(request: Request) -> Dict[str, Any]:
     savepath = normalize_relative_path(data.get("savepath", ""))
     if not savepath:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "请填写网盘保存路径"})
-
-    existing = find_existing_resource_job(resource, savepath)
-    if existing:
-        existing_status = str(existing.get("status", "")).strip().lower()
-        if existing_status == "completed":
-            msg = "该资源已添加过。若需重新导入，请先清空“已完成导入记录”后再试。"
-        else:
-            msg = "该资源已在处理中，请勿重复提交。"
-        return JSONResponse(
-            status_code=409,
-            content={
-                "ok": False,
-                "msg": msg,
-                "job_id": existing.get("id", 0),
-                "status": existing_status,
-            },
-        )
-
-    matched_monitor = match_monitor_task_for_savepath(cfg, savepath)
-    monitor_task_name = matched_monitor.get("task_name", "")
-
-    try:
-        folder_id = await asyncio.to_thread(resolve_115_folder_id_by_path, str(cfg.get("cookie_115", "")).strip(), savepath)
-    except Exception as exc:
-        return JSONResponse(status_code=400, content={"ok": False, "msg": f"保存路径无效：{exc}"})
-
     auto_refresh_requested = bool(data.get("auto_refresh", True))
-    payload = {
-        "folder_id": folder_id,
-        "savepath": savepath,
-        "sharetitle": str(data.get("sharetitle", "") or "").strip(),
-        "monitor_task_name": monitor_task_name,
-        "refresh_delay_seconds": max(0, int(data.get("refresh_delay_seconds", 0) or 0)),
-        "auto_refresh": auto_refresh_requested and bool(monitor_task_name),
-        "extra": {
-            "job_source": "manual_import",
-        },
-    }
-    if link_type == "115share":
-        payload["share_selection"] = data.get("share_selection", {})
-        if receive_code:
-            payload["receive_code"] = receive_code
-    job_id = create_resource_job(resource, payload)
+    provided_folder_id = str(data.get("folder_id", "") or "").strip()
+    if provided_folder_id and not provided_folder_id.isdigit():
+        provided_folder_id = ""
+
+    async with resource_job_create_lock:
+        existing = find_existing_resource_job(resource, savepath)
+        if existing:
+            existing_status = str(existing.get("status", "")).strip().lower()
+            if existing_status == "completed":
+                msg = "该资源已添加过。若需重新导入，请先清空“已完成导入记录”后再试。"
+            else:
+                msg = "该资源已在处理中，请勿重复提交。"
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "ok": False,
+                    "msg": msg,
+                    "job_id": existing.get("id", 0),
+                    "status": existing_status,
+                },
+            )
+
+        matched_monitor = match_monitor_task_for_savepath(cfg, savepath)
+        monitor_task_name = matched_monitor.get("task_name", "")
+        folder_id = provided_folder_id
+        if not folder_id or folder_id == "0":
+            try:
+                folder_id = await asyncio.to_thread(resolve_115_folder_id_by_path, str(cfg.get("cookie_115", "")).strip(), savepath)
+            except Exception as exc:
+                return JSONResponse(status_code=400, content={"ok": False, "msg": f"保存路径无效：{exc}"})
+
+        payload = {
+            "folder_id": folder_id,
+            "savepath": savepath,
+            "sharetitle": str(data.get("sharetitle", "") or "").strip(),
+            "monitor_task_name": monitor_task_name,
+            "refresh_delay_seconds": max(0, int(data.get("refresh_delay_seconds", 0) or 0)),
+            "auto_refresh": auto_refresh_requested and bool(monitor_task_name),
+            "extra": {
+                "job_source": "manual_import",
+            },
+        }
+        if link_type == "115share":
+            payload["share_selection"] = data.get("share_selection", {})
+            if receive_code:
+                payload["receive_code"] = receive_code
+        job_id = create_resource_job(resource, payload)
+
     asyncio.create_task(run_resource_job(job_id))
     return {
         "ok": True,

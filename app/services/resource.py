@@ -275,13 +275,17 @@ async def run_resource_job(job_id: int) -> None:
                 refresh_text = "已命中文件夹监控任务，等待手动触发生成 strm"
             detail = f"{detail}；{refresh_text}（{monitor_task_name}）"
         else:
-            detail = f"{detail}；当前保存路径未纳入文件夹监控，不会自动生成 strm"
+            detail = f"{detail}；当前保存路径未纳入文件夹监控，导入成功后不会自动生成 strm"
+
+        next_status = "submitted" if monitor_task_name else "completed"
 
         update_fields = {
-            "status": "submitted",
+            "status": next_status,
             "status_detail": detail,
             "response_json": safe_json_dumps(response),
         }
+        if next_status == "completed":
+            update_fields["finished_at"] = now_text()
         if link_type == "115share":
             update_fields["extra_json"] = job.get("extra_json", safe_json_dumps({}))
             if str(job.get("sharetitle", "")).strip():
@@ -290,7 +294,7 @@ async def run_resource_job(job_id: int) -> None:
         update_resource_job(job_id, **update_fields)
         if resource_id > 0:
             conn = open_db()
-            update_resource_item_status(conn, resource_id, "submitted")
+            update_resource_item_status(conn, resource_id, next_status)
             conn.commit()
             conn.close()
 

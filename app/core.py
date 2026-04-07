@@ -116,6 +116,7 @@ STATIC_DIR = os.path.join(BASE_DIR, "static")
 FAVICON_PATH = os.path.join(STATIC_DIR, "icons", "favicon.svg")
 USERSCRIPT_MAGNET_HELPER_PATH = os.path.join(BASE_DIR, "115-magnet-helper-webhook.user.js")
 RESOURCE_MAGNET_REGEX = re.compile(r"magnet:\?xt=urn:btih:[A-Za-z0-9]{32,40}[^\s<>'\"]*", re.IGNORECASE)
+RESOURCE_MAGNET_HASH_REGEX = re.compile(r"xt=urn:btih:([A-Za-z0-9]{32,40})", re.IGNORECASE)
 RESOURCE_ED2K_REGEX = re.compile(r"ed2k://[^\s<>'\"]+", re.IGNORECASE)
 RESOURCE_URL_REGEX = re.compile(r"https?://[^\s<>'\"]+", re.IGNORECASE)
 RESOURCE_115_SHARE_URL_REGEX = re.compile(
@@ -1312,6 +1313,64 @@ def pick_resource_title(raw_text: str, fallback_title: str = "") -> str:
     return lines[0] if lines else "未命名资源"
 
 
+def is_resource_title_link_like(text: str) -> bool:
+    normalized = normalize_resource_title(text)
+    if not normalized:
+        return True
+    lowered = normalized.lower()
+    if lowered.startswith(("magnet:?", "ed2k://", "http://", "https://")):
+        return True
+    remainder = normalized
+    for pattern in (RESOURCE_MAGNET_REGEX, RESOURCE_ED2K_REGEX, RESOURCE_URL_REGEX, RESOURCE_115_SHARE_BARE_URL_REGEX):
+        remainder = pattern.sub(" ", remainder)
+    remainder = re.sub(r"[\s\-•#_|，。；：,.;:!?！？、/\\\(\)（）\[\]【】<>《》]+", "", remainder)
+    return not remainder
+
+
+def extract_magnet_hash(link_url: str) -> str:
+    token = trim_resource_link_token(link_url)
+    if not token:
+        return ""
+    match = RESOURCE_MAGNET_HASH_REGEX.search(token)
+    if not match:
+        return ""
+    return str(match.group(1) or "").upper()
+
+
+def pick_magnet_title(link_url: str, index: int = 0) -> str:
+    token = trim_resource_link_token(link_url)
+    if token:
+        try:
+            parsed = urllib.parse.urlsplit(token)
+            query = urllib.parse.parse_qs(parsed.query, keep_blank_values=False)
+            dn_candidates = query.get("dn", [])
+            if dn_candidates:
+                dn_title = normalize_resource_title(dn_candidates[0])
+                if dn_title and not is_resource_title_link_like(dn_title):
+                    return dn_title
+        except Exception:
+            pass
+    magnet_hash = extract_magnet_hash(token)
+    if magnet_hash:
+        return f"磁力任务 {magnet_hash[:12]}"
+    if index > 0:
+        return f"磁力任务 #{index}"
+    return "磁力任务"
+
+
+def pick_link_fallback_title(link_type: str, link_url: str, index: int = 0) -> str:
+    normalized_type = str(link_type or "").strip().lower()
+    if normalized_type == "magnet":
+        return pick_magnet_title(link_url, index=index)
+    if normalized_type == "115share":
+        return f"115分享任务 #{index}" if index > 0 else "115分享任务"
+    if normalized_type == "ed2k":
+        return f"ED2K任务 #{index}" if index > 0 else "ED2K任务"
+    if normalized_type == "link":
+        return f"链接任务 #{index}" if index > 0 else "链接任务"
+    return f"资源任务 #{index}" if index > 0 else "资源任务"
+
+
 def extract_resource_candidates(
     raw_text: str,
     source_name: str = "",
@@ -1326,6 +1385,7 @@ def extract_resource_candidates(
 
     links = extract_resource_links(raw)
     base_title = pick_resource_title(raw)
+    base_title_link_like = is_resource_title_link_like(base_title)
     guessed_year = ""
     year_match = RESOURCE_YEAR_REGEX.search(raw)
     if year_match:
@@ -1366,9 +1426,12 @@ def extract_resource_candidates(
             normalized_link = str(parsed_payload.get("url", "") or normalized_link).strip() or normalized_link
             link_type = detect_resource_link_type(normalized_link)
             receive_code = normalize_receive_code(parsed_payload.get("receive_code", ""))
-        title = base_title
-        if multi:
+        if base_title_link_like:
+            title = pick_link_fallback_title(link_type, normalized_link, idx if multi else 0)
+        elif multi:
             title = f"{base_title} #{idx}"
+        else:
+            title = base_title
         extra: Dict[str, Any] = {}
         if receive_code:
             extra["receive_code"] = receive_code
@@ -2965,6 +3028,88 @@ def recover_stale_resource_jobs(max_age_seconds: int = RESOURCE_JOB_STALE_RECOVE
     return {"recovered": recovered, "checked": checked}
 
 
+def recover_submitted_resource_jobs_without_monitor(limit: int = 200) -> Dict[str, int]:
+    ensure_db()
+    conn = open_db()
+    cursor = conn.cursor()
+    query_limit = max(20, min(int(limit or 200), 1000))
+    cursor.execute(
+        """
+        SELECT id, resource_id, status_detail
+        FROM resource_jobs
+        WHERE status = 'submitted' AND trim(monitor_task_name) = ''
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (query_limit,),
+    )
+    rows = cursor.fetchall()
+    if not rows:
+        conn.close()
+        return {"recovered": 0, "checked": 0}
+
+    now_iso = now_text()
+    recovered = 0
+    checked = 0
+    recovered_resource_ids: Set[int] = set()
+    hint_text = "当前保存路径未纳入文件夹监控，导入成功后不会自动生成 strm"
+
+    for row in rows:
+        data = sqlite_row_to_dict(row)
+        job_id = max(0, int(data.get("id", 0) or 0))
+        if job_id <= 0:
+            continue
+        checked += 1
+        detail = str(data.get("status_detail", "") or "").strip()
+        next_detail = detail or hint_text
+        if hint_text not in next_detail:
+            next_detail = f"{next_detail}；{hint_text}" if next_detail else hint_text
+        cursor.execute(
+            """
+            UPDATE resource_jobs
+            SET status = 'completed',
+                status_detail = ?,
+                finished_at = CASE WHEN trim(finished_at) = '' THEN ? ELSE finished_at END,
+                updated_at = ?
+            WHERE id = ? AND status = 'submitted'
+            """,
+            (next_detail, now_iso, now_iso, job_id),
+        )
+        if int(cursor.rowcount or 0) > 0:
+            recovered += 1
+            recovered_resource_ids.add(max(0, int(data.get("resource_id", 0) or 0)))
+            resource_refresh_pending.discard(job_id)
+            resource_job_cancel_requested.discard(job_id)
+
+    for resource_id in recovered_resource_ids:
+        if resource_id <= 0:
+            continue
+        cursor.execute(
+            "SELECT COUNT(1) FROM resource_jobs WHERE resource_id = ? AND status IN ('pending', 'running', 'submitted')",
+            (resource_id,),
+        )
+        active_row = cursor.fetchone()
+        active_count = int(active_row[0] if active_row else 0)
+        if active_count > 0:
+            continue
+        cursor.execute(
+            "SELECT COUNT(1) FROM resource_jobs WHERE resource_id = ? AND status = 'completed'",
+            (resource_id,),
+        )
+        completed_row = cursor.fetchone()
+        completed_count = int(completed_row[0] if completed_row else 0)
+        if completed_count <= 0:
+            continue
+        cursor.execute(
+            "UPDATE resource_items SET status = 'completed', last_seen_at = ? WHERE id = ?",
+            (now_iso, resource_id),
+        )
+
+    conn.commit()
+    conn.close()
+    return {"recovered": recovered, "checked": checked}
+
+
 def prune_resource_channel_cache(conn: sqlite3.Connection, channel_id: str, keep: int = RESOURCE_CHANNEL_CACHE_LIMIT) -> int:
     normalized_channel = normalize_telegram_channel_id_from_input(channel_id)
     keep_limit = max(0, int(keep if keep is not None else RESOURCE_CHANNEL_CACHE_LIMIT))
@@ -3459,6 +3604,9 @@ def create_resource_job(resource: Dict[str, Any], data: Dict[str, Any]) -> int:
         sharetitle = manual_sharetitle
     elif link_type == "115share":
         sharetitle = normalize_relative_path(extra.get("auto_sharetitle", ""))
+    elif link_type == "magnet":
+        # 磁力任务默认不绑定子目录提示，避免把原始链接文本误当目录。
+        sharetitle = ""
     else:
         sharetitle = normalize_relative_path(resource.get("title", ""))
     monitor_task_name = str(data.get("monitor_task_name", "")).strip()
@@ -3923,6 +4071,7 @@ def build_ui_state_payload(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, An
 async def build_resource_state_payload(search: str = "") -> Dict[str, Any]:
     cfg = get_config()
     recover_stale_resource_jobs()
+    recover_submitted_resource_jobs_without_monitor()
     keyword = str(search or "").strip()
     search_meta = await search_resource_sources(keyword) if keyword else {
         "items": [],
@@ -4166,6 +4315,8 @@ def extract_webhook_refresh_path(task: Dict[str, Any], payload: Dict[str, Any], 
     savepath_rel = normalize_relative_path(savepath_raw)
     sharetitle_raw = str(payload.get("sharetitle", "") or "").strip()
     sharetitle_rel = normalize_relative_path(sharetitle_raw)
+    if sharetitle_rel and is_resource_title_link_like(sharetitle_rel):
+        sharetitle_rel = ""
     refresh_target_type = str(payload.get("refresh_target_type", "") or "").strip().lower()
     allow_subdir_hint = refresh_target_type not in ("file", "mixed")
 
@@ -4296,7 +4447,9 @@ async def write_monitor_task_header(task: Dict[str, Any], trigger: str, payload:
     )
     if payload and trigger in ("webhook", "resource"):
         title = str(payload.get("title", "") or "").strip()
-        sharetitle = str(payload.get("sharetitle", "") or "").strip()
+        sharetitle = normalize_relative_path(payload.get("sharetitle", ""))
+        if sharetitle and is_resource_title_link_like(sharetitle):
+            sharetitle = ""
         refresh_target_type = str(payload.get("refresh_target_type", "") or "").strip()
         webhook_bits = []
         if title:

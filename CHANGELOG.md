@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.5] - 2026-04-07
+- 修复批量磁力导入标题污染：每条任务生成独立标题，避免整段 magnet 文本进入任务名与目录提示路径。
+- 修复导入重复点击导致重复建任务：前端提交按钮增加请求中锁定，后端创建接口增加并发去重保护。
+- 修复未绑定监控目录任务状态：115 导入成功后直接标记已完成，并自动纠正历史卡在“待刷新”的记录。
+
 ## [0.1.4] - 2026-04-07
 - 关于页“流程图设计”改为按需加载，默认进入页面不再请求流程图图片资源。
 - 流程图弹窗新增加载中与失败提示，首次点击再下载并展示大图。

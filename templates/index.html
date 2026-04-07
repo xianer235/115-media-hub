@@ -507,23 +507,14 @@
             </div>
 
             <div class="group-card">
-                <h3 class="group-title">流程图设计</h3>
-                <div class="grid grid-cols-1 xl:grid-cols-[300px_minmax(0,1fr)] gap-4">
-                    <div class="about-workflow-card">
-                        <div class="about-workflow-title">Cookie 导入 / OpenList 生成覆盖范围</div>
-                        <div class="about-workflow-copy">上半段依赖 115 Cookie 完成导入，下半段依赖 OpenList 完成目录刷新与 STRM 生成，中间通过路径映射桥关联。</div>
-                        <div class="grid grid-cols-1 gap-2 mt-4">
-                            <button type="button" onclick="openAboutWorkflowModal()" class="about-action about-action-primary">点击查看流程图</button>
-                            <a href="/static/images/about-workflow-cookie-openlist.png" target="_blank" rel="noopener noreferrer" class="about-action about-action-secondary">新窗口打开</a>
-                        </div>
+                <h3 class="group-title">导入与 STRM 生成流程</h3>
+                <div class="about-workflow-card">
+                    <div class="about-workflow-title">115 导入链路与 OpenList 生成链路映射图</div>
+                    <div class="about-workflow-copy">资源导入阶段依赖 115 Cookie，STRM 生成阶段依赖 OpenList API，中间通过 savepath 与挂载路径映射桥关联。流程图采用按需加载，避免影响页面首屏速度。</div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mt-4">
+                        <button type="button" onclick="openAboutWorkflowModal()" class="about-action about-action-primary">查看流程图</button>
+                        <a href="/static/images/about-workflow-cookie-openlist.png" target="_blank" rel="noopener noreferrer" class="about-action about-action-secondary">新窗口打开</a>
                     </div>
-                    <button id="about-workflow-thumb" type="button" onclick="openAboutWorkflowModal()" aria-label="查看流程图大图">
-                        <div id="about-workflow-thumb-placeholder" class="about-workflow-thumb-placeholder">
-                            <div class="about-workflow-thumb-title">流程图预览</div>
-                            <div id="about-workflow-thumb-hint" class="about-workflow-thumb-hint">点击后加载（约 100 KB）</div>
-                        </div>
-                        <img id="about-workflow-thumb-image" data-src="/static/images/about-workflow-cookie-openlist.png" alt="115 Cookie 与 OpenList 覆盖范围流程图" class="hidden">
-                    </button>
                 </div>
             </div>
         </div>
@@ -531,7 +522,7 @@
         <div id="about-workflow-modal" class="hidden fixed inset-0 bg-black/70 z-[61] p-4">
             <div class="w-full max-w-7xl mx-auto mt-[3vh] max-h-[94vh] overflow-hidden group-card modal-card">
                 <div class="flex items-center justify-between gap-3">
-                    <h3 class="group-title mb-0">流程图设计 · Cookie 与 OpenList 覆盖范围</h3>
+                    <h3 class="group-title mb-0">导入与 STRM 生成流程图 · Cookie / OpenList 覆盖范围</h3>
                     <button type="button" onclick="closeAboutWorkflowModal()" class="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm">关闭</button>
                 </div>
                 <div class="about-workflow-modal-body">

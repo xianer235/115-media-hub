@@ -83,6 +83,7 @@
         let resourceSourceBulkSelected = {};
         let resourceSourceTestBusy = false;
         let resourceSourceTestResult = { total: 0, done: 0, success: 0, failed: 0, running: false, last_name: '', error: '' };
+        let resourceSubmitBusy = false;
         let resourceJobFilter = 'all';
         let tgProxyTestState = { loading: false, ok: null, message: '', latency_ms: 0, mode: '', proxy_url: '', target_url: '' };
         let resourceBoardHintText = '';
@@ -851,16 +852,12 @@
             if (aboutWorkflowImageLoadingPromise) return aboutWorkflowImageLoadingPromise;
 
             const modalImage = document.getElementById('about-workflow-modal-image');
-            const thumbImage = document.getElementById('about-workflow-thumb-image');
-            const thumbPlaceholder = document.getElementById('about-workflow-thumb-placeholder');
-            const thumbHint = document.getElementById('about-workflow-thumb-hint');
             const loadingEl = document.getElementById('about-workflow-modal-loading');
             const errorEl = document.getElementById('about-workflow-modal-error');
             if (!modalImage) return false;
 
             if (loadingEl) loadingEl.classList.remove('hidden');
             if (errorEl) errorEl.classList.add('hidden');
-            if (thumbHint) thumbHint.textContent = '正在加载流程图...';
 
             const targetSrc = String(modalImage.dataset.src || ABOUT_WORKFLOW_IMAGE_URL).trim() || ABOUT_WORKFLOW_IMAGE_URL;
             aboutWorkflowImageLoadingPromise = new Promise((resolve) => {
@@ -873,15 +870,9 @@
                         if (loadingEl) loadingEl.classList.add('hidden');
                         if (errorEl) errorEl.classList.add('hidden');
                         modalImage.classList.remove('hidden');
-                        if (thumbImage) {
-                            thumbImage.classList.remove('hidden');
-                        }
-                        if (thumbPlaceholder) thumbPlaceholder.classList.add('hidden');
-                        if (thumbHint) thumbHint.textContent = '已加载，点击可放大查看';
                     } else {
                         if (loadingEl) loadingEl.classList.add('hidden');
                         if (errorEl) errorEl.classList.remove('hidden');
-                        if (thumbHint) thumbHint.textContent = '加载失败，点击重试';
                     }
                     aboutWorkflowImageLoadingPromise = null;
                     resolve(ok);
@@ -893,9 +884,6 @@
                 modalImage.addEventListener('load', handleLoad, { once: true });
                 modalImage.addEventListener('error', handleError, { once: true });
 
-                if (thumbImage && !thumbImage.src) {
-                    thumbImage.src = String(thumbImage.dataset.src || targetSrc).trim() || targetSrc;
-                }
                 if (!modalImage.src) {
                     modalImage.src = targetSrc;
                 }
@@ -6398,7 +6386,8 @@
             closeBtn.innerText = importMode ? '取消' : '关闭';
 
             const canOpenImport = canOpenResourceImport(item);
-            const canSubmit = canImportResource(item);
+            const canSubmitNow = canImportResource(item);
+            const canSubmit = canSubmitNow && !resourceSubmitBusy;
             const showPrimaryAction = importMode ? true : canOpenImport;
             footer.className = showPrimaryAction ? 'grid grid-cols-1 md:grid-cols-2 gap-3 pt-2' : 'grid grid-cols-1 gap-3 pt-2';
             submitBtn.classList.toggle('hidden', !showPrimaryAction);
@@ -6416,7 +6405,9 @@
                     ? 'bg-emerald-600 hover:bg-emerald-500 rounded-xl py-3 font-bold text-white'
                     : 'bg-slate-700 rounded-xl py-3 font-bold text-slate-400 btn-disabled';
             }
-            if (importMode && batchMode) {
+            if (importMode && resourceSubmitBusy) {
+                submitBtn.innerText = batchMode ? `批量提交中（${batchCount} 条）...` : '提交中...';
+            } else if (importMode && batchMode) {
                 submitBtn.innerText = `批量下载到 115（${batchCount} 条）`;
             } else {
                 submitBtn.innerText = getResourceImportLabel(item);
@@ -6537,153 +6528,185 @@
         }
 
         async function submitResourceJob() {
+            if (resourceSubmitBusy) {
+                showToast('正在提交中，请勿重复点击', { tone: 'info', duration: 2200, placement: 'top-center' });
+                return;
+            }
             if (!selectedResourceItem) return alert('未选择资源');
-            const batchMode = isResourceBatchImportMode();
-            const batchItems = batchMode ? getResourceBatchMagnetItems() : [];
-            const selectionState = getResourceShareSelectionState();
-            if (!batchMode && isCurrentResource115Share() && resourceShareRootLoaded && !selectionState.selected_ids.length) {
-                return alert('请先至少勾选一个要转存的目录或文件');
-            }
-            let receiveCode = '';
-            if (!batchMode && isCurrentResource115Share()) {
-                const rawReceiveCode = String(document.getElementById('resource_share_receive_code')?.value || resourceShareReceiveCode || '').trim();
-                receiveCode = normalizeReceiveCodeInput(rawReceiveCode);
-                if (rawReceiveCode && !receiveCode) {
-                    return alert('提取码格式不正确，请输入 1-16 位字母或数字');
+            resourceSubmitBusy = true;
+            renderResourceModalLayout(selectedResourceItem);
+            try {
+                const batchMode = isResourceBatchImportMode();
+                const batchItems = batchMode ? getResourceBatchMagnetItems() : [];
+                const selectionState = getResourceShareSelectionState();
+                if (!batchMode && isCurrentResource115Share() && resourceShareRootLoaded && !selectionState.selected_ids.length) {
+                    return alert('请先至少勾选一个要转存的目录或文件');
                 }
-                resourceShareReceiveCode = receiveCode;
-            }
-            const folderSelectionValid = await ensureResourceFolderSelectionValid({ phase: 'submit' });
-            if (!folderSelectionValid) return;
-            const savepath = normalizeRelativePathInput(document.getElementById('resource_job_savepath').value.trim());
-            if (!savepath) {
-                return alert('请先选择一个非根目录的 115 保存目录');
-            }
-            const refreshDelaySeconds = normalizeResourceRefreshDelaySeconds(
-                document.getElementById('resource_job_refresh_delay_seconds').value,
-                0
-            );
-            if (batchMode) {
-                if (!batchItems.length) {
-                    showToast('批量导入队列为空，请重新粘贴磁力链接后再试', { tone: 'warn', duration: 3200, placement: 'top-center' });
+                let receiveCode = '';
+                if (!batchMode && isCurrentResource115Share()) {
+                    const rawReceiveCode = String(document.getElementById('resource_share_receive_code')?.value || resourceShareReceiveCode || '').trim();
+                    receiveCode = normalizeReceiveCodeInput(rawReceiveCode);
+                    if (rawReceiveCode && !receiveCode) {
+                        return alert('提取码格式不正确，请输入 1-16 位字母或数字');
+                    }
+                    resourceShareReceiveCode = receiveCode;
+                }
+                const folderSelectionValid = await ensureResourceFolderSelectionValid({ phase: 'submit' });
+                if (!folderSelectionValid) return;
+                const savepath = normalizeRelativePathInput(document.getElementById('resource_job_savepath').value.trim());
+                if (!savepath) {
+                    return alert('请先选择一个非根目录的 115 保存目录');
+                }
+                const folderId = String(document.getElementById('resource_job_folder_id')?.value || '').trim();
+                const refreshDelaySeconds = normalizeResourceRefreshDelaySeconds(
+                    document.getElementById('resource_job_refresh_delay_seconds').value,
+                    0
+                );
+                if (batchMode) {
+                    if (!batchItems.length) {
+                        showToast('批量导入队列为空，请重新粘贴磁力链接后再试', { tone: 'warn', duration: 3200, placement: 'top-center' });
+                        return;
+                    }
+                    const createdJobIds = [];
+                    let duplicatedCount = 0;
+                    let failedCount = 0;
+                    let firstFailedMsg = '';
+                    let matchedTaskName = '';
+                    let autoRefreshMatched = false;
+
+                    for (const batchItem of batchItems) {
+                        const payload = {
+                            savepath,
+                            refresh_delay_seconds: refreshDelaySeconds,
+                            auto_refresh: true,
+                            resource: serializeTransientResourceForJob(batchItem)
+                        };
+                        if (folderId && folderId !== '0') payload.folder_id = folderId;
+                        let res;
+                        try {
+                            res = await fetch('/resource/jobs/create', {
+                                method: 'POST',
+                                headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify(payload)
+                            });
+                        } catch (e) {
+                            failedCount += 1;
+                            if (!firstFailedMsg) {
+                                firstFailedMsg = String(e?.message || '网络请求失败').trim() || '请稍后重试';
+                            }
+                            continue;
+                        }
+                        let data = {};
+                        try {
+                            data = await res.json();
+                        } catch (e) {
+                            data = {};
+                        }
+                        if (res.ok && data.ok) {
+                            createdJobIds.push(Number(data.job_id || 0));
+                            const currentTaskName = String(data.monitor_task_name || '').trim();
+                            if (!matchedTaskName && currentTaskName) matchedTaskName = currentTaskName;
+                            if (currentTaskName && data.auto_refresh) autoRefreshMatched = true;
+                            continue;
+                        }
+                        if (res.status === 409) {
+                            duplicatedCount += 1;
+                            continue;
+                        }
+                        failedCount += 1;
+                        if (!firstFailedMsg) {
+                            firstFailedMsg = String(data.msg || `HTTP ${res.status}`).trim() || '请稍后重试';
+                        }
+                    }
+
+                    if (!createdJobIds.length && duplicatedCount <= 0 && failedCount > 0) {
+                        showToast(`批量导入失败：${firstFailedMsg || '请稍后重试'}`, {
+                            tone: 'error',
+                            duration: 3800,
+                            placement: 'top-center'
+                        });
+                        return;
+                    }
+
+                    rememberResourceRefreshDelaySeconds(refreshDelaySeconds);
+                    closeResourceJobModal();
+                    await refreshResourceState();
+
+                    const summaryParts = [];
+                    if (createdJobIds.length) summaryParts.push(`已创建 ${createdJobIds.length} 条任务`);
+                    if (duplicatedCount > 0) summaryParts.push(`跳过 ${duplicatedCount} 条重复任务`);
+                    if (failedCount > 0) summaryParts.push(`失败 ${failedCount} 条`);
+                    if (createdJobIds.length) {
+                        if (matchedTaskName) {
+                            summaryParts.push(
+                                autoRefreshMatched
+                                    ? `保存完成后会自动触发“${matchedTaskName}”`
+                                    : `已匹配“${matchedTaskName}”，可稍后手动触发刷新`
+                            );
+                        } else {
+                            summaryParts.push('当前目录不会自动生成 strm');
+                        }
+                    }
+                    const summaryText = summaryParts.join('，');
+                    const tone = failedCount > 0 ? (createdJobIds.length > 0 || duplicatedCount > 0 ? 'warn' : 'error') : 'success';
+                    showToast(summaryText || '批量导入已处理完成', {
+                        tone,
+                        duration: failedCount > 0 ? 5200 : 3600,
+                        placement: 'top-center'
+                    });
+                    if (failedCount > 0 && firstFailedMsg) {
+                        showToast(`失败原因示例：${firstFailedMsg}`, {
+                            tone: 'error',
+                            duration: 4200,
+                            placement: 'top-center'
+                        });
+                    }
                     return;
                 }
-                const createdJobIds = [];
-                let duplicatedCount = 0;
-                let failedCount = 0;
-                let firstFailedMsg = '';
-                let matchedTaskName = '';
-                let autoRefreshMatched = false;
 
-                for (const batchItem of batchItems) {
-                    const payload = {
-                        savepath,
-                        refresh_delay_seconds: refreshDelaySeconds,
-                        auto_refresh: true,
-                        resource: serializeTransientResourceForJob(batchItem)
-                    };
-                    const res = await fetch('/resource/jobs/create', {
+                const payload = {
+                    savepath,
+                    refresh_delay_seconds: refreshDelaySeconds,
+                    auto_refresh: true
+                };
+                if (folderId && folderId !== '0') payload.folder_id = folderId;
+                if (Number(selectedResourceId || 0) > 0) payload.resource_id = selectedResourceId;
+                else payload.resource = serializeTransientResourceForJob(selectedResourceItem);
+                if (isCurrentResource115Share()) {
+                    payload.share_selection = selectionState;
+                    if (receiveCode) payload.receive_code = receiveCode;
+                }
+                let res;
+                let data = {};
+                try {
+                    res = await fetch('/resource/jobs/create', {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify(payload)
                     });
-                    let data = {};
-                    try {
-                        data = await res.json();
-                    } catch (e) {
-                        data = {};
-                    }
-                    if (res.ok && data.ok) {
-                        createdJobIds.push(Number(data.job_id || 0));
-                        const currentTaskName = String(data.monitor_task_name || '').trim();
-                        if (!matchedTaskName && currentTaskName) matchedTaskName = currentTaskName;
-                        if (currentTaskName && data.auto_refresh) autoRefreshMatched = true;
-                        continue;
-                    }
-                    if (res.status === 409) {
-                        duplicatedCount += 1;
-                        continue;
-                    }
-                    failedCount += 1;
-                    if (!firstFailedMsg) {
-                        firstFailedMsg = String(data.msg || `HTTP ${res.status}`).trim() || '请稍后重试';
-                    }
-                }
-
-                if (!createdJobIds.length && duplicatedCount <= 0 && failedCount > 0) {
-                    showToast(`批量导入失败：${firstFailedMsg || '请稍后重试'}`, {
-                        tone: 'error',
-                        duration: 3800,
-                        placement: 'top-center'
-                    });
+                    data = await res.json();
+                } catch (e) {
+                    showToast(`提交失败：${e?.message || '网络请求失败'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
                     return;
                 }
-
+                if (!res.ok || !data.ok) {
+                    showToast(`提交失败：${data.msg || '请稍后重试'}`, { tone: 'error', duration: 3000, placement: 'top-center' });
+                    return;
+                }
                 rememberResourceRefreshDelaySeconds(refreshDelaySeconds);
                 closeResourceJobModal();
                 await refreshResourceState();
-
-                const summaryParts = [];
-                if (createdJobIds.length) summaryParts.push(`已创建 ${createdJobIds.length} 条任务`);
-                if (duplicatedCount > 0) summaryParts.push(`跳过 ${duplicatedCount} 条重复任务`);
-                if (failedCount > 0) summaryParts.push(`失败 ${failedCount} 条`);
-                if (createdJobIds.length) {
-                    if (matchedTaskName) {
-                        summaryParts.push(
-                            autoRefreshMatched
-                                ? `保存完成后会自动触发“${matchedTaskName}”`
-                                : `已匹配“${matchedTaskName}”，可稍后手动触发刷新`
-                        );
-                    } else {
-                        summaryParts.push('当前目录不会自动生成 strm');
-                    }
+                const matchedTaskName = String(data.monitor_task_name || '').trim();
+                const tail = matchedTaskName
+                    ? (data.auto_refresh ? `，保存完成后会自动触发“${matchedTaskName}”` : `，已匹配“${matchedTaskName}”，可稍后手动触发刷新`)
+                    : '，当前目录不会自动生成 strm';
+                showToast(`已创建导入任务 #${data.job_id}${tail}`, { tone: 'success', duration: 3000, placement: 'top-center' });
+            } finally {
+                resourceSubmitBusy = false;
+                if (resourceModalMode === 'import' && selectedResourceItem) {
+                    renderResourceModalLayout(selectedResourceItem);
                 }
-                const summaryText = summaryParts.join('，');
-                const tone = failedCount > 0 ? (createdJobIds.length > 0 || duplicatedCount > 0 ? 'warn' : 'error') : 'success';
-                showToast(summaryText || '批量导入已处理完成', {
-                    tone,
-                    duration: failedCount > 0 ? 5200 : 3600,
-                    placement: 'top-center'
-                });
-                if (failedCount > 0 && firstFailedMsg) {
-                    showToast(`失败原因示例：${firstFailedMsg}`, {
-                        tone: 'error',
-                        duration: 4200,
-                        placement: 'top-center'
-                    });
-                }
-                return;
             }
-
-            const payload = {
-                savepath,
-                refresh_delay_seconds: refreshDelaySeconds,
-                auto_refresh: true
-            };
-            if (Number(selectedResourceId || 0) > 0) payload.resource_id = selectedResourceId;
-            else payload.resource = serializeTransientResourceForJob(selectedResourceItem);
-            if (isCurrentResource115Share()) {
-                payload.share_selection = selectionState;
-                if (receiveCode) payload.receive_code = receiveCode;
-            }
-            const res = await fetch('/resource/jobs/create', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(payload)
-            });
-            const data = await res.json();
-            if (!res.ok || !data.ok) {
-                showToast(`提交失败：${data.msg || '请稍后重试'}`, { tone: 'error', duration: 3000, placement: 'top-center' });
-                return;
-            }
-            rememberResourceRefreshDelaySeconds(refreshDelaySeconds);
-            closeResourceJobModal();
-            await refreshResourceState();
-            const matchedTaskName = String(data.monitor_task_name || '').trim();
-            const tail = matchedTaskName
-                ? (data.auto_refresh ? `，保存完成后会自动触发“${matchedTaskName}”` : `，已匹配“${matchedTaskName}”，可稍后手动触发刷新`)
-                : '，当前目录不会自动生成 strm';
-            showToast(`已创建导入任务 #${data.job_id}${tail}`, { tone: 'success', duration: 3000, placement: 'top-center' });
         }
 
         async function copyResourceRecord(resourceId) {

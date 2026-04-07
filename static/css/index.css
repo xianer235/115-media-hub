@@ -2567,50 +2567,6 @@
             line-height: 1.6;
             color: #94a3b8;
         }
-        #about-workflow-thumb {
-            width: 100%;
-            border-radius: 1rem;
-            border: 1px solid rgba(100, 116, 139, 0.42);
-            background: linear-gradient(180deg, rgba(15, 23, 42, 0.66), rgba(15, 23, 42, 0.45));
-            padding: 0.75rem;
-            cursor: pointer;
-            transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
-        }
-        #about-workflow-thumb:hover {
-            border-color: rgba(56, 189, 248, 0.6);
-            box-shadow: 0 12px 26px rgba(14, 165, 233, 0.18);
-            transform: translateY(-1px);
-        }
-        #about-workflow-thumb img {
-            width: 100%;
-            height: auto;
-            display: block;
-            border-radius: 0.7rem;
-            border: 1px solid rgba(148, 163, 184, 0.3);
-            background: #fff;
-        }
-        #about-workflow-thumb .about-workflow-thumb-placeholder {
-            width: 100%;
-            min-height: 220px;
-            border-radius: 0.7rem;
-            border: 1px dashed rgba(148, 163, 184, 0.42);
-            background: linear-gradient(145deg, rgba(15, 23, 42, 0.28), rgba(15, 23, 42, 0.14));
-            display: grid;
-            place-content: center;
-            gap: 0.38rem;
-            text-align: center;
-            color: #cbd5e1;
-            padding: 1rem;
-        }
-        #about-workflow-thumb .about-workflow-thumb-title {
-            font-size: 0.95rem;
-            font-weight: 800;
-            letter-spacing: 0.01em;
-        }
-        #about-workflow-thumb .about-workflow-thumb-hint {
-            font-size: 0.74rem;
-            color: #94a3b8;
-        }
         #about-workflow-modal .about-workflow-modal-body {
             margin-top: 1rem;
             max-height: 82vh;
@@ -2622,12 +2578,15 @@
         }
         #about-workflow-modal .about-workflow-modal-body img {
             width: 100%;
-            min-width: 700px;
+            min-width: 640px;
             height: auto;
-            display: block;
             border-radius: 0.7rem;
             border: 1px solid rgba(148, 163, 184, 0.3);
             background: #fff;
+            display: none;
+        }
+        #about-workflow-modal .about-workflow-modal-body img:not(.hidden) {
+            display: block;
         }
         #about-workflow-modal .about-workflow-modal-loading,
         #about-workflow-modal .about-workflow-modal-error {
@@ -2635,12 +2594,16 @@
             border-radius: 0.8rem;
             border: 1px dashed rgba(148, 163, 184, 0.42);
             background: rgba(15, 23, 42, 0.22);
-            display: grid;
+            display: none;
             place-content: center;
             text-align: center;
             padding: 1rem;
             line-height: 1.6;
             font-size: 0.84rem;
+        }
+        #about-workflow-modal .about-workflow-modal-loading:not(.hidden),
+        #about-workflow-modal .about-workflow-modal-error:not(.hidden) {
+            display: grid;
         }
         #about-workflow-modal .about-workflow-modal-loading {
             color: #cbd5e1;
@@ -3396,8 +3359,7 @@
             border-color: rgba(14, 165, 233, 0.5);
             color: #075985;
         }
-        html.theme-day #page-about .about-workflow-card,
-        html.theme-day #about-workflow-thumb {
+        html.theme-day #page-about .about-workflow-card {
             background: rgba(255, 255, 255, 0.94);
             border-color: rgba(148, 163, 184, 0.38);
         }
@@ -3406,14 +3368,6 @@
         }
         html.theme-day #page-about .about-workflow-copy {
             color: #475569;
-        }
-        html.theme-day #about-workflow-thumb .about-workflow-thumb-placeholder {
-            background: linear-gradient(145deg, rgba(226, 232, 240, 0.85), rgba(241, 245, 249, 0.9));
-            border-color: rgba(148, 163, 184, 0.5);
-            color: #1e293b;
-        }
-        html.theme-day #about-workflow-thumb .about-workflow-thumb-hint {
-            color: #64748b;
         }
         html.theme-day #about-workflow-modal .about-workflow-modal-body {
             background: rgba(241, 245, 249, 0.95);
