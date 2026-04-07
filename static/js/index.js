@@ -69,6 +69,7 @@
         let resourceChannelNextBefore = {};
         let resourceChannelNoMore = {};
         let resourceTempIdSeed = -1;
+        let resourceBatchImportItems = [];
         let resourceClientIdSeed = -100000;
         let resourceClientIdsByIdentity = {};
         let resourceJobModalOpen = false;
@@ -840,6 +841,14 @@
 
         function closeHelpModal() {
             document.getElementById('help-modal').classList.add('hidden');
+        }
+
+        function openAboutWorkflowModal() {
+            showLockedModal('about-workflow-modal');
+        }
+
+        function closeAboutWorkflowModal() {
+            hideLockedModal('about-workflow-modal');
         }
 
         function addTreeRow(data = {url: '', prefix: '', exclude: 1}) {
@@ -3169,6 +3178,42 @@
             };
         }
 
+        function normalizeResourceBatchImportItems(items) {
+            const seenLinks = new Set();
+            const normalized = [];
+            (Array.isArray(items) ? items : []).forEach(rawItem => {
+                const item = rawItem && typeof rawItem === 'object' ? rawItem : {};
+                const linkUrl = String(item?.link_url || '').trim();
+                if (!linkUrl) return;
+                const linkKey = linkUrl.toLowerCase();
+                if (seenLinks.has(linkKey)) return;
+                seenLinks.add(linkKey);
+                normalized.push(item);
+            });
+            return normalized;
+        }
+
+        function setResourceBatchImportItems(items = []) {
+            resourceBatchImportItems = normalizeResourceBatchImportItems(items);
+        }
+
+        function getResourceBatchMagnetItems() {
+            return normalizeResourceBatchImportItems(resourceBatchImportItems).filter(item => {
+                const linkUrl = String(item?.link_url || '').trim();
+                if (!linkUrl) return false;
+                return getEffectiveResourceLinkType(item) === 'magnet';
+            });
+        }
+
+        function isResourceBatchImportMode() {
+            if (resourceModalMode !== 'import') return false;
+            if (Number(selectedResourceId || 0) > 0) return false;
+            const batchItems = getResourceBatchMagnetItems();
+            if (batchItems.length <= 1) return false;
+            const selectedLink = String(selectedResourceItem?.link_url || '').trim().toLowerCase();
+            return !selectedLink || batchItems.some(item => String(item?.link_url || '').trim().toLowerCase() === selectedLink);
+        }
+
         function getResourceItemIdentity(item) {
             const sourcePostId = String(item?.source_post_id || item?.extra?.source_post_id || '').trim();
             if (sourcePostId) return `post:${sourcePostId}`;
@@ -3489,6 +3534,10 @@
         }
 
         function getResourceImportSelectionHint() {
+            if (isResourceBatchImportMode()) {
+                const batchCount = getResourceBatchMagnetItems().length;
+                return `当前为批量模式，将按同一保存目录依次导入 ${batchCount} 条磁力链接。`;
+            }
             if (!isCurrentResource115Share()) return '当前资源会按完整内容导入。';
             if (!resourceState.cookie_configured) return '配置 115 Cookie 后可浏览分享目录并选择具体内容。';
             if (!resourceShareRootLoaded) return '分享目录载入后可选择需要保存的目录或文件。';
@@ -3554,6 +3603,10 @@
             const selectionState = getResourceShareSelectionState();
             const isShare = isCurrentResource115Share();
             let selectionText = '整条资源';
+
+            if (!isShare && isResourceBatchImportMode()) {
+                selectionText = `${getResourceBatchMagnetItems().length} 条磁力`;
+            }
 
             if (isShare) {
                 const directCount = selectionState.selected_entries.length;
@@ -3973,9 +4026,42 @@
                 throw new Error(data.msg || '链接解析失败');
             }
             const items = Array.isArray(data.items) ? data.items : [];
-            const preferred = items.find(item => canOpenResourceImport(item));
-            if (!preferred) throw new Error('未在文本中识别到可导入的 magnet 或 115 分享链接');
-            openResourceItemModal(createTransientResourceItem(preferred), 'import');
+            const importableItems = items
+                .filter(item => canOpenResourceImport(item))
+                .map(item => createTransientResourceItem(item));
+            if (!importableItems.length) throw new Error('未在文本中识别到可导入的 magnet 或 115 分享链接');
+
+            const magnetItems = importableItems.filter(item => getEffectiveResourceLinkType(item) === 'magnet');
+            const hasShareItems = importableItems.some(item => getEffectiveResourceLinkType(item) === '115share');
+            if (magnetItems.length > 1 && !hasShareItems) {
+                setResourceBatchImportItems(magnetItems);
+                const batchMagnetItems = getResourceBatchMagnetItems();
+                const firstItem = batchMagnetItems[0] || magnetItems[0];
+                openResourceItemModal(firstItem, 'import');
+                showToast(`已识别 ${batchMagnetItems.length} 条磁力链接，提交时将批量导入`, {
+                    tone: 'info',
+                    duration: 3200,
+                    placement: 'top-center'
+                });
+                return {
+                    inserted: 0,
+                    updated: 0,
+                    item: firstItem,
+                    items: batchMagnetItems,
+                    batch_total: batchMagnetItems.length
+                };
+            }
+
+            setResourceBatchImportItems([]);
+            const preferred = importableItems[0];
+            if (importableItems.length > 1) {
+                showToast(`已识别 ${importableItems.length} 条可导入链接，当前先处理第 1 条`, {
+                    tone: 'info',
+                    duration: 3200,
+                    placement: 'top-center'
+                });
+            }
+            openResourceItemModal(preferred, 'import');
             return {
                 inserted: 0,
                 updated: 0,
@@ -6235,9 +6321,11 @@
             const submitBtn = document.getElementById('resource-submit-btn');
             const closeBtn = document.getElementById('resource-close-btn');
             const importMode = resourceModalMode === 'import';
+            const batchMode = importMode && isResourceBatchImportMode();
+            const batchCount = batchMode ? getResourceBatchMagnetItems().length : 0;
             if (!titleEl || !detailGrid || !rawCard || !savePanel || !saveHintEl || !footer || !submitBtn || !closeBtn) return;
 
-            titleEl.innerText = importMode ? '导入资源' : '资源详情';
+            titleEl.innerText = importMode ? (batchMode ? '批量导入资源' : '导入资源') : '资源详情';
             detailGrid.className = importMode ? 'resource-import-layout' : 'grid grid-cols-1 gap-4';
             rawCard.classList.toggle('hidden', importMode);
             savePanel.classList.toggle('hidden', !importMode);
@@ -6262,7 +6350,11 @@
                     ? 'bg-emerald-600 hover:bg-emerald-500 rounded-xl py-3 font-bold text-white'
                     : 'bg-slate-700 rounded-xl py-3 font-bold text-slate-400 btn-disabled';
             }
-            submitBtn.innerText = getResourceImportLabel(item);
+            if (importMode && batchMode) {
+                submitBtn.innerText = `批量下载到 115（${batchCount} 条）`;
+            } else {
+                submitBtn.innerText = getResourceImportLabel(item);
+            }
 
             if (!importMode) {
                 saveHintEl.classList.add('hidden');
@@ -6274,6 +6366,9 @@
             if (!canOpenResourceImport(item)) {
                 hints.push('当前资源没有可直接导入的 magnet 或 115 分享链接。');
             } else {
+                if (batchMode) {
+                    hints.push(`已识别 ${batchCount} 条磁力链接，将按同一保存目录和延时设置依次导入。`);
+                }
                 if (!resourceState.cookie_configured) {
                     hints.push('还没有配置 115 Cookie。你可以先查看并填写保存资源和保存目录，但真正提交前需要先补上 Cookie。');
                 }
@@ -6352,6 +6447,7 @@
         function openResourceModal(resourceId, mode = 'detail') {
             const item = findResourceItem(resourceId);
             if (!item) return;
+            setResourceBatchImportItems([]);
             openResourceItemModal(item, mode);
         }
 
@@ -6369,18 +6465,21 @@
             selectedResourceItem = null;
             resourceModalMode = 'detail';
             resourceModalLinkType = '';
+            setResourceBatchImportItems([]);
             resetResourceShareState();
             hideLockedModal('resource-import-modal');
         }
 
         async function submitResourceJob() {
             if (!selectedResourceItem) return alert('未选择资源');
+            const batchMode = isResourceBatchImportMode();
+            const batchItems = batchMode ? getResourceBatchMagnetItems() : [];
             const selectionState = getResourceShareSelectionState();
-            if (isCurrentResource115Share() && resourceShareRootLoaded && !selectionState.selected_ids.length) {
+            if (!batchMode && isCurrentResource115Share() && resourceShareRootLoaded && !selectionState.selected_ids.length) {
                 return alert('请先至少勾选一个要转存的目录或文件');
             }
             let receiveCode = '';
-            if (isCurrentResource115Share()) {
+            if (!batchMode && isCurrentResource115Share()) {
                 const rawReceiveCode = String(document.getElementById('resource_share_receive_code')?.value || resourceShareReceiveCode || '').trim();
                 receiveCode = normalizeReceiveCodeInput(rawReceiveCode);
                 if (rawReceiveCode && !receiveCode) {
@@ -6398,6 +6497,98 @@
                 document.getElementById('resource_job_refresh_delay_seconds').value,
                 0
             );
+            if (batchMode) {
+                if (!batchItems.length) {
+                    showToast('批量导入队列为空，请重新粘贴磁力链接后再试', { tone: 'warn', duration: 3200, placement: 'top-center' });
+                    return;
+                }
+                const createdJobIds = [];
+                let duplicatedCount = 0;
+                let failedCount = 0;
+                let firstFailedMsg = '';
+                let matchedTaskName = '';
+                let autoRefreshMatched = false;
+
+                for (const batchItem of batchItems) {
+                    const payload = {
+                        savepath,
+                        refresh_delay_seconds: refreshDelaySeconds,
+                        auto_refresh: true,
+                        resource: serializeTransientResourceForJob(batchItem)
+                    };
+                    const res = await fetch('/resource/jobs/create', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(payload)
+                    });
+                    let data = {};
+                    try {
+                        data = await res.json();
+                    } catch (e) {
+                        data = {};
+                    }
+                    if (res.ok && data.ok) {
+                        createdJobIds.push(Number(data.job_id || 0));
+                        const currentTaskName = String(data.monitor_task_name || '').trim();
+                        if (!matchedTaskName && currentTaskName) matchedTaskName = currentTaskName;
+                        if (currentTaskName && data.auto_refresh) autoRefreshMatched = true;
+                        continue;
+                    }
+                    if (res.status === 409) {
+                        duplicatedCount += 1;
+                        continue;
+                    }
+                    failedCount += 1;
+                    if (!firstFailedMsg) {
+                        firstFailedMsg = String(data.msg || `HTTP ${res.status}`).trim() || '请稍后重试';
+                    }
+                }
+
+                if (!createdJobIds.length && duplicatedCount <= 0 && failedCount > 0) {
+                    showToast(`批量导入失败：${firstFailedMsg || '请稍后重试'}`, {
+                        tone: 'error',
+                        duration: 3800,
+                        placement: 'top-center'
+                    });
+                    return;
+                }
+
+                rememberResourceRefreshDelaySeconds(refreshDelaySeconds);
+                closeResourceJobModal();
+                await refreshResourceState();
+
+                const summaryParts = [];
+                if (createdJobIds.length) summaryParts.push(`已创建 ${createdJobIds.length} 条任务`);
+                if (duplicatedCount > 0) summaryParts.push(`跳过 ${duplicatedCount} 条重复任务`);
+                if (failedCount > 0) summaryParts.push(`失败 ${failedCount} 条`);
+                if (createdJobIds.length) {
+                    if (matchedTaskName) {
+                        summaryParts.push(
+                            autoRefreshMatched
+                                ? `保存完成后会自动触发“${matchedTaskName}”`
+                                : `已匹配“${matchedTaskName}”，可稍后手动触发刷新`
+                        );
+                    } else {
+                        summaryParts.push('当前目录不会自动生成 strm');
+                    }
+                }
+                const summaryText = summaryParts.join('，');
+                const tone = failedCount > 0 ? (createdJobIds.length > 0 || duplicatedCount > 0 ? 'warn' : 'error') : 'success';
+                showToast(summaryText || '批量导入已处理完成', {
+                    tone,
+                    duration: failedCount > 0 ? 5200 : 3600,
+                    placement: 'top-center'
+                });
+                if (failedCount > 0 && firstFailedMsg) {
+                    showToast(`失败原因示例：${firstFailedMsg}`, {
+                        tone: 'error',
+                        duration: 4200,
+                        placement: 'top-center'
+                    });
+                }
+                return;
+            }
+
             const payload = {
                 savepath,
                 refresh_delay_seconds: refreshDelaySeconds,
@@ -7115,6 +7306,9 @@
         document.getElementById('help-modal').addEventListener('click', (e) => {
             if (e.target.id === 'help-modal') closeHelpModal();
         });
+        document.getElementById('about-workflow-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'about-workflow-modal') closeAboutWorkflowModal();
+        });
         document.getElementById('resource-source-modal').addEventListener('click', (e) => {
             if (e.target.id === 'resource-source-modal') closeResourceSourceModal();
         });
@@ -7193,6 +7387,11 @@
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape' && resourceJobClearMenuOpen) {
                 closeResourceJobClearMenu();
+                return;
+            }
+            const aboutWorkflowModal = document.getElementById('about-workflow-modal');
+            if (e.key === 'Escape' && aboutWorkflowModal && !aboutWorkflowModal.classList.contains('hidden')) {
+                closeAboutWorkflowModal();
                 return;
             }
             const subscriptionEpisodeModal = document.getElementById('subscription-episode-modal');

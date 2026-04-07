@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.3] - 2026-04-07
+- 资源中心“快速识别”支持一次粘贴多条磁力链接，并按同一保存目录批量提交导入任务。
+- 导入弹窗新增批量模式提示与提交结果汇总，支持成功/重复/失败统计反馈。
+- 关于页新增“流程图设计”卡片与大图弹窗，可直接查看 Cookie 与 OpenList 覆盖范围流程图。
+
 ## [0.1.2] - 2026-04-07
 - 增强订阅任务重跑可靠性：单季集数上限裁剪、115 重复接收延迟复核、全季覆盖后自动收口，降低二次误导入概率。
 - 订阅导入批次收口刷新改为固定内置策略，移除设置页开关与对应配置项，避免“有开关但不生效”的混淆。

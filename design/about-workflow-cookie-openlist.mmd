@@ -1,0 +1,52 @@
+%%{init: {
+  "theme": "base",
+  "fontFamily": "PingFang SC, Microsoft YaHei, Arial",
+  "flowchart": {
+    "htmlLabels": true,
+    "curve": "basis",
+    "nodeSpacing": 46,
+    "rankSpacing": 68
+  },
+  "themeVariables": {
+    "fontSize": "18px",
+    "primaryColor": "#ffffff",
+    "primaryTextColor": "#0f172a",
+    "primaryBorderColor": "#334155",
+    "lineColor": "#475569",
+    "clusterBkg": "#f8fafc",
+    "clusterBorder": "#64748b"
+  }
+}}%%
+flowchart TB
+    subgraph U["上半段：资源导入（依赖 115 Cookie）"]
+        direction TB
+        A["输入资源<br/>TG 同步 / 粘贴 magnet 或 115 分享链接"] --> B{"识别链接类型"}
+        B --> C["磁力：创建 115 离线下载"]
+        B --> D["115 分享：创建 115 转存"]
+        C --> E["写入 115 保存目录（savepath）"]
+        D --> E
+    end
+
+    E --> M["映射桥：115 savepath ↔ OpenList 挂载路径"]
+
+    subgraph L["下半段：STRM 生成（依赖 OpenList）"]
+        direction TB
+        M --> F["按映射定位 OpenList 目录"]
+        F --> G{"命中文件夹监控任务？"}
+        G -- 是 --> H["调用 OpenList 刷新目录<br/>生成 / 更新 STRM"]
+        G -- 否 --> I["仅保存到 115 网盘<br/>暂不生成 STRM"]
+    end
+
+    H --> J["媒体库播放 / 订阅追更"]
+    I --> J
+
+    SC["覆盖范围（Cookie）<br/>115 API：离线下载 / 转存 / 网盘写入"]:::scope
+    SO["覆盖范围（OpenList）<br/>OpenList API：路径映射 / 刷新目录 / STRM 生成"]:::scope
+
+    SC -.-> C
+    SC -.-> D
+    SC -.-> E
+    SO -.-> F
+    SO -.-> H
+
+    classDef scope fill:#0f172a,stroke:#38bdf8,color:#e2e8f0,stroke-width:1px,stroke-dasharray:4 3;
