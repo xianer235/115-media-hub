@@ -411,19 +411,25 @@
             background: rgba(2, 6, 23, 0.86);
         }
         /* 夜间模式下 time 输入框默认图标对比度偏低，显式提升可读性 */
-        #page-settings input[type="time"] {
+        input[type="time"] {
             color: #e2e8f0;
             color-scheme: dark;
             padding-right: 2.4rem;
             letter-spacing: 0.01em;
         }
-        #page-settings input[type="time"]::-webkit-datetime-edit {
+        input[type="time"]::-webkit-datetime-edit {
             color: #e2e8f0;
         }
-        #page-settings input[type="time"]::-webkit-calendar-picker-indicator {
-            opacity: 0.92;
-            filter: invert(0.88) sepia(0.25) saturate(0.4) hue-rotate(172deg) brightness(1.12);
+        input[type="time"]::-webkit-calendar-picker-indicator {
+            opacity: 0.98;
+            padding: 0.22rem;
+            border-radius: 999px;
+            background: rgba(148, 163, 184, 0.22);
+            filter: invert(0.94) sepia(0.14) saturate(0.55) hue-rotate(170deg) brightness(1.07) contrast(1.04);
             cursor: pointer;
+        }
+        input[type="time"]::-webkit-calendar-picker-indicator:hover {
+            background: rgba(148, 163, 184, 0.3);
         }
         .settings-grid {
             align-items: start;
@@ -4129,15 +4135,16 @@
             color: #334155 !important;
             font-weight: 600;
         }
-        html.theme-day #page-settings input[type="time"] {
+        html.theme-day input[type="time"] {
             color: #0f172a !important;
             color-scheme: light;
         }
-        html.theme-day #page-settings input[type="time"]::-webkit-datetime-edit {
+        html.theme-day input[type="time"]::-webkit-datetime-edit {
             color: #0f172a !important;
         }
-        html.theme-day #page-settings input[type="time"]::-webkit-calendar-picker-indicator {
+        html.theme-day input[type="time"]::-webkit-calendar-picker-indicator {
             filter: none;
+            background: rgba(148, 163, 184, 0.16);
             opacity: 0.86;
         }
         html.theme-day #page-about .about-action-primary {

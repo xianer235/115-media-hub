@@ -85,7 +85,8 @@ async def startup() -> None:
     async def subscription_scheduler() -> None:
         await asyncio.sleep(5)
         while True:
-            now = time.time()
+            now_dt = datetime.now()
+            now_ts = now_dt.timestamp()
             cfg = get_config()
             prev_next_runs = dict(subscription_next_run)
             tasks = [normalize_subscription_task(task or {}) for task in cfg.get("subscription_tasks", []) or []]
@@ -100,16 +101,58 @@ async def startup() -> None:
                 name = str(task.get("name", "")).strip()
                 if not name:
                     continue
-                cron_minutes = int(task.get("cron_minutes", 0) or 0)
-                if not task.get("enabled", True) or cron_minutes <= 0:
+                if not task.get("enabled", True):
                     subscription_next_run.pop(name, None)
                     continue
+
+                window_meta = compute_subscription_schedule_window_meta(
+                    weekdays=task.get("schedule_weekdays", []),
+                    start_time=task.get("schedule_start_time", "00:00"),
+                    end_time=task.get("schedule_end_time", "23:59"),
+                    now=now_dt,
+                )
+                if not bool(window_meta.get("valid", False)):
+                    subscription_next_run.pop(name, None)
+                    continue
+
+                interval_minutes = normalize_subscription_schedule_interval_minutes(
+                    task.get("schedule_interval_minutes", 30),
+                    fallback=30,
+                )
+                interval_seconds = max(60, interval_minutes * 60)
+
                 if name not in subscription_last_run:
-                    subscription_last_run[name] = now
-                next_ts = subscription_last_run[name] + (cron_minutes * 60)
-                subscription_next_run[name] = datetime.fromtimestamp(next_ts).strftime("%H:%M:%S")
-                if now >= next_ts:
-                    queue_subscription_job(name, "cron")
+                    state = load_subscription_task_state(name, task.get("media_type", "movie"))
+                    last_run_at = parse_resource_datetime_to_timestamp(str(state.get("last_run_at", "") or "").strip())
+                    subscription_last_run[name] = last_run_at if last_run_at > 0 else 0.0
+
+                if bool(window_meta.get("in_window", False)):
+                    previous_run_ts = float(subscription_last_run.get(name, 0.0) or 0.0)
+                    next_due_ts = previous_run_ts + interval_seconds if previous_run_ts > 0 else now_ts
+                    if now_ts >= next_due_ts:
+                        queue_subscription_job(name, "cron")
+                        next_due_ts = now_ts + interval_seconds
+
+                    active_end = window_meta.get("active_end")
+                    active_end_ts = active_end.timestamp() if isinstance(active_end, datetime) else 0.0
+                    if active_end_ts > 0 and next_due_ts < active_end_ts:
+                        subscription_next_run[name] = format_subscription_schedule_next_run(
+                            datetime.fromtimestamp(next_due_ts)
+                        )
+                    else:
+                        next_window_start = window_meta.get("next_window_start")
+                        if isinstance(next_window_start, datetime):
+                            subscription_next_run[name] = format_subscription_schedule_next_run(next_window_start)
+                        else:
+                            subscription_next_run.pop(name, None)
+                    continue
+
+                next_window_start = window_meta.get("next_window_start")
+                if isinstance(next_window_start, datetime):
+                    subscription_next_run[name] = format_subscription_schedule_next_run(next_window_start)
+                else:
+                    subscription_next_run.pop(name, None)
+
             if subscription_next_run != prev_next_runs:
                 schedule_ui_state_push(0)
             await asyncio.sleep(5)

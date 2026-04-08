@@ -689,19 +689,61 @@
                         <input id="subscription_savepath" class="hidden" value="">
                         <div id="subscription-savepath-hint" class="text-[11px] text-slate-500 leading-5 px-1">电影会自动保存到“目标目录/影片名”子文件夹；电视剧保存到所选目录。</div>
                     </div>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <label class="block">
-                            <span class="text-xs text-slate-500">定时检查（分钟，0 为关闭）</span>
-                            <input id="subscription_cron_minutes" type="number" min="0" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="30">
-                        </label>
-                        <label class="block">
-                            <span class="text-xs text-slate-500">匹配阈值（30-100）</span>
-                            <input id="subscription_min_score" type="number" min="30" max="100" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="55">
-                            <div class="text-[11px] text-slate-500 mt-2 leading-5">
-                                推荐：电影 58-68，电视剧 52-62。阈值越高越严格（更准但可能漏）；阈值越低更容易命中（更全但可能误匹配）。
-                            </div>
-                        </label>
+                    <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 space-y-3">
+                        <div class="text-xs text-slate-500">自动查询时段</div>
+                        <div class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2" id="subscription_schedule_weekdays">
+                            <label class="flex items-center justify-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm cursor-pointer">
+                                <input type="checkbox" data-subscription-weekday="1" class="ui-checkbox" checked>
+                                周一
+                            </label>
+                            <label class="flex items-center justify-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm cursor-pointer">
+                                <input type="checkbox" data-subscription-weekday="2" class="ui-checkbox" checked>
+                                周二
+                            </label>
+                            <label class="flex items-center justify-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm cursor-pointer">
+                                <input type="checkbox" data-subscription-weekday="3" class="ui-checkbox" checked>
+                                周三
+                            </label>
+                            <label class="flex items-center justify-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm cursor-pointer">
+                                <input type="checkbox" data-subscription-weekday="4" class="ui-checkbox" checked>
+                                周四
+                            </label>
+                            <label class="flex items-center justify-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm cursor-pointer">
+                                <input type="checkbox" data-subscription-weekday="5" class="ui-checkbox" checked>
+                                周五
+                            </label>
+                            <label class="flex items-center justify-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm cursor-pointer">
+                                <input type="checkbox" data-subscription-weekday="6" class="ui-checkbox" checked>
+                                周六
+                            </label>
+                            <label class="flex items-center justify-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm cursor-pointer">
+                                <input type="checkbox" data-subscription-weekday="7" class="ui-checkbox" checked>
+                                周日
+                            </label>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <label class="block">
+                                <span class="text-xs text-slate-500">开始时间</span>
+                                <input id="subscription_schedule_start_time" type="time" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="00:00">
+                            </label>
+                            <label class="block">
+                                <span class="text-xs text-slate-500">结束时间</span>
+                                <input id="subscription_schedule_end_time" type="time" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="23:59">
+                            </label>
+                            <label class="block">
+                                <span class="text-xs text-slate-500">时段内查询间隔（分钟）</span>
+                                <input id="subscription_schedule_interval_minutes" type="number" min="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="30">
+                            </label>
+                        </div>
+                        <div class="text-[11px] text-slate-500 leading-5">仅在所选星期与时间段内按间隔自动查询。支持跨天时段（例如 22:00 到次日 02:00）。</div>
                     </div>
+                    <label class="block">
+                        <span class="text-xs text-slate-500">匹配阈值（30-100）</span>
+                        <input id="subscription_min_score" type="number" min="30" max="100" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="55">
+                        <div class="text-[11px] text-slate-500 mt-2 leading-5">
+                            推荐：电影 58-68，电视剧 52-62。阈值越高越严格（更准但可能漏）；阈值越低更容易命中（更全但可能误匹配）。
+                        </div>
+                    </label>
                     <label class="block">
                         <span class="text-xs text-slate-500">清晰度优先级（常见分辨率）</span>
                         <select id="subscription_quality_priority" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1">

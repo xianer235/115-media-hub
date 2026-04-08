@@ -120,6 +120,16 @@
         const TOAST_DEFAULT_DURATION_MS = 3000;
         const SUBSCRIPTION_EPISODE_CACHE_TTL_MS = 1000 * 60 * 3;
         const SUBSCRIPTION_INTRO_EPISODE_RETRY_MS = 1000 * 60;
+        const SUBSCRIPTION_WEEKDAY_LABELS = {
+            1: '周一',
+            2: '周二',
+            3: '周三',
+            4: '周四',
+            5: '周五',
+            6: '周六',
+            7: '周日'
+        };
+        const SUBSCRIPTION_DEFAULT_WEEKDAYS = [1, 2, 3, 4, 5, 6, 7];
 
         function lockPageScroll() {
             if (modalScrollLockCount === 0) {
@@ -1736,10 +1746,23 @@
             const mediaText = isTv ? '电视剧' : '电影';
             const titleText = String(task?.title || task?.name || '').trim() || '未命名影视';
             const savepath = String(task?.savepath || '').trim() || '--';
-            const scheduleMinutes = Math.max(0, Number(task?.cron_minutes || 0) || 0);
-            const scheduleText = scheduleMinutes > 0
-                ? `每 ${scheduleMinutes} 分钟自动检索一次，下次定时 ${String(nextRun || '计算中')}`
-                : '未开启定时，仅支持手动运行';
+            const scheduleWeekdays = normalizeSubscriptionWeekdays(task?.schedule_weekdays || []);
+            const scheduleStartTime = normalizeSubscriptionScheduleTime(task?.schedule_start_time || '00:00', '00:00');
+            const scheduleEndTime = normalizeSubscriptionScheduleTime(task?.schedule_end_time || '23:59', '23:59');
+            const scheduleIntervalMinutes = Math.max(1, Number(task?.schedule_interval_minutes || task?.cron_minutes || 30) || 30);
+            const weekdayText = formatSubscriptionWeekdayText(scheduleWeekdays);
+            const isCrossDayWindow = scheduleStartTime > scheduleEndTime;
+            const windowText = isCrossDayWindow
+                ? `${scheduleStartTime} - 次日 ${scheduleEndTime}`
+                : `${scheduleStartTime} - ${scheduleEndTime}`;
+            let scheduleText = '';
+            if (task?.enabled === false) {
+                scheduleText = '自动查询已停用，仅支持手动运行';
+            } else if (!scheduleWeekdays.length) {
+                scheduleText = '未选择查询星期，仅支持手动运行';
+            } else {
+                scheduleText = `${weekdayText} ${windowText} 每 ${scheduleIntervalMinutes} 分钟查询一次，下次执行 ${String(nextRun || '计算中')}`;
+            }
             const latestMatched = String(task?.matched_resource_title || '').trim();
             const latestText = latestMatched ? `最近命中：${latestMatched}` : '最近尚未命中资源';
             const modeText = isTv ? (multiSeasonMode ? '多季合一追更' : '单季追更') : '命中资源后即执行';
@@ -1790,6 +1813,61 @@
             const normalized = String(value || 'balanced').trim().toLowerCase();
             if (['balanced', 'ultra', 'fhd', 'hd', 'sd'].includes(normalized)) return normalized;
             return 'balanced';
+        }
+
+        function normalizeSubscriptionWeekdays(values) {
+            let payload = values;
+            if (typeof payload === 'string') {
+                payload = payload.split(/[\s,，|/]+/).map((item) => item.trim()).filter(Boolean);
+            }
+            const source = Array.isArray(payload) ? payload : [];
+            const seen = new Set();
+            const normalized = [];
+            source.forEach((item) => {
+                const weekday = parseInt(item || '0', 10) || 0;
+                if (weekday < 1 || weekday > 7 || seen.has(weekday)) return;
+                seen.add(weekday);
+                normalized.push(weekday);
+            });
+            normalized.sort((a, b) => a - b);
+            return normalized;
+        }
+
+        function normalizeSubscriptionScheduleTime(value, fallback = '00:00') {
+            const raw = String(value || '').trim() || String(fallback || '00:00').trim();
+            const matched = raw.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+            if (!matched) {
+                const fallbackMatched = String(fallback || '00:00').trim().match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+                if (!fallbackMatched) return '00:00';
+                return `${String(parseInt(fallbackMatched[1], 10)).padStart(2, '0')}:${String(parseInt(fallbackMatched[2], 10)).padStart(2, '0')}`;
+            }
+            return `${String(parseInt(matched[1], 10)).padStart(2, '0')}:${String(parseInt(matched[2], 10)).padStart(2, '0')}`;
+        }
+
+        function formatSubscriptionWeekdayText(values) {
+            const weekdays = normalizeSubscriptionWeekdays(values);
+            if (!weekdays.length) return '未选择更新日';
+            return weekdays.map((weekday) => SUBSCRIPTION_WEEKDAY_LABELS[weekday] || `周${weekday}`).join('、');
+        }
+
+        function setSubscriptionWeekdaysToForm(values) {
+            const weekdays = new Set(normalizeSubscriptionWeekdays(values));
+            const checkboxList = document.querySelectorAll('[data-subscription-weekday]');
+            checkboxList.forEach((checkbox) => {
+                const weekday = parseInt(checkbox?.dataset?.subscriptionWeekday || '0', 10) || 0;
+                checkbox.checked = weekdays.has(weekday);
+            });
+        }
+
+        function getSubscriptionWeekdaysFromForm() {
+            const selected = [];
+            const checkboxList = document.querySelectorAll('[data-subscription-weekday]');
+            checkboxList.forEach((checkbox) => {
+                const weekday = parseInt(checkbox?.dataset?.subscriptionWeekday || '0', 10) || 0;
+                if (weekday <= 0 || weekday > 7 || !checkbox.checked) return;
+                selected.push(weekday);
+            });
+            return normalizeSubscriptionWeekdays(selected);
         }
 
         function getSubscriptionQualityPriorityLabel(value) {
@@ -2299,6 +2377,19 @@
             const title = document.getElementById('subscription_title').value.trim();
             const tmdbBinding = getSubscriptionTmdbBindingFromForm();
             const multiSeasonMode = !!document.getElementById('subscription_anime_mode').checked;
+            const scheduleWeekdays = getSubscriptionWeekdaysFromForm();
+            const scheduleStartTime = normalizeSubscriptionScheduleTime(
+                document.getElementById('subscription_schedule_start_time')?.value || '00:00',
+                '00:00'
+            );
+            const scheduleEndTime = normalizeSubscriptionScheduleTime(
+                document.getElementById('subscription_schedule_end_time')?.value || '23:59',
+                '23:59'
+            );
+            const scheduleIntervalMinutes = Math.max(
+                1,
+                parseInt(document.getElementById('subscription_schedule_interval_minutes')?.value || '30', 10) || 30
+            );
             return {
                 name: title,
                 media_type: normalizeSubscriptionMediaType(document.getElementById('subscription_media_type').value),
@@ -2310,7 +2401,10 @@
                 anime_mode: multiSeasonMode,
                 multi_season_mode: multiSeasonMode,
                 savepath: normalizeRelativePathInput(document.getElementById('subscription_savepath').value.trim()),
-                cron_minutes: parseInt(document.getElementById('subscription_cron_minutes').value || '30', 10) || 0,
+                schedule_weekdays: scheduleWeekdays,
+                schedule_start_time: scheduleStartTime,
+                schedule_end_time: scheduleEndTime,
+                schedule_interval_minutes: scheduleIntervalMinutes,
                 min_score: parseInt(document.getElementById('subscription_min_score').value || '55', 10) || 55,
                 quality_priority: normalizeSubscriptionQualityPriority(document.getElementById('subscription_quality_priority').value || 'balanced'),
                 enabled: document.getElementById('subscription_enabled').checked,
@@ -2344,7 +2438,10 @@
             subscriptionFolderSummary = { folder_count: 0, file_count: 0 };
             subscriptionFolderLoading = false;
             subscriptionFolderCreateBusy = false;
-            document.getElementById('subscription_cron_minutes').value = 30;
+            setSubscriptionWeekdaysToForm(SUBSCRIPTION_DEFAULT_WEEKDAYS);
+            document.getElementById('subscription_schedule_start_time').value = '00:00';
+            document.getElementById('subscription_schedule_end_time').value = '23:59';
+            document.getElementById('subscription_schedule_interval_minutes').value = 30;
             document.getElementById('subscription_min_score').value = 55;
             document.getElementById('subscription_quality_priority').value = 'balanced';
             document.getElementById('subscription_enabled').checked = true;
@@ -2409,7 +2506,11 @@
             if (!task.title) return alert('订阅影视名称不能为空');
             if (!task.savepath) return alert('请先从网盘选择保存目录');
             if (task.year && !/^(19|20)\d{2}$/.test(task.year)) return alert('年份格式不正确，请输入四位年份');
-            if (task.cron_minutes < 0) return alert('定时检查分钟不能小于 0');
+            if (task.schedule_start_time === task.schedule_end_time) return alert('开始时间和结束时间不能相同');
+            if (task.schedule_interval_minutes < 1) return alert('时段内查询间隔不能小于 1 分钟');
+            if (task.enabled && (!Array.isArray(task.schedule_weekdays) || task.schedule_weekdays.length <= 0)) {
+                return alert('请至少选择一个查询星期，或先关闭任务启用状态');
+            }
             if (task.min_score < 30 || task.min_score > 100) return alert('匹配阈值需在 30-100 之间');
             if (!['balanced', 'ultra', 'fhd', 'hd', 'sd'].includes(task.quality_priority)) return alert('清晰度优先级配置无效');
             if (task.tmdb_id > 0 && task.tmdb_media_type && task.tmdb_media_type !== task.media_type) {
@@ -2483,7 +2584,10 @@
             document.getElementById('subscription_anime_mode').checked = resolveTaskMultiSeasonMode(task);
             subscriptionFolderTrail = [{ id: '0', name: '根目录' }];
             setSubscriptionSavepath('0', task.savepath || '');
-            document.getElementById('subscription_cron_minutes').value = task.cron_minutes ?? 30;
+            setSubscriptionWeekdaysToForm(task.schedule_weekdays || SUBSCRIPTION_DEFAULT_WEEKDAYS);
+            document.getElementById('subscription_schedule_start_time').value = normalizeSubscriptionScheduleTime(task.schedule_start_time || '00:00', '00:00');
+            document.getElementById('subscription_schedule_end_time').value = normalizeSubscriptionScheduleTime(task.schedule_end_time || '23:59', '23:59');
+            document.getElementById('subscription_schedule_interval_minutes').value = Math.max(1, parseInt(task.schedule_interval_minutes ?? task.cron_minutes ?? 30, 10) || 30);
             document.getElementById('subscription_min_score').value = task.min_score ?? 55;
             document.getElementById('subscription_quality_priority').value = normalizeSubscriptionQualityPriority(task.quality_priority || 'balanced');
             document.getElementById('subscription_enabled').checked = task.enabled !== false;

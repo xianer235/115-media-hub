@@ -40,6 +40,7 @@ LEGACY_DEFAULT_EXTENSIONS = "mp4,mkv,avi,mov,ts,iso,rmvb,wmv,m4v,mpg,flac,mp3,as
 MAX_MONITOR_RETRIES = 5
 SUBSCRIPTION_MIN_SCORE = 55
 SUBSCRIPTION_MAX_CRON_MINUTES = 24 * 60
+SUBSCRIPTION_MAX_SCHEDULE_INTERVAL_MINUTES = SUBSCRIPTION_MAX_CRON_MINUTES
 SUBSCRIPTION_ATTEMPT_INTERVAL_SECONDS = max(
     0.0,
     min(5.0, float(os.environ.get("SUBSCRIPTION_ATTEMPT_INTERVAL_SECONDS", 2) or 2)),
@@ -282,6 +283,162 @@ def normalize_subscription_quality_priority(value: Any) -> str:
     return normalized
 
 
+def normalize_subscription_schedule_weekdays(value: Any) -> List[int]:
+    if isinstance(value, str):
+        payload: Any = [token.strip() for token in re.split(r"[,\s，|/]+", value) if token and token.strip()]
+    elif isinstance(value, list):
+        payload = value
+    else:
+        payload = []
+
+    weekdays: Set[int] = set()
+    for item in payload:
+        try:
+            weekday = int(item or 0)
+        except (TypeError, ValueError):
+            weekday = 0
+        if 1 <= weekday <= 7:
+            weekdays.add(weekday)
+    return sorted(weekdays)
+
+
+def normalize_subscription_schedule_time(value: Any, fallback: str = "00:00") -> str:
+    text = str(value or "").strip()
+    if not text:
+        text = str(fallback or "00:00").strip() or "00:00"
+    matched = re.fullmatch(r"([01]?\d|2[0-3]):([0-5]\d)", text)
+    if not matched:
+        fallback_matched = re.fullmatch(r"([01]?\d|2[0-3]):([0-5]\d)", str(fallback or "00:00").strip())
+        if not fallback_matched:
+            return "00:00"
+        return f"{int(fallback_matched.group(1)):02d}:{int(fallback_matched.group(2)):02d}"
+    return f"{int(matched.group(1)):02d}:{int(matched.group(2)):02d}"
+
+
+def parse_subscription_schedule_time_minutes(value: Any, fallback: int = 0) -> int:
+    normalized = normalize_subscription_schedule_time(value, fallback="00:00")
+    try:
+        hour, minute = [int(part) for part in normalized.split(":", 1)]
+    except Exception:
+        return max(0, min(23 * 60 + 59, int(fallback or 0)))
+    return max(0, min(23 * 60 + 59, hour * 60 + minute))
+
+
+def normalize_subscription_schedule_interval_minutes(value: Any, fallback: int = 30) -> int:
+    try:
+        interval = int(value if value is not None else fallback)
+    except (TypeError, ValueError):
+        interval = int(fallback or 30)
+    return max(1, min(SUBSCRIPTION_MAX_SCHEDULE_INTERVAL_MINUTES, int(interval or 1)))
+
+
+def compute_subscription_schedule_window_meta(
+    weekdays: List[int],
+    start_time: str,
+    end_time: str,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    normalized_weekdays = normalize_subscription_schedule_weekdays(weekdays or [])
+    normalized_start = normalize_subscription_schedule_time(start_time, fallback="00:00")
+    normalized_end = normalize_subscription_schedule_time(end_time, fallback="23:59")
+    if not normalized_weekdays:
+        return {
+            "valid": False,
+            "weekdays": normalized_weekdays,
+            "start_time": normalized_start,
+            "end_time": normalized_end,
+            "in_window": False,
+            "active_start": None,
+            "active_end": None,
+            "next_window_start": None,
+        }
+
+    start_minutes = parse_subscription_schedule_time_minutes(normalized_start, fallback=0)
+    end_minutes = parse_subscription_schedule_time_minutes(normalized_end, fallback=(23 * 60 + 59))
+    if start_minutes == end_minutes:
+        return {
+            "valid": False,
+            "weekdays": normalized_weekdays,
+            "start_time": normalized_start,
+            "end_time": normalized_end,
+            "in_window": False,
+            "active_start": None,
+            "active_end": None,
+            "next_window_start": None,
+        }
+
+    reference_now = now or datetime.now()
+    monday_date = (reference_now - timedelta(days=reference_now.isoweekday() - 1)).date()
+    crosses_day = start_minutes > end_minutes
+    windows: List[Tuple[datetime, datetime]] = []
+
+    for weekday in normalized_weekdays:
+        base_start_date = monday_date + timedelta(days=weekday - 1)
+        for day_offset in (-7, 0, 7):
+            start_date = base_start_date + timedelta(days=day_offset)
+            start_dt = datetime(
+                start_date.year,
+                start_date.month,
+                start_date.day,
+                int(start_minutes / 60),
+                int(start_minutes % 60),
+                0,
+            )
+            if crosses_day:
+                end_date = start_date + timedelta(days=1)
+            else:
+                end_date = start_date
+            end_dt = datetime(
+                end_date.year,
+                end_date.month,
+                end_date.day,
+                int(end_minutes / 60),
+                int(end_minutes % 60),
+                59,
+            )
+            windows.append((start_dt, end_dt))
+
+    active_window: Optional[Tuple[datetime, datetime]] = None
+    future_start_times: List[datetime] = []
+    for start_dt, end_dt in windows:
+        if start_dt <= reference_now < end_dt:
+            if active_window is None or start_dt > active_window[0]:
+                active_window = (start_dt, end_dt)
+            continue
+        if start_dt > reference_now:
+            future_start_times.append(start_dt)
+
+    future_start_times.sort()
+    next_window_start = future_start_times[0] if future_start_times else None
+    return {
+        "valid": True,
+        "weekdays": normalized_weekdays,
+        "start_time": normalized_start,
+        "end_time": normalized_end,
+        "crosses_day": crosses_day,
+        "in_window": bool(active_window),
+        "active_start": active_window[0] if active_window else None,
+        "active_end": active_window[1] if active_window else None,
+        "next_window_start": next_window_start,
+    }
+
+
+def format_subscription_schedule_next_run(value: Optional[datetime]) -> str:
+    if not isinstance(value, datetime):
+        return ""
+    weekday_labels = {
+        1: "周一",
+        2: "周二",
+        3: "周三",
+        4: "周四",
+        5: "周五",
+        6: "周六",
+        7: "周日",
+    }
+    weekday = weekday_labels.get(value.isoweekday(), "")
+    return f"{value.strftime('%m-%d %H:%M:%S')} {weekday}".strip()
+
+
 def normalize_tmdb_media_type(value: Any, fallback: str = "") -> str:
     media_type = str(value or "").strip().lower()
     if media_type in ("movie", "tv"):
@@ -505,9 +662,37 @@ def normalize_subscription_task(task: Dict[str, Any]) -> Dict[str, Any]:
     except (TypeError, ValueError):
         total_episodes = 0
     try:
-        cron_minutes = int(task.get("cron_minutes", 30) or 30)
+        legacy_cron_minutes = int(task.get("cron_minutes", 30) or 30)
     except (TypeError, ValueError):
-        cron_minutes = 30
+        legacy_cron_minutes = 30
+    has_schedule_weekdays = ("schedule_weekdays" in task) or ("weekdays" in task)
+    has_schedule_start = ("schedule_start_time" in task) or ("start_time" in task)
+    has_schedule_end = ("schedule_end_time" in task) or ("end_time" in task)
+    has_schedule_interval = ("schedule_interval_minutes" in task) or ("interval_minutes" in task)
+    if has_schedule_weekdays:
+        schedule_weekdays = normalize_subscription_schedule_weekdays(
+            task.get("schedule_weekdays", task.get("weekdays", []))
+        )
+    else:
+        # 旧版 cron_minutes 迁移：有定时则默认全周生效，无定时则保持“仅手动”。
+        schedule_weekdays = list(range(1, 8)) if legacy_cron_minutes > 0 else []
+    schedule_start_time = normalize_subscription_schedule_time(
+        task.get("schedule_start_time", task.get("start_time", "00:00")) if has_schedule_start else "00:00",
+        fallback="00:00",
+    )
+    schedule_end_time = normalize_subscription_schedule_time(
+        task.get("schedule_end_time", task.get("end_time", "23:59")) if has_schedule_end else "23:59",
+        fallback="23:59",
+    )
+    schedule_interval_raw = (
+        task.get("schedule_interval_minutes", task.get("interval_minutes", legacy_cron_minutes if legacy_cron_minutes > 0 else 30))
+        if has_schedule_interval
+        else (legacy_cron_minutes if legacy_cron_minutes > 0 else 30)
+    )
+    schedule_interval_minutes = normalize_subscription_schedule_interval_minutes(
+        schedule_interval_raw,
+        fallback=(legacy_cron_minutes if legacy_cron_minutes > 0 else 30),
+    )
     try:
         min_score = int(task.get("min_score", SUBSCRIPTION_MIN_SCORE) or SUBSCRIPTION_MIN_SCORE)
     except (TypeError, ValueError):
@@ -556,7 +741,12 @@ def normalize_subscription_task(task: Dict[str, Any]) -> Dict[str, Any]:
         "total_episodes": max(0, total_episodes),
         "savepath": savepath,
         "enabled": bool(task.get("enabled", True)),
-        "cron_minutes": max(0, min(SUBSCRIPTION_MAX_CRON_MINUTES, cron_minutes)),
+        # 兼容旧前端字段：cron_minutes 保留为“时段内查询间隔”镜像值。
+        "cron_minutes": schedule_interval_minutes,
+        "schedule_weekdays": schedule_weekdays,
+        "schedule_start_time": schedule_start_time,
+        "schedule_end_time": schedule_end_time,
+        "schedule_interval_minutes": schedule_interval_minutes,
         "min_score": max(30, min(100, min_score)),
         "quality_priority": quality_priority,
         # 向后兼容：anime_mode 为旧字段，语义已等同于 multi_season_mode。
@@ -4418,7 +4608,7 @@ def format_monitor_trigger(trigger: str) -> str:
 def format_subscription_trigger(trigger: str) -> str:
     labels = {
         "manual": "手动触发",
-        "cron": "定时触发",
+        "cron": "时段定时触发",
         "queued": "队列触发",
     }
     return labels.get(trigger, trigger or "未知触发")
