@@ -6,6 +6,7 @@ import re
 import shutil
 import sqlite3
 import ssl
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -89,6 +90,20 @@ RESOURCE_CHANNEL_CACHE_GLOBAL_LIMIT = max(
     RESOURCE_CHANNEL_CACHE_LIMIT,
     int(os.environ.get("RESOURCE_CHANNEL_CACHE_GLOBAL_LIMIT", 2000) or 2000),
 )
+SHARE_SNAP_RATE_LIMIT_SECONDS = max(
+    0.2,
+    min(5.0, float(os.environ.get("SHARE_SNAP_RATE_LIMIT_SECONDS", 1.0) or 1.0)),
+)
+SHARE_SNAP_CACHE_TTL_SECONDS = max(
+    10,
+    min(24 * 3600, int(os.environ.get("SHARE_SNAP_CACHE_TTL_SECONDS", 5 * 60) or (5 * 60))),
+)
+SHARE_SNAP_CACHE_MAX_ROWS = max(
+    200,
+    int(os.environ.get("SHARE_SNAP_CACHE_MAX_ROWS", 3000) or 3000),
+)
+_share_snap_rate_limit_lock = threading.Lock()
+_share_snap_last_request_monotonic = 0.0
 RESOURCE_CHANNEL_CACHE_ACTIVE_MIN_KEEP = max(
     0,
     min(RESOURCE_CHANNEL_CACHE_LIMIT, int(os.environ.get("RESOURCE_CHANNEL_CACHE_ACTIVE_MIN_KEEP", 10) or 10)),
@@ -731,6 +746,33 @@ def normalize_subscription_task(task: Dict[str, Any]) -> Dict[str, Any]:
         multi_season_mode = False
         tmdb_episode_mode = "seasonal"
     savepath = normalize_relative_path(task.get("savepath", ""))
+    share_link_url = str(
+        task.get(
+            "share_link_url",
+            task.get("fixed_share_url", task.get("subscription_share_url", "")),
+        )
+        or ""
+    ).strip()
+    share_link_receive_code = normalize_receive_code(
+        task.get(
+            "share_link_receive_code",
+            task.get("fixed_share_receive_code", task.get("subscription_share_receive_code", "")),
+        )
+    )
+    share_subdir = normalize_relative_path(
+        task.get(
+            "share_subdir",
+            task.get("share_subdir_path", task.get("share_subfolder", "")),
+        )
+    )
+    share_subdir_cid = normalize_115_cid(
+        task.get(
+            "share_subdir_cid",
+            task.get("share_subdir_id", task.get("share_subfolder_cid", "")),
+        )
+    )
+    if not share_subdir:
+        share_subdir_cid = ""
     return {
         "name": name,
         "media_type": media_type,
@@ -740,6 +782,10 @@ def normalize_subscription_task(task: Dict[str, Any]) -> Dict[str, Any]:
         "season": max(1, season),
         "total_episodes": max(0, total_episodes),
         "savepath": savepath,
+        "share_link_url": share_link_url,
+        "share_link_receive_code": share_link_receive_code if share_link_url else "",
+        "share_subdir": share_subdir,
+        "share_subdir_cid": share_subdir_cid,
         "enabled": bool(task.get("enabled", True)),
         # 兼容旧前端字段：cron_minutes 保留为“时段内查询间隔”镜像值。
         "cron_minutes": schedule_interval_minutes,
@@ -1126,6 +1172,19 @@ def ensure_db() -> None:
         )
         """
     )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS share_entries_cache (
+            cache_key TEXT PRIMARY KEY,
+            share_code TEXT NOT NULL DEFAULT '',
+            receive_code TEXT NOT NULL DEFAULT '',
+            cid TEXT NOT NULL DEFAULT '0',
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT '',
+            expires_at TEXT NOT NULL DEFAULT ''
+        )
+        """
+    )
     cursor.execute("PRAGMA table_info(resource_jobs)")
     job_columns = {str(row[1]) for row in cursor.fetchall()}
     if "extra_json" not in job_columns:
@@ -1145,6 +1204,8 @@ def ensure_db() -> None:
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_subscription_episode_ledger_task_status ON subscription_episode_ledger(task_name, status)"
     )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_share_entries_cache_expires_at ON share_entries_cache(expires_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_share_entries_cache_share_cid ON share_entries_cache(share_code, cid)")
     cursor.execute(
         """
         SELECT id, last_seen_at, extra_json
@@ -1227,6 +1288,15 @@ def normalize_receive_code(value: Any) -> str:
     if not token:
         return ""
     if not re.fullmatch(r"[A-Za-z0-9]{1,16}", token):
+        return ""
+    return token
+
+
+def normalize_115_cid(value: Any) -> str:
+    token = re.sub(r"\s+", "", str(value or "").strip())
+    if not token or token == "0":
+        return ""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", token):
         return ""
     return token
 
@@ -5568,6 +5638,133 @@ def resolve_115_share_payload(cookie: str, share_url: str, raw_text: str = "", r
     return parsed
 
 
+def _build_115_share_snap_cache_key(share_code: str, receive_code: str, cid: str) -> str:
+    source = f"{str(share_code or '').strip()}|{str(receive_code or '').strip()}|{str(cid or '0').strip() or '0'}"
+    return hashlib.sha1(source.encode("utf-8")).hexdigest()
+
+
+def _throttle_115_share_snap_requests() -> None:
+    global _share_snap_last_request_monotonic
+    min_interval = max(0.0, float(SHARE_SNAP_RATE_LIMIT_SECONDS or 0.0))
+    if min_interval <= 0:
+        return
+    with _share_snap_rate_limit_lock:
+        now_mono = time.monotonic()
+        wait_seconds = min_interval - (now_mono - _share_snap_last_request_monotonic)
+        if wait_seconds > 0:
+            time.sleep(wait_seconds)
+        _share_snap_last_request_monotonic = time.monotonic()
+
+
+def _is_retryable_115_share_snap_error(exc: Exception) -> bool:
+    if isinstance(exc, urllib.error.HTTPError):
+        return int(getattr(exc, "code", 0) or 0) in (405, 408, 409, 425, 429, 500, 502, 503, 504)
+    if isinstance(exc, urllib.error.URLError):
+        return True
+    message = str(exc or "").strip().lower()
+    if not message:
+        return False
+    if any(token in message for token in ("http error 405", "http error 429", "http error 5")):
+        return True
+    return any(
+        token in message
+        for token in (
+            "timeout",
+            "timed out",
+            "temporarily unavailable",
+            "connection reset",
+            "connection aborted",
+            "remote end closed",
+            "bad gateway",
+            "service unavailable",
+            "too many requests",
+        )
+    )
+
+
+def load_115_share_snap_cache(
+    share_code: str,
+    receive_code: str,
+    cid: str,
+    allow_expired: bool = False,
+) -> Dict[str, Any]:
+    normalized_share_code = str(share_code or "").strip()
+    if not normalized_share_code:
+        return {}
+    cache_key = _build_115_share_snap_cache_key(normalized_share_code, receive_code, cid)
+    ensure_db()
+    conn = open_db()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT payload_json, expires_at FROM share_entries_cache WHERE cache_key = ?", (cache_key,))
+        row = cursor.fetchone()
+        if not row:
+            return {}
+        expires_at = str(row["expires_at"] or "").strip()
+        now_iso = now_text()
+        if (not allow_expired) and expires_at and expires_at <= now_iso:
+            return {}
+        payload = safe_json_loads(row["payload_json"], {})
+        return payload if isinstance(payload, dict) else {}
+    finally:
+        conn.close()
+
+
+def save_115_share_snap_cache(
+    share_code: str,
+    receive_code: str,
+    cid: str,
+    payload: Dict[str, Any],
+    ttl_seconds: int = SHARE_SNAP_CACHE_TTL_SECONDS,
+) -> None:
+    normalized_share_code = str(share_code or "").strip()
+    if not normalized_share_code or not isinstance(payload, dict):
+        return
+    cache_key = _build_115_share_snap_cache_key(normalized_share_code, receive_code, cid)
+    now_iso = now_text()
+    expires_at = (datetime.now() + timedelta(seconds=max(1, int(ttl_seconds or SHARE_SNAP_CACHE_TTL_SECONDS)))).isoformat(
+        timespec="seconds"
+    )
+    ensure_db()
+    conn = open_db()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO share_entries_cache(
+                cache_key, share_code, receive_code, cid, payload_json, created_at, expires_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                cache_key,
+                normalized_share_code,
+                str(receive_code or "").strip(),
+                str(cid or "0").strip() or "0",
+                safe_json_dumps(payload),
+                now_iso,
+                expires_at,
+            ),
+        )
+        cursor.execute("DELETE FROM share_entries_cache WHERE expires_at <> '' AND expires_at <= ?", (now_iso,))
+        max_rows = max(200, int(SHARE_SNAP_CACHE_MAX_ROWS or 3000))
+        cursor.execute("SELECT COUNT(1) FROM share_entries_cache")
+        total_rows = int(cursor.fetchone()[0] or 0)
+        if total_rows > max_rows:
+            overflow = total_rows - max_rows
+            cursor.execute(
+                "SELECT cache_key FROM share_entries_cache ORDER BY created_at ASC LIMIT ?",
+                (overflow,),
+            )
+            stale_keys = [str(row["cache_key"] or "").strip() for row in cursor.fetchall() if str(row["cache_key"] or "").strip()]
+            if stale_keys:
+                placeholders = ",".join(["?"] * len(stale_keys))
+                cursor.execute(f"DELETE FROM share_entries_cache WHERE cache_key IN ({placeholders})", tuple(stale_keys))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def list_115_share_entries(
     cookie: str,
     share_url: str,
@@ -5582,6 +5779,10 @@ def list_115_share_entries(
     share_code = str(parsed.get("share_code", "") or "").strip()
     receive_code = str(parsed.get("receive_code", "") or "").strip()
     current_cid = str(cid or "0").strip() or "0"
+    fresh_cache = load_115_share_snap_cache(share_code, receive_code, current_cid, allow_expired=False)
+    if fresh_cache:
+        return fresh_cache
+    stale_cache = load_115_share_snap_cache(share_code, receive_code, current_cid, allow_expired=True)
 
     headers = {
         "Cookie": cookie,
@@ -5593,6 +5794,7 @@ def list_115_share_entries(
     offset = 0
     limit = 200
     total_count = 0
+    max_request_retries = 2
 
     while True:
         query = urllib.parse.urlencode(
@@ -5607,11 +5809,31 @@ def list_115_share_entries(
                 "format": "json",
             }
         )
-        result = http_request_json(
-            f"https://webapi.115.com/share/snap?{query}",
-            extra_headers=headers,
-            timeout=45,
-        )
+        result: Dict[str, Any] = {}
+        last_request_error: Optional[Exception] = None
+        for attempt in range(0, max_request_retries + 1):
+            try:
+                _throttle_115_share_snap_requests()
+                result = http_request_json(
+                    f"https://webapi.115.com/share/snap?{query}",
+                    extra_headers=headers,
+                    timeout=45,
+                )
+                last_request_error = None
+                break
+            except Exception as exc:
+                last_request_error = exc
+                if (not _is_retryable_115_share_snap_error(exc)) or attempt >= max_request_retries:
+                    break
+                time.sleep(0.6 * (attempt + 1))
+        if last_request_error is not None:
+            if stale_cache:
+                stale_payload = dict(stale_cache)
+                stale_payload["cache_stale"] = True
+                stale_payload["cache_error"] = str(last_request_error or "").strip()[:180]
+                stale_payload["cache_cid"] = current_cid
+                return stale_payload
+            raise RuntimeError(str(last_request_error or "读取 115 分享内容失败").strip() or "读取 115 分享内容失败")
         payload = result.get("data") if isinstance(result, dict) else {}
         if payload is None:
             payload = {}
@@ -5623,6 +5845,12 @@ def list_115_share_entries(
                 or str(result.get("message", "")).strip()
                 or "读取 115 分享内容失败"
             )
+            if stale_cache:
+                stale_payload = dict(stale_cache)
+                stale_payload["cache_stale"] = True
+                stale_payload["cache_error"] = detail[:180]
+                stale_payload["cache_cid"] = current_cid
+                return stale_payload
             raise RuntimeError(detail)
 
         total_count = parse_int(payload.get("count") or total_count)
@@ -5653,7 +5881,7 @@ def list_115_share_entries(
         if not batch or len(batch) < limit or (total_count and len(entries) >= total_count):
             shareinfo = payload.get("shareinfo") or {}
             entries.sort(key=lambda item: (0 if item.get("is_dir") else 1, str(item.get("name", "")).lower()))
-            return {
+            result_payload = {
                 "entries": entries,
                 "summary": {
                     "folder_count": sum(1 for item in entries if item.get("is_dir")),
@@ -5665,6 +5893,14 @@ def list_115_share_entries(
                 "current_cid": current_cid,
                 "count": total_count or len(entries),
             }
+            save_115_share_snap_cache(
+                share_code,
+                receive_code,
+                current_cid,
+                result_payload,
+                ttl_seconds=SHARE_SNAP_CACHE_TTL_SECONDS,
+            )
+            return result_payload
         offset += len(batch)
 
 

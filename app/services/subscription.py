@@ -1,5 +1,6 @@
 import asyncio
 import os
+import unicodedata
 
 from ..core import *  # noqa: F401,F403
 from .monitor import queue_monitor_job
@@ -1395,11 +1396,752 @@ def _prioritize_tv_candidates_by_missing_episodes(
     return prioritized_with_episode + without_episode + existing_candidates
 
 
+def _normalize_subscription_share_dir_match_key(name: str, drop_digits: bool = False) -> str:
+    normalized = normalize_relative_path(name)
+    if not normalized:
+        return ""
+    text = unicodedata.normalize("NFKC", normalized).lower()
+    text = text.replace("｜", "|")
+    text = re.sub(r"\s+", "", text)
+    text = re.sub(r"[。．…·•~～\-_+=]+$", "", text)
+    text = re.sub(r"[^0-9a-z\u4e00-\u9fff{}#:+-]+", "", text)
+    if drop_digits:
+        text = re.sub(r"\d+", "", text)
+    return text
+
+
+def _extract_subscription_tmdbid_token(text: str) -> str:
+    normalized = unicodedata.normalize("NFKC", str(text or ""))
+    matched = re.search(r"tmdbid[-_:\s]*([0-9]{3,})", normalized, re.IGNORECASE)
+    return str(matched.group(1) if matched else "").strip()
+
+
+def _pick_unique_subscription_share_entry(candidates: List[Tuple[int, Dict[str, Any]]]) -> Dict[str, Any]:
+    if not candidates:
+        return {}
+    ranked = sorted(candidates, key=lambda item: int(item[0] or 0), reverse=True)
+    if len(ranked) > 1 and int(ranked[0][0] or 0) == int(ranked[1][0] or 0):
+        return {}
+    return ranked[0][1] if isinstance(ranked[0][1], dict) else {}
+
+
+def _sample_subscription_share_dir_names(entries: List[Dict[str, Any]], limit: int = 6) -> List[str]:
+    samples: List[str] = []
+    for entry in entries if isinstance(entries, list) else []:
+        if not bool(entry.get("is_dir")):
+            continue
+        name = normalize_relative_path(str(entry.get("name", "") or "").strip())
+        if not name or name in samples:
+            continue
+        samples.append(name)
+        if len(samples) >= max(1, int(limit or 6)):
+            break
+    return samples
+
+
+def _collect_subscription_task_share_dir_name_candidates(task: Dict[str, Any]) -> List[str]:
+    candidates: List[str] = []
+    for value in (
+        task.get("title", ""),
+        task.get("tmdb_title", ""),
+        task.get("tmdb_original_title", ""),
+    ):
+        text = normalize_relative_path(str(value or "").strip())
+        if text:
+            candidates.append(text)
+    for field in ("aliases", "tmdb_aliases"):
+        raw_values = task.get(field, [])
+        if not isinstance(raw_values, list):
+            continue
+        for raw in raw_values:
+            text = normalize_relative_path(str(raw or "").strip())
+            if text:
+                candidates.append(text)
+    return unique_preserve_order(candidates)
+
+
+def _score_subscription_share_dir_for_task(
+    entry_name: str,
+    task_name_candidates: List[str],
+    task_tmdbid: str = "",
+) -> int:
+    normalized_entry = normalize_relative_path(entry_name)
+    if not normalized_entry:
+        return 0
+    best_score = 0
+    for expected_name in task_name_candidates if isinstance(task_name_candidates, list) else []:
+        score = _score_subscription_share_dir_candidate_name(
+            normalized_entry,
+            expected_name,
+            expected_tmdbid=task_tmdbid,
+        )
+        if score > best_score:
+            best_score = score
+    entry_key = _normalize_subscription_share_dir_match_key(normalized_entry)
+    if task_tmdbid and entry_key and task_tmdbid in entry_key:
+        best_score = max(best_score, 260)
+    return best_score
+
+
+async def _refine_subscription_share_selection_for_task(
+    cookie: str,
+    item: Dict[str, Any],
+    task: Dict[str, Any],
+    selection: Dict[str, Any],
+    per_request_timeout: int = 25,
+    max_depth: int = 3,
+    max_dirs: int = 140,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    stats: Dict[str, Any] = {
+        "reason": "",
+        "scanned_dirs": 0,
+        "candidate_count": 0,
+        "best_score": 0,
+        "ambiguous_count": 0,
+        "start_child_dirs": 0,
+        "current_score": 0,
+        "from_path": "",
+        "to_path": "",
+        "candidate_samples": [],
+    }
+    normalized_cookie = str(cookie or "").strip()
+    share_url = str(item.get("link_url", "") or "").strip()
+    raw_text = str(item.get("raw_text", "") or "")
+    if not normalized_cookie or not share_url:
+        stats["reason"] = "missing_context"
+        return {}, stats
+
+    base_selection = normalize_share_selection_meta(selection or {})
+    selected_entries = (
+        base_selection.get("selected_entries", [])
+        if isinstance(base_selection.get("selected_entries"), list)
+        else []
+    )
+    start_entry = selected_entries[0] if selected_entries else {}
+    if not start_entry or not bool(start_entry.get("is_dir")):
+        stats["reason"] = "selection_invalid"
+        return {}, stats
+
+    start_cid = str(start_entry.get("cid", "") or start_entry.get("id", "") or "").strip()
+    start_path = normalize_relative_path(str(start_entry.get("name", "") or "").strip())
+    if not start_cid or not start_path:
+        stats["reason"] = "selection_invalid"
+        return {}, stats
+    stats["from_path"] = start_path
+
+    task_tmdbid = str(max(0, int(task.get("tmdb_id", 0) or 0)))
+    if task_tmdbid == "0":
+        task_tmdbid = ""
+    task_name_candidates = _collect_subscription_task_share_dir_name_candidates(task)
+    if not task_name_candidates and not task_tmdbid:
+        stats["reason"] = "task_clues_empty"
+        return {}, stats
+
+    current_leaf_name = start_path.split("/")[-1] if start_path else ""
+    current_score = _score_subscription_share_dir_for_task(
+        current_leaf_name,
+        task_name_candidates,
+        task_tmdbid=task_tmdbid,
+    )
+    stats["current_score"] = current_score
+    if current_score >= 170:
+        stats["reason"] = "current_match_strong"
+        return base_selection, stats
+
+    item_extra = item.get("extra") if isinstance(item.get("extra"), dict) else safe_json_loads(item.get("extra_json"), {})
+    receive_code = (
+        normalize_receive_code(item.get("receive_code", ""))
+        or normalize_receive_code((item_extra or {}).get("receive_code", ""))
+    )
+    timeout_seconds = max(10, int(per_request_timeout or 25))
+    queue: List[Tuple[str, int, str]] = [(start_cid, 0, start_path)]
+    visited: Set[str] = set()
+    scored_candidates: List[Tuple[int, Dict[str, Any]]] = []
+
+    while queue and int(stats.get("scanned_dirs", 0) or 0) < max(20, int(max_dirs or 140)):
+        cid, depth, parent_path = queue.pop(0)
+        normalized_cid = str(cid or "").strip()
+        if not normalized_cid or normalized_cid in visited:
+            continue
+        visited.add(normalized_cid)
+        try:
+            branch = await asyncio.wait_for(
+                asyncio.to_thread(
+                    list_115_share_entries,
+                    normalized_cookie,
+                    share_url,
+                    raw_text,
+                    normalized_cid,
+                    receive_code,
+                ),
+                timeout=timeout_seconds,
+            )
+        except Exception:
+            continue
+
+        stats["scanned_dirs"] = int(stats.get("scanned_dirs", 0) or 0) + 1
+        entries = branch.get("entries", []) if isinstance(branch.get("entries"), list) else []
+        if depth == 0:
+            stats["start_child_dirs"] = sum(1 for entry in entries if bool(entry.get("is_dir")))
+        for entry in entries:
+            if not bool(entry.get("is_dir")):
+                continue
+            entry_name = normalize_relative_path(str(entry.get("name", "") or "").strip())
+            if not entry_name:
+                continue
+            full_path = normalize_relative_path(join_relative_path(parent_path, entry_name))
+            score = _score_subscription_share_dir_for_task(
+                entry_name,
+                task_name_candidates,
+                task_tmdbid=task_tmdbid,
+            )
+            if score > 0:
+                candidate = {
+                    "id": str(entry.get("id", "") or entry.get("cid", "") or "").strip(),
+                    "cid": str(entry.get("cid", "") or entry.get("id", "") or "").strip(),
+                    "parent_id": str(entry.get("parent_id", "0") or "0").strip() or "0",
+                    "name": full_path,
+                    "is_dir": True,
+                }
+                if candidate["id"] and candidate["cid"] and candidate["name"]:
+                    scored_candidates.append((score, candidate))
+            if depth < max(1, int(max_depth or 3)):
+                child_cid = str(entry.get("cid", "") or entry.get("id", "") or "").strip()
+                if child_cid and child_cid not in visited:
+                    queue.append((child_cid, depth + 1, full_path))
+
+    stats["candidate_count"] = len(scored_candidates)
+    if not scored_candidates:
+        stats["reason"] = "not_found"
+        return {}, stats
+
+    scored_candidates.sort(key=lambda item: (int(item[0] or 0), len(str(item[1].get("name", "")))), reverse=True)
+    best_score = int(scored_candidates[0][0] or 0)
+    stats["best_score"] = best_score
+    best_candidates = [item[1] for item in scored_candidates if int(item[0] or 0) == best_score]
+    stats["ambiguous_count"] = len(best_candidates)
+    if len(best_candidates) != 1:
+        stats["reason"] = "ambiguous"
+        stats["candidate_samples"] = [
+            str(item.get("name", "") or "").strip()
+            for item in best_candidates[:5]
+            if str(item.get("name", "") or "").strip()
+        ]
+        return {}, stats
+
+    best_candidate = best_candidates[0]
+    if best_score < 130:
+        stats["reason"] = "weak_match"
+        stats["candidate_samples"] = [str(best_candidate.get("name", "") or "").strip()]
+        return {}, stats
+    if str(best_candidate.get("id", "") or "").strip() == str(start_entry.get("id", "") or "").strip():
+        stats["reason"] = "same_as_current"
+        return base_selection, stats
+
+    refined_selection = normalize_share_selection_meta(
+        {
+            "selected_ids": [str(best_candidate.get("id", "") or "").strip()],
+            "selected_entries": [best_candidate],
+            "refresh_target_type": "folder",
+            "share_root_title": str(base_selection.get("share_root_title", "") or "").strip(),
+            "auto_sharetitle": str(best_candidate.get("name", "") or "").strip(),
+        }
+    )
+    if not (
+        refined_selection.get("selected_ids", [])
+        if isinstance(refined_selection.get("selected_ids"), list)
+        else []
+    ):
+        stats["reason"] = "refine_selection_empty"
+        return {}, stats
+    stats["reason"] = "ok_refined"
+    stats["to_path"] = str(best_candidate.get("name", "") or "").strip()
+    return refined_selection, stats
+
+
+def _score_subscription_share_dir_candidate_name(
+    entry_name: str,
+    expected_name: str,
+    expected_tmdbid: str = "",
+) -> int:
+    normalized_entry_name = normalize_relative_path(entry_name)
+    normalized_expected_name = normalize_relative_path(expected_name)
+    if not normalized_entry_name:
+        return 0
+    if normalized_entry_name == normalized_expected_name:
+        return 200
+    entry_key = _normalize_subscription_share_dir_match_key(normalized_entry_name)
+    expected_key = _normalize_subscription_share_dir_match_key(normalized_expected_name)
+    if not entry_key or not expected_key:
+        return 0
+    if entry_key == expected_key:
+        return 180
+    score = 0
+    if expected_tmdbid and expected_tmdbid in entry_key:
+        score = max(score, 170)
+    expected_key_no_digits = _normalize_subscription_share_dir_match_key(normalized_expected_name, drop_digits=True)
+    entry_key_no_digits = _normalize_subscription_share_dir_match_key(normalized_entry_name, drop_digits=True)
+    if expected_key_no_digits and entry_key_no_digits and expected_key_no_digits == entry_key_no_digits and len(expected_key_no_digits) >= 6:
+        score = max(score, 150)
+    short_len = min(len(expected_key), len(entry_key))
+    if short_len >= 6 and (expected_key in entry_key or entry_key in expected_key):
+        score = max(score, 120 - abs(len(expected_key) - len(entry_key)))
+    return max(0, int(score))
+
+
+async def _find_subscription_share_dir_by_leaf_fallback(
+    cookie: str,
+    share_url: str,
+    raw_text: str,
+    receive_code: str,
+    expected_leaf_name: str,
+    expected_tmdbid: str = "",
+    start_cid: str = "0",
+    start_parent_path: str = "",
+    per_request_timeout: int = 25,
+    max_depth: int = 4,
+    max_dirs: int = 120,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    stats: Dict[str, Any] = {
+        "reason": "not_found",
+        "scanned_dirs": 0,
+        "candidate_count": 0,
+        "best_score": 0,
+        "ambiguous_count": 0,
+    }
+    normalized_cookie = str(cookie or "").strip()
+    normalized_share_url = str(share_url or "").strip()
+    leaf_name = normalize_relative_path(expected_leaf_name)
+    if (not normalized_cookie) or (not normalized_share_url) or (not leaf_name):
+        stats["reason"] = "invalid_args"
+        return {}, stats
+
+    timeout_seconds = max(10, int(per_request_timeout or 25))
+    queue: List[Tuple[str, int, str]] = [(
+        str(start_cid or "0").strip() or "0",
+        0,
+        normalize_relative_path(start_parent_path),
+    )]
+    visited: Set[str] = set()
+    scored_candidates: List[Tuple[int, Dict[str, Any]]] = []
+
+    while queue and int(stats.get("scanned_dirs", 0) or 0) < max(10, int(max_dirs or 120)):
+        cid, depth, parent_path = queue.pop(0)
+        normalized_cid = str(cid or "0").strip() or "0"
+        if normalized_cid in visited:
+            continue
+        visited.add(normalized_cid)
+        try:
+            branch = await asyncio.wait_for(
+                asyncio.to_thread(
+                    list_115_share_entries,
+                    normalized_cookie,
+                    normalized_share_url,
+                    raw_text,
+                    normalized_cid,
+                    receive_code,
+                ),
+                timeout=timeout_seconds,
+            )
+        except Exception:
+            continue
+
+        stats["scanned_dirs"] = int(stats.get("scanned_dirs", 0) or 0) + 1
+        entries = branch.get("entries", []) if isinstance(branch.get("entries"), list) else []
+        for entry in entries:
+            if not bool(entry.get("is_dir")):
+                continue
+            entry_name = normalize_relative_path(str(entry.get("name", "") or "").strip())
+            if not entry_name:
+                continue
+            resolved_path = normalize_relative_path(f"{parent_path}/{entry_name}" if parent_path else entry_name)
+            score = _score_subscription_share_dir_candidate_name(
+                entry_name=entry_name,
+                expected_name=leaf_name,
+                expected_tmdbid=expected_tmdbid,
+            )
+            if score > 0:
+                candidate = {
+                    "id": str(entry.get("id", "") or entry.get("cid", "") or "").strip(),
+                    "cid": str(entry.get("cid", "") or entry.get("id", "") or "").strip(),
+                    "parent_id": str(entry.get("parent_id", "0") or "0").strip() or "0",
+                    "name": entry_name,
+                    "resolved_path": resolved_path,
+                }
+                if candidate["id"] and candidate["cid"] and candidate["resolved_path"]:
+                    scored_candidates.append((score, candidate))
+            if depth < max(1, int(max_depth or 4)):
+                next_cid = str(entry.get("cid", "") or entry.get("id", "") or "").strip()
+                if next_cid and next_cid not in visited:
+                    queue.append((next_cid, depth + 1, resolved_path))
+
+    stats["candidate_count"] = len(scored_candidates)
+    if not scored_candidates:
+        stats["reason"] = "not_found"
+        return {}, stats
+
+    scored_candidates.sort(key=lambda item: int(item[0] or 0), reverse=True)
+    best_score = int(scored_candidates[0][0] or 0)
+    best_candidates = [item[1] for item in scored_candidates if int(item[0] or 0) == best_score]
+    stats["best_score"] = best_score
+    stats["ambiguous_count"] = len(best_candidates)
+    if len(best_candidates) != 1:
+        stats["reason"] = "ambiguous"
+        stats["candidate_samples"] = [
+            str(item.get("resolved_path", "") or "").strip()
+            for item in best_candidates[:5]
+            if str(item.get("resolved_path", "") or "").strip()
+        ]
+        return {}, stats
+    stats["reason"] = "ok"
+    return best_candidates[0], stats
+
+
+def _match_subscription_share_dir_entry(entries: List[Dict[str, Any]], expected_name: str) -> Dict[str, Any]:
+    target_name = normalize_relative_path(expected_name)
+    if not target_name:
+        return {}
+    target_lower = target_name.lower()
+    target_key = _normalize_subscription_share_dir_match_key(target_name)
+    target_key_no_digits = _normalize_subscription_share_dir_match_key(target_name, drop_digits=True)
+    target_tmdbid = _extract_subscription_tmdbid_token(target_name)
+    fallback: Dict[str, Any] = {}
+    tmdb_hits: List[Tuple[int, Dict[str, Any]]] = []
+    no_digit_hits: List[Tuple[int, Dict[str, Any]]] = []
+    contains_hits: List[Tuple[int, Dict[str, Any]]] = []
+    for entry in entries if isinstance(entries, list) else []:
+        if not bool(entry.get("is_dir")):
+            continue
+        entry_name = normalize_relative_path(str(entry.get("name", "") or "").strip())
+        if not entry_name:
+            continue
+        if entry_name == target_name:
+            return entry
+        if (not fallback) and entry_name.lower() == target_lower:
+            fallback = entry
+        entry_key = _normalize_subscription_share_dir_match_key(entry_name)
+        if target_key and entry_key:
+            if entry_key == target_key:
+                return entry
+            short_len = min(len(target_key), len(entry_key))
+            if short_len >= 6 and (target_key in entry_key or entry_key in target_key):
+                contains_hits.append((short_len * 10 - abs(len(target_key) - len(entry_key)), entry))
+        if target_tmdbid and entry_key:
+            if target_tmdbid in entry_key:
+                tmdb_hits.append((len(entry_key), entry))
+        if target_key_no_digits:
+            entry_key_no_digits = _normalize_subscription_share_dir_match_key(entry_name, drop_digits=True)
+            if entry_key_no_digits and entry_key_no_digits == target_key_no_digits and len(entry_key_no_digits) >= 6:
+                no_digit_hits.append((len(entry_key_no_digits), entry))
+
+    unique_tmdb = _pick_unique_subscription_share_entry(tmdb_hits)
+    if unique_tmdb:
+        return unique_tmdb
+    unique_no_digits = _pick_unique_subscription_share_entry(no_digit_hits)
+    if unique_no_digits:
+        return unique_no_digits
+    unique_contains = _pick_unique_subscription_share_entry(contains_hits)
+    if unique_contains:
+        return unique_contains
+    return fallback
+
+
+def _normalize_subscription_share_subdir_parts(share_subdir: str, share_root_title: str = "") -> List[str]:
+    requested_parts = [part for part in normalize_relative_path(share_subdir).split("/") if part]
+    root_parts = [part for part in normalize_relative_path(share_root_title).split("/") if part]
+    if root_parts and len(requested_parts) >= len(root_parts):
+        if [part.lower() for part in requested_parts[: len(root_parts)]] == [part.lower() for part in root_parts]:
+            requested_parts = requested_parts[len(root_parts) :]
+    return requested_parts
+
+
+def _normalize_subscription_share_subdir_cid(value: Any) -> str:
+    return normalize_115_cid(value)
+
+
+def _format_subscription_share_scope_label(share_subdir: str, share_subdir_cid: str = "") -> str:
+    normalized_subdir = normalize_relative_path(share_subdir)
+    normalized_cid = _normalize_subscription_share_subdir_cid(share_subdir_cid)
+    if normalized_subdir and normalized_cid:
+        return f"{normalized_subdir} [CID:{normalized_cid}]"
+    if normalized_subdir:
+        return normalized_subdir
+    if normalized_cid:
+        return f"CID:{normalized_cid}"
+    return "--"
+
+
+async def _build_subscription_share_subdir_selection(
+    cookie: str,
+    item: Dict[str, Any],
+    share_subdir: str,
+    share_subdir_cid: str = "",
+    per_request_timeout: int = 25,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    normalized_cookie = str(cookie or "").strip()
+    share_url = str(item.get("link_url", "") or "").strip()
+    raw_text = str(item.get("raw_text", "") or "")
+    requested_subdir = normalize_relative_path(share_subdir)
+    requested_subdir_cid = _normalize_subscription_share_subdir_cid(share_subdir_cid)
+    stats: Dict[str, Any] = {
+        "reason": "",
+        "requested_subdir": requested_subdir,
+        "requested_subdir_cid": requested_subdir_cid,
+        "share_root_title": "",
+        "resolved_subdir": "",
+        "resolved_subdir_cid": "",
+        "scanned_dirs": 0,
+        "failed_segment": "",
+        "matched_depth": 0,
+    }
+    if not requested_subdir and not requested_subdir_cid:
+        stats["reason"] = "share_subdir_empty"
+        return {}, stats
+    if not normalized_cookie:
+        stats["reason"] = "cookie_missing"
+        return {}, stats
+    if not share_url:
+        stats["reason"] = "share_url_missing"
+        return {}, stats
+
+    item_extra = item.get("extra") if isinstance(item.get("extra"), dict) else safe_json_loads(item.get("extra_json"), {})
+    receive_code = (
+        normalize_receive_code(item.get("receive_code", ""))
+        or normalize_receive_code((item_extra or {}).get("receive_code", ""))
+    )
+    request_timeout = max(10, int(per_request_timeout or 25))
+
+    if requested_subdir_cid:
+        anchor_branch: Dict[str, Any] = {}
+        anchor_error = ""
+        anchor_attempts = 0
+        max_anchor_retries = 2
+        for attempt in range(0, max_anchor_retries + 1):
+            anchor_attempts = attempt + 1
+            try:
+                anchor_branch = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        list_115_share_entries,
+                        normalized_cookie,
+                        share_url,
+                        raw_text,
+                        requested_subdir_cid,
+                        receive_code,
+                    ),
+                    timeout=request_timeout,
+                )
+                anchor_error = ""
+                break
+            except Exception as exc:
+                anchor_error = str(exc or "").strip() or exc.__class__.__name__
+                if attempt >= max_anchor_retries:
+                    stats["anchor_error"] = anchor_error[:180]
+                    stats["anchor_retry_attempts"] = anchor_attempts
+                    break
+                await asyncio.sleep(0.6 * (attempt + 1))
+
+        if anchor_branch:
+            stats["scanned_dirs"] = int(stats.get("scanned_dirs", 0) or 0) + 1
+            share_root_title = normalize_relative_path(str(anchor_branch.get("share_title", "") or ""))
+            stats["share_root_title"] = share_root_title
+            resolved_subdir = requested_subdir or normalize_relative_path(f"cid-{requested_subdir_cid}")
+            stats["resolved_subdir"] = resolved_subdir
+            stats["resolved_subdir_cid"] = requested_subdir_cid
+            stats["matched_depth"] = len([part for part in resolved_subdir.split("/") if part]) if resolved_subdir else 0
+            stats["reason"] = "ok_cid_anchor"
+            selection = normalize_share_selection_meta(
+                {
+                    "selected_ids": [requested_subdir_cid],
+                    "selected_entries": [
+                        {
+                            "id": requested_subdir_cid,
+                            "name": resolved_subdir,
+                            "is_dir": True,
+                            "parent_id": "0",
+                            "cid": requested_subdir_cid,
+                            "fid": "",
+                        }
+                    ],
+                    "refresh_target_type": "folder",
+                    "share_root_title": share_root_title,
+                    "auto_sharetitle": resolved_subdir,
+                }
+            )
+            if not (selection.get("selected_ids", []) if isinstance(selection.get("selected_ids"), list) else []):
+                stats["reason"] = "subdir_selection_empty"
+                return {}, stats
+            return selection, stats
+
+        if not requested_subdir:
+            stats["reason"] = "share_anchor_unreachable"
+            return {}, stats
+
+    root_branch: Dict[str, Any] = {}
+    root_error = ""
+    root_attempts = 0
+    max_root_retries = 2
+    for attempt in range(0, max_root_retries + 1):
+        root_attempts = attempt + 1
+        try:
+            root_branch = await asyncio.wait_for(
+                asyncio.to_thread(
+                    list_115_share_entries,
+                    normalized_cookie,
+                    share_url,
+                    raw_text,
+                    "0",
+                    receive_code,
+                ),
+                timeout=request_timeout,
+            )
+            root_error = ""
+            break
+        except Exception as exc:
+            root_error = str(exc or "").strip() or exc.__class__.__name__
+            if attempt >= max_root_retries:
+                stats["reason"] = "share_root_unreachable"
+                stats["root_error"] = root_error[:180]
+                stats["root_retry_attempts"] = root_attempts
+                return {}, stats
+            await asyncio.sleep(0.6 * (attempt + 1))
+    stats["scanned_dirs"] = 1
+    share_root_title = normalize_relative_path(str(root_branch.get("share_title", "") or ""))
+    stats["share_root_title"] = share_root_title
+
+    path_parts = _normalize_subscription_share_subdir_parts(requested_subdir, share_root_title)
+    if not path_parts:
+        stats["reason"] = "target_is_share_root"
+        return {}, stats
+
+    current_entries = root_branch.get("entries", []) if isinstance(root_branch.get("entries"), list) else []
+    current_cid = "0"
+    matched_entry: Dict[str, Any] = {}
+    matched_parts: List[str] = []
+    fallback_used = False
+    for idx, segment in enumerate(path_parts):
+        matched_entry = _match_subscription_share_dir_entry(current_entries, segment)
+        if not matched_entry:
+            fallback_entry, fallback_stats = await _find_subscription_share_dir_by_leaf_fallback(
+                normalized_cookie,
+                share_url,
+                raw_text,
+                receive_code,
+                expected_leaf_name=path_parts[-1] if path_parts else str(segment or "").strip(),
+                expected_tmdbid=_extract_subscription_tmdbid_token(requested_subdir),
+                start_cid=current_cid,
+                start_parent_path="/".join(matched_parts),
+                per_request_timeout=request_timeout,
+                max_depth=max(3, len(path_parts) - idx + 1),
+                max_dirs=180,
+            )
+            stats["fallback_reason"] = str((fallback_stats or {}).get("reason", "") or "").strip()
+            stats["fallback_scanned_dirs"] = int((fallback_stats or {}).get("scanned_dirs", 0) or 0)
+            stats["fallback_candidate_count"] = int((fallback_stats or {}).get("candidate_count", 0) or 0)
+            stats["scanned_dirs"] = int(stats.get("scanned_dirs", 0) or 0) + int(
+                (fallback_stats or {}).get("scanned_dirs", 0) or 0
+            )
+            if fallback_entry:
+                matched_entry = fallback_entry
+                fallback_used = True
+                fallback_path = normalize_relative_path(str(fallback_entry.get("resolved_path", "") or "").strip())
+                if fallback_path:
+                    matched_parts = [part for part in fallback_path.split("/") if part]
+                    stats["matched_depth"] = len(matched_parts)
+                break
+            stats["reason"] = "subdir_not_found"
+            stats["failed_segment"] = str(segment or "").strip()
+            stats["matched_depth"] = idx
+            stats["sibling_dir_samples"] = _sample_subscription_share_dir_names(current_entries, limit=6)
+            stats["fallback_candidate_samples"] = (
+                (fallback_stats or {}).get("candidate_samples", [])
+                if isinstance((fallback_stats or {}).get("candidate_samples", []), list)
+                else []
+            )
+            return {}, stats
+
+        entry_name = normalize_relative_path(str(matched_entry.get("name", "") or "").strip())
+        if not entry_name:
+            stats["reason"] = "subdir_entry_invalid"
+            stats["failed_segment"] = str(segment or "").strip()
+            stats["matched_depth"] = idx
+            return {}, stats
+
+        matched_parts.append(entry_name)
+        stats["matched_depth"] = idx + 1
+
+        if idx >= len(path_parts) - 1:
+            break
+        child_cid = str(matched_entry.get("cid", "") or matched_entry.get("id", "") or "").strip()
+        if not child_cid:
+            stats["reason"] = "subdir_cid_missing"
+            stats["failed_segment"] = str(segment or "").strip()
+            return {}, stats
+        try:
+            branch = await asyncio.wait_for(
+                asyncio.to_thread(
+                    list_115_share_entries,
+                    normalized_cookie,
+                    share_url,
+                    raw_text,
+                    child_cid,
+                    receive_code,
+                ),
+                timeout=request_timeout,
+            )
+        except Exception:
+            stats["reason"] = "subdir_branch_unreachable"
+            stats["failed_segment"] = str(segment or "").strip()
+            return {}, stats
+        stats["scanned_dirs"] = int(stats.get("scanned_dirs", 0) or 0) + 1
+        current_entries = branch.get("entries", []) if isinstance(branch.get("entries"), list) else []
+        current_cid = child_cid
+
+    target_id = str(matched_entry.get("id", "") or matched_entry.get("cid", "") or "").strip()
+    target_cid = str(matched_entry.get("cid", "") or target_id).strip()
+    target_parent_id = str(matched_entry.get("parent_id", "0") or "0").strip() or "0"
+    fallback_resolved_subdir = normalize_relative_path(str(matched_entry.get("resolved_path", "") or "").strip())
+    resolved_subdir = fallback_resolved_subdir if fallback_used and fallback_resolved_subdir else normalize_relative_path("/".join(matched_parts))
+    stats["resolved_subdir"] = resolved_subdir
+    stats["resolved_subdir_cid"] = target_cid
+
+    if not target_id or not target_cid or not resolved_subdir:
+        stats["reason"] = "subdir_target_invalid"
+        return {}, stats
+    if fallback_used:
+        stats["reason"] = "ok_fallback_leaf"
+    else:
+        stats["reason"] = "ok"
+
+    selection = normalize_share_selection_meta(
+        {
+            "selected_ids": [target_id],
+            "selected_entries": [
+                {
+                    "id": target_id,
+                    "name": resolved_subdir,
+                    "is_dir": True,
+                    "parent_id": target_parent_id,
+                    "cid": target_cid,
+                    "fid": "",
+                }
+            ],
+            "refresh_target_type": "folder",
+            "share_root_title": share_root_title,
+            "auto_sharetitle": resolved_subdir,
+        }
+    )
+    if not (selection.get("selected_ids", []) if isinstance(selection.get("selected_ids"), list) else []):
+        stats["reason"] = "subdir_selection_empty"
+        return {}, stats
+    return selection, stats
+
+
 async def _build_tv_share_selection_for_missing_episodes(
     cookie: str,
     task: Dict[str, Any],
     item: Dict[str, Any],
     missing_episodes: Set[int],
+    share_subdir_selection: Optional[Dict[str, Any]] = None,
     max_depth: int = 4,
     max_dirs: int = 80,
     max_entries: int = 3000,
@@ -1422,7 +2164,43 @@ async def _build_tv_share_selection_for_missing_episodes(
         or normalize_receive_code((item_extra or {}).get("receive_code", ""))
     )
 
-    queue: List[Tuple[str, int, str]] = [("0", 0, "")]
+    share_subdir = normalize_relative_path(str(task.get("share_subdir", "") or "").strip())
+    share_subdir_cid = _normalize_subscription_share_subdir_cid(task.get("share_subdir_cid", ""))
+    subdir_selection = normalize_share_selection_meta(share_subdir_selection or {})
+    subdir_stats: Dict[str, Any] = {}
+    start_cid = "0"
+    start_parent_path = ""
+    if share_subdir or share_subdir_cid:
+        if not (
+            subdir_selection.get("selected_ids", [])
+            if isinstance(subdir_selection.get("selected_ids"), list)
+            else []
+        ):
+            subdir_selection, subdir_stats = await _build_subscription_share_subdir_selection(
+                normalized_cookie,
+                item,
+                share_subdir,
+                share_subdir_cid=share_subdir_cid,
+                per_request_timeout=per_request_timeout,
+            )
+        subdir_entries = (
+            subdir_selection.get("selected_entries", [])
+            if isinstance(subdir_selection.get("selected_entries"), list)
+            else []
+        )
+        subdir_entry = subdir_entries[0] if subdir_entries else {}
+        if not subdir_entry or not bool(subdir_entry.get("is_dir")):
+            reason = str((subdir_stats or {}).get("reason", "") or "share_subdir_unresolved").strip() or "share_subdir_unresolved"
+            return {}, {
+                "reason": f"share_subdir_{reason}",
+                "share_subdir": share_subdir,
+                "share_subdir_cid": share_subdir_cid,
+                "share_subdir_stats": subdir_stats,
+            }
+        start_cid = str(subdir_entry.get("cid", "") or subdir_entry.get("id", "") or "").strip() or "0"
+        start_parent_path = normalize_relative_path(str(subdir_entry.get("name", "") or "").strip())
+
+    queue: List[Tuple[str, int, str]] = [(start_cid, 0, start_parent_path)]
     visited: Set[str] = set()
     selected_entries: List[Dict[str, Any]] = []
     selected_ids: Set[str] = set()
@@ -1515,6 +2293,10 @@ async def _build_tv_share_selection_for_missing_episodes(
         "covered_episodes": sorted(covered_missing)[:300],
         "covered_preview": _format_episode_preview(covered_missing) if covered_missing else "--",
         "selected_count": len(selected_ids),
+        "share_subdir": share_subdir,
+        "share_subdir_cid": share_subdir_cid,
+        "share_scope_cid": start_cid,
+        "share_scope_path": start_parent_path,
     }
 
     if not selected_ids:
@@ -1760,6 +2542,32 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             f"类型: {'电影' if task['media_type'] == 'movie' else '电视剧'} | 标题: {task['title']} | 保存路径: {task['savepath']}",
             "info",
         )
+        task_share_subdir = normalize_relative_path(str(task.get("share_subdir", "") or "").strip())
+        task_share_subdir_cid = _normalize_subscription_share_subdir_cid(task.get("share_subdir_cid", ""))
+        task_share_link_url = str(task.get("share_link_url", "") or "").strip()
+        task_share_link_receive_code = normalize_receive_code(task.get("share_link_receive_code", ""))
+        task_share_link_type = resolve_resource_link_type("", task_share_link_url)
+        use_fixed_share_link = bool(task_share_link_url) and task_share_link_type == "115share"
+        if task_share_subdir_cid and (not use_fixed_share_link):
+            # CID 仅对固定分享链接稳定有效，频道搜索模式下忽略。
+            task_share_subdir_cid = ""
+        task_share_scope_enabled = bool(task_share_subdir or task_share_subdir_cid)
+        task_share_scope_label = _format_subscription_share_scope_label(task_share_subdir, task_share_subdir_cid)
+        if task_share_link_url and (not use_fixed_share_link):
+            await write_subscription_log(
+                "固定链接已配置但不是 115 分享链接，已自动忽略并回退频道搜索",
+                "warn",
+            )
+        if use_fixed_share_link:
+            await write_subscription_log(
+                "固定链接模式已启用：将直接使用配置的 115 分享链接，不再依赖频道搜索",
+                "info",
+            )
+        if task_share_scope_enabled:
+            await write_subscription_log(
+                f"115 分享子目录已启用：{task_share_scope_label}（仅在该目录内扫描和转存）",
+                "info",
+            )
         await write_subscription_log(
             f"执行批次: {subscription_run_id} | 批次收口刷新: 开启（内置固定）",
             "info",
@@ -1814,79 +2622,147 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 "warn",
             )
 
-        upsert_subscription_task_state(task_name, status="running", progress=15, detail="正在主动搜索启用频道资源")
+        upsert_subscription_task_state(
+            task_name,
+            status="running",
+            progress=15,
+            detail="正在校验固定分享链接" if use_fixed_share_link else "正在主动搜索启用频道资源",
+        )
         check_subscription_cancelled()
-        search_result = await find_subscription_task_match_candidate_by_search(task, last_episode=last_episode)
+        search_result: Dict[str, Any] = {}
+        if use_fixed_share_link:
+            fixed_link_url = apply_share_receive_code_to_url(task_share_link_url, task_share_link_receive_code)
+            fixed_item = {
+                "id": 0,
+                "title": str(task.get("title", "") or task_name or "固定分享链接").strip() or "固定分享链接",
+                "link_url": fixed_link_url,
+                "link_type": "115share",
+                "message_url": "",
+                "source_post_id": "",
+                "raw_text": fixed_link_url,
+                "receive_code": task_share_link_receive_code,
+                "extra": {
+                    "receive_code": task_share_link_receive_code,
+                },
+            }
+            fixed_candidate = {
+                "item": fixed_item,
+                "score": 100,
+                "episode": 0,
+                "season": 0,
+                "total": 0,
+                "range_start": 0,
+                "range_end": 0,
+                "resolution": 0,
+                "token_hits": 0,
+            }
+            search_result = {
+                "candidate": fixed_candidate,
+                "candidates": [fixed_candidate],
+                "keywords": ["fixed-share-link"],
+                "errors": [],
+                "stats": {
+                    "search_keywords": 0,
+                    "searched_sources": 0,
+                    "matched_channels": 0,
+                    "pages_scanned": 0,
+                    "raw_items": 0,
+                    "deduped_items": 1,
+                    "persisted_items": 0,
+                    "supported_items": 1,
+                    "unsupported_items": 0,
+                    "media_guard_filtered": 0,
+                    "media_guard_reasons": {},
+                    "season_guard_filtered": 0,
+                    "target_season": 0,
+                    "scored_items": 1,
+                    "scored_candidates": 1,
+                    "relaxed_score_mode": False,
+                    "relaxed_candidates": 0,
+                    "search_errors": 0,
+                    "best_score": 100,
+                },
+            }
+        else:
+            search_result = await find_subscription_task_match_candidate_by_search(task, last_episode=last_episode)
         search_stats = search_result.get("stats", {}) if isinstance(search_result.get("stats"), dict) else {}
         search_errors = search_result.get("errors", []) if isinstance(search_result.get("errors"), list) else []
         search_keywords = search_result.get("keywords", []) if isinstance(search_result.get("keywords"), list) else []
-        await write_subscription_log(
-            "主动搜索关键词: " + " / ".join(search_keywords or [str(task.get("title", "")).strip() or "--"]),
-            "info",
-        )
-        await write_subscription_log(
-            (
-                f"主动搜索完成：频道检索 {int(search_stats.get('searched_sources', 0) or 0)} 次，"
-                f"命中频道 {int(search_stats.get('matched_channels', 0) or 0)} 个，"
-                f"扫描页面 {int(search_stats.get('pages_scanned', 0) or 0)} 页，"
-                f"候选资源 {int(search_stats.get('deduped_items', 0) or 0)} 条，"
-                f"可导入资源 {int(search_stats.get('supported_items', 0) or 0)} 条"
-            ),
-            "info",
-        )
-        if int(search_stats.get("unsupported_items", 0) or 0) > 0:
+        if use_fixed_share_link:
             await write_subscription_log(
-                f"已过滤 {int(search_stats.get('unsupported_items', 0) or 0)} 条不支持链接（仅支持 magnet / 115 分享）",
-                "warn",
+                f"固定链接候选已就绪：{task_share_link_url}",
+                "info",
             )
-        if int(search_stats.get("media_guard_filtered", 0) or 0) > 0:
-            media_reasons = search_stats.get("media_guard_reasons", {}) if isinstance(search_stats.get("media_guard_reasons"), dict) else {}
-            reason_labels = {
-                "episode_like": "电影命中剧集资源",
-                "tv_like": "电影命中电视剧关键词",
-                "movie_like": "电视剧命中电影资源",
-                "missing_episode_meta": "电视剧缺少季集信息",
-            }
-            reason_text = "，".join(
-                f"{reason_labels.get(str(key), str(key))} {int(value or 0)} 条"
-                for key, value in media_reasons.items()
-                if int(value or 0) > 0
-            )
+            if task_share_link_receive_code:
+                await write_subscription_log("固定链接提取码已生效", "info")
+        else:
             await write_subscription_log(
-                f"类型强分区已过滤 {int(search_stats.get('media_guard_filtered', 0) or 0)} 条非目标类型资源"
-                + (f"（{reason_text}）" if reason_text else ""),
-                "warn",
+                "主动搜索关键词: " + " / ".join(search_keywords or [str(task.get("title", "")).strip() or "--"]),
+                "info",
             )
-        if int(search_stats.get("season_guard_filtered", 0) or 0) > 0:
             await write_subscription_log(
                 (
-                    f"单季强过滤：已过滤 {int(search_stats.get('season_guard_filtered', 0) or 0)} 条季号不匹配资源"
-                    f"（目标 S{int(search_stats.get('target_season', 0) or 0):02d}）"
+                    f"主动搜索完成：频道检索 {int(search_stats.get('searched_sources', 0) or 0)} 次，"
+                    f"命中频道 {int(search_stats.get('matched_channels', 0) or 0)} 个，"
+                    f"扫描页面 {int(search_stats.get('pages_scanned', 0) or 0)} 页，"
+                    f"候选资源 {int(search_stats.get('deduped_items', 0) or 0)} 条，"
+                    f"可导入资源 {int(search_stats.get('supported_items', 0) or 0)} 条"
                 ),
-                "warn",
+                "info",
             )
-        if bool(search_stats.get("relaxed_score_mode", False)):
-            await write_subscription_log(
-                (
-                    f"评分放宽模式已启用：有 {int(search_stats.get('relaxed_candidates', 0) or 0)} 条电视剧候选因阈值过低未达标，"
-                    "已改为先尝试候选再按集数去重判断"
-                ),
-                "warn",
-            )
-        if search_errors:
-            await write_subscription_log(
-                f"有 {len(search_errors)} 个频道搜索异常（不影响其余频道）："
-                + "；".join(
-                    [
-                        (
-                            f"{str(err.get('name', '') or err.get('channel_id', '未知频道')).strip()}:"
-                            f"{str(err.get('message', '')).strip()}"
-                        )[:120]
-                        for err in search_errors[:3]
-                    ]
-                ),
-                "warn",
-            )
+            if int(search_stats.get("unsupported_items", 0) or 0) > 0:
+                await write_subscription_log(
+                    f"已过滤 {int(search_stats.get('unsupported_items', 0) or 0)} 条不支持链接（仅支持 magnet / 115 分享）",
+                    "warn",
+                )
+            if int(search_stats.get("media_guard_filtered", 0) or 0) > 0:
+                media_reasons = search_stats.get("media_guard_reasons", {}) if isinstance(search_stats.get("media_guard_reasons"), dict) else {}
+                reason_labels = {
+                    "episode_like": "电影命中剧集资源",
+                    "tv_like": "电影命中电视剧关键词",
+                    "movie_like": "电视剧命中电影资源",
+                    "missing_episode_meta": "电视剧缺少季集信息",
+                }
+                reason_text = "，".join(
+                    f"{reason_labels.get(str(key), str(key))} {int(value or 0)} 条"
+                    for key, value in media_reasons.items()
+                    if int(value or 0) > 0
+                )
+                await write_subscription_log(
+                    f"类型强分区已过滤 {int(search_stats.get('media_guard_filtered', 0) or 0)} 条非目标类型资源"
+                    + (f"（{reason_text}）" if reason_text else ""),
+                    "warn",
+                )
+            if int(search_stats.get("season_guard_filtered", 0) or 0) > 0:
+                await write_subscription_log(
+                    (
+                        f"单季强过滤：已过滤 {int(search_stats.get('season_guard_filtered', 0) or 0)} 条季号不匹配资源"
+                        f"（目标 S{int(search_stats.get('target_season', 0) or 0):02d}）"
+                    ),
+                    "warn",
+                )
+            if bool(search_stats.get("relaxed_score_mode", False)):
+                await write_subscription_log(
+                    (
+                        f"评分放宽模式已启用：有 {int(search_stats.get('relaxed_candidates', 0) or 0)} 条电视剧候选因阈值过低未达标，"
+                        "已改为先尝试候选再按集数去重判断"
+                    ),
+                    "warn",
+                )
+            if search_errors:
+                await write_subscription_log(
+                    f"有 {len(search_errors)} 个频道搜索异常（不影响其余频道）："
+                    + "；".join(
+                        [
+                            (
+                                f"{str(err.get('name', '') or err.get('channel_id', '未知频道')).strip()}:"
+                                f"{str(err.get('message', '')).strip()}"
+                            )[:120]
+                            for err in search_errors[:3]
+                        ]
+                    ),
+                    "warn",
+                )
 
         upsert_subscription_task_state(task_name, status="running", progress=25, detail="频道搜索完成，正在匹配评分")
         check_subscription_cancelled()
@@ -1899,6 +2775,9 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             if completed_locked:
                 detail = f"已完结（{last_episode}/{known_total}），未发现可更新资源"
                 status = "completed"
+            elif use_fixed_share_link:
+                detail = "固定分享链接当前不可用，请检查链接/提取码或稍后重试"
+                status = "waiting"
             elif int(search_stats.get("searched_sources", 0) or 0) <= 0:
                 detail = "未启用任何 TG 订阅源，请先在参数配置里启用频道后重试"
                 status = "waiting"
@@ -2137,13 +3016,17 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 "info",
             )
 
-        invalid_link_cache = _load_subscription_invalid_link_cache(
-            [
-                _normalize_subscription_candidate_link(
-                    (candidate.get("item", {}) if isinstance(candidate.get("item"), dict) else {}).get("link_url", "")
-                )
-                for candidate in attempt_candidates
-            ]
+        invalid_link_cache = (
+            {}
+            if use_fixed_share_link
+            else _load_subscription_invalid_link_cache(
+                [
+                    _normalize_subscription_candidate_link(
+                        (candidate.get("item", {}) if isinstance(candidate.get("item"), dict) else {}).get("link_url", "")
+                    )
+                    for candidate in attempt_candidates
+                ]
+            )
         )
         if invalid_link_cache:
             await write_subscription_log(
@@ -2163,6 +3046,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
         skipped_existing_candidates = 0
         skipped_ledger_candidates = 0
         skipped_invalid_candidates = 0
+        skipped_subdir_candidates = 0
         last_failed_detail = ""
         selected_candidate: Dict[str, Any] = {}
         selected_item: Dict[str, Any] = {}
@@ -2175,6 +3059,8 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
         max_total_detected = 0
         successful_job_ids: List[int] = []
         batch_created_job_ids: Set[int] = set()
+        share_subdir_selection_cache: Dict[str, Dict[str, Any]] = {}
+        share_subdir_selection_stats_cache: Dict[str, Dict[str, Any]] = {}
         batch_refresh_result: Dict[str, Any] = {
             "run_id": subscription_run_id,
             "created_jobs": 0,
@@ -2246,7 +3132,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             check_subscription_cancelled()
             item = candidate.get("item", {}) if isinstance(candidate.get("item"), dict) else {}
             resource_id = int(item.get("id", 0) or 0)
-            if resource_id <= 0:
+            if resource_id <= 0 and (not use_fixed_share_link):
                 continue
             score = int(candidate.get("score", 0) or 0)
             episode = max(0, int(candidate.get("episode", 0) or 0))
@@ -2261,6 +3147,11 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             episode_label = _format_candidate_episode_label(candidate)
             candidate_link_url = _normalize_subscription_candidate_link(item.get("link_url", ""))
             candidate_link_type = resolve_resource_link_type(item.get("link_type", ""), candidate_link_url)
+            candidate_share_subdir_cid = task_share_subdir_cid if use_fixed_share_link else ""
+            candidate_share_scope_label = _format_subscription_share_scope_label(
+                task_share_subdir,
+                candidate_share_subdir_cid,
+            )
 
             if (
                 task["media_type"] == "tv"
@@ -2359,6 +3250,138 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             )
 
             pre_attempt_existing_episodes = set(existing_folder_episodes)
+            resolved_subdir_selection: Dict[str, Any] = {}
+            if candidate_link_type == "115share" and (task_share_subdir or candidate_share_subdir_cid):
+                subdir_cache_key = f"{candidate_link_url or f'resource:{resource_id}'}|{task_share_subdir}|{candidate_share_subdir_cid}"
+                if subdir_cache_key in share_subdir_selection_cache:
+                    resolved_subdir_selection = share_subdir_selection_cache.get(subdir_cache_key, {})
+                    subdir_stats = share_subdir_selection_stats_cache.get(subdir_cache_key, {})
+                else:
+                    resolved_subdir_selection, subdir_stats = await _build_subscription_share_subdir_selection(
+                        cookie_115,
+                        item,
+                        task_share_subdir,
+                        share_subdir_cid=candidate_share_subdir_cid,
+                    )
+                    share_subdir_selection_cache[subdir_cache_key] = resolved_subdir_selection
+                    share_subdir_selection_stats_cache[subdir_cache_key] = subdir_stats
+
+                selected_ids = (
+                    resolved_subdir_selection.get("selected_ids", [])
+                    if isinstance(resolved_subdir_selection.get("selected_ids"), list)
+                    else []
+                )
+                subdir_reason = str((subdir_stats or {}).get("reason", "") or "").strip()
+                if not selected_ids:
+                    if subdir_reason == "target_is_share_root":
+                        await write_subscription_log(
+                            f"候选资源 #{index} 的分享子目录配置等于分享根目录，已回退为根目录导入",
+                            "warn",
+                        )
+                    else:
+                        skipped_subdir_candidates += 1
+                        failed_segment = str((subdir_stats or {}).get("failed_segment", "") or "").strip()
+                        sibling_samples = (
+                            (subdir_stats or {}).get("sibling_dir_samples", [])
+                            if isinstance((subdir_stats or {}).get("sibling_dir_samples", []), list)
+                            else []
+                        )
+                        fallback_candidate_samples = (
+                            (subdir_stats or {}).get("fallback_candidate_samples", [])
+                            if isinstance((subdir_stats or {}).get("fallback_candidate_samples", []), list)
+                            else []
+                        )
+                        fallback_reason = str((subdir_stats or {}).get("fallback_reason", "") or "").strip()
+                        root_error = str((subdir_stats or {}).get("root_error", "") or "").strip()
+                        root_retry_attempts = int((subdir_stats or {}).get("root_retry_attempts", 0) or 0)
+                        anchor_error = str((subdir_stats or {}).get("anchor_error", "") or "").strip()
+                        anchor_retry_attempts = int((subdir_stats or {}).get("anchor_retry_attempts", 0) or 0)
+                        reason_tail = f"（{subdir_reason}）" if subdir_reason else ""
+                        segment_tail = f"，未命中片段：{failed_segment}" if failed_segment else ""
+                        sample_text = " / ".join(
+                            [str(name or "").strip()[:80] for name in sibling_samples[:3] if str(name or "").strip()]
+                        )
+                        sample_tail = f"，同级目录示例：{sample_text}" if sample_text else ""
+                        fallback_sample_text = " / ".join(
+                            [str(name or "").strip()[:80] for name in fallback_candidate_samples[:3] if str(name or "").strip()]
+                        )
+                        fallback_tail = ""
+                        if fallback_reason:
+                            fallback_tail = f"，回溯匹配：{fallback_reason}"
+                        if fallback_sample_text:
+                            fallback_tail += f"，候选示例：{fallback_sample_text}"
+                        root_tail = ""
+                        if subdir_reason == "share_root_unreachable":
+                            retry_tail = f"（已重试 {root_retry_attempts} 次）" if root_retry_attempts > 1 else ""
+                            root_tail = f"，分享目录访问失败：{(root_error or '未知原因')[:140]}{retry_tail}"
+                        if subdir_reason == "share_anchor_unreachable":
+                            retry_tail = f"（已重试 {anchor_retry_attempts} 次）" if anchor_retry_attempts > 1 else ""
+                            root_tail = f"，CID 目录访问失败：{(anchor_error or '未知原因')[:140]}{retry_tail}"
+                        await write_subscription_log(
+                            (
+                                f"候选资源 #{index} 未命中订阅子目录「{candidate_share_scope_label}」，"
+                                f"已跳过该候选{reason_tail}{segment_tail}{sample_tail}{fallback_tail}{root_tail}"
+                            ),
+                            "warn",
+                        )
+                        await maybe_wait_between_attempts()
+                        continue
+                if selected_ids and candidate_link_type == "115share" and task.get("media_type") == "tv":
+                    refined_selection, refine_stats = await _refine_subscription_share_selection_for_task(
+                        cookie_115,
+                        item,
+                        task,
+                        resolved_subdir_selection,
+                    )
+                    refined_ids = (
+                        refined_selection.get("selected_ids", [])
+                        if isinstance(refined_selection.get("selected_ids"), list)
+                        else []
+                    )
+                    refine_reason = str((refine_stats or {}).get("reason", "") or "").strip()
+                    if refined_ids and refined_ids != selected_ids:
+                        from_path = str((refine_stats or {}).get("from_path", "") or "").strip()
+                        to_path = str((refine_stats or {}).get("to_path", "") or "").strip()
+                        resolved_subdir_selection = refined_selection
+                        selected_ids = refined_ids
+                        await write_subscription_log(
+                            (
+                                f"候选资源 #{index} 订阅子目录已自动收敛："
+                                f"{from_path or candidate_share_scope_label} -> {to_path or '--'}"
+                            ),
+                            "info",
+                        )
+                    else:
+                        current_score = int((refine_stats or {}).get("current_score", 0) or 0)
+                        best_score = int((refine_stats or {}).get("best_score", 0) or 0)
+                        start_child_dirs = int((refine_stats or {}).get("start_child_dirs", 0) or 0)
+                        candidate_samples = (
+                            (refine_stats or {}).get("candidate_samples", [])
+                            if isinstance((refine_stats or {}).get("candidate_samples", []), list)
+                            else []
+                        )
+                        should_guard_skip = (
+                            refine_reason in ("not_found", "ambiguous", "weak_match", "refine_selection_empty")
+                            and current_score < 170
+                            and start_child_dirs > 1
+                        )
+                        if should_guard_skip:
+                            skipped_subdir_candidates += 1
+                            sample_text = " / ".join(
+                                [str(name or "").strip()[:80] for name in candidate_samples[:3] if str(name or "").strip()]
+                            )
+                            sample_tail = f"，候选示例：{sample_text}" if sample_text else ""
+                            await write_subscription_log(
+                                (
+                                    f"候选资源 #{index} 子目录疑似合集目录，且未能安全收敛到剧集目录，"
+                                    f"已跳过避免整包导入（{refine_reason or 'unknown'}，"
+                                    f"当前分 {current_score}，最佳候选分 {best_score}）{sample_tail}"
+                                ),
+                                "warn",
+                            )
+                            await maybe_wait_between_attempts()
+                            continue
+
             existing = find_existing_resource_job(item, effective_savepath)
             job_id = 0
             auto_refresh = bool(monitor_task_name)
@@ -2366,6 +3389,30 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             selected_share_episode_values: Set[int] = set()
             duplicate_validation_applied = False
             duplicate_verified_episode_values: Set[int] = set()
+            if existing and use_fixed_share_link and candidate_link_type == "115share":
+                existing = {}
+                await write_subscription_log(
+                    f"候选资源 #{index} 为固定分享链接模式，本次强制重新导入以捕捉目录更新",
+                    "info",
+                )
+            if existing and candidate_link_type == "115share" and (task_share_subdir or candidate_share_subdir_cid):
+                existing_extra = existing.get("extra") if isinstance(existing.get("extra"), dict) else {}
+                existing_share_subdir = normalize_relative_path(
+                    str(existing_extra.get("subscription_share_subdir", "") or "").strip()
+                )
+                existing_share_subdir_cid = _normalize_subscription_share_subdir_cid(
+                    existing_extra.get("subscription_share_subdir_cid", "")
+                )
+                if existing_share_subdir != task_share_subdir or existing_share_subdir_cid != candidate_share_subdir_cid:
+                    existing = {}
+                    await write_subscription_log(
+                        (
+                            f"候选资源 #{index} 历史任务子目录策略不一致（旧: "
+                            f"{_format_subscription_share_scope_label(existing_share_subdir, existing_share_subdir_cid)}），"
+                            "改为重新导入"
+                        ),
+                        "info",
+                    )
             if existing and task["media_type"] == "tv" and existing_episode_scan_ready:
                 # 历史任务复用前先看目录是否仍缺集，避免“手动删文件后仍复用旧任务”。
                 missing_for_candidate = _candidate_missing_episode_values(
@@ -2389,7 +3436,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 if existing_status == "failed":
                     failed_attempts += 1
                     last_failed_detail = str(existing.get("status_detail", "") or f"任务 #{job_id} 失败").strip()
-                    if candidate_link_url and _is_subscription_invalid_link_error(last_failed_detail, candidate_link_type):
+                    if (not use_fixed_share_link) and candidate_link_url and _is_subscription_invalid_link_error(last_failed_detail, candidate_link_type):
                         cache_meta = _record_subscription_invalid_link_cache(candidate_link_url, candidate_link_type, last_failed_detail)
                         if cache_meta:
                             invalid_link_cache[candidate_link_url] = cache_meta
@@ -2420,11 +3467,105 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                         "subscription_run_id": subscription_run_id,
                     },
                 }
+                if task_share_subdir:
+                    job_payload["extra"]["subscription_share_subdir"] = task_share_subdir
+                if candidate_share_subdir_cid:
+                    job_payload["extra"]["subscription_share_subdir_cid"] = candidate_share_subdir_cid
+                if use_fixed_share_link and candidate_link_type == "115share":
+                    job_payload["extra"]["subscription_share_link_url"] = task_share_link_url
+                    if task_share_link_receive_code:
+                        job_payload["receive_code"] = task_share_link_receive_code
+                if (
+                    candidate_link_type == "115share"
+                    and (
+                        resolved_subdir_selection.get("selected_ids", [])
+                        if isinstance(resolved_subdir_selection.get("selected_ids"), list)
+                        else []
+                    )
+                ):
+                    job_payload["share_selection"] = resolved_subdir_selection
+                forced_precise_selection_applied = False
+                if (
+                    use_fixed_share_link
+                    and candidate_link_type == "115share"
+                    and task.get("media_type") == "tv"
+                    and (task_share_subdir or candidate_share_subdir_cid)
+                ):
+                    precise_missing_episode_values: Set[int] = set()
+                    if known_total > 0:
+                        precise_missing_episode_values = set(range(1, known_total + 1))
+                    elif single_season_episode_upper_bound > 0:
+                        precise_missing_episode_values = set(range(1, single_season_episode_upper_bound + 1))
+                    elif candidate_episode_values:
+                        precise_missing_episode_values = set(candidate_episode_values)
+                    if existing_episode_scan_ready and precise_missing_episode_values:
+                        precise_missing_episode_values = {
+                            episode_no
+                            for episode_no in precise_missing_episode_values
+                            if episode_no not in existing_folder_episodes
+                        }
+                    if existing_episode_scan_ready and known_total > 0 and not precise_missing_episode_values:
+                        skipped_existing_candidates += 1
+                        await write_subscription_log(
+                            f"候选资源 #{index} 目录已覆盖订阅总集数 E1-E{known_total}，跳过导入",
+                            "info",
+                        )
+                        await maybe_wait_between_attempts()
+                        continue
+                    if precise_missing_episode_values:
+                        precise_selection, precise_stats = await _build_tv_share_selection_for_missing_episodes(
+                            cookie_115,
+                            task,
+                            item,
+                            precise_missing_episode_values,
+                            share_subdir_selection=resolved_subdir_selection,
+                        )
+                        precise_ids = (
+                            precise_selection.get("selected_ids", [])
+                            if isinstance(precise_selection.get("selected_ids"), list)
+                            else []
+                        )
+                        if precise_ids:
+                            job_payload["share_selection"] = precise_selection
+                            forced_precise_selection_applied = True
+                            selected_share_episode_values = {
+                                max(0, int(value or 0))
+                                for value in (
+                                    precise_stats.get("covered_episodes", [])
+                                    if isinstance(precise_stats, dict)
+                                    else []
+                                )
+                                if max(0, int(value or 0)) > 0
+                            }
+                            await write_subscription_log(
+                                (
+                                    f"候选资源 #{index} 固定链接模式已启用文件级筛选，"
+                                    f"自动命中 {len(precise_ids)} 个剧集文件后再转存（避免整包导入）"
+                                ),
+                                "info",
+                            )
+                        else:
+                            skipped_subdir_candidates += 1
+                            selection_reason = str((precise_stats or {}).get("reason", "") or "").strip() or "unknown"
+                            scanned_dirs = int((precise_stats or {}).get("scanned_dirs", 0) or 0)
+                            scanned_entries = int((precise_stats or {}).get("scanned_entries", 0) or 0)
+                            covered_preview = _format_episode_preview(precise_missing_episode_values)
+                            await write_subscription_log(
+                                (
+                                    f"候选资源 #{index} 固定链接模式未能在订阅子目录中识别目标剧集文件，"
+                                    f"已跳过避免整包导入（目标 {covered_preview}，原因 {selection_reason}，"
+                                    f"扫描目录 {scanned_dirs} 个，条目 {scanned_entries} 条）"
+                                ),
+                                "warn",
+                            )
+                            await maybe_wait_between_attempts()
+                            continue
                 if (
                     task["media_type"] == "tv"
                     and existing_episode_scan_ready
                     and candidate_link_type == "115share"
                     and candidate_episode_values
+                    and (not forced_precise_selection_applied)
                 ):
                     overlap_existing = any(episode_no in existing_folder_episodes for episode_no in candidate_episode_values)
                     missing_for_candidate = _candidate_missing_episode_values(
@@ -2439,6 +3580,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                             task,
                             item,
                             missing_for_candidate,
+                            share_subdir_selection=resolved_subdir_selection,
                         )
                         selected_ids = share_selection.get("selected_ids", []) if isinstance(share_selection, dict) else []
                         if selected_ids:
@@ -2526,7 +3668,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 if latest_status == "failed":
                     failed_attempts += 1
                     last_failed_detail = str((latest_job or {}).get("status_detail", "") or "资源导入失败").strip()
-                    if candidate_link_url and _is_subscription_invalid_link_error(last_failed_detail, candidate_link_type):
+                    if (not use_fixed_share_link) and candidate_link_url and _is_subscription_invalid_link_error(last_failed_detail, candidate_link_type):
                         cache_meta = _record_subscription_invalid_link_cache(candidate_link_url, candidate_link_type, last_failed_detail)
                         if cache_meta:
                             invalid_link_cache[candidate_link_url] = cache_meta
@@ -2820,6 +3962,8 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
         if not selected_candidate:
             if skipped_invalid_candidates > 0 and attempted_candidates <= 0:
                 detail = f"候选资源命中失效链接缓存（已跳过 {skipped_invalid_candidates} 条），等待新资源发布"
+            elif skipped_subdir_candidates > 0 and attempted_candidates <= 0:
+                detail = f"候选资源未命中订阅子目录「{task_share_scope_label}」（已跳过 {skipped_subdir_candidates} 条），等待新资源发布"
             elif skipped_existing_candidates > 0 and attempted_candidates <= 0:
                 detail = f"候选资源均已在目标目录存在（已跳过 {skipped_existing_candidates} 条），等待新集发布"
             elif skipped_ledger_candidates > 0 and attempted_candidates <= 0:
@@ -2836,6 +3980,8 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 detail = "候选资源暂不可用，等待下次自动重试"
             if skipped_invalid_candidates > 0 and attempted_candidates > 0:
                 detail += f"；失效链接缓存跳过 {skipped_invalid_candidates} 条"
+            if skipped_subdir_candidates > 0 and attempted_candidates > 0:
+                detail += f"；子目录过滤跳过 {skipped_subdir_candidates} 条"
             if skipped_ledger_candidates > 0 and attempted_candidates > 0:
                 detail += f"；集数账本跳过 {skipped_ledger_candidates} 条"
             upsert_subscription_task_state(
@@ -2864,8 +4010,13 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                     "skipped_existing_candidates": skipped_existing_candidates,
                     "skipped_ledger_candidates": skipped_ledger_candidates,
                     "skipped_invalid_candidates": skipped_invalid_candidates,
+                    "skipped_subdir_candidates": skipped_subdir_candidates,
                     "scanned_candidates": scanned_candidates,
                     "max_scan_candidates": max_scan_candidates,
+                    "use_fixed_share_link": use_fixed_share_link,
+                    "share_link_url": task_share_link_url if use_fixed_share_link else "",
+                    "share_subdir": task_share_subdir,
+                    "share_subdir_cid": task_share_subdir_cid,
                     **existing_episode_scan_stats,
                     **search_stats,
                 },
@@ -2987,9 +4138,14 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 "skipped_existing_candidates": skipped_existing_candidates,
                 "skipped_ledger_candidates": skipped_ledger_candidates,
                 "skipped_invalid_candidates": skipped_invalid_candidates,
+                "skipped_subdir_candidates": skipped_subdir_candidates,
                 "scanned_candidates": scanned_candidates,
                 "max_scan_candidates": max_scan_candidates,
                 "existing_episode_count": existing_episode_count,
+                "use_fixed_share_link": use_fixed_share_link,
+                "share_link_url": task_share_link_url if use_fixed_share_link else "",
+                "share_subdir": task_share_subdir,
+                "share_subdir_cid": task_share_subdir_cid,
                 **existing_episode_scan_stats,
                 **search_stats,
             },

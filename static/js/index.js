@@ -32,6 +32,15 @@
         let subscriptionFolderSummary = { folder_count: 0, file_count: 0 };
         let subscriptionFolderLoading = false;
         let subscriptionFolderCreateBusy = false;
+        let subscriptionShareFolderTrail = [{ cid: '0', name: '分享根目录' }];
+        let subscriptionShareFolderEntriesByParent = { '0': [] };
+        let subscriptionShareFolderCurrentCid = '0';
+        let subscriptionShareFolderLoading = false;
+        let subscriptionShareFolderError = '';
+        let subscriptionShareFolderInfo = { title: '', count: 0, share_code: '', receive_code: '' };
+        let subscriptionShareFolderRootLoaded = false;
+        let subscriptionShareFolderRequestToken = 0;
+        let subscriptionShareFolderLinkFingerprint = '';
         let subscriptionTmdbSearchBusy = false;
         let subscriptionTmdbSearchToken = 0;
         let subscriptionTmdbResults = [];
@@ -1751,6 +1760,9 @@
             const mediaText = isTv ? '电视剧' : '电影';
             const titleText = String(task?.title || task?.name || '').trim() || '未命名影视';
             const savepath = String(task?.savepath || '').trim() || '--';
+            const fixedShareLink = String(task?.share_link_url || '').trim();
+            const shareSubdir = normalizeRelativePathInput(task?.share_subdir || '');
+            const shareSubdirCid = normalizeShareCidInput(task?.share_subdir_cid || '');
             const scheduleWeekdays = normalizeSubscriptionWeekdays(task?.schedule_weekdays || []);
             const scheduleStartTime = normalizeSubscriptionScheduleTime(task?.schedule_start_time || '00:00', '00:00');
             const scheduleEndTime = normalizeSubscriptionScheduleTime(task?.schedule_end_time || '23:59', '23:59');
@@ -1771,7 +1783,11 @@
             const latestMatched = String(task?.matched_resource_title || '').trim();
             const latestText = latestMatched ? `最近命中：${latestMatched}` : '最近尚未命中资源';
             const modeText = isTv ? (multiSeasonMode ? '多季合一追更' : '单季追更') : '命中资源后即执行';
-            return `状态：${statusText}（${enabledText}）。${mediaText}《${titleText}》保存到 ${savepath}，${modeText}，${episodeText}；${scheduleText}；${latestText}。`;
+            const fixedShareText = fixedShareLink ? '，固定分享链接模式' : '';
+            const shareScopeText = shareSubdir
+                ? `，分享子目录 ${shareSubdir}${shareSubdirCid ? `（CID ${shareSubdirCid}）` : ''}`
+                : (shareSubdirCid ? `，分享子目录 CID ${shareSubdirCid}` : '');
+            return `状态：${statusText}（${enabledText}）。${mediaText}《${titleText}》保存到 ${savepath}${fixedShareText}${shareScopeText}，${modeText}，${episodeText}；${scheduleText}；${latestText}。`;
         }
 
         function buildSubscriptionTaskProgressBar({ progress = 0, detail = '' } = {}) {
@@ -2395,6 +2411,15 @@
                 1,
                 parseInt(document.getElementById('subscription_schedule_interval_minutes')?.value || '30', 10) || 30
             );
+            const shareLinkRaw = String(document.getElementById('subscription_share_link_url')?.value || '').trim();
+            const shareLinkType = detectResourceLinkTypeByUrl(shareLinkRaw);
+            const normalizedShareLink = shareLinkType === '115share' ? shareLinkRaw : '';
+            const receiveCodeRaw = String(document.getElementById('subscription_share_receive_code')?.value || '').trim();
+            const normalizedReceiveCode = normalizeReceiveCodeInput(receiveCodeRaw);
+            const shareSubdir = normalizeRelativePathInput(document.getElementById('subscription_share_subdir')?.value || '');
+            const shareSubdirCid = shareSubdir
+                ? normalizeShareCidInput(document.getElementById('subscription_share_subdir_cid')?.value || '')
+                : '';
             return {
                 name: title,
                 media_type: normalizeSubscriptionMediaType(document.getElementById('subscription_media_type').value),
@@ -2406,12 +2431,16 @@
                 anime_mode: multiSeasonMode,
                 multi_season_mode: multiSeasonMode,
                 savepath: normalizeRelativePathInput(document.getElementById('subscription_savepath').value.trim()),
+                share_link_url: normalizedShareLink,
+                share_link_receive_code: normalizedReceiveCode,
+                share_subdir: shareSubdir,
+                share_subdir_cid: shareSubdirCid,
                 schedule_weekdays: scheduleWeekdays,
                 schedule_start_time: scheduleStartTime,
                 schedule_end_time: scheduleEndTime,
                 schedule_interval_minutes: scheduleIntervalMinutes,
                 min_score: parseInt(document.getElementById('subscription_min_score').value || '55', 10) || 55,
-                quality_priority: normalizeSubscriptionQualityPriority(document.getElementById('subscription_quality_priority').value || 'balanced'),
+                quality_priority: normalizeSubscriptionQualityPriority(document.getElementById('subscription_quality_priority').value || 'ultra'),
                 enabled: document.getElementById('subscription_enabled').checked,
                 tmdb_id: tmdbBinding.tmdb_id,
                 tmdb_media_type: tmdbBinding.tmdb_media_type,
@@ -2430,7 +2459,7 @@
             editingSubscriptionName = null;
             const titleEl = document.getElementById('subscription-modal-title');
             if (titleEl) titleEl.innerText = '新增订阅任务';
-            document.getElementById('subscription_media_type').value = 'movie';
+            document.getElementById('subscription_media_type').value = 'tv';
             document.getElementById('subscription_title').value = '';
             document.getElementById('subscription_aliases').value = '';
             document.getElementById('subscription_year').value = '';
@@ -2438,6 +2467,12 @@
             document.getElementById('subscription_total_episodes').value = 0;
             document.getElementById('subscription_anime_mode').checked = false;
             setSubscriptionSavepath('0', '');
+            const shareLinkInput = document.getElementById('subscription_share_link_url');
+            if (shareLinkInput) shareLinkInput.value = '';
+            const shareReceiveInput = document.getElementById('subscription_share_receive_code');
+            if (shareReceiveInput) shareReceiveInput.value = '';
+            setSubscriptionShareSubdirSelection('', '');
+            resetSubscriptionShareFolderBrowser();
             subscriptionFolderTrail = [{ id: '0', name: '根目录' }];
             subscriptionFolderEntries = [];
             subscriptionFolderSummary = { folder_count: 0, file_count: 0 };
@@ -2448,7 +2483,7 @@
             document.getElementById('subscription_schedule_end_time').value = '23:59';
             document.getElementById('subscription_schedule_interval_minutes').value = 30;
             document.getElementById('subscription_min_score').value = 55;
-            document.getElementById('subscription_quality_priority').value = 'balanced';
+            document.getElementById('subscription_quality_priority').value = 'ultra';
             document.getElementById('subscription_enabled').checked = true;
             clearSubscriptionTmdbBinding({ silent: true });
             subscriptionTmdbResults = [];
@@ -2510,6 +2545,16 @@
             const task = currentSubscriptionFormData();
             if (!task.title) return alert('订阅影视名称不能为空');
             if (!task.savepath) return alert('请先从网盘选择保存目录');
+            const rawShareLink = String(document.getElementById('subscription_share_link_url')?.value || '').trim();
+            if (rawShareLink && !task.share_link_url) return alert('固定分享链接仅支持 115 分享链接格式');
+            const rawReceiveCode = String(document.getElementById('subscription_share_receive_code')?.value || '').trim();
+            if (rawReceiveCode && !task.share_link_receive_code) return alert('提取码格式不正确，请输入 1-16 位字母或数字');
+            if (!task.share_link_url) {
+                task.share_link_receive_code = '';
+                task.share_subdir = normalizeRelativePathInput(task.share_subdir || '');
+                task.share_subdir_cid = '';
+            }
+            if (!task.share_subdir) task.share_subdir_cid = '';
             if (task.year && !/^(19|20)\d{2}$/.test(task.year)) return alert('年份格式不正确，请输入四位年份');
             if (task.schedule_start_time === task.schedule_end_time) return alert('开始时间和结束时间不能相同');
             if (task.schedule_interval_minutes < 1) return alert('时段内查询间隔不能小于 1 分钟');
@@ -2589,6 +2634,12 @@
             document.getElementById('subscription_anime_mode').checked = resolveTaskMultiSeasonMode(task);
             subscriptionFolderTrail = [{ id: '0', name: '根目录' }];
             setSubscriptionSavepath('0', task.savepath || '');
+            const shareLinkInput = document.getElementById('subscription_share_link_url');
+            if (shareLinkInput) shareLinkInput.value = String(task.share_link_url || '').trim();
+            const shareReceiveInput = document.getElementById('subscription_share_receive_code');
+            if (shareReceiveInput) shareReceiveInput.value = normalizeReceiveCodeInput(task.share_link_receive_code || '');
+            setSubscriptionShareSubdirSelection(task.share_subdir || '', task.share_subdir_cid || '');
+            resetSubscriptionShareFolderBrowser();
             setSubscriptionWeekdaysToForm(task.schedule_weekdays || SUBSCRIPTION_DEFAULT_WEEKDAYS);
             document.getElementById('subscription_schedule_start_time').value = normalizeSubscriptionScheduleTime(task.schedule_start_time || '00:00', '00:00');
             document.getElementById('subscription_schedule_end_time').value = normalizeSubscriptionScheduleTime(task.schedule_end_time || '23:59', '23:59');
@@ -3081,6 +3132,12 @@
                 .map(part => part.trim())
                 .filter(Boolean)
                 .join('/');
+        }
+
+        function normalizeShareCidInput(value) {
+            const raw = String(value || '').trim().replace(/\s+/g, '');
+            if (!raw || raw === '0') return '';
+            return /^[A-Za-z0-9_-]{1,64}$/.test(raw) ? raw : '';
         }
 
         function normalizeRemotePathInput(value) {
@@ -7569,6 +7626,218 @@
             closeSubscriptionFolderModal();
         }
 
+        function setSubscriptionShareSubdirSelection(path = '', cid = '') {
+            const normalizedPath = normalizeRelativePathInput(path || '');
+            const normalizedCid = normalizedPath ? normalizeShareCidInput(cid || '') : '';
+            const subdirInput = document.getElementById('subscription_share_subdir');
+            if (subdirInput) subdirInput.value = normalizedPath;
+            const cidInput = document.getElementById('subscription_share_subdir_cid');
+            if (cidInput) cidInput.value = normalizedCid;
+        }
+
+        function resetSubscriptionShareFolderBrowser() {
+            subscriptionShareFolderTrail = [{ cid: '0', name: '分享根目录' }];
+            subscriptionShareFolderEntriesByParent = { '0': [] };
+            subscriptionShareFolderCurrentCid = '0';
+            subscriptionShareFolderLoading = false;
+            subscriptionShareFolderError = '';
+            subscriptionShareFolderInfo = { title: '', count: 0, share_code: '', receive_code: '' };
+            subscriptionShareFolderRootLoaded = false;
+            subscriptionShareFolderRequestToken = 0;
+            subscriptionShareFolderLinkFingerprint = '';
+        }
+
+        function getSubscriptionShareLinkPayload() {
+            const linkInput = document.getElementById('subscription_share_link_url');
+            const receiveInput = document.getElementById('subscription_share_receive_code');
+            const linkUrl = String(linkInput?.value || '').trim();
+            const linkType = detectResourceLinkTypeByUrl(linkUrl);
+            if (!linkUrl) throw new Error('请先填写固定 115 分享链接');
+            if (linkType !== '115share') throw new Error('仅支持 115 分享链接');
+            const rawReceiveCode = String(receiveInput?.value || '').trim();
+            let receiveCode = normalizeReceiveCodeInput(rawReceiveCode);
+            if (rawReceiveCode && !receiveCode) throw new Error('提取码格式不正确，请输入 1-16 位字母或数字');
+            if (!receiveCode) receiveCode = extractReceiveCodeFromShareUrl(linkUrl);
+            if (receiveInput) receiveInput.value = receiveCode;
+            if (linkInput) linkInput.value = linkUrl;
+            return {
+                link_url: linkUrl,
+                raw_text: linkUrl,
+                receive_code: receiveCode,
+            };
+        }
+
+        async function fetchSubscriptionShareFolderData(cid = '0') {
+            const payload = getSubscriptionShareLinkPayload();
+            const res = await fetch('/resource/115/share_entries_preview', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    cid: String(cid || '0'),
+                    link_url: payload.link_url,
+                    raw_text: payload.raw_text,
+                    receive_code: payload.receive_code,
+                }),
+            });
+            const data = await res.json();
+            if (!res.ok || !data.ok) throw new Error(data.msg || '读取分享目录失败');
+            return {
+                entries: Array.isArray(data.entries) ? data.entries : [],
+                summary: data.summary || { folder_count: 0, file_count: 0 },
+                share: data.share || { title: '', share_code: '', receive_code: '', count: 0 },
+            };
+        }
+
+        function renderSubscriptionShareFolderBreadcrumbs() {
+            const container = document.getElementById('subscription-share-folder-breadcrumbs');
+            if (!container) return;
+            container.innerHTML = subscriptionShareFolderTrail.map((item, index) => {
+                const isLast = index === subscriptionShareFolderTrail.length - 1;
+                return `
+                    ${index > 0 ? '<span class="resource-folder-sep">›</span>' : ''}
+                    <button
+                        type="button"
+                        data-subscription-share-folder-action="trail"
+                        data-subscription-share-folder-index="${index}"
+                        class="resource-folder-crumb ${isLast ? 'resource-folder-crumb-active' : ''}"
+                        ${isLast ? 'disabled' : ''}
+                    >${escapeHtml(item?.name || '分享根目录')}</button>
+                `;
+            }).join('');
+        }
+
+        function getCurrentSubscriptionShareFolderEntries() {
+            return Array.isArray(subscriptionShareFolderEntriesByParent?.[subscriptionShareFolderCurrentCid])
+                ? subscriptionShareFolderEntriesByParent[subscriptionShareFolderCurrentCid]
+                : [];
+        }
+
+        function renderSubscriptionShareFolderList() {
+            const container = document.getElementById('subscription-share-folder-list');
+            const summary = document.getElementById('subscription-share-folder-summary');
+            if (!container) return;
+            if (summary) {
+                const rootTitle = String(subscriptionShareFolderInfo?.title || '').trim();
+                const counts = subscriptionShareFolderRootLoaded
+                    ? `当前目录下共有 ${Number(getCurrentSubscriptionShareFolderEntries().filter(entry => !!entry?.is_dir).length)} 个子文件夹。`
+                    : '先填写固定分享链接，再浏览并选择链接中的目标子目录。';
+                summary.innerText = rootTitle
+                    ? `分享标题：${rootTitle}。${counts}`
+                    : counts;
+            }
+            if (subscriptionShareFolderLoading) {
+                container.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">正在读取分享目录...</div>';
+                return;
+            }
+            if (subscriptionShareFolderError) {
+                container.innerHTML = `<div class="rounded-2xl border border-dashed border-red-500/40 p-6 text-center text-red-300 text-sm">${escapeHtml(subscriptionShareFolderError)}</div>`;
+                return;
+            }
+            if (!subscriptionShareFolderRootLoaded) {
+                container.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">点击“浏览链接目录”后，这里会显示分享内的子文件夹。</div>';
+                return;
+            }
+            const folders = getCurrentSubscriptionShareFolderEntries().filter(entry => !!entry?.is_dir);
+            if (!folders.length) {
+                container.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">当前目录没有子文件夹，可以直接选择这里。</div>';
+                return;
+            }
+            container.innerHTML = folders.map(entry => buildResourceEntryRow(entry, {
+                showOpenButton: true,
+                openActionPrefix: 'subscription-share-folder',
+            })).join('');
+        }
+
+        async function loadSubscriptionShareFolderBranch(cid = '0') {
+            subscriptionShareFolderLoading = true;
+            subscriptionShareFolderError = '';
+            renderSubscriptionShareFolderBreadcrumbs();
+            renderSubscriptionShareFolderList();
+            const requestToken = ++subscriptionShareFolderRequestToken;
+            try {
+                const result = await fetchSubscriptionShareFolderData(cid);
+                if (requestToken !== subscriptionShareFolderRequestToken) return;
+                const normalizedCid = String(cid || '0');
+                subscriptionShareFolderEntriesByParent[normalizedCid] = result.entries;
+                subscriptionShareFolderInfo = result.share;
+                subscriptionShareFolderRootLoaded = true;
+            } catch (e) {
+                if (requestToken !== subscriptionShareFolderRequestToken) return;
+                subscriptionShareFolderEntriesByParent[String(cid || '0')] = [];
+                subscriptionShareFolderError = e?.message || '读取分享目录失败';
+                subscriptionShareFolderRootLoaded = false;
+            } finally {
+                if (requestToken !== subscriptionShareFolderRequestToken) return;
+                subscriptionShareFolderLoading = false;
+                renderSubscriptionShareFolderBreadcrumbs();
+                renderSubscriptionShareFolderList();
+            }
+        }
+
+        async function openSubscriptionShareFolderModal() {
+            let payload;
+            try {
+                payload = getSubscriptionShareLinkPayload();
+            } catch (e) {
+                showToast(e?.message || '请先填写固定 115 分享链接', { tone: 'warn', duration: 2800, placement: 'top-center' });
+                return;
+            }
+            const fingerprint = `${payload.link_url}#${payload.receive_code || ''}`;
+            if (!subscriptionShareFolderLinkFingerprint || subscriptionShareFolderLinkFingerprint !== fingerprint) {
+                resetSubscriptionShareFolderBrowser();
+                subscriptionShareFolderLinkFingerprint = fingerprint;
+            }
+            showLockedModal('subscription-share-folder-modal');
+            renderSubscriptionShareFolderBreadcrumbs();
+            renderSubscriptionShareFolderList();
+            await loadSubscriptionShareFolderBranch(subscriptionShareFolderCurrentCid || '0');
+        }
+
+        function closeSubscriptionShareFolderModal() {
+            hideLockedModal('subscription-share-folder-modal');
+        }
+
+        async function goSubscriptionShareFolderBack() {
+            if (subscriptionShareFolderTrail.length <= 1) return;
+            subscriptionShareFolderTrail = subscriptionShareFolderTrail.slice(0, -1);
+            subscriptionShareFolderCurrentCid = String(subscriptionShareFolderTrail[subscriptionShareFolderTrail.length - 1]?.cid || '0');
+            await loadSubscriptionShareFolderBranch(subscriptionShareFolderCurrentCid);
+        }
+
+        async function goSubscriptionShareFolderRoot() {
+            subscriptionShareFolderTrail = [{ cid: '0', name: '分享根目录' }];
+            subscriptionShareFolderCurrentCid = '0';
+            await loadSubscriptionShareFolderBranch('0');
+        }
+
+        async function openSubscriptionShareFolderTrail(index) {
+            const targetIndex = Math.max(0, Math.min(Number(index || 0), subscriptionShareFolderTrail.length - 1));
+            subscriptionShareFolderTrail = subscriptionShareFolderTrail.slice(0, targetIndex + 1);
+            subscriptionShareFolderCurrentCid = String(subscriptionShareFolderTrail[targetIndex]?.cid || '0');
+            await loadSubscriptionShareFolderBranch(subscriptionShareFolderCurrentCid);
+        }
+
+        async function openSubscriptionShareFolderChild(folderId, folderName) {
+            const nextCid = String(folderId || '0').trim() || '0';
+            subscriptionShareFolderCurrentCid = nextCid;
+            subscriptionShareFolderTrail = subscriptionShareFolderTrail.concat([{ cid: nextCid, name: String(folderName || '--') }]);
+            await loadSubscriptionShareFolderBranch(nextCid);
+        }
+
+        function selectCurrentSubscriptionShareFolder() {
+            const current = subscriptionShareFolderTrail[subscriptionShareFolderTrail.length - 1] || { cid: '0', name: '分享根目录' };
+            const subdir = normalizeRelativePathInput(subscriptionShareFolderTrail.slice(1).map(item => item.name).join('/'));
+            const subdirCid = subdir ? normalizeShareCidInput(current?.cid || '') : '';
+            setSubscriptionShareSubdirSelection(subdir, subdirCid);
+            closeSubscriptionShareFolderModal();
+            showToast(
+                subdir
+                    ? `已选择分享子目录：${subdir}${subdirCid ? `（CID ${subdirCid}）` : ''}`
+                    : '已选择分享根目录（留空）',
+                { tone: 'success', duration: 2600, placement: 'top-center' }
+            );
+        }
+
         async function triggerResourceJobRefresh(jobId) {
             const res = await fetch('/resource/jobs/refresh', {
                 method: 'POST',
@@ -7997,6 +8266,9 @@
         document.getElementById('subscription-folder-modal').addEventListener('click', (e) => {
             if (e.target.id === 'subscription-folder-modal') closeSubscriptionFolderModal();
         });
+        document.getElementById('subscription-share-folder-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'subscription-share-folder-modal') closeSubscriptionShareFolderModal();
+        });
         document.getElementById('help-modal').addEventListener('click', (e) => {
             if (e.target.id === 'help-modal') closeHelpModal();
         });
@@ -8047,6 +8319,14 @@
                 await openSubscriptionFolderChild(btn.dataset.subscriptionFolderId || '0', btn.dataset.subscriptionFolderName || '--');
             }
         });
+        document.getElementById('subscription-share-folder-list').addEventListener('click', async (e) => {
+            const btn = e.target.closest('[data-subscription-share-folder-action]');
+            if (!btn) return;
+            const action = btn.dataset.subscriptionShareFolderAction || '';
+            if (action === 'open') {
+                await openSubscriptionShareFolderChild(btn.dataset.subscriptionShareFolderId || '0', btn.dataset.subscriptionShareFolderName || '--');
+            }
+        });
         document.getElementById('subscription_tmdb_result_list').addEventListener('click', async (e) => {
             const btn = e.target.closest('[data-subscription-tmdb-action]');
             if (!btn) return;
@@ -8069,6 +8349,14 @@
             const action = btn.dataset.subscriptionFolderAction || '';
             if (action === 'trail') {
                 await openSubscriptionFolderTrail(btn.dataset.subscriptionFolderIndex || '0');
+            }
+        });
+        document.getElementById('subscription-share-folder-breadcrumbs').addEventListener('click', async (e) => {
+            const btn = e.target.closest('[data-subscription-share-folder-action]');
+            if (!btn) return;
+            const action = btn.dataset.subscriptionShareFolderAction || '';
+            if (action === 'trail') {
+                await openSubscriptionShareFolderTrail(btn.dataset.subscriptionShareFolderIndex || '0');
             }
         });
         document.getElementById('resource-job-modal').addEventListener('click', (e) => {
@@ -8104,6 +8392,11 @@
             const subscriptionFolderModal = document.getElementById('subscription-folder-modal');
             if (e.key === 'Escape' && subscriptionFolderModal && !subscriptionFolderModal.classList.contains('hidden')) {
                 closeSubscriptionFolderModal();
+                return;
+            }
+            const subscriptionShareFolderModal = document.getElementById('subscription-share-folder-modal');
+            if (e.key === 'Escape' && subscriptionShareFolderModal && !subscriptionShareFolderModal.classList.contains('hidden')) {
+                closeSubscriptionShareFolderModal();
                 return;
             }
             const subscriptionModal = document.getElementById('subscription-modal');
@@ -8164,6 +8457,14 @@
         document.getElementById('resource_share_receive_code').addEventListener('input', (e) => {
             const rawCode = String(e?.target?.value || '').trim();
             resourceShareReceiveCode = normalizeReceiveCodeInput(rawCode);
+        });
+        document.getElementById('subscription_share_link_url').addEventListener('input', () => {
+            const cidInput = document.getElementById('subscription_share_subdir_cid');
+            if (cidInput) cidInput.value = '';
+        });
+        document.getElementById('subscription_share_subdir').addEventListener('input', () => {
+            const cidInput = document.getElementById('subscription_share_subdir_cid');
+            if (cidInput) cidInput.value = '';
         });
         window.addEventListener('scroll', () => {
             syncResourceBackTopButton();

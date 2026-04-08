@@ -127,6 +127,7 @@
                         <button id="resource-search-btn" type="button" onclick="searchResources()" class="resource-search-btn bg-sky-600 hover:bg-sky-500 text-white shadow-lg">搜索</button>
                         <button id="resource-sync-btn" type="button" onclick="syncResourceChannels(true)" class="resource-search-btn bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700">同步频道</button>
                     </div>
+                    <div id="resource-quick-link-strip" class="resource-quick-link-strip hidden" aria-label="常用网盘链接快捷入口"></div>
                 </div>
             </div>
 
@@ -627,8 +628,8 @@
                         <label class="block">
                             <span class="text-xs text-slate-500">订阅类型</span>
                             <select id="subscription_media_type" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" onchange="syncSubscriptionTypeUI()">
-                                <option value="movie">电影</option>
                                 <option value="tv">电视剧</option>
+                                <option value="movie">电影</option>
                             </select>
                         </label>
                         <label class="block">
@@ -690,6 +691,24 @@
                         <div id="subscription-savepath-hint" class="text-[11px] text-slate-500 leading-5 px-1">电影会自动保存到“目标目录/影片名”子文件夹；电视剧保存到所选目录。</div>
                     </div>
                     <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 space-y-3">
+                        <div class="text-xs text-slate-500">固定 115 分享链接（可选）</div>
+                        <div class="resource-save-path-grid">
+                            <input id="subscription_share_link_url" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" placeholder="例如：https://115.com/s/xxxxxxx?password=abcd">
+                            <button type="button" onclick="openSubscriptionShareFolderModal()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold whitespace-nowrap">浏览链接目录</button>
+                        </div>
+                        <div class="resource-save-path-grid">
+                            <input id="subscription_share_receive_code" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm font-mono uppercase tracking-[0.08em]" placeholder="可选：提取码（1-16 位字母数字）">
+                            <button type="button" onclick="openSubscriptionShareFolderModal(true)" class="px-4 py-3 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold whitespace-nowrap">应用并浏览</button>
+                        </div>
+                        <div class="text-[11px] text-slate-500 leading-5">填写后将优先使用这个固定分享链接，不再依赖频道搜索；适合长期更新的合集链接。</div>
+                    </div>
+                    <label class="block">
+                        <span class="text-xs text-slate-500">115 分享子目录（可选）</span>
+                        <input id="subscription_share_subdir" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：合集/剧名（留空表示从分享根目录）">
+                        <input id="subscription_share_subdir_cid" type="hidden" value="">
+                        <div class="text-[11px] text-slate-500 mt-2">可手动填写，也可先填上方固定分享链接后点击“浏览链接目录”选择。浏览选择时会自动记录 CID 锚点，优先按 CID 定位目录；配置后仅在该子目录内扫描和转存。</div>
+                    </label>
+                    <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 space-y-3">
                         <div class="text-xs text-slate-500">自动查询时段</div>
                         <div class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2" id="subscription_schedule_weekdays">
                             <label class="flex items-center justify-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm cursor-pointer">
@@ -747,8 +766,8 @@
                     <label class="block">
                         <span class="text-xs text-slate-500">清晰度优先级（常见分辨率）</span>
                         <select id="subscription_quality_priority" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1">
-                            <option value="balanced">均衡（1080P > 720P > 4K > 480P）</option>
                             <option value="ultra">超清优先（4K > 1080P > 720P）</option>
+                            <option value="balanced">均衡（1080P > 720P > 4K > 480P）</option>
                             <option value="fhd">高清优先（1080P > 4K > 720P）</option>
                             <option value="hd">流畅优先（720P > 1080P > 4K）</option>
                             <option value="sd">小体积优先（480P > 720P > 1080P）</option>
@@ -762,7 +781,7 @@
                         启用任务（关闭后不参与定时，但仍可手动运行）
                     </label>
                     <div class="text-xs text-slate-500 leading-6">
-                        匹配策略：执行时会主动在已启用频道按标题/别名搜索，再叠加年份、季集信息评分，超过阈值才会触发导入任务。
+                        匹配策略：若填写了固定 115 分享链接，会直接在该链接内扫描；未填写时，才会在已启用频道按标题/别名主动搜索并评分命中。
                     </div>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
                         <button onclick="saveSubscriptionTask()" class="bg-sky-600 hover:bg-sky-500 rounded-xl py-3 font-bold text-white">保存任务</button>
@@ -795,6 +814,30 @@
                         <button id="subscription-folder-create-btn" type="button" onclick="createSubscriptionFolderInCurrent()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold whitespace-nowrap">新建文件夹</button>
                     </div>
                     <div id="subscription-folder-list" class="space-y-3"></div>
+                </div>
+            </div>
+        </div>
+
+        <div id="subscription-share-folder-modal" class="hidden fixed inset-0 bg-black/60 z-[57] p-4">
+            <div class="w-full max-w-3xl mx-auto mt-[8vh] max-h-[88vh] overflow-y-auto group-card modal-card">
+                <div class="flex items-center justify-between">
+                    <h3 class="group-title mb-0">选择固定分享链接子目录</h3>
+                    <button onclick="closeSubscriptionShareFolderModal()" class="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm">关闭</button>
+                </div>
+                <div class="space-y-4 mt-4">
+                    <div class="resource-folder-pathbar">
+                        <div class="resource-folder-path-label">分享目录路径</div>
+                        <div id="subscription-share-folder-breadcrumbs" class="resource-folder-path-track">分享根目录</div>
+                    </div>
+                    <div id="subscription-share-folder-summary" class="text-xs text-slate-500">
+                        先填写固定分享链接，再浏览并选择链接中的目标子目录。
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                        <button type="button" onclick="selectCurrentSubscriptionShareFolder()" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold">选择当前目录</button>
+                        <button type="button" onclick="goSubscriptionShareFolderBack()" class="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">返回上一级</button>
+                        <button type="button" onclick="goSubscriptionShareFolderRoot()" class="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">回到根目录</button>
+                    </div>
+                    <div id="subscription-share-folder-list" class="space-y-3"></div>
                 </div>
             </div>
         </div>
@@ -1122,6 +1165,40 @@
                         <button id="resource-folder-create-btn" type="button" onclick="createResourceFolderInCurrent()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold whitespace-nowrap">新建文件夹</button>
                     </div>
                     <div id="resource-folder-list" class="space-y-3"></div>
+                </div>
+            </div>
+        </div>
+
+        <div id="resource-quick-link-modal" class="hidden fixed inset-0 bg-black/65 backdrop-blur-sm z-[58] p-4">
+            <div class="w-full max-w-3xl mx-auto mt-[6vh] max-h-[88vh] overflow-y-auto group-card modal-card resource-source-modal-shell resource-quick-link-modal-shell">
+                <div class="resource-source-modal-header">
+                    <div>
+                        <div class="resource-source-modal-eyebrow">Quick Link</div>
+                        <div class="resource-source-modal-title">常用网盘链接</div>
+                        <div class="resource-source-modal-subtitle">支持自定义名称，点击“识别”会自动填入搜索框并按现有流程解析，适合快速处理会持续更新的分享链接。</div>
+                    </div>
+                    <button type="button" class="resource-source-modal-close" onclick="closeResourceQuickLinkModal()" aria-label="关闭常用网盘链接弹窗">✕</button>
+                </div>
+                <div class="space-y-4 mt-4">
+                    <div class="resource-quick-link-form-grid">
+                        <label class="block">
+                            <span class="resource-quick-link-field-label">显示名称</span>
+                            <input id="resource-quick-link-name" class="resource-quick-link-input" placeholder="例如：电影追更合集">
+                        </label>
+                        <label class="block">
+                            <span class="resource-quick-link-field-label">网盘分享链接</span>
+                            <input id="resource-quick-link-url" class="resource-quick-link-input" placeholder="https://pan.quark.cn/s/xxxxxx">
+                        </label>
+                    </div>
+                    <div class="resource-quick-link-form-actions">
+                        <button type="button" onclick="fillResourceQuickLinkFormFromSearch()" class="resource-quick-link-action-btn resource-quick-link-action-btn-muted">读取搜索框</button>
+                        <button id="resource-quick-link-cancel-edit-btn" type="button" onclick="cancelEditResourceQuickLink()" class="resource-quick-link-action-btn resource-quick-link-action-btn-muted hidden">取消编辑</button>
+                        <button id="resource-quick-link-save-btn" type="button" onclick="saveResourceQuickLink()" class="resource-quick-link-action-btn resource-quick-link-action-btn-primary">添加常用网盘链接</button>
+                    </div>
+                    <div class="resource-quick-link-note">
+                        提示：如果粘贴的是纯分享页链接，点击“识别”即可进入原有导入流程；点击“跳转”会新开标签页访问源链接。
+                    </div>
+                    <div id="resource-quick-link-list" class="space-y-3"></div>
                 </div>
             </div>
         </div>
