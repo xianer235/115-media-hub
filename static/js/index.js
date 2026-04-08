@@ -74,9 +74,12 @@
         let resourceClientIdsByIdentity = {};
         let resourceJobModalOpen = false;
         let resourceJobClearMenuOpen = false;
+        let resourceQuickLinkModalOpen = false;
         let resourceSourceModalOpen = false;
         let resourceSourceImportModalOpen = false;
         let resourceSourceManagerOpen = false;
+        let resourceQuickLinks = [];
+        let editingResourceQuickLinkId = '';
         let resourceSourceFilter = 'all';
         let resourceSourceEnabledFilter = 'all';
         let resourceSourceActivityFilter = 'all';
@@ -116,6 +119,8 @@
         const ABOUT_WORKFLOW_IMAGE_URL = '/static/images/about-workflow-cookie-openlist.png';
         const RESOURCE_FOLDER_MEMORY_KEY = 'resource-folder-selection-v1';
         const RESOURCE_IMPORT_DELAY_MEMORY_KEY = 'resource-import-delay-seconds-v1';
+        const RESOURCE_QUICK_LINKS_MEMORY_KEY = 'resource-quick-links-v1';
+        const RESOURCE_QUICK_LINKS_LIMIT = 60;
         const MAIN_TAB_ROW_HINT_MEMORY_KEY = 'main-tab-row-hint-v1';
         const TOAST_DEFAULT_DURATION_MS = 3000;
         const SUBSCRIPTION_EPISODE_CACHE_TTL_MS = 1000 * 60 * 3;
@@ -3227,6 +3232,434 @@
             return `${size.toFixed(precision)} ${units[unitIndex]}`;
         }
 
+        function createResourceQuickLinkId() {
+            return `rql_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`;
+        }
+
+        function normalizeResourceQuickLinkNameInput(value) {
+            return String(value || '').replace(/\s+/g, ' ').trim();
+        }
+
+        function normalizeResourceQuickLinkUrlInput(value) {
+            const raw = String(value || '').trim();
+            if (!raw) return '';
+            const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`;
+            try {
+                const parsed = new URL(withScheme);
+                if (!/^https?:$/i.test(parsed.protocol)) return '';
+                return parsed.toString();
+            } catch (e) {
+                return '';
+            }
+        }
+
+        function buildResourceQuickLinkFingerprint(url) {
+            const raw = String(url || '').trim();
+            if (!raw) return '';
+            try {
+                const parsed = new URL(raw);
+                parsed.hash = '';
+                const protocol = String(parsed.protocol || '').toLowerCase();
+                const host = String(parsed.host || '').toLowerCase();
+                return `${protocol}//${host}${parsed.pathname}${parsed.search}`;
+            } catch (e) {
+                return raw.toLowerCase();
+            }
+        }
+
+        function suggestResourceQuickLinkName(url) {
+            const linkType = detectResourceLinkTypeByUrl(url);
+            if (linkType && linkType !== 'unknown' && linkType !== 'link') {
+                return getResourceLinkTypeLabel(linkType);
+            }
+            try {
+                const host = new URL(url).hostname.replace(/^www\./i, '');
+                return host || '网盘分享';
+            } catch (e) {
+                return '网盘分享';
+            }
+        }
+
+        function normalizeResourceQuickLinks(list = []) {
+            const sourceList = Array.isArray(list) ? list : [];
+            const output = [];
+            const seenFingerprint = new Set();
+            const seenId = new Set();
+            for (const rawItem of sourceList) {
+                if (!rawItem || typeof rawItem !== 'object' || Array.isArray(rawItem)) continue;
+                const normalizedUrl = normalizeResourceQuickLinkUrlInput(rawItem.url || rawItem.link_url || rawItem.href || '');
+                if (!normalizedUrl) continue;
+                const fingerprint = buildResourceQuickLinkFingerprint(normalizedUrl);
+                if (!fingerprint || seenFingerprint.has(fingerprint)) continue;
+                seenFingerprint.add(fingerprint);
+
+                let id = String(rawItem.id || '').trim();
+                if (!id || seenId.has(id)) id = createResourceQuickLinkId();
+                seenId.add(id);
+
+                const now = Date.now();
+                const createdAtRaw = Number(rawItem.created_at || now);
+                const updatedAtRaw = Number(rawItem.updated_at || createdAtRaw || now);
+                const usedAtRaw = Number(rawItem.last_used_at || 0);
+                output.push({
+                    id,
+                    name: normalizeResourceQuickLinkNameInput(rawItem.name || rawItem.title || '') || suggestResourceQuickLinkName(normalizedUrl),
+                    url: normalizedUrl,
+                    fingerprint,
+                    created_at: Number.isFinite(createdAtRaw) ? createdAtRaw : now,
+                    updated_at: Number.isFinite(updatedAtRaw) ? updatedAtRaw : now,
+                    last_used_at: Number.isFinite(usedAtRaw) ? usedAtRaw : 0,
+                });
+                if (output.length >= RESOURCE_QUICK_LINKS_LIMIT) break;
+            }
+            return output;
+        }
+
+        function serializeResourceQuickLinks(list = []) {
+            return (Array.isArray(list) ? list : []).map(item => ({
+                id: String(item?.id || '').trim(),
+                name: String(item?.name || '').trim(),
+                url: String(item?.url || '').trim(),
+                created_at: Number(item?.created_at || 0),
+                updated_at: Number(item?.updated_at || 0),
+                last_used_at: Number(item?.last_used_at || 0),
+            }));
+        }
+
+        function persistResourceQuickLinksToStorage() {
+            try {
+                localStorage.setItem(RESOURCE_QUICK_LINKS_MEMORY_KEY, JSON.stringify(serializeResourceQuickLinks(resourceQuickLinks)));
+            } catch (e) {}
+        }
+
+        function setResourceQuickLinks(nextLinks, { persist = true, render = true } = {}) {
+            resourceQuickLinks = normalizeResourceQuickLinks(nextLinks);
+            if (persist) persistResourceQuickLinksToStorage();
+            if (render) {
+                renderResourceQuickLinkStrip();
+                renderResourceQuickLinkList();
+            }
+        }
+
+        function loadResourceQuickLinksFromStorage() {
+            try {
+                const raw = localStorage.getItem(RESOURCE_QUICK_LINKS_MEMORY_KEY);
+                const parsed = raw ? JSON.parse(raw) : [];
+                setResourceQuickLinks(parsed, { persist: true, render: true });
+            } catch (e) {
+                setResourceQuickLinks([], { persist: false, render: true });
+            }
+            syncResourceQuickLinkFormState();
+        }
+
+        function getResourceQuickLinkById(linkId) {
+            const target = String(linkId || '').trim();
+            if (!target) return null;
+            return (resourceQuickLinks || []).find(item => String(item?.id || '').trim() === target) || null;
+        }
+
+        function resetResourceQuickLinkForm({ keepUrl = false } = {}) {
+            editingResourceQuickLinkId = '';
+            const nameInput = document.getElementById('resource-quick-link-name');
+            const urlInput = document.getElementById('resource-quick-link-url');
+            if (nameInput) nameInput.value = '';
+            if (urlInput && !keepUrl) urlInput.value = '';
+            syncResourceQuickLinkFormState();
+        }
+
+        function syncResourceQuickLinkFormState() {
+            const saveBtn = document.getElementById('resource-quick-link-save-btn');
+            const cancelBtn = document.getElementById('resource-quick-link-cancel-edit-btn');
+            const editing = !!String(editingResourceQuickLinkId || '').trim();
+            if (saveBtn) saveBtn.textContent = editing ? '保存修改' : '添加常用网盘链接';
+            if (cancelBtn) cancelBtn.classList.toggle('hidden', !editing);
+        }
+
+        function renderResourceQuickLinkStrip() {
+            const container = document.getElementById('resource-quick-link-strip');
+            if (!container) return;
+            const links = Array.isArray(resourceQuickLinks) ? resourceQuickLinks : [];
+            const hasLinks = links.length > 0;
+            const previewLimit = 8;
+            const preview = links.slice(0, previewLimit);
+            const overflow = Math.max(0, links.length - preview.length);
+            container.classList.remove('hidden');
+            container.innerHTML = `
+                <div class="resource-quick-link-strip-label">常用网盘链接</div>
+                <div class="resource-quick-link-strip-list">
+                    ${hasLinks
+                        ? preview.map(item => `
+                            <div class="resource-quick-link-chip-group">
+                                <button type="button" class="resource-quick-link-chip" data-resource-quick-link-action="search" data-resource-quick-link-id="${escapeHtml(item.id)}" title="${escapeHtml(item.url)}">${escapeHtml(item.name || '未命名')}</button>
+                                <button type="button" class="resource-quick-link-chip-open" data-resource-quick-link-action="open" data-resource-quick-link-id="${escapeHtml(item.id)}" title="跳转到原链接" aria-label="跳转到 ${escapeHtml(item.name || '网盘链接')}">↗</button>
+                            </div>
+                        `).join('')
+                        : '<span class="resource-quick-link-strip-empty">暂无快捷项</span>'}
+                    <button type="button" class="resource-quick-link-manage-btn" data-resource-quick-link-action="manage">${overflow > 0 ? `管理 +${overflow}` : '管理'}</button>
+                </div>
+            `;
+        }
+
+        function renderResourceQuickLinkList() {
+            const container = document.getElementById('resource-quick-link-list');
+            if (!container) return;
+            const links = Array.isArray(resourceQuickLinks) ? resourceQuickLinks : [];
+            if (!links.length) {
+                container.innerHTML = '<div class="resource-quick-link-list-empty">还没有常用网盘链接。<br>可先在搜索框粘贴分享链接，再点“读取搜索框”一键保存。</div>';
+                return;
+            }
+            container.innerHTML = links.map(item => {
+                const usedText = Number(item?.last_used_at || 0) > 0 ? formatTimeText(Number(item.last_used_at)) : '未使用';
+                return `
+                    <div class="resource-quick-link-item">
+                        <div class="resource-quick-link-item-main">
+                            <div class="resource-quick-link-item-name">${escapeHtml(item.name || '未命名链接')}</div>
+                            <div class="resource-quick-link-item-url">${escapeHtml(item.url || '')}</div>
+                            <div class="resource-quick-link-item-meta">最近使用：${escapeHtml(usedText)}</div>
+                        </div>
+                        <div class="resource-quick-link-item-actions">
+                            <button type="button" class="resource-quick-link-item-action resource-quick-link-item-action-primary" data-resource-quick-link-action="search" data-resource-quick-link-id="${escapeHtml(item.id)}">识别</button>
+                            <button type="button" class="resource-quick-link-item-action" data-resource-quick-link-action="open" data-resource-quick-link-id="${escapeHtml(item.id)}">跳转</button>
+                            <button type="button" class="resource-quick-link-item-action" data-resource-quick-link-action="copy" data-resource-quick-link-id="${escapeHtml(item.id)}">复制</button>
+                            <button type="button" class="resource-quick-link-item-action" data-resource-quick-link-action="edit" data-resource-quick-link-id="${escapeHtml(item.id)}">编辑</button>
+                            <button type="button" class="resource-quick-link-item-action resource-quick-link-item-action-danger" data-resource-quick-link-action="delete" data-resource-quick-link-id="${escapeHtml(item.id)}">删除</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function openResourceQuickLinkModal(prefillFromSearch = false) {
+            const shouldPrefill = prefillFromSearch === true || String(prefillFromSearch || '').trim() === 'true';
+            if (!shouldPrefill) resetResourceQuickLinkForm();
+            resourceQuickLinkModalOpen = true;
+            showLockedModal('resource-quick-link-modal');
+            renderResourceQuickLinkList();
+            syncResourceQuickLinkFormState();
+            if (shouldPrefill) {
+                editingResourceQuickLinkId = '';
+                syncResourceQuickLinkFormState();
+                fillResourceQuickLinkFormFromSearch({ silent: true });
+            }
+            requestAnimationFrame(() => {
+                const input = document.getElementById('resource-quick-link-name') || document.getElementById('resource-quick-link-url');
+                if (!input) return;
+                input.focus();
+                input.select?.();
+            });
+        }
+
+        function closeResourceQuickLinkModal() {
+            resourceQuickLinkModalOpen = false;
+            hideLockedModal('resource-quick-link-modal');
+            resetResourceQuickLinkForm();
+        }
+
+        function pickFirstHttpUrlFromText(text = '') {
+            const raw = String(text || '').trim();
+            if (!raw) return '';
+            const links = raw.match(/https?:\/\/[^\s<>'"]+/gi) || [];
+            if (links.length) return String(links[0] || '').replace(/[，。；、]+$/g, '');
+            const compact = raw.replace(/\s+/g, '');
+            if (/^[a-z0-9.-]+\.[a-z]{2,}(?:\/[^\s]*)?$/i.test(compact)) return compact;
+            return '';
+        }
+
+        function fillResourceQuickLinkFormFromSearch({ silent = false } = {}) {
+            const searchInput = document.getElementById('resource-search-input');
+            const nameInput = document.getElementById('resource-quick-link-name');
+            const urlInput = document.getElementById('resource-quick-link-url');
+            if (!nameInput || !urlInput) return false;
+
+            const keyword = String(searchInput?.value || '').trim();
+            if (!keyword) {
+                if (!silent) showToast('搜索框为空，请先粘贴网盘分享链接', { tone: 'warn', duration: 2400, placement: 'top-center' });
+                return false;
+            }
+            const candidate = pickFirstHttpUrlFromText(keyword) || keyword;
+            const normalizedUrl = normalizeResourceQuickLinkUrlInput(candidate);
+            if (!normalizedUrl) {
+                if (!silent) showToast('未识别到有效的 http/https 分享链接', { tone: 'warn', duration: 2600, placement: 'top-center' });
+                return false;
+            }
+            urlInput.value = normalizedUrl;
+            if (!normalizeResourceQuickLinkNameInput(nameInput.value)) {
+                nameInput.value = suggestResourceQuickLinkName(normalizedUrl);
+            }
+            if (!silent) showToast('已读取搜索框链接，可直接保存', { tone: 'info', duration: 2200, placement: 'top-center' });
+            return true;
+        }
+
+        function cancelEditResourceQuickLink() {
+            resetResourceQuickLinkForm();
+            const nameInput = document.getElementById('resource-quick-link-name');
+            if (nameInput) nameInput.focus();
+        }
+
+        function editResourceQuickLink(linkId) {
+            const item = getResourceQuickLinkById(linkId);
+            if (!item) return;
+            const nameInput = document.getElementById('resource-quick-link-name');
+            const urlInput = document.getElementById('resource-quick-link-url');
+            if (!nameInput || !urlInput) return;
+            editingResourceQuickLinkId = item.id;
+            nameInput.value = item.name || '';
+            urlInput.value = item.url || '';
+            syncResourceQuickLinkFormState();
+            nameInput.focus();
+            nameInput.select?.();
+        }
+
+        function touchResourceQuickLink(linkId) {
+            const target = String(linkId || '').trim();
+            if (!target) return;
+            const now = Date.now();
+            let changed = false;
+            const nextLinks = (resourceQuickLinks || []).map(item => {
+                if (String(item?.id || '').trim() !== target) return item;
+                changed = true;
+                return {
+                    ...item,
+                    last_used_at: now,
+                    updated_at: Math.max(Number(item?.updated_at || 0), now),
+                };
+            });
+            if (changed) setResourceQuickLinks(nextLinks, { persist: true, render: true });
+        }
+
+        async function useResourceQuickLinkForSearch(linkId, { closeModal = false } = {}) {
+            const item = getResourceQuickLinkById(linkId);
+            if (!item) return null;
+            const input = document.getElementById('resource-search-input');
+            if (!input) return null;
+            input.value = item.url || '';
+            syncResourceSearchClearButton();
+            touchResourceQuickLink(item.id);
+            if (closeModal) closeResourceQuickLinkModal();
+            return searchResources();
+        }
+
+        function openResourceQuickLinkExternal(linkId) {
+            const item = getResourceQuickLinkById(linkId);
+            if (!item || !item.url) return;
+            const opened = window.open(item.url, '_blank', 'noopener,noreferrer');
+            if (!opened) {
+                showToast('浏览器拦截了新窗口，请允许弹窗后重试', { tone: 'warn', duration: 2800, placement: 'top-center' });
+                return;
+            }
+            touchResourceQuickLink(item.id);
+        }
+
+        async function copyResourceQuickLink(linkId) {
+            const item = getResourceQuickLinkById(linkId);
+            if (!item || !item.url) return;
+            try {
+                if (!navigator.clipboard?.writeText) throw new Error('当前浏览器不支持剪贴板接口');
+                await navigator.clipboard.writeText(item.url);
+                touchResourceQuickLink(item.id);
+                showToast('链接已复制到剪贴板', { tone: 'success', duration: 2200, placement: 'top-center' });
+            } catch (e) {
+                window.prompt('复制失败，请手动复制以下链接：', item.url);
+            }
+        }
+
+        function saveResourceQuickLink() {
+            const nameInput = document.getElementById('resource-quick-link-name');
+            const urlInput = document.getElementById('resource-quick-link-url');
+            if (!nameInput || !urlInput) return;
+
+            const normalizedUrl = normalizeResourceQuickLinkUrlInput(urlInput.value);
+            if (!normalizedUrl) {
+                showToast('请填写有效的 http/https 网盘链接', { tone: 'warn', duration: 2600, placement: 'top-center' });
+                urlInput.focus();
+                urlInput.select?.();
+                return;
+            }
+            const now = Date.now();
+            const normalizedName = normalizeResourceQuickLinkNameInput(nameInput.value) || suggestResourceQuickLinkName(normalizedUrl);
+            const normalizedFingerprint = buildResourceQuickLinkFingerprint(normalizedUrl);
+            const editingId = String(editingResourceQuickLinkId || '').trim();
+
+            const duplicate = (resourceQuickLinks || []).find(item =>
+                String(item?.fingerprint || '') === normalizedFingerprint
+                && String(item?.id || '').trim() !== editingId
+            );
+            if (duplicate) {
+                const mergedLinks = (resourceQuickLinks || []).map(item => {
+                    if (String(item?.id || '').trim() !== String(duplicate?.id || '').trim()) return item;
+                    return {
+                        ...item,
+                        name: normalizedName,
+                        url: normalizedUrl,
+                        fingerprint: normalizedFingerprint,
+                        updated_at: now,
+                    };
+                });
+                setResourceQuickLinks(mergedLinks, { persist: true, render: true });
+                editingResourceQuickLinkId = String(duplicate?.id || '').trim();
+                syncResourceQuickLinkFormState();
+                nameInput.value = normalizedName;
+                urlInput.value = normalizedUrl;
+                showToast('该链接已存在，已更新名称和地址', { tone: 'info', duration: 2400, placement: 'top-center' });
+                return;
+            }
+
+            if (editingId) {
+                let updated = false;
+                const nextLinks = (resourceQuickLinks || []).map(item => {
+                    if (String(item?.id || '').trim() !== editingId) return item;
+                    updated = true;
+                    return {
+                        ...item,
+                        name: normalizedName,
+                        url: normalizedUrl,
+                        fingerprint: normalizedFingerprint,
+                        updated_at: now,
+                    };
+                });
+                if (updated) {
+                    setResourceQuickLinks(nextLinks, { persist: true, render: true });
+                    showToast('常用网盘链接已更新', { tone: 'success', duration: 2200, placement: 'top-center' });
+                    resetResourceQuickLinkForm();
+                    urlInput.value = normalizedUrl;
+                    nameInput.focus();
+                    return;
+                }
+            }
+
+            const overflow = Math.max(0, (resourceQuickLinks || []).length + 1 - RESOURCE_QUICK_LINKS_LIMIT);
+            const newItem = {
+                id: createResourceQuickLinkId(),
+                name: normalizedName,
+                url: normalizedUrl,
+                fingerprint: normalizedFingerprint,
+                created_at: now,
+                updated_at: now,
+                last_used_at: 0,
+            };
+            setResourceQuickLinks([newItem, ...(resourceQuickLinks || [])], { persist: true, render: true });
+            resetResourceQuickLinkForm();
+            urlInput.value = normalizedUrl;
+            nameInput.focus();
+            showToast(
+                overflow > 0
+                    ? `已添加常用链接，超出的最旧 ${overflow} 条已自动移除`
+                    : '常用网盘链接已添加',
+                { tone: 'success', duration: 2400, placement: 'top-center' }
+            );
+        }
+
+        function deleteResourceQuickLink(linkId) {
+            const item = getResourceQuickLinkById(linkId);
+            if (!item) return;
+            if (!confirm(`确认删除常用链接「${item.name || '未命名链接'}」吗？`)) return;
+            const targetId = String(item.id || '').trim();
+            const nextLinks = (resourceQuickLinks || []).filter(link => String(link?.id || '').trim() !== targetId);
+            setResourceQuickLinks(nextLinks, { persist: true, render: true });
+            if (String(editingResourceQuickLinkId || '').trim() === targetId) resetResourceQuickLinkForm();
+            showToast('常用链接已删除', { tone: 'success', duration: 2200, placement: 'top-center' });
+        }
+
         function formatShareModifiedAt(value) {
             const raw = String(value || '').trim();
             if (!raw) return '--';
@@ -5903,6 +6336,20 @@
             renderResourceShareBrowser();
         }
 
+        function autoSelectCurrentResourceShareEntries({ clearEntryId = '' } = {}) {
+            const normalizedClearId = String(clearEntryId || '').trim();
+            if (normalizedClearId) delete resourceShareSelected[normalizedClearId];
+            const entries = getCurrentResourceShareEntries();
+            if (!entries.length) {
+                syncResourceSharetitleFromSelection();
+                renderResourceShareBrowser();
+                return;
+            }
+            entries.forEach(entry => applyResourceShareSelection(entry, true, { renderAfter: false }));
+            syncResourceSharetitleFromSelection();
+            renderResourceShareBrowser();
+        }
+
         async function reloadResourceShareRoot() {
             if (!selectedResourceItem || !isCurrentResource115Share()) return;
             await loadResourceShareBranch(selectedResourceId, '0', { resetSelection: true });
@@ -6039,15 +6486,19 @@
             if (!selectedResourceItem || !isCurrentResource115Share()) return;
             const entry = resourceShareEntryIndex[String(entryId || '').trim()];
             if (!entry || !entry.is_dir) return;
+            const normalizedEntryId = String(entry.id || '').trim();
+            if (normalizedEntryId) delete resourceShareSelected[normalizedEntryId];
             const branchId = String(entry.cid || entry.id || '').trim();
             if (!branchId) return;
             resourceShareCurrentCid = branchId;
             resourceShareTrail = resourceShareTrail.concat([{ cid: branchId, name: String(entry.name || '未命名目录') }]);
             if (!Object.prototype.hasOwnProperty.call(resourceShareEntriesByParent, branchId)) {
                 await loadResourceShareBranch(selectedResourceId, branchId);
+                if (!Object.prototype.hasOwnProperty.call(resourceShareEntriesByParent, branchId)) return;
+                autoSelectCurrentResourceShareEntries({ clearEntryId: normalizedEntryId });
                 return;
             }
-            renderResourceShareBrowser();
+            autoSelectCurrentResourceShareEntries({ clearEntryId: normalizedEntryId });
         }
 
         async function openResourceShareTrail(index) {
@@ -6070,7 +6521,7 @@
                 const effectiveSelected = directSelected || !!coveredByAncestor;
                 const noteText = coveredByAncestor
                     ? `已由上级目录“${coveredByAncestor.name}”一并选择`
-                    : (normalized.is_dir ? '展开后可继续选择子项' : '');
+                    : '';
                 return `
                     <div class="resource-browser-row">
                         <div class="resource-browser-name-cell">
@@ -7340,6 +7791,56 @@
             }
             renderResourceBoard();
         });
+        document.getElementById('resource-quick-link-strip').addEventListener('click', async (e) => {
+            const btn = e.target.closest('[data-resource-quick-link-action]');
+            if (!btn) return;
+            const action = String(btn.dataset.resourceQuickLinkAction || '').trim();
+            const linkId = String(btn.dataset.resourceQuickLinkId || '').trim();
+            if (action === 'manage') {
+                openResourceQuickLinkModal(false);
+                return;
+            }
+            if (action === 'search' && linkId) {
+                await useResourceQuickLinkForSearch(linkId, { closeModal: false });
+                return;
+            }
+            if (action === 'open' && linkId) {
+                openResourceQuickLinkExternal(linkId);
+            }
+        });
+        document.getElementById('resource-quick-link-list').addEventListener('click', async (e) => {
+            const btn = e.target.closest('[data-resource-quick-link-action]');
+            if (!btn) return;
+            const action = String(btn.dataset.resourceQuickLinkAction || '').trim();
+            const linkId = String(btn.dataset.resourceQuickLinkId || '').trim();
+            if (!action || !linkId) return;
+            if (action === 'search') {
+                await useResourceQuickLinkForSearch(linkId, { closeModal: true });
+                return;
+            }
+            if (action === 'open') {
+                openResourceQuickLinkExternal(linkId);
+                return;
+            }
+            if (action === 'copy') {
+                await copyResourceQuickLink(linkId);
+                return;
+            }
+            if (action === 'edit') {
+                editResourceQuickLink(linkId);
+                return;
+            }
+            if (action === 'delete') {
+                deleteResourceQuickLink(linkId);
+            }
+        });
+        ['resource-quick-link-name', 'resource-quick-link-url'].forEach(id => {
+            document.getElementById(id).addEventListener('keydown', (e) => {
+                if (e.key !== 'Enter' || e.isComposing) return;
+                e.preventDefault();
+                saveResourceQuickLink();
+            });
+        });
         document.getElementById('resource-job-modal-toggle').addEventListener('click', () => {
             toggleResourceJobModal();
         });
@@ -7517,6 +8018,9 @@
         document.getElementById('resource-folder-modal').addEventListener('click', (e) => {
             if (e.target.id === 'resource-folder-modal') closeResourceFolderModal();
         });
+        document.getElementById('resource-quick-link-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'resource-quick-link-modal') closeResourceQuickLinkModal();
+        });
         document.getElementById('resource-folder-create-name').addEventListener('keydown', (e) => {
             if (e.key !== 'Enter') return;
             e.preventDefault();
@@ -7607,6 +8111,10 @@
                 closeSubscriptionModal();
                 return;
             }
+            if (e.key === 'Escape' && resourceQuickLinkModalOpen) {
+                closeResourceQuickLinkModal();
+                return;
+            }
             if (e.key === 'Escape' && resourceSourceManagerOpen) {
                 closeResourceSourceManagerModal();
                 return;
@@ -7689,6 +8197,7 @@
             } catch (e) {}
         }
         applyThemeFromStorage();
+        loadResourceQuickLinksFromStorage();
         initMainTabRow();
         const initPromise = init();
         syncResourceBackTopButton();
