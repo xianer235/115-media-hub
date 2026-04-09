@@ -17,11 +17,8 @@ config/
 .cursor/
 .codex-ui-check/
 
-# preview runtime (keep scripts, ignore generated/runtime artifacts)
-preview-runtime/node_modules/
-preview-runtime/.npm-cache/
-preview-runtime/shots/
-preview-runtime/preview-runtime/
+# preview runtime (local validation only)
+preview-runtime/
 
 # macOS Finder metadata
 .DS_Store
