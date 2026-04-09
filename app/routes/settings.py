@@ -4,6 +4,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from ..core import *  # noqa: F401,F403
+from ..services.notify import send_notify_test_message
 from ..services.sign115 import refresh_sign115_status, run_sign115_job
 
 router = APIRouter()
@@ -49,6 +50,29 @@ async def test_tg_proxy(request: Request) -> JSONResponse:
     )
     try:
         result = await asyncio.to_thread(test_telegram_latency, cfg)
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
+    return JSONResponse(content=result)
+
+
+@router.post("/settings/notify/test")
+async def test_notify_push(request: Request) -> JSONResponse:
+    incoming = await request.json()
+    cfg = normalize_config(
+        {
+            **get_config(),
+            "notify_push_enabled": incoming.get("notify_push_enabled", False),
+            "notify_monitor_enabled": incoming.get("notify_monitor_enabled", False),
+            "notify_channel": incoming.get("notify_channel", "wecom_bot"),
+            "notify_wecom_webhook": incoming.get("notify_wecom_webhook", ""),
+            "notify_wecom_app_corp_id": incoming.get("notify_wecom_app_corp_id", ""),
+            "notify_wecom_app_agent_id": incoming.get("notify_wecom_app_agent_id", ""),
+            "notify_wecom_app_secret": incoming.get("notify_wecom_app_secret", ""),
+            "notify_wecom_app_touser": incoming.get("notify_wecom_app_touser", ""),
+        }
+    )
+    try:
+        result = await asyncio.to_thread(send_notify_test_message, cfg)
     except Exception as exc:
         return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
     return JSONResponse(content=result)

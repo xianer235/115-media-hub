@@ -392,7 +392,64 @@
                 </div>
 
                 <div class="group-card settings-section-card">
-                    <h3 class="group-title">8. 后台安全管理</h3>
+                    <h3 class="group-title">8. 通知推送（企业微信）</h3>
+                    <div class="space-y-4">
+                        <label class="flex items-center gap-3 cursor-pointer text-sm">
+                            <input type="checkbox" id="notify_push_enabled" class="ui-checkbox">
+                            启用订阅更新成功推送（仅推送成功）
+                        </label>
+                        <label class="flex items-center gap-3 cursor-pointer text-sm">
+                            <input type="checkbox" id="notify_monitor_enabled" class="ui-checkbox">
+                            启用文件夹监控生成成功推送（基于 `.strm` 路径/文件名匹配影视信息）
+                        </label>
+                        <label class="block">
+                            <span class="text-xs text-slate-500">通知渠道</span>
+                            <select id="notify_channel" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" onchange="syncNotifyChannelUI()">
+                                <option value="wecom_bot">企业微信群机器人（Webhook）</option>
+                                <option value="wecom_app">企业微信应用 API（发给个人成员）</option>
+                            </select>
+                        </label>
+                        <div id="notify-bot-fields" class="space-y-4">
+                            <label class="block">
+                                <span class="text-xs text-slate-500">群机器人 Webhook</span>
+                                <input id="notify_wecom_webhook" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...">
+                            </label>
+                        </div>
+                        <div id="notify-app-fields" class="space-y-4 hidden">
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">CorpID</span>
+                                    <input id="notify_wecom_app_corp_id" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="wwxxxxxxxxxxxxxxxx">
+                                </label>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">AgentID</span>
+                                    <input id="notify_wecom_app_agent_id" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="1000002">
+                                </label>
+                            </div>
+                            <label class="block">
+                                <span class="text-xs text-slate-500">AppSecret</span>
+                                <input id="notify_wecom_app_secret" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="企业微信自建应用 Secret">
+                            </label>
+                            <label class="block">
+                                <span class="text-xs text-slate-500">接收人 UserID（多个用 | 分隔）</span>
+                                <input id="notify_wecom_app_touser" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="zhangsan|lisi">
+                            </label>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-3">
+                            <button id="notify-test-btn" type="button" onclick="testNotifyPush()" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">发送测试消息</button>
+                            <span class="text-[11px] text-slate-500">测试消息可单独发送，不依赖“启用”开关。</span>
+                        </div>
+                        <div id="notify-test-status" class="hidden tg-proxy-status rounded-xl border px-4 py-3 text-sm leading-6"></div>
+                        <div class="text-xs text-slate-500 leading-6">
+                            推送范围：订阅成功入库 + 文件夹监控成功生成 `.strm`（均可独立开关）。
+                            <br>失败、无更新、过滤跳过等情况保留在 Web 日志查看。
+                            <br>去重规则：任务名 + 集数 + 保存路径，避免同一更新重复提醒。
+                        </div>
+                    </div>
+                </div>
+
+                <div class="group-card settings-section-card">
+                    <h3 class="group-title">9. 后台安全管理</h3>
                     <div class="space-y-4">
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <label class="block"><span class="text-xs text-slate-500">管理账号</span><input id="username" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1"></label>

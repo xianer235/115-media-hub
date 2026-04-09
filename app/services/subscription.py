@@ -4,6 +4,7 @@ import unicodedata
 
 from ..core import *  # noqa: F401,F403
 from .monitor import queue_monitor_job
+from .notify import push_subscription_success_notification
 from .resource import cancel_resource_job, run_resource_job
 
 
@@ -4151,6 +4152,35 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             },
         )
         await write_subscription_log(detail, "success")
+        try:
+            notify_result = await push_subscription_success_notification(
+                cfg=cfg,
+                task=task,
+                item=item,
+                effective_savepath=effective_savepath,
+                job_id=job_id,
+                successful_count=successful_count,
+                imported_episode_list=imported_episode_list,
+                baseline_last_episode=baseline_last_episode,
+                next_episode=next_episode,
+            )
+            if bool(notify_result.get("pushed", False)):
+                channel = str(notify_result.get("channel", "") or "").strip().lower()
+                channel_label = "企业微信应用 API" if channel == "wecom_app" else "企业微信群机器人"
+                notified_episodes = (
+                    notify_result.get("episodes", [])
+                    if isinstance(notify_result.get("episodes"), list)
+                    else []
+                )
+                if notified_episodes:
+                    await write_subscription_log(
+                        f"更新通知已推送到{channel_label}（新增 {len(notified_episodes)} 集）",
+                        "info",
+                    )
+                else:
+                    await write_subscription_log(f"更新通知已推送到{channel_label}", "info")
+        except Exception as notify_exc:
+            await write_subscription_log(f"订阅成功通知推送失败：{notify_exc}", "warn")
         update_subscription_summary("执行成功", detail)
     except asyncio.CancelledError:
         detail = "任务已中断"

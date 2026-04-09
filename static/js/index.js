@@ -98,6 +98,7 @@
         let resourceSubmitBusy = false;
         let resourceJobFilter = 'all';
         let tgProxyTestState = { loading: false, ok: null, message: '', latency_ms: 0, mode: '', proxy_url: '', target_url: '' };
+        let notifyTestState = { loading: false, ok: null, message: '', channel: '', target_desc: '', webhook_host: '', sent_at: '' };
         let resourceBoardHintText = '';
         let resourceTgHealthState = { visible: false, tone: 'loading', title: '', meta: '', note: '' };
         let resourceTgLastLatencyMs = 0;
@@ -986,6 +987,33 @@
             };
         }
 
+        function getCurrentNotifyConfig() {
+            return {
+                notify_push_enabled: document.getElementById('notify_push_enabled').checked,
+                notify_monitor_enabled: document.getElementById('notify_monitor_enabled').checked,
+                notify_channel: document.getElementById('notify_channel').value.trim(),
+                notify_wecom_webhook: document.getElementById('notify_wecom_webhook').value.trim(),
+                notify_wecom_app_corp_id: document.getElementById('notify_wecom_app_corp_id').value.trim(),
+                notify_wecom_app_agent_id: document.getElementById('notify_wecom_app_agent_id').value.trim(),
+                notify_wecom_app_secret: document.getElementById('notify_wecom_app_secret').value.trim(),
+                notify_wecom_app_touser: document.getElementById('notify_wecom_app_touser').value.trim()
+            };
+        }
+
+        function notifyChannelLabel(value) {
+            const key = String(value || '').trim().toLowerCase();
+            if (key === 'wecom_app') return '企业微信应用 API';
+            return '企业微信群机器人';
+        }
+
+        function syncNotifyChannelUI() {
+            const channel = String(document.getElementById('notify_channel')?.value || 'wecom_bot').trim().toLowerCase();
+            const botFields = document.getElementById('notify-bot-fields');
+            const appFields = document.getElementById('notify-app-fields');
+            if (botFields) botFields.classList.toggle('hidden', channel !== 'wecom_bot');
+            if (appFields) appFields.classList.toggle('hidden', channel === 'wecom_bot');
+        }
+
         function getCurrentTgChannelThreads() {
             const inputRaw = parseInt(document.getElementById('tg_channel_threads')?.value || '', 10);
             const stateRaw = parseInt(resourceState?.search_meta?.thread_limit || '', 10);
@@ -1123,6 +1151,87 @@
                 };
             }
             renderTgProxyTestStatus();
+        }
+
+        function renderNotifyTestStatus() {
+            const btn = document.getElementById('notify-test-btn');
+            const statusEl = document.getElementById('notify-test-status');
+            if (btn) {
+                btn.disabled = notifyTestState.loading;
+                btn.classList.toggle('btn-disabled', notifyTestState.loading);
+                btn.textContent = notifyTestState.loading ? '发送中...' : '发送测试消息';
+            }
+            if (!statusEl) return;
+
+            if (notifyTestState.loading) {
+                statusEl.className = 'tg-proxy-status tg-proxy-status--loading';
+                statusEl.innerHTML = `
+                    <div class="tg-proxy-status-title">正在发送测试消息</div>
+                    <div class="tg-proxy-status-meta">请稍候，正在请求企业微信通知接口...</div>
+                `;
+                statusEl.classList.remove('hidden');
+                return;
+            }
+
+            if (notifyTestState.ok === true) {
+                const channelLabel = notifyChannelLabel(notifyTestState.channel || document.getElementById('notify_channel')?.value || '');
+                statusEl.className = 'tg-proxy-status tg-proxy-status--success';
+                statusEl.innerHTML = `
+                    <div class="tg-proxy-status-title">测试消息发送成功</div>
+                    <div class="tg-proxy-status-meta">${escapeHtml(notifyTestState.message || '通知配置可用')}</div>
+                    <div class="tg-proxy-status-note">渠道：${escapeHtml(channelLabel)}｜目标：${escapeHtml(notifyTestState.target_desc || notifyTestState.webhook_host || '--')}</div>
+                `;
+                statusEl.classList.remove('hidden');
+                return;
+            }
+
+            if (notifyTestState.ok === false) {
+                statusEl.className = 'tg-proxy-status tg-proxy-status--error';
+                statusEl.innerHTML = `
+                    <div class="tg-proxy-status-title">测试消息发送失败</div>
+                    <div class="tg-proxy-status-meta">${escapeHtml(notifyTestState.message || '未知错误')}</div>
+                `;
+                statusEl.classList.remove('hidden');
+                return;
+            }
+
+            statusEl.classList.add('hidden');
+            statusEl.textContent = '';
+        }
+
+        async function testNotifyPush() {
+            if (notifyTestState.loading) return;
+            notifyTestState = { loading: true, ok: null, message: '', channel: '', target_desc: '', webhook_host: '', sent_at: '' };
+            renderNotifyTestStatus();
+            try {
+                const res = await fetch('/settings/notify/test', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(getCurrentNotifyConfig())
+                });
+                const data = await res.json();
+                if (!res.ok || !data.ok) throw new Error(data.msg || '测试消息发送失败');
+                notifyTestState = {
+                    loading: false,
+                    ok: true,
+                    message: String(data.msg || '测试消息已发送'),
+                    channel: String(data.channel || ''),
+                    target_desc: String(data.target_desc || ''),
+                    webhook_host: String(data.webhook_host || ''),
+                    sent_at: String(data.sent_at || '')
+                };
+            } catch (e) {
+                notifyTestState = {
+                    loading: false,
+                    ok: false,
+                    message: e instanceof Error ? e.message : String(e || '测试消息发送失败'),
+                    channel: '',
+                    target_desc: '',
+                    webhook_host: '',
+                    sent_at: ''
+                };
+            }
+            renderNotifyTestStatus();
         }
 
         function setResourceTgHealthState(nextState = {}) {
@@ -1313,6 +1422,12 @@
                 'tg_proxy_protocol',
                 'tg_proxy_host',
                 'tg_proxy_port',
+                'notify_channel',
+                'notify_wecom_webhook',
+                'notify_wecom_app_corp_id',
+                'notify_wecom_app_agent_id',
+                'notify_wecom_app_secret',
+                'notify_wecom_app_touser',
                 'tmdb_api_key',
                 'tmdb_language',
                 'tmdb_region',
@@ -1333,6 +1448,8 @@
             cfg.sync_clean = document.getElementById('sync_clean').checked;
             cfg.sign115_enabled = document.getElementById('sign115_enabled').checked;
             cfg.tg_proxy_enabled = document.getElementById('tg_proxy_enabled').checked;
+            cfg.notify_push_enabled = document.getElementById('notify_push_enabled').checked;
+            cfg.notify_monitor_enabled = document.getElementById('notify_monitor_enabled').checked;
             cfg.tmdb_enabled = document.getElementById('tmdb_enabled').checked;
             const rawTmdbCacheTtl = parseInt(document.getElementById('tmdb_cache_ttl_hours')?.value || '', 10);
             cfg.tmdb_cache_ttl_hours = Math.min(720, Math.max(1, Number.isFinite(rawTmdbCacheTtl) ? rawTmdbCacheTtl : 24));
@@ -6407,6 +6524,23 @@
             renderResourceShareBrowser();
         }
 
+        function narrowResourceShareSelectionToBranch(branchId) {
+            const normalizedBranchId = String(branchId || '').trim();
+            if (!normalizedBranchId) return;
+            Object.keys(resourceShareSelected || {}).forEach(selectedId => {
+                const selectedEntry = buildResourceShareSelectableEntry(resourceShareSelected[selectedId] || {});
+                const currentId = String(selectedEntry.id || selectedId || '').trim();
+                if (!currentId) {
+                    delete resourceShareSelected[selectedId];
+                    return;
+                }
+                const keepInBranch = currentId === normalizedBranchId || isResourceShareDescendantOf(selectedEntry, normalizedBranchId);
+                if (!keepInBranch) {
+                    delete resourceShareSelected[currentId];
+                }
+            });
+        }
+
         async function reloadResourceShareRoot() {
             if (!selectedResourceItem || !isCurrentResource115Share()) return;
             await loadResourceShareBranch(selectedResourceId, '0', { resetSelection: true });
@@ -6544,7 +6678,11 @@
             const entry = resourceShareEntryIndex[String(entryId || '').trim()];
             if (!entry || !entry.is_dir) return;
             const normalizedEntryId = String(entry.id || '').trim();
-            if (normalizedEntryId) delete resourceShareSelected[normalizedEntryId];
+            if (normalizedEntryId) {
+                // 进入子目录后，仅保留该子树内的选择，避免误带上级目录文件一起转存。
+                narrowResourceShareSelectionToBranch(normalizedEntryId);
+                delete resourceShareSelected[normalizedEntryId];
+            }
             const branchId = String(entry.cid || entry.id || '').trim();
             if (!branchId) return;
             resourceShareCurrentCid = branchId;
@@ -8001,7 +8139,9 @@
                     enabled: !!cfg.sign115_enabled,
                     cron_time: String(cfg.sign115_cron_time || '09:00')
                 });
+                syncNotifyChannelUI();
                 renderTgProxyTestStatus();
+                renderNotifyTestStatus();
                 resetMonitorForm();
                 resetSubscriptionForm();
                 resetResourceSourceForm();

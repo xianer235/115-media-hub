@@ -247,6 +247,14 @@ def default_config() -> Dict[str, Any]:
         "tg_proxy_protocol": "http",
         "tg_proxy_host": "",
         "tg_proxy_port": "",
+        "notify_push_enabled": False,
+        "notify_monitor_enabled": False,
+        "notify_channel": "wecom_bot",
+        "notify_wecom_webhook": "",
+        "notify_wecom_app_corp_id": "",
+        "notify_wecom_app_agent_id": "",
+        "notify_wecom_app_secret": "",
+        "notify_wecom_app_touser": "",
         "tg_channel_threads": TG_CHANNEL_THREADS_DEFAULT,
         "tmdb_enabled": False,
         "tmdb_api_key": "",
@@ -862,6 +870,22 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         merged["tg_proxy_host"] = ""
     if "tg_proxy_port" not in merged:
         merged["tg_proxy_port"] = ""
+    if "notify_push_enabled" not in merged:
+        merged["notify_push_enabled"] = False
+    if "notify_monitor_enabled" not in merged:
+        merged["notify_monitor_enabled"] = False
+    if "notify_channel" not in merged:
+        merged["notify_channel"] = "wecom_bot"
+    if "notify_wecom_webhook" not in merged:
+        merged["notify_wecom_webhook"] = ""
+    if "notify_wecom_app_corp_id" not in merged:
+        merged["notify_wecom_app_corp_id"] = ""
+    if "notify_wecom_app_agent_id" not in merged:
+        merged["notify_wecom_app_agent_id"] = ""
+    if "notify_wecom_app_secret" not in merged:
+        merged["notify_wecom_app_secret"] = ""
+    if "notify_wecom_app_touser" not in merged:
+        merged["notify_wecom_app_touser"] = ""
     if "tg_channel_threads" not in merged:
         merged["tg_channel_threads"] = TG_CHANNEL_THREADS_DEFAULT
     if "tmdb_enabled" not in merged:
@@ -944,6 +968,15 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         merged["tg_proxy_protocol"] = "http"
     merged["tg_proxy_host"] = str(merged.get("tg_proxy_host", "")).strip()
     merged["tg_proxy_port"] = str(merged.get("tg_proxy_port", "")).strip()
+    merged["notify_push_enabled"] = bool(merged.get("notify_push_enabled", False))
+    merged["notify_monitor_enabled"] = bool(merged.get("notify_monitor_enabled", False))
+    notify_channel = str(merged.get("notify_channel", "wecom_bot") or "wecom_bot").strip().lower()
+    merged["notify_channel"] = notify_channel if notify_channel in ("wecom_bot", "wecom_app") else "wecom_bot"
+    merged["notify_wecom_webhook"] = str(merged.get("notify_wecom_webhook", "")).strip()
+    merged["notify_wecom_app_corp_id"] = str(merged.get("notify_wecom_app_corp_id", "")).strip()
+    merged["notify_wecom_app_agent_id"] = str(merged.get("notify_wecom_app_agent_id", "")).strip()
+    merged["notify_wecom_app_secret"] = str(merged.get("notify_wecom_app_secret", "")).strip()
+    merged["notify_wecom_app_touser"] = str(merged.get("notify_wecom_app_touser", "")).strip()
     merged["tmdb_enabled"] = bool(merged.get("tmdb_enabled", False))
     merged["tmdb_api_key"] = str(merged.get("tmdb_api_key", "")).strip()
     tmdb_lang = str(merged.get("tmdb_language", "zh-CN") or "zh-CN").strip()
@@ -1185,6 +1218,19 @@ def ensure_db() -> None:
         )
         """
     )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS notification_dedupe (
+            dedupe_key TEXT PRIMARY KEY,
+            scene TEXT NOT NULL DEFAULT '',
+            task_name TEXT NOT NULL DEFAULT '',
+            episode INTEGER NOT NULL DEFAULT 0,
+            savepath TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT '',
+            expires_at TEXT NOT NULL DEFAULT ''
+        )
+        """
+    )
     cursor.execute("PRAGMA table_info(resource_jobs)")
     job_columns = {str(row[1]) for row in cursor.fetchall()}
     if "extra_json" not in job_columns:
@@ -1206,6 +1252,8 @@ def ensure_db() -> None:
     )
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_share_entries_cache_expires_at ON share_entries_cache(expires_at)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_share_entries_cache_share_cid ON share_entries_cache(share_code, cid)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_notification_dedupe_expires_at ON notification_dedupe(expires_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_notification_dedupe_scene ON notification_dedupe(scene, task_name)")
     cursor.execute(
         """
         SELECT id, last_seen_at, extra_json

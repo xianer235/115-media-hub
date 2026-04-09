@@ -1,4 +1,5 @@
 from ..core import *  # noqa: F401,F403
+from .notify import push_monitor_success_notification
 
 def write_strm_file(target_file: str, url: str) -> bool:
     old_content = None
@@ -89,6 +90,7 @@ async def run_monitor_task(
         "deleted_dirs": 0,
         "success_dirs": 0,
     }
+    generated_strm_paths: List[str] = []
 
     try:
         await write_monitor_task_header(task, trigger, payload)
@@ -256,6 +258,9 @@ async def run_monitor_task(
                 changed = await asyncio.to_thread(write_strm_file, target_file, strm_url)
                 if changed:
                     stats["generated"] += 1
+                    generated_rel_path = normalize_relative_path(item_local_rel + ".strm")
+                    if generated_rel_path:
+                        generated_strm_paths.append(generated_rel_path)
                     await write_monitor_log(f"生成: {target_file}", "success")
                 else:
                     stats["skipped"] += 1
@@ -355,6 +360,25 @@ async def run_monitor_task(
 
         await write_monitor_section("执行结果")
         await write_monitor_task_summary(stats)
+        try:
+            notify_result = await push_monitor_success_notification(
+                cfg=cfg,
+                task=task,
+                trigger=trigger,
+                stats=stats,
+                generated_strm_paths=generated_strm_paths,
+            )
+            if notify_result.get("pushed"):
+                await write_monitor_log(
+                    "通知推送成功: 生成 {generated} 条，匹配 {matched} 条，未识别 {unmatched} 条".format(
+                        generated=max(0, int(notify_result.get("generated", 0) or 0)),
+                        matched=max(0, int(notify_result.get("matched", 0) or 0)),
+                        unmatched=max(0, int(notify_result.get("unmatched", 0) or 0)),
+                    ),
+                    "success",
+                )
+        except Exception as notify_exc:
+            await write_monitor_log(f"通知推送失败: {notify_exc}", "warn")
         await write_monitor_task_footer(task_name, "执行成功")
         update_monitor_summary("任务完成", f"{task_name} 执行结束")
     except asyncio.CancelledError:

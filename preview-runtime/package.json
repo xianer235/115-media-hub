@@ -1,0 +1,25 @@
+{
+  "name": "preview-runtime",
+  "version": "1.0.0",
+  "description": "UI preview and audit runtime for 115 Media Hub",
+  "scripts": {
+    "preview:quick-link": "node capture-resource-quick-link.mjs",
+    "preview:theme": "node theme-audit.mjs",
+    "preview:modals": "node capture-modals.mjs",
+    "preview:contrast": "node contrast-audit.mjs",
+    "preview:readability": "node audit-readability.mjs",
+    "preview:mermaid": "node render-mermaid.mjs"
+  },
+  "keywords": [
+    "preview",
+    "playwright",
+    "ui-audit"
+  ],
+  "author": "115 Media Hub",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "mermaid": "^11.14.0",
+    "playwright": "^1.59.1"
+  }
+}
