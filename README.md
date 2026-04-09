@@ -11,15 +11,17 @@
 - 文件夹监控任务支持“生成成功”通知，按 `.strm` 路径/文件名提取影视信息并推送识别摘要。
 - 优化 115 分享目录选择行为，进入子目录时自动收敛已选范围，避免误带上级目录文件。
 
-## 这项目能做什么
+## 这项目能做什么（按模块）
 
 | 模块 | 作用 |
 | --- | --- |
-| 资源中心 | 同步 TG 公开频道资源，或手动粘贴 magnet / 网盘分享链接入库，并直接提交到 115 离线下载 |
-| 影视订阅任务 | 按周期搜索候选资源，自动创建导入任务，支持电影和剧集追更 |
-| 文件夹监控任务 | 扫描 AList/OpenList 目录变化，支持手动、定时、Webhook 触发 |
-| 目录树任务 | 基于 115 目录树批量生成 `.strm` 文件，适合大库初始化和低频更新 |
+| 资源中心 | 同步 TG 公开频道、手动预览/导入资源文本，支持 magnet 与 115 分享链接入库并提交导入任务 |
+| 影视订阅任务 | 电影/剧集自动匹配资源并入库，支持周期时段调度、评分阈值、质量偏好、TMDB 绑定与追更状态 |
+| 文件夹监控任务 | 扫描 AList/OpenList 目录变化，支持手动、定时、Webhook 触发，并可按 savepath/sharetitle 局部刷新 |
+| 目录树任务 | 基于 115 目录树批量生成 `.strm` 文件，支持多源 URL、前缀映射、排除层级、哈希跳过与同步清理 |
 | 企业微信通知推送 | 可对订阅成功和监控生成成功事件推送提醒，支持机器人和应用两种通道 |
+| 115 每日签到 | 支持手动签到与每日定时签到，并在页面顶部展示签到状态 |
+| 实时状态总线 | 前端通过 SSE (`/events`) 实时接收任务进度、日志和运行状态更新 |
 | Web 管理后台 | 集中管理配置、任务、日志、版本提示，支持桌面和移动端 |
 
 ## 适合这些场景
@@ -37,6 +39,43 @@
 | 已有固定目录，想持续补新内容 | `文件夹监控任务` |
 | 想按影片/剧集名称自动找资源 | `影视订阅任务` |
 | 想把转存、离线、刷新串起来 | `资源中心 + Webhook + 文件夹监控任务` |
+
+## 功能检查结果（与当前代码对齐）
+
+### 资源中心
+
+- 支持 TG 频道订阅、同步、分页加载与关键词搜索，频道支持批量启停和 JSON 导入导出。
+- 支持资源文本“预览解析”和“正式入库”两步，识别 magnet、115 分享链接等常见格式。
+- 导入任务支持 `magnet` 和 `115share` 两类链路，并内置同资源+路径去重，避免重复提交。
+- 支持浏览 115 网盘目录、创建目录、预览分享链接目录树，并可选择分享子目录后再转存。
+- 导入任务支持刷新、取消、重试、清理已完成/失败记录。
+
+### 影视订阅任务
+
+- 支持电影与剧集两类任务，支持多别名、年份、最小匹配分、质量偏好（清晰度优先策略）。
+- 调度模型为“周几 + 时间窗口 + 窗口内间隔分钟”，可按任务独立启停。
+- 支持 TMDB 搜索与绑定，自动带回别名、年份、总季/总集、分季集数映射。
+- 支持固定分享链接导入与子目录 CID 锚定；支持集数视图与任务进度重建。
+
+### 文件夹监控任务
+
+- 支持手动运行、按分钟定时运行、Webhook 触发运行。
+- Webhook 同时支持“普通目录刷新”与“磁力直导入”两种模式。
+- 签名支持 `X-Webhook-Token` 或 `X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign`（HMAC-SHA256）。
+- 支持任务取消、队列清理、日志清空，以及运行日志中的步骤化状态反馈。
+
+### 目录树任务
+
+- 支持联网同步、本地调试解析、强制全量重刷三种启动方式。
+- 支持多源目录树 URL、父目录前缀映射、排除层级、增量/全量写入模式。
+- 支持哈希跳过与同步清理（删除本地已失效 `.strm`）。
+
+### 参数与系统能力
+
+- 支持 TG/TMDB 代理配置和延迟测试。
+- 支持 115 每日签到（手动+定时）。
+- 支持企业微信通知测试与运行时推送（订阅成功、监控成功）。
+- 支持版本检查、关于页更新提示、SSE 实时状态推送。
 
 ## 快速开始
 
@@ -88,7 +127,8 @@ docker compose up -d
 5. 如果要用资源中心提交 115 离线任务，再配置 `115 Cookie`
 6. 如果要提升影视订阅识别准确率，再启用 `TMDB API Key`
 7. 如果服务器访问 TG / TMDB 不稳定，再补充代理设置（同一套代理配置会同时用于 TG 与 TMDB）
-8. 如果要在任务成功后收到提醒，再配置「通知推送（企业微信）」并发送测试消息
+8. 如果要自动签到 115，再开启 `115 每日签到` 并设置签到时间
+9. 如果要在任务成功后收到提醒，再配置「通知推送（企业微信）」并发送测试消息
 
 ## 推荐使用流程
 
@@ -158,6 +198,47 @@ POST /webhook/{任务名}
 - 方式二：签名头 `X-Webhook-Ts`、`X-Webhook-Nonce`、`X-Webhook-Sign`
 - 签名基串为 `{ts}.{nonce}.{body}`，算法为 `HMAC-SHA256`
 
+## 接口速查（常用）
+
+页面与会话：
+
+- `GET /login`：登录页
+- `POST /login`：登录
+- `GET /logout`：退出
+- `GET /events`：SSE 状态流
+
+配置与系统：
+
+- `GET /get_settings` / `POST /save_settings`
+- `GET /version`：版本检查状态
+- `POST /settings/tg_proxy/test`：TG 代理延迟测试
+- `POST /settings/notify/test`：企业微信通知测试
+- `GET /settings/115/sign/status` / `POST /settings/115/sign/run`
+
+目录树：
+
+- `POST /start`：启动目录树任务
+- `GET /logs`：目录树状态与日志
+
+资源中心：
+
+- `GET /resource/state`
+- `POST /resource/channels/sync`
+- `POST /resource/items/preview_text`
+- `POST /resource/items/import_text`
+- `POST /resource/jobs/create`
+- `POST /resource/jobs/refresh|cancel|retry|clear|clear_completed`
+- `GET /resource/115/folders`
+- `GET /resource/115/share_entries`
+
+订阅与监控：
+
+- `GET /subscription/status`
+- `POST /subscription/save|start|stop|rebuild|delete`
+- `GET /monitor/status`
+- `POST /monitor/save|start|stop|delete`
+- `POST /webhook/{task_name}`
+
 ## 企业微信通知推送（0.1.6）
 
 配置入口：`参数配置 -> 通知推送（企业微信）`
@@ -213,13 +294,27 @@ uvicorn main:app --host 0.0.0.0 --port 18080 --reload
 - `RESOURCE_JOB_STALE_RECOVER_SECONDS`：导入任务卡死恢复阈值，默认 `300`
 - `VERSION_CACHE_TTL`：版本检查缓存秒数，默认 `21600`
 
+订阅去重与重试：
+
+- `SUBSCRIPTION_INVALID_LINK_CACHE_TTL_SECONDS`：订阅无效链接缓存时长，默认 `604800`
+- `SUBSCRIPTION_DUPLICATE_VERIFY_RETRIES`：115 重复状态复核重试次数，默认 `2`
+- `SUBSCRIPTION_DUPLICATE_VERIFY_DELAY_SECONDS`：重复复核重试间隔秒，默认 `3`
+
 TG 访问相关：
 
 - `TG_CHANNEL_THREADS_DEFAULT`：TG 同步默认线程数，默认 `6`
+- `TG_SEARCH_PAGE_LIMIT`：单频道搜索分页大小，默认 `20`
+- `TG_SEARCH_MAX_PAGES`：单频道搜索最大页数，默认 `6`
+- `TG_SEARCH_TOTAL_LIMIT`：全局搜索返回上限，默认 `60`
+- `TG_FETCH_RETRY_ATTEMPTS`：抓取重试次数，默认 `3`
+- `TG_FETCH_RETRY_DELAY_SECONDS`：抓取重试退避系数，默认 `0.8`
 
 TMDB 相关：
 
 - `TMDB_REQUEST_TIMEOUT_SECONDS`：TMDB 请求超时，默认 `20`
+- `TMDB_SEARCH_LIMIT`：TMDB 搜索结果截断上限，默认 `12`
+- `TMDB_API_BASE_URL`：TMDB API 基础地址
+- `TMDB_IMAGE_BASE_URL`：TMDB 图片基础地址
 
 通知推送相关：
 
@@ -227,11 +322,20 @@ TMDB 相关：
 
 频道缓存治理：
 
-- `RESOURCE_CHANNEL_CACHE_LIMIT`
-- `RESOURCE_CHANNEL_INACTIVE_CACHE_LIMIT`
-- `RESOURCE_CHANNEL_CACHE_TTL_DAYS`
-- `RESOURCE_CHANNEL_CACHE_GLOBAL_LIMIT`
-- `RESOURCE_CHANNEL_CACHE_ACTIVE_MIN_KEEP`
+- `RESOURCE_CHANNEL_TYPE_SAMPLE_SIZE`：频道类型识别采样条数
+- `RESOURCE_CHANNEL_TYPE_PAGE_LIMIT`：频道类型识别单页抓取条数
+- `RESOURCE_CHANNEL_TYPE_MAX_PAGES`：频道类型识别最大抓取页数
+- `RESOURCE_CHANNEL_CACHE_LIMIT`：单频道缓存保留上限
+- `RESOURCE_CHANNEL_INACTIVE_CACHE_LIMIT`：未启用频道保留条数
+- `RESOURCE_CHANNEL_CACHE_TTL_DAYS`：频道缓存按天过期
+- `RESOURCE_CHANNEL_CACHE_GLOBAL_LIMIT`：全局频道缓存硬上限
+- `RESOURCE_CHANNEL_CACHE_ACTIVE_MIN_KEEP`：活跃频道最小保留条数
+
+分享目录预览缓存：
+
+- `SHARE_SNAP_RATE_LIMIT_SECONDS`
+- `SHARE_SNAP_CACHE_TTL_SECONDS`
+- `SHARE_SNAP_CACHE_MAX_ROWS`
 
 ## 浏览器辅助脚本
 
@@ -255,6 +359,11 @@ TMDB 相关：
 - 历史变更见 `CHANGELOG.md`
 - 仓库地址：<https://github.com/xianer235/115-media-hub>
 
-## 说明
+## 免责声明
 
-本项目用于个人媒体库自动化管理，请结合你自己的使用环境和相关平台规则自行评估后使用。
+本项目仅用于个人技术研究与个人媒体库自动化管理，不提供任何破解、绕过授权或商业化分发能力，也不鼓励将其用于任何侵权或违规场景。使用本项目即表示你已知悉并同意以下事项：
+
+- 请仅在你有合法访问权限的数据、账号和资源范围内使用本项目，并遵守你所在地区法律法规及相关平台条款。
+- `115 Cookie`、`AList/OpenList Token`、Webhook 密钥等凭据由使用者自行妥善保管；因凭据泄露导致的账号风险、数据泄露或资产损失需自行承担。
+- 项目依赖第三方平台与网络环境（如 115、TG、TMDB、AList/OpenList 等），相关接口策略、可用性和返回结果可能随时变化，本项目不承诺持续可用或结果绝对准确。
+
