@@ -28,12 +28,12 @@
         #sign115-indicator.nav-action-btn {
             min-width: 0;
             width: auto;
-            max-width: 7.8rem;
+            max-width: 5.8rem;
             justify-content: center;
         }
         #sign115-indicator-text {
             display: inline-block;
-            max-width: 5.6rem;
+            max-width: 2.4rem;
             overflow: hidden;
             text-overflow: ellipsis;
         }
@@ -41,10 +41,10 @@
             min-width: 5.2rem;
         }
         #theme-toggle.nav-action-btn {
-            min-width: 6.2rem;
+            min-width: 4.8rem;
         }
         a.nav-action-btn[href="/logout"] {
-            min-width: 6.8rem;
+            min-width: 4.6rem;
             text-decoration: none;
         }
         #main-nav-actions .nav-action-btn:focus-visible {
@@ -3037,10 +3037,21 @@
                 display: inline-flex;
                 align-items: center;
             }
+            #sign115-indicator.nav-action-btn {
+                max-width: 4.9rem;
+            }
+            #sign115-indicator-text {
+                max-width: 2.4rem;
+            }
+            #theme-toggle.nav-action-btn {
+                min-width: 4.2rem;
+                padding-left: 0.5rem !important;
+                padding-right: 0.5rem !important;
+            }
             a.nav-action-btn[href="/logout"] {
-                min-width: 5.4rem;
-                padding-left: 0.6rem !important;
-                padding-right: 0.6rem !important;
+                min-width: 4.2rem;
+                padding-left: 0.5rem !important;
+                padding-right: 0.5rem !important;
             }
             #page-settings .text-xs,
             #page-monitor .text-xs,
@@ -3138,36 +3149,38 @@
             #page-resource .resource-shell { padding: 0.85rem; }
             .group-title { font-size: 1rem; }
             .nav-title { font-size: 1rem !important; }
-            #main-nav-actions { gap: 0.45rem !important; }
+            #main-nav-actions { gap: 0.3rem !important; }
             #main-nav-actions .nav-action-btn {
                 min-height: 36px;
                 font-size: 0.78rem !important;
-                padding: 0.45rem 0.65rem !important;
+                padding: 0.42rem 0.5rem !important;
                 border-radius: 0.75rem;
             }
             #sign115-indicator.nav-action-btn {
                 min-width: 0;
-                max-width: 7.6rem;
-                padding-left: 0.56rem !important;
-                padding-right: 0.56rem !important;
+                max-width: 4.8rem;
+                padding-left: 0.5rem !important;
+                padding-right: 0.5rem !important;
             }
             #sign115-indicator-text {
-                max-width: 4.9rem;
+                max-width: 2.4rem;
                 overflow: hidden;
                 text-overflow: ellipsis;
             }
             #resource-job-modal-toggle.nav-action-btn {
-                min-width: 3.8rem;
-                padding-left: 0.54rem !important;
-                padding-right: 0.54rem !important;
+                min-width: 3.4rem;
+                padding-left: 0.48rem !important;
+                padding-right: 0.48rem !important;
             }
             #theme-toggle.nav-action-btn {
-                min-width: 0;
+                min-width: 3.6rem;
+                padding-left: 0.48rem !important;
+                padding-right: 0.48rem !important;
             }
             a.nav-action-btn[href="/logout"] {
-                min-width: 5rem;
-                padding-left: 0.54rem !important;
-                padding-right: 0.54rem !important;
+                min-width: 3.8rem;
+                padding-left: 0.5rem !important;
+                padding-right: 0.5rem !important;
             }
             #main-nav-actions .nav-action-btn,
             .nav-title { white-space: nowrap; }

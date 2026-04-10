@@ -25,7 +25,7 @@
                         title="115 每日签到状态"
                     >
                         <span aria-hidden="true">🍁</span>
-                        <span id="sign115-indicator-text">签到状态</span>
+                        <span id="sign115-indicator-text">签到</span>
                     </button>
                     <button
                         id="resource-job-modal-toggle"
@@ -41,8 +41,8 @@
                         <span class="nav-task-center-text">任务</span>
                         <span id="resource-job-modal-badge" class="resource-job-trigger-badge hidden">0</span>
                     </button>
-                    <a href="/logout" class="nav-action-btn text-xs bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white px-3 py-1 rounded-lg border border-red-500/20 transition-all font-bold" aria-label="退出登录">退出登录</a>
-                    <button id="theme-toggle" class="nav-action-btn text-xs bg-slate-700/40 text-slate-100 px-2 py-1 rounded-lg border border-slate-500/40 hover:bg-slate-600 transition-all" onclick="toggleTheme()" aria-label="切换夜间/日间模式" title="切换夜间/日间模式">🌙 夜间</button>
+                    <a href="/logout" class="nav-action-btn text-xs bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white px-3 py-1 rounded-lg border border-red-500/20 transition-all font-bold" aria-label="退出登录">退出</a>
+                    <button id="theme-toggle" class="nav-action-btn text-xs bg-slate-700/40 text-slate-100 px-2 py-1 rounded-lg border border-slate-500/40 hover:bg-slate-600 transition-all" onclick="toggleTheme()" aria-label="切换夜间/日间模式" title="切换夜间/日间模式">🌙夜间</button>
                 </div>
             </div>
             <div id="tab-row-shell" class="tab-row-shell">
@@ -471,10 +471,10 @@
                             <br>当前支持：`X-Webhook-Token` 或 `X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign`。
                         </div>
                         <div class="flex items-center gap-2 flex-wrap">
-                            <a href="/download/userscript/magnet-helper.user.js" target="_blank" rel="noopener noreferrer" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">
-                                下载油猴脚本（磁力助手）
+                            <a href="/userscript/magnet-helper.user.js" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">
+                                安装油猴脚本（磁力助手）
                             </a>
-                            <span class="text-xs text-slate-500">下载后在 Tampermonkey 中安装即可。</span>
+                            <span class="text-xs text-slate-500">点击后会打开脚本文本，Tampermonkey 会自动弹出安装提示。</span>
                         </div>
                     </div>
                 </div>

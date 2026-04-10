@@ -1,10 +1,10 @@
 {
-  "version": "0.1.6",
-  "buildDate": "2026-04-09T12:43:51+08:00",
+  "version": "0.1.7",
+  "buildDate": "2026-04-10T19:21:42+08:00",
   "notes": [
-    "新增企业微信通知推送配置：支持群机器人 Webhook 与企业微信应用 API，并可一键发送测试消息。",
-    "订阅任务新增“成功入库”通知能力，按任务名 + 集数 + 保存路径去重，避免同一更新重复提醒。",
-    "文件夹监控任务新增成功推送：对生成的 .strm 路径做影视信息匹配，输出识别摘要和未识别样例。"
+    "油猴脚本支持 magnet / torrent / 115 分享链接识别，并增强 BTIH 提取与一键复制能力。",
+    "新增 /userscript/magnet-helper.user.js 安装入口，旧下载地址自动重定向兼容。",
+    "优化通知推送文案结构与导航按钮文案，提升消息可读性和移动端操作体验。"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

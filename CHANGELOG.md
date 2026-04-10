@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.7] - 2026-04-10
+- 油猴脚本新增 magnet / torrent / 115 分享链接识别，支持更多哈希解析与一键复制，提升导入兼容性。
+- 新增 `/userscript/magnet-helper.user.js` 安装入口，旧 `/download/userscript/magnet-helper.user.js` 自动重定向兼容。
+- 优化通知消息排版（订阅入库成功、监控生成成功、测试消息），提升推送可读性。
+- 精简顶部操作区按钮文案与宽度，优化移动端下“签到 / 主题 / 退出”布局。
+
 ## [0.1.6] - 2026-04-09
 - 设置页新增企业微信通知推送配置，支持群机器人 Webhook / 企业微信应用 API，并提供一键测试消息。
 - 订阅任务在“成功入库”后支持推送更新通知，新增任务名 + 集数 + 保存路径去重，避免重复提醒。

@@ -351,7 +351,8 @@ TMDB 相关：
 
 服务端同时提供下载入口：
 
-- `GET /download/userscript/magnet-helper.user.js`
+- `GET /userscript/magnet-helper.user.js`（推荐，直接触发 Tampermonkey 安装）
+- `GET /download/userscript/magnet-helper.user.js`（兼容旧地址，会重定向到新地址）
 
 ## 版本与更新
 
@@ -366,4 +367,3 @@ TMDB 相关：
 - 请仅在你有合法访问权限的数据、账号和资源范围内使用本项目，并遵守你所在地区法律法规及相关平台条款。
 - `115 Cookie`、`AList/OpenList Token`、Webhook 密钥等凭据由使用者自行妥善保管；因凭据泄露导致的账号风险、数据泄露或资产损失需自行承担。
 - 项目依赖第三方平台与网络环境（如 115、TG、TMDB、AList/OpenList 等），相关接口策略、可用性和返回结果可能随时变化，本项目不承诺持续可用或结果绝对准确。
-

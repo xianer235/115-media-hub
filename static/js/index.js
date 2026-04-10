@@ -556,18 +556,18 @@
                 'border-slate-500/40',
                 'hover:bg-slate-600'
             ];
-            let label = '签到状态';
+            let label = '签到';
             if (running || state === 'checking') {
-                label = '签到中...';
+                label = '签中';
                 toneClasses.splice(0, toneClasses.length, 'bg-sky-500/20', 'text-sky-200', 'border-sky-400/40', 'hover:bg-sky-500/30');
             } else if (state === 'signed' || sign115State.signed_today === true) {
-                label = rewardLeaf > 0 ? `已签 +${rewardLeaf}` : '今日已签';
+                label = '已签';
                 toneClasses.splice(0, toneClasses.length, 'bg-emerald-500/20', 'text-emerald-200', 'border-emerald-400/40', 'hover:bg-emerald-500/30');
             } else if (state === 'unsigned' || sign115State.signed_today === false) {
-                label = '今日未签';
+                label = '未签';
                 toneClasses.splice(0, toneClasses.length, 'bg-amber-500/20', 'text-amber-200', 'border-amber-400/40', 'hover:bg-amber-500/30');
             } else if (state === 'error') {
-                label = '签到异常';
+                label = '异常';
                 toneClasses.splice(0, toneClasses.length, 'bg-rose-500/20', 'text-rose-200', 'border-rose-400/40', 'hover:bg-rose-500/30');
             }
 
@@ -583,6 +583,7 @@
 
             const titleBits = [];
             if (sign115State.message) titleBits.push(sign115State.message);
+            if (rewardLeaf > 0) titleBits.push(`本次获得：${rewardLeaf} 枫叶`);
             if (balanceLeaf !== null) titleBits.push(`当前枫叶：${balanceLeaf}`);
             if (sign115State.next_run) titleBits.push(`下次自动签到：${sign115State.next_run}`);
             if (!enabled) titleBits.push('定时签到未启用，可手动点击签到');
@@ -8619,7 +8620,7 @@
                 const isDay = localStorage.getItem('theme-day') === 'day';
                 document.documentElement.classList.toggle('theme-day', isDay);
                 const btn = document.getElementById('theme-toggle');
-                if (btn) btn.textContent = isDay ? '☀️ 日间' : '🌙 夜间';
+                if (btn) btn.textContent = isDay ? '☀️日间' : '🌙夜间';
             } catch (e) {}
         }
         function toggleTheme() {
@@ -8634,7 +8635,7 @@
                     localStorage.setItem('theme-day', 'night');
                 }
                 const btn = document.getElementById('theme-toggle');
-                if (btn) btn.textContent = isDay ? '☀️ 日间' : '🌙 夜间';
+                if (btn) btn.textContent = isDay ? '☀️日间' : '🌙夜间';
             } catch (e) {}
         }
         applyThemeFromStorage();

@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         115云盘磁力助手 核心版
 // @namespace    http://tampermonkey.net/
-// @version      2.2.3
-// @description  检测网页磁力链接并生成按钮，选择任务后签名推送到 webhook
+// @version      2.3.1
+// @description  检测网页 magnet / torrent / 115 分享链接并生成快捷按钮
 // @author       仙儿
 // @license      MIT
 // @match        *://*/*
@@ -19,10 +19,13 @@
 
     const APP_NAME = '115云盘磁力助手 核心版';
     const MAGNET_REGEX = /magnet:\?xt=urn:btih:[A-Za-z0-9]{32,40}[^\s<>'"]*/gi;
+    const SHARE115_REGEX = /https?:\/\/(?:115cdn|115|anxia)\.com\/s\/[A-Za-z0-9]+[^\s<>'"]*/gi;
+    const DETECTABLE_LINK_REGEX = /(magnet:\?xt=urn:btih:[A-Za-z0-9]{32,40}[^\s<>'"]*|https?:\/\/[^\s<>'"]+?\.torrent(?:\?[^\s<>'"]*)?|https?:\/\/(?:115cdn|115|anxia)\.com\/s\/[A-Za-z0-9]+[^\s<>'"]*)/gi;
     const STORE_TASKS_KEY = 'magnet_push_tasks_v2';
     const STORE_SECRET_KEY = 'magnet_push_secret_v2';
 
     const BTN_CLASS = 'mh-push-btn';
+    const COPY_BTN_CLASS = 'mh-copy-btn';
     const WRAP_CLASS = 'mh-magnet-wrap';
     const NODE_MARK = '__mh_magnet_scanned__';
 
@@ -103,6 +106,140 @@
 
     function isHttpUrl(url) {
         return /^https?:\/\//i.test(String(url || '').trim());
+    }
+
+    function normalizeSourceLink(link) {
+        let out = String(link || '').trim();
+        while (out && /[)\],.;!?，。；！？）】》]$/.test(out)) {
+            out = out.slice(0, -1).trim();
+        }
+        return out;
+    }
+
+    function isLikelyTorrentUrl(url) {
+        const text = String(url || '').trim();
+        if (!isHttpUrl(text)) return false;
+        return /\.torrent(?:$|[?#])/i.test(text) || /[?&](?:info_hash|xt|btih)=/i.test(text);
+    }
+
+    function isLikely115ShareUrl(url) {
+        const text = String(url || '').trim();
+        if (!isHttpUrl(text)) return false;
+        return /^https?:\/\/(?:115cdn|115|anxia)\.com\/s\/[A-Za-z0-9]+/i.test(text);
+    }
+
+    async function copyTextToClipboard(text) {
+        const value = String(text || '');
+        if (!value) throw new Error('复制内容为空');
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+            await navigator.clipboard.writeText(value);
+            return;
+        }
+        const area = document.createElement('textarea');
+        area.value = value;
+        area.setAttribute('readonly', 'readonly');
+        area.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0;';
+        document.body.appendChild(area);
+        area.focus();
+        area.select();
+        const copied = document.execCommand && document.execCommand('copy');
+        if (area.parentNode) area.parentNode.removeChild(area);
+        if (!copied) throw new Error('当前页面不支持自动复制');
+    }
+
+    function decodeBase32ToHex(base32Text) {
+        const source = String(base32Text || '').trim().toUpperCase().replace(/=+$/g, '');
+        if (!source || /[^A-Z2-7]/.test(source)) return '';
+        const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+        let bits = 0;
+        let value = 0;
+        const bytes = [];
+        for (const ch of source) {
+            const idx = alphabet.indexOf(ch);
+            if (idx < 0) return '';
+            value = (value << 5) | idx;
+            bits += 5;
+            if (bits >= 8) {
+                bits -= 8;
+                bytes.push((value >> bits) & 0xff);
+            }
+        }
+        return bytes.map((b) => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+    }
+
+    function normalizeBtihHash(rawHash) {
+        const cleaned = String(rawHash || '')
+            .trim()
+            .replace(/^urn:btih:/i, '')
+            .replace(/[^A-Za-z0-9]/g, '');
+        if (!cleaned) return '';
+        if (/^[A-Fa-f0-9]{40}$/.test(cleaned)) return cleaned.toUpperCase();
+        if (/^[A-Za-z2-7]{32}$/i.test(cleaned)) {
+            const hex = decodeBase32ToHex(cleaned);
+            return hex.length === 40 ? hex : '';
+        }
+        return '';
+    }
+
+    function tryExtractBtihFromUrl(url) {
+        const text = String(url || '').trim();
+        if (!text) return '';
+
+        const direct = text.match(/btih:([A-Za-z0-9]{32,40})/i);
+        if (direct && direct[1]) {
+            const normalizedDirect = normalizeBtihHash(direct[1]);
+            if (normalizedDirect) return normalizedDirect;
+        }
+
+        try {
+            const parsed = new URL(text);
+            const candidates = [
+                parsed.searchParams.get('xt'),
+                parsed.searchParams.get('btih'),
+                parsed.searchParams.get('info_hash'),
+                parsed.searchParams.get('hash')
+            ].filter(Boolean);
+            for (const item of candidates) {
+                const normalized = normalizeBtihHash(item);
+                if (normalized) return normalized;
+                const embedded = String(item || '').match(/btih:([A-Za-z0-9]{32,40})/i);
+                if (embedded && embedded[1]) {
+                    const normalizedEmbedded = normalizeBtihHash(embedded[1]);
+                    if (normalizedEmbedded) return normalizedEmbedded;
+                }
+            }
+
+            const rawQuery = String(parsed.search || '').replace(/^\?/, '');
+            for (const pair of rawQuery.split('&')) {
+                if (!pair) continue;
+                const eqIndex = pair.indexOf('=');
+                const rawKey = eqIndex >= 0 ? pair.slice(0, eqIndex) : pair;
+                let decodedKey = '';
+                try {
+                    decodedKey = decodeURIComponent(rawKey.replace(/\+/g, '%20')).toLowerCase();
+                } catch (err) {
+                    decodedKey = rawKey.toLowerCase();
+                }
+                if (decodedKey !== 'info_hash') continue;
+                const rawVal = eqIndex >= 0 ? pair.slice(eqIndex + 1) : '';
+                const normalizedRaw = normalizeBtihHash(rawVal);
+                if (normalizedRaw) return normalizedRaw;
+                try {
+                    const decodedVal = decodeURIComponent(rawVal.replace(/\+/g, '%20'));
+                    const normalizedDecoded = normalizeBtihHash(decodedVal);
+                    if (normalizedDecoded) return normalizedDecoded;
+                    const bytes = Array.from(decodedVal, (ch) => ch.charCodeAt(0) & 0xff);
+                    if (bytes.length === 20) {
+                        return bytes.map((b) => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+                    }
+                } catch (err) {
+                    // ignore decoding errors, continue probing
+                }
+            }
+        } catch (err) {
+            return '';
+        }
+        return '';
     }
 
     function makeTaskId() {
@@ -216,9 +353,189 @@
         }
     }
 
+    function parseTorrentNameFromUrl(url) {
+        try {
+            const parsed = new URL(String(url || '').trim());
+            const base = parsed.pathname.split('/').pop() || '';
+            const decoded = decodeURIComponent(base.replace(/\+/g, ' '));
+            const name = decoded
+                .replace(/\.torrent$/i, '')
+                .replace(/[\\/:*?"<>|]/g, '_')
+                .replace(/[\x00-\x1F\x7F]/g, '')
+                .trim();
+            return name.slice(0, 200);
+        } catch (err) {
+            return '';
+        }
+    }
+
     function extractMagnetHash(magnet) {
         const match = String(magnet || '').match(/btih:([A-Za-z0-9]{32,40})/i);
-        return match && match[1] ? String(match[1]).toUpperCase() : '';
+        if (!match || !match[1]) return '';
+        const normalized = normalizeBtihHash(match[1]);
+        return normalized || String(match[1]).toUpperCase();
+    }
+
+    function parseBencodeStringMeta(bytes, index) {
+        let cursor = index;
+        let length = 0;
+        if (cursor >= bytes.length || bytes[cursor] < 48 || bytes[cursor] > 57) {
+            throw new Error('bencode 字符串长度无效');
+        }
+        while (cursor < bytes.length && bytes[cursor] >= 48 && bytes[cursor] <= 57) {
+            length = (length * 10) + (bytes[cursor] - 48);
+            cursor += 1;
+        }
+        if (cursor >= bytes.length || bytes[cursor] !== 58) {
+            throw new Error('bencode 字符串缺少分隔符');
+        }
+        cursor += 1;
+        const dataStart = cursor;
+        const dataEnd = dataStart + length;
+        if (dataEnd > bytes.length) {
+            throw new Error('bencode 字符串越界');
+        }
+        return { dataStart, dataEnd, next: dataEnd };
+    }
+
+    function skipBencodeValue(bytes, index) {
+        if (index >= bytes.length) throw new Error('bencode 值越界');
+        const marker = bytes[index];
+        if (marker === 105) { // i
+            let cursor = index + 1;
+            if (cursor >= bytes.length) throw new Error('bencode 整数无效');
+            if (bytes[cursor] === 45) cursor += 1; // -
+            if (cursor >= bytes.length || bytes[cursor] < 48 || bytes[cursor] > 57) {
+                throw new Error('bencode 整数字面量无效');
+            }
+            while (cursor < bytes.length && bytes[cursor] !== 101) { // e
+                if (bytes[cursor] < 48 || bytes[cursor] > 57) throw new Error('bencode 整数字面量无效');
+                cursor += 1;
+            }
+            if (cursor >= bytes.length) throw new Error('bencode 整数缺少结束符');
+            return cursor + 1;
+        }
+        if (marker === 108) { // l
+            let cursor = index + 1;
+            while (cursor < bytes.length && bytes[cursor] !== 101) {
+                cursor = skipBencodeValue(bytes, cursor);
+            }
+            if (cursor >= bytes.length) throw new Error('bencode 列表缺少结束符');
+            return cursor + 1;
+        }
+        if (marker === 100) { // d
+            let cursor = index + 1;
+            while (cursor < bytes.length && bytes[cursor] !== 101) {
+                const keyMeta = parseBencodeStringMeta(bytes, cursor);
+                cursor = keyMeta.next;
+                cursor = skipBencodeValue(bytes, cursor);
+            }
+            if (cursor >= bytes.length) throw new Error('bencode 字典缺少结束符');
+            return cursor + 1;
+        }
+        if (marker >= 48 && marker <= 57) {
+            return parseBencodeStringMeta(bytes, index).next;
+        }
+        throw new Error('bencode 类型标记无效');
+    }
+
+    function bencodeKeyEquals(bytes, keyMeta, keyText) {
+        const expectLen = keyText.length;
+        if (!keyMeta || (keyMeta.dataEnd - keyMeta.dataStart) !== expectLen) return false;
+        for (let i = 0; i < expectLen; i += 1) {
+            if (bytes[keyMeta.dataStart + i] !== keyText.charCodeAt(i)) return false;
+        }
+        return true;
+    }
+
+    function extractTorrentInfoBytes(data) {
+        const bytes = data instanceof Uint8Array ? data : new Uint8Array(data || []);
+        if (!bytes.length) throw new Error('torrent 文件为空');
+        if (bytes[0] !== 100) throw new Error('torrent 文件格式无效');
+        let cursor = 1;
+        let infoStart = -1;
+        let infoEnd = -1;
+        while (cursor < bytes.length && bytes[cursor] !== 101) {
+            const keyMeta = parseBencodeStringMeta(bytes, cursor);
+            cursor = keyMeta.next;
+            const valueStart = cursor;
+            cursor = skipBencodeValue(bytes, cursor);
+            if (infoStart < 0 && bencodeKeyEquals(bytes, keyMeta, 'info')) {
+                infoStart = valueStart;
+                infoEnd = cursor;
+            }
+        }
+        if (cursor >= bytes.length || bytes[cursor] !== 101) {
+            throw new Error('torrent 元数据解析失败');
+        }
+        if (infoStart < 0 || infoEnd <= infoStart) {
+            throw new Error('torrent 文件缺少 info 字段');
+        }
+        return bytes.slice(infoStart, infoEnd);
+    }
+
+    function fetchArrayBuffer(url) {
+        return new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url,
+                timeout: 26000,
+                responseType: 'arraybuffer',
+                onload: (res) => {
+                    if (res.status < 200 || res.status >= 300) {
+                        reject(new Error(`下载 torrent 失败: ${res.status || '网络错误'}`));
+                        return;
+                    }
+                    const body = res.response;
+                    if (body instanceof ArrayBuffer) {
+                        resolve(body);
+                        return;
+                    }
+                    if (ArrayBuffer.isView(body)) {
+                        resolve(body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength));
+                        return;
+                    }
+                    reject(new Error('torrent 返回内容不是二进制'));
+                },
+                onerror: () => reject(new Error('下载 torrent 失败: 网络错误')),
+                ontimeout: () => reject(new Error('下载 torrent 失败: 请求超时'))
+            });
+        });
+    }
+
+    async function sha1Hex(data) {
+        if (!window.crypto || !window.crypto.subtle) {
+            throw new Error('当前页面不支持 WebCrypto SHA-1');
+        }
+        const bytes = data instanceof Uint8Array ? data : new Uint8Array(data || []);
+        const digest = await window.crypto.subtle.digest('SHA-1', bytes);
+        return arrayBufferToHex(digest).toUpperCase();
+    }
+
+    async function convertTorrentUrlToMagnet(torrentUrl) {
+        const link = normalizeSourceLink(torrentUrl);
+        if (!isLikelyTorrentUrl(link)) {
+            throw new Error('当前链接不是可识别的 torrent 下载地址');
+        }
+        let hash = tryExtractBtihFromUrl(link);
+        if (!hash) {
+            const torrentBody = await fetchArrayBuffer(link);
+            const infoBytes = extractTorrentInfoBytes(torrentBody);
+            hash = await sha1Hex(infoBytes);
+        }
+        if (!hash) {
+            throw new Error('无法从 torrent 解析出 infohash');
+        }
+        const dn = parseTorrentNameFromUrl(link);
+        return `magnet:?xt=urn:btih:${hash}${dn ? `&dn=${encodeURIComponent(dn)}` : ''}`;
+    }
+
+    async function resolveMagnetFromSource(source) {
+        const link = normalizeSourceLink(source);
+        if (!link) throw new Error('链接为空');
+        if (/^magnet:\?/i.test(link)) return link;
+        if (isLikelyTorrentUrl(link)) return convertTorrentUrlToMagnet(link);
+        throw new Error('仅支持 magnet 或 torrent 链接');
     }
 
     function buildPayload(task, magnet) {
@@ -304,14 +621,18 @@
         return tasks.filter((t) => t.enabled && t.name && t.webhookUrl && t.savepath);
     }
 
-    async function chooseTask(candidates, magnet) {
+    async function chooseTask(candidates, sourceLink) {
         if (!candidates.length) return null;
         if (candidates.length === 1) return candidates[0];
-        const currentTitle = parseMagnetTitle(magnet);
-        const currentHash = extractMagnetHash(magnet);
+        const source = normalizeSourceLink(sourceLink);
+        const currentTitle = parseMagnetTitle(source) || parseTorrentNameFromUrl(source);
+        const currentHash = extractMagnetHash(source) || tryExtractBtihFromUrl(source);
+        const torrentHint = isLikelyTorrentUrl(source) && !/^magnet:\?/i.test(source)
+            ? '类型：torrent 链接（将自动转换为磁力）'
+            : '';
         const previewLine = currentTitle
             ? `标题：${currentTitle}`
-            : (currentHash ? `Hash：${currentHash.slice(0, 12)}...` : '请点击一个任务');
+            : (currentHash ? `Hash：${currentHash.slice(0, 12)}...` : (torrentHint || '请点击一个任务'));
 
         return new Promise((resolve) => {
             const existed = document.getElementById('mh-task-picker-overlay');
@@ -413,7 +734,7 @@
         button.disabled = false;
     }
 
-    async function pushMagnet(task, magnet, button) {
+    async function pushMagnet(task, sourceLink, button) {
         const secret = getSecret();
         if (!secret) {
             window.alert('请先配置签名密钥');
@@ -422,6 +743,9 @@
         }
         setButtonState(button, 'busy');
         try {
+            const source = normalizeSourceLink(sourceLink);
+            const fromTorrent = isLikelyTorrentUrl(source) && !/^magnet:\?/i.test(source);
+            const magnet = await resolveMagnetFromSource(source);
             const payload = buildPayload(task, magnet);
             const bodyText = JSON.stringify(payload);
             const signHeaders = await buildSignedHeaders(secret, bodyText);
@@ -436,7 +760,7 @@
                 setButtonState(button, 'error');
                 return;
             }
-            showToast(`已推送到任务: ${task.name}`);
+            showToast(fromTorrent ? `已转换 torrent 并推送到任务: ${task.name}` : `已推送到任务: ${task.name}`);
             setButtonState(button, 'idle');
         } catch (err) {
             showToast(`推送失败: ${err.message || '未知错误'}`, 'error');
@@ -444,12 +768,14 @@
         }
     }
 
-    function createPushButton(magnet) {
+    function createPushButton(sourceLink) {
+        const source = normalizeSourceLink(sourceLink);
+        const fromTorrent = isLikelyTorrentUrl(source) && !/^magnet:\?/i.test(source);
         const button = document.createElement('button');
         button.type = 'button';
         button.className = BTN_CLASS;
         button.textContent = '115';
-        button.title = '选择任务并推送 webhook';
+        button.title = fromTorrent ? '选择任务，自动转换 torrent 后推送 webhook' : '选择任务并推送 webhook';
         button.style.cssText = BTN_STYLE;
 
         button.addEventListener('mouseenter', () => {
@@ -468,9 +794,57 @@
                 window.alert('没有可用任务，请先通过菜单配置任务并启用');
                 return;
             }
-            const task = await chooseTask(list, magnet);
+            const task = await chooseTask(list, source);
             if (!task) return;
-            await pushMagnet(task, magnet, button);
+            await pushMagnet(task, source, button);
+        });
+
+        return button;
+    }
+
+    function createCopyButton(sourceLink) {
+        const source = normalizeSourceLink(sourceLink);
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = COPY_BTN_CLASS;
+        button.textContent = '复制';
+        button.title = '复制 115 分享链接';
+        button.style.cssText = BTN_STYLE
+            .replace('background:#2777F8', 'background:#16a34a')
+            .replace('min-width:32px', 'min-width:38px');
+
+        button.addEventListener('mouseenter', () => {
+            button.style.transform = 'scale(1.08)';
+        });
+        button.addEventListener('mouseleave', () => {
+            button.style.transform = 'scale(1)';
+        });
+
+        button.addEventListener('click', async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (button.disabled) return;
+            setButtonState(button, 'busy');
+            button.textContent = '复制中';
+            try {
+                await copyTextToClipboard(source);
+                button.style.background = '#16a34a';
+                button.textContent = '已复制';
+                showToast('115 链接已复制');
+                window.setTimeout(() => {
+                    button.textContent = '复制';
+                    button.style.background = '#16a34a';
+                    button.disabled = false;
+                }, 900);
+            } catch (err) {
+                showToast(`复制失败: ${err.message || '未知错误'}`, 'error');
+                button.textContent = '复制';
+                button.style.background = '#ef4444';
+                button.disabled = false;
+                window.setTimeout(() => {
+                    button.style.background = '#16a34a';
+                }, 1200);
+            }
         });
 
         return button;
@@ -482,7 +856,10 @@
         if (parent.closest(`.${WRAP_CLASS}`)) return true;
         const tag = parent.tagName;
         if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'TEXTAREA') return true;
-        if (tag === 'A' && String(parent.getAttribute('href') || '').includes('magnet:?')) return true;
+        if (tag === 'A') {
+            const href = String(parent.getAttribute('href') || '');
+            if (href.includes('magnet:?') || isLikelyTorrentUrl(href) || isLikely115ShareUrl(href)) return true;
+        }
         const style = window.getComputedStyle(parent);
         if (style.display === 'none' || style.visibility === 'hidden') return true;
         return false;
@@ -493,15 +870,17 @@
         node[NODE_MARK] = true;
         if (shouldSkipTextNode(node)) return;
         const raw = String(node.textContent || '');
-        if (!raw.includes('magnet:?')) return;
+        if (!raw.includes('magnet:?') && !/\.torrent/i.test(raw) && !SHARE115_REGEX.test(raw)) return;
+        SHARE115_REGEX.lastIndex = 0;
 
-        const matches = Array.from(raw.matchAll(MAGNET_REGEX));
+        const matches = Array.from(raw.matchAll(DETECTABLE_LINK_REGEX));
         if (!matches.length) return;
 
         const fragment = document.createDocumentFragment();
         let offset = 0;
         for (const match of matches) {
-            const magnet = match[0];
+            const link = normalizeSourceLink(match[0]);
+            if (!link) continue;
             const idx = match.index || 0;
             if (idx > offset) fragment.appendChild(document.createTextNode(raw.slice(offset, idx)));
 
@@ -510,12 +889,13 @@
             wrap.style.cssText = 'display:inline-flex;align-items:center;white-space:nowrap;';
 
             const textSpan = document.createElement('span');
-            textSpan.textContent = magnet;
+            textSpan.textContent = match[0];
             wrap.appendChild(textSpan);
-            wrap.appendChild(createPushButton(magnet));
+            const actionBtn = isLikely115ShareUrl(link) ? createCopyButton(link) : createPushButton(link);
+            wrap.appendChild(actionBtn);
             fragment.appendChild(wrap);
 
-            offset = idx + magnet.length;
+            offset = idx + match[0].length;
         }
         if (offset < raw.length) fragment.appendChild(document.createTextNode(raw.slice(offset)));
 
@@ -523,16 +903,23 @@
     }
 
     function processAnchor(anchor) {
-        if (!anchor || anchor.dataset.mhMagnetBound === '1') return;
+        if (!anchor || anchor.dataset.mhMagnetBound === '1' || anchor.dataset.mhLinkBound === '1') return;
         const href = String(anchor.getAttribute('href') || '');
-        if (!href.includes('magnet:?')) return;
-        const matched = href.match(MAGNET_REGEX);
-        if (!matched || !matched[0]) return;
-
-        const magnet = matched[0];
-        const button = createPushButton(magnet);
+        const matchedMagnet = href.match(MAGNET_REGEX);
+        const source = matchedMagnet && matchedMagnet[0]
+            ? normalizeSourceLink(matchedMagnet[0])
+            : normalizeSourceLink(href);
+        if (!source) return;
+        let button = null;
+        if (/^magnet:\?/i.test(source) || isLikelyTorrentUrl(source)) {
+            button = createPushButton(source);
+        } else if (isLikely115ShareUrl(source)) {
+            button = createCopyButton(source);
+        }
+        if (!button) return;
         anchor.insertAdjacentElement('afterend', button);
         anchor.dataset.mhMagnetBound = '1';
+        anchor.dataset.mhLinkBound = '1';
     }
 
     function scanPage() {
@@ -543,7 +930,9 @@
         while (walker.nextNode()) textNodes.push(walker.currentNode);
         textNodes.forEach(processTextNode);
 
-        document.querySelectorAll('a[href*="magnet:?"]').forEach(processAnchor);
+        document.querySelectorAll(
+            'a[href*="magnet:?"], a[href*=".torrent"], a[href*="info_hash="], a[href*="btih:"], a[href*="115.com/s/"], a[href*="115cdn.com/s/"], a[href*="anxia.com/s/"]'
+        ).forEach(processAnchor);
     }
 
     function managerElements() {

@@ -392,15 +392,23 @@ def _build_subscription_success_markdown(
     ]
     if media_type == "tv":
         episode_summary = _format_notify_episode_summary(notify_episodes)
-        lines.append(f"> 新增集数：{episode_summary or '--'}（{len(notify_episodes)} 集）")
+        lines.append(f"> 概览：新增 {episode_summary or '--'}（共 {len(notify_episodes)} 集）")
         if int(next_episode or 0) > 0:
             lines.append(f"> 当前进度：E{int(next_episode)}")
-    lines.append(f"> 保存路径：{savepath_label}")
-    lines.append(f"> 命中资源：{resource_title}")
+    else:
+        lines.append("> 概览：电影资源已成功入库")
+    lines.extend(
+        [
+            ">",
+            "> 入库详情：",
+            f"> - 命中资源：{resource_title}",
+            f"> - 保存路径：`{savepath_label}`",
+        ]
+    )
     if int(job_id or 0) > 0:
-        lines.append(f"> 导入任务：#{int(job_id)}")
+        lines.append(f"> - 导入任务：#{int(job_id)}")
     if int(successful_count or 0) > 1:
-        lines.append(f"> 本轮批量成功：{int(successful_count)} 条")
+        lines.append(f"> - 本轮批量成功：{int(successful_count)} 条")
     return "\n".join(lines)
 
 
@@ -451,8 +459,11 @@ def send_notify_test_message(cfg: Dict[str, Any]) -> Dict[str, Any]:
             "### 115 Media Hub 通知测试",
             f"> 时间：{now_label}",
             f"> 渠道：{channel_label}",
-            "> 说明：若收到此消息，表示通知配置可用。",
-            "> 策略：按开关推送“订阅更新成功 / 文件夹监控生成成功”事件。",
+            "> 状态：通知链路连通",
+            ">",
+            "> 推送策略：",
+            "> - 订阅更新成功（按开关发送）",
+            "> - 文件夹监控生成成功（按开关发送）",
         ]
     )
     _send_notify_content(runtime_cfg, content, timeout=20)
@@ -764,15 +775,16 @@ def _build_monitor_success_markdown(
         f"> 时间：{now_label}",
         f"> 任务：{task_label}",
         f"> 触发：{trigger_label}",
-        f"> 输出目录：/strm/{_compact_text(task_root or '--', 120)}",
-        f"> 新增 .strm：{generated_count} 条",
-        f"> 影视匹配：{matched_count} 条（剧集 {tv_count} / 电影 {movie_count} / 未识别 {unmatched_count}）",
+        f"> 输出目录：`/strm/{_compact_text(task_root or '--', 120)}`",
+        f"> 概览：新增 {generated_count} 条，识别 {matched_count} 条，未识别 {unmatched_count} 条",
+        f"> 识别构成：剧集 {tv_count} / 电影 {movie_count}",
     ]
 
     if matched_items:
+        lines.append(">")
         lines.append("> 识别摘要：")
         preview_limit = 8
-        for row in matched_items[:preview_limit]:
+        for idx, row in enumerate(matched_items[:preview_limit], start=1):
             media_type = str(row.get("media_type", "movie") or "movie").strip().lower()
             title = _compact_text(row.get("title", "") or "未命名", 56)
             year = str(row.get("year", "") or "").strip()
@@ -784,18 +796,19 @@ def _build_monitor_success_markdown(
                 episodes = row.get("episodes", []) if isinstance(row.get("episodes", []), list) else []
                 episode_text = _format_notify_episode_summary(episodes)
                 if episode_text:
-                    lines.append(f"> - 剧集：{title}{year_text} {season_text}，新增集数 {episode_text}")
+                    lines.append(f"> {idx}. 剧集：{title}{year_text} {season_text}，新增集数 {episode_text}")
                 else:
-                    lines.append(f"> - 剧集：{title}{year_text} {season_text}，新增 {count} 条")
+                    lines.append(f"> {idx}. 剧集：{title}{year_text} {season_text}，新增 {count} 条")
             else:
-                lines.append(f"> - 电影：{title}{year_text}（{count} 条）")
+                lines.append(f"> {idx}. 电影：{title}{year_text}（{count} 条）")
         if len(matched_items) > preview_limit:
-            lines.append(f"> - 其余 {len(matched_items) - preview_limit} 条请在 Web 监控日志查看")
+            lines.append(f"> ... 其余 {len(matched_items) - preview_limit} 条请在 Web 监控日志查看")
 
     if unmatched_examples:
+        lines.append(">")
         lines.append("> 未识别示例：")
-        for rel_path in unmatched_examples[:2]:
-            lines.append(f"> - /strm/{_compact_text(rel_path, 96)}")
+        for idx, rel_path in enumerate(unmatched_examples[:2], start=1):
+            lines.append(f"> {idx}. `/strm/{_compact_text(rel_path, 96)}`")
 
     return "\n".join(lines)
 

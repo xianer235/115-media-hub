@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from ..core import *  # noqa: F401,F403
 
@@ -39,15 +39,25 @@ async def favicon_ico() -> FileResponse:
 
 
 @router.api_route("/download/userscript/magnet-helper.user.js", methods=["GET", "HEAD"], include_in_schema=False)
-async def download_magnet_userscript():
+async def download_magnet_userscript(request: Request):
+    return RedirectResponse(url="/userscript/magnet-helper.user.js", status_code=307)
+
+
+@router.api_route("/userscript/magnet-helper.user.js", methods=["GET", "HEAD"], include_in_schema=False)
+async def install_magnet_userscript(request: Request):
     if not os.path.exists(USERSCRIPT_MAGNET_HELPER_PATH):
         return JSONResponse(status_code=404, content={"ok": False, "msg": "脚本文件不存在"})
-    return FileResponse(
-        USERSCRIPT_MAGNET_HELPER_PATH,
+    headers = {
+        "Cache-Control": "no-store",
+    }
+    if request.method == "HEAD":
+        return Response(status_code=200, media_type="application/javascript; charset=utf-8", headers=headers)
+    with open(USERSCRIPT_MAGNET_HELPER_PATH, "r", encoding="utf-8") as f:
+        script_text = f.read()
+    return Response(
+        content=script_text,
         media_type="application/javascript; charset=utf-8",
-        filename="115-magnet-helper-webhook.user.js",
-        content_disposition_type="inline",
-        headers={"Cache-Control": "no-store"},
+        headers=headers,
     )
 
 
