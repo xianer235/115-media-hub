@@ -4038,6 +4038,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
         if batch_refresh_enabled and int(batch_refresh_result.get("triggered_groups", 0) or 0) > 0:
             auto_refresh = True
         imported_episode_list = sorted(imported_episodes)
+        matched_display_title = pick_subscription_display_title(task, item, fallback=f"资源#{resource_id}")
 
         next_episode = last_episode
         if task["media_type"] == "tv" and imported_episode_list:
@@ -4060,12 +4061,12 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 batch_tail = ""
             detail = (
                 f"本次批量导入 {successful_count} 条候选资源{batch_tail}；"
-                f"最新命中「{str(item.get('title', '') or f'资源#{resource_id}').strip()}」"
+                f"最新命中「{matched_display_title}」"
                 f"（评分 {score}），{action_text} #{job_id}，保存到 {effective_savepath}"
             )
         else:
             detail = (
-                f"命中「{str(item.get('title', '') or f'资源#{resource_id}').strip()}」"
+                f"命中「{matched_display_title}」"
                 f"（评分 {score}），{action_text} #{job_id}，保存到 {effective_savepath}"
             )
         if monitor_task_name:
@@ -4105,7 +4106,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             last_episode=next_episode,
             total_episodes=next_total,
             matched_resource_id=resource_id,
-            matched_resource_title=str(item.get("title", "") or "").strip(),
+            matched_resource_title=matched_display_title,
             matched_score=score,
             queued_job_id=job_id,
             stats={

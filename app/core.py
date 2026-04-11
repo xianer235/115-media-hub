@@ -1554,6 +1554,46 @@ def normalize_resource_title(text: str) -> str:
     return cleaned[:200]
 
 
+RESOURCE_CJK_TEXT_REGEX = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+
+
+def contains_cjk_text(value: Any) -> bool:
+    return bool(RESOURCE_CJK_TEXT_REGEX.search(str(value or "").strip()))
+
+
+def pick_subscription_display_title(task: Dict[str, Any], item: Dict[str, Any], fallback: str = "未命名资源") -> str:
+    payload_task = task if isinstance(task, dict) else {}
+    payload_item = item if isinstance(item, dict) else {}
+
+    candidate_values: List[str] = []
+    for value in [
+        payload_task.get("tmdb_title", ""),
+        payload_task.get("title", ""),
+        payload_item.get("title", ""),
+        payload_task.get("tmdb_original_title", ""),
+    ]:
+        normalized = str(value or "").strip()
+        if normalized:
+            candidate_values.append(normalized)
+
+    for field in ("tmdb_aliases", "aliases"):
+        raw_values = payload_task.get(field, [])
+        if not isinstance(raw_values, list):
+            continue
+        candidate_values.extend([str(value or "").strip() for value in raw_values if str(value or "").strip()])
+
+    deduped_candidates = unique_preserve_order(candidate_values)
+    for candidate in deduped_candidates:
+        if contains_cjk_text(candidate):
+            return candidate
+
+    if str(payload_item.get("title", "") or "").strip():
+        return str(payload_item.get("title", "") or "").strip()
+    if deduped_candidates:
+        return deduped_candidates[0]
+    return str(fallback or "未命名资源").strip() or "未命名资源"
+
+
 def guess_resource_quality(text: str) -> str:
     raw = str(text or "").lower()
     tokens: List[str] = []

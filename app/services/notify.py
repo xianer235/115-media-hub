@@ -381,7 +381,7 @@ def _build_subscription_success_markdown(
     media_type = str(task.get("media_type", "movie") or "movie").strip().lower()
     media_label = "电视剧" if media_type == "tv" else "电影"
     task_label = _compact_text(task.get("title", "") or task.get("name", "") or "未命名任务", 64)
-    resource_title = _compact_text(item.get("title", "") or "未命名资源", 96)
+    resource_title = _compact_text(pick_subscription_display_title(task, item), 96)
     savepath_label = _compact_text(normalize_relative_path(savepath) or "--", 128)
     now_label = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
