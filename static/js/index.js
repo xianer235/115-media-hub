@@ -3708,7 +3708,7 @@
             const input = document.getElementById('resource-search-input');
             if (!input) return null;
             input.value = item.url || '';
-            syncResourceSearchClearButton();
+            syncResourceSearchInputActions();
             touchResourceQuickLink(item.id);
             if (closeModal) closeResourceQuickLinkModal();
             return searchResources();
@@ -4657,7 +4657,7 @@
             renderResourceBoard();
             renderResourceJobs();
             syncResourceJobModalTrigger();
-            syncResourceSearchClearButton();
+            syncResourceSearchInputActions();
             syncResourceActionButtons();
             renderResourceTgHealthStatus();
             if (selectedResourceItem) renderResourceModalLayout(selectedResourceItem);
@@ -4666,13 +4666,21 @@
 
         }
 
-        function syncResourceSearchClearButton() {
+        function syncResourceSearchInputActions() {
             const input = document.getElementById('resource-search-input');
             const clearBtn = document.getElementById('resource-search-clear-btn');
-            if (!input || !clearBtn) return;
+            const pasteBtn = document.getElementById('resource-search-paste-btn');
+            if (!input) return;
             const hasValue = !!String(input.value || '').trim();
-            clearBtn.classList.toggle('hidden', !hasValue);
-            clearBtn.disabled = !hasValue;
+            if (clearBtn) {
+                clearBtn.classList.toggle('hidden', !hasValue);
+                clearBtn.disabled = !hasValue;
+            }
+            if (pasteBtn) {
+                const showPaste = !hasValue;
+                pasteBtn.classList.toggle('hidden', !showPaste);
+                pasteBtn.disabled = !showPaste;
+            }
             syncResourceActionButtons();
         }
 
@@ -4984,7 +4992,7 @@
             if (!input) return;
             const hadKeyword = !!String(input.value || '').trim();
             input.value = '';
-            syncResourceSearchClearButton();
+            syncResourceSearchInputActions();
             if (resourceState.search || hadKeyword) {
                 resetResourceSearchResults();
                 await refreshResourceState({ keywordOverride: '' });
@@ -4992,6 +5000,31 @@
                 renderResourceBoard();
             }
             input.focus();
+        }
+
+        async function pasteResourceSearch() {
+            const input = document.getElementById('resource-search-input');
+            if (!input) return;
+            if (!navigator.clipboard?.readText) {
+                showToast('当前环境不支持一键粘贴，请直接使用 Ctrl/Cmd + V', { tone: 'warn', duration: 2800, placement: 'top-center' });
+                return;
+            }
+            let text = '';
+            try {
+                text = String(await navigator.clipboard.readText() || '').trim();
+            } catch (e) {
+                showToast(`读取剪贴板失败：${e?.message || '请检查浏览器权限'}`, { tone: 'warn', duration: 3200, placement: 'top-center' });
+                return;
+            }
+            if (!text) {
+                showToast('剪贴板里暂无可粘贴内容', { tone: 'warn', duration: 2400, placement: 'top-center' });
+                return;
+            }
+            input.value = text;
+            syncResourceSearchInputActions();
+            input.focus();
+            input.setSelectionRange?.(text.length, text.length);
+            showToast('已粘贴剪贴板内容，可直接搜索', { tone: 'info', duration: 2200, placement: 'top-center' });
         }
 
         function currentResourceSourceFormData() {
@@ -8192,7 +8225,7 @@
             if (e.key === 'Enter') searchResources();
         });
         document.getElementById('resource-search-input').addEventListener('input', async (e) => {
-            syncResourceSearchClearButton();
+            syncResourceSearchInputActions();
             if (String(e.target?.value || '').trim()) return;
             if (String(resourceState.search || '').trim()) {
                 resetResourceSearchResults();

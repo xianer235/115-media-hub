@@ -121,7 +121,8 @@
                         <div class="resource-search-input-shell">
                             <div class="resource-search-input-wrap">
                                 <input id="resource-search-input" class="resource-search-input w-full bg-slate-950/85 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-100 placeholder:text-slate-500" placeholder="搜索订阅频道，或粘贴 magnet / 常见网盘分享链接快速识别">
-                                <button id="resource-search-clear-btn" type="button" onclick="clearResourceSearch()" class="resource-search-clear-btn hidden" aria-label="清空搜索">✕</button>
+                                <button id="resource-search-paste-btn" type="button" onclick="pasteResourceSearch()" class="resource-search-input-action resource-search-paste-btn hidden" aria-label="粘贴剪贴板内容">粘贴</button>
+                                <button id="resource-search-clear-btn" type="button" onclick="clearResourceSearch()" class="resource-search-input-action resource-search-clear-btn hidden" aria-label="清空搜索">✕</button>
                             </div>
                         </div>
                         <button id="resource-search-btn" type="button" onclick="searchResources()" class="resource-search-btn bg-sky-600 hover:bg-sky-500 text-white shadow-lg">搜索</button>
@@ -973,8 +974,8 @@
                         </span>
                     </label>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
-                        <button id="resource-source-modal-save-btn" onclick="saveResourceSource()" class="bg-sky-600 hover:bg-sky-500 rounded-xl py-3 font-bold text-white">保存频道订阅</button>
-                        <button onclick="closeResourceSourceModal()" class="bg-slate-700 hover:bg-slate-600 rounded-xl py-3 font-bold text-white">取消</button>
+                        <button id="resource-source-modal-save-btn" onclick="saveResourceSource()" class="resource-source-modal-action-btn resource-source-modal-action-btn-primary">保存频道订阅</button>
+                        <button type="button" onclick="closeResourceSourceModal()" class="resource-source-modal-action-btn resource-source-modal-action-btn-secondary">取消</button>
                     </div>
                 </div>
             </div>
@@ -1000,8 +1001,8 @@
                         </span>
                     </label>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
-                        <button id="resource-source-import-submit-btn" type="button" onclick="importResourceSources()" class="bg-sky-600 hover:bg-sky-500 rounded-xl py-3 font-bold text-white">开始导入</button>
-                        <button type="button" onclick="closeResourceSourceImportModal()" class="bg-slate-700 hover:bg-slate-600 rounded-xl py-3 font-bold text-white">取消</button>
+                        <button id="resource-source-import-submit-btn" type="button" onclick="importResourceSources()" class="resource-source-modal-action-btn resource-source-modal-action-btn-primary">开始导入</button>
+                        <button type="button" onclick="closeResourceSourceImportModal()" class="resource-source-modal-action-btn resource-source-modal-action-btn-secondary">取消</button>
                     </div>
                 </div>
             </div>
