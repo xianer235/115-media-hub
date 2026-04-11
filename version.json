@@ -1,10 +1,10 @@
 {
-  "version": "0.1.7",
-  "buildDate": "2026-04-10T19:21:42+08:00",
+  "version": "0.1.8",
+  "buildDate": "2026-04-11T16:47:54+08:00",
   "notes": [
-    "油猴脚本支持 magnet / torrent / 115 分享链接识别，并增强 BTIH 提取与一键复制能力。",
-    "新增 /userscript/magnet-helper.user.js 安装入口，旧下载地址自动重定向兼容。",
-    "优化通知推送文案结构与导航按钮文案，提升消息可读性和移动端操作体验。"
+    "订阅命中资源与消息推送标题改为优先使用中文名，降低英文标题干扰。",
+    "任务状态中的 matched_resource_title 同步改为中文优先，页面展示与推送口径保持一致。",
+    "保留英文名回退逻辑：无中文标题时仍会继续显示资源原始标题。"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

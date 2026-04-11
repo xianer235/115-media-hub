@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.8] - 2026-04-11
+- 订阅任务命中资源标题改为优先使用中文名，优先取 TMDB 中文标题与任务中文别名。
+- 企业微信订阅成功推送中的“命中资源”展示改为中文优先，和页面任务状态保持一致。
+- 无中文标题时仍保留英文资源名回退，避免影响现有资源匹配与导入流程。
+
 ## [0.1.7] - 2026-04-10
 - 油猴脚本新增 magnet / torrent / 115 分享链接识别，支持更多哈希解析与一键复制，提升导入兼容性。
 - 新增 `/userscript/magnet-helper.user.js` 安装入口，旧 `/download/userscript/magnet-helper.user.js` 自动重定向兼容。
