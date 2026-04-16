@@ -118,6 +118,7 @@ TG_SEARCH_CHANNEL_TIMEOUT_SECONDS = max(5, int(os.environ.get("TG_SEARCH_CHANNEL
 TG_CHANNEL_THREADS_MAX = 20
 TG_CHANNEL_THREADS_DEFAULT = max(1, min(TG_CHANNEL_THREADS_MAX, int(os.environ.get("TG_CHANNEL_THREADS_DEFAULT", 6) or 6)))
 TG_FETCH_RETRY_ATTEMPTS = max(1, int(os.environ.get("TG_FETCH_RETRY_ATTEMPTS", 3) or 3))
+RESOURCE_QUICK_LINKS_LIMIT = 60
 TG_FETCH_RETRY_DELAY_SECONDS = max(0.2, float(os.environ.get("TG_FETCH_RETRY_DELAY_SECONDS", 0.8) or 0.8))
 RESOURCE_IMPORT_TIMEOUT_SECONDS = max(10, min(900, int(os.environ.get("RESOURCE_IMPORT_TIMEOUT_SECONDS", 90) or 90)))
 RESOURCE_JOB_STALE_RECOVER_SECONDS = max(
@@ -273,6 +274,7 @@ def default_config() -> Dict[str, Any]:
         "monitor_tasks": [],
         "subscription_tasks": [],
         "resource_sources": [],
+        "resource_quick_links": [],
     }
 
 
@@ -643,7 +645,7 @@ def convert_subscription_absolute_to_season_episode(task: Dict[str, Any], absolu
 
 
 def build_subscription_tv_savepath(task: Dict[str, Any], base_savepath: str, season: int = 0, episode: int = 0) -> str:
-    normalized_base = normalize_relative_path(base_savepath)
+    normalized_base = resolve_subscription_tv_base_savepath(task, base_savepath)
     if not normalized_base:
         return ""
     if str((task or {}).get("media_type", "movie") or "movie").strip().lower() != "tv":
@@ -659,6 +661,39 @@ def build_subscription_tv_savepath(task: Dict[str, Any], base_savepath: str, sea
 
     season_folder = f"Season {resolved_season:02d}"
     return join_relative_path(normalized_base, season_folder)
+
+
+def is_subscription_season_folder_name(value: Any) -> bool:
+    folder_name = str(value or "").strip()
+    if not folder_name:
+        return False
+    if re.fullmatch(r"(?i)season\s*(?:0|o)?\d{1,2}", folder_name):
+        return True
+    if re.fullmatch(r"(?i)s(?:0|o)?\d{1,2}", folder_name):
+        return True
+    if re.fullmatch(r"第\s*[零〇一二三四五六七八九十两兩\d]{1,4}\s*季", folder_name):
+        return True
+    return False
+
+
+def resolve_subscription_tv_base_savepath(task: Dict[str, Any], base_savepath: str) -> str:
+    normalized_base = normalize_relative_path(base_savepath)
+    if not normalized_base:
+        return ""
+    payload = task if isinstance(task, dict) else {}
+    if str(payload.get("media_type", "movie") or "movie").strip().lower() != "tv":
+        return normalized_base
+    if not is_subscription_multi_season_mode(payload):
+        return normalized_base
+
+    parts = [part for part in normalized_base.split("/") if part]
+    if len(parts) <= 1:
+        return normalized_base
+    if not is_subscription_season_folder_name(parts[-1]):
+        return normalized_base
+
+    parent_path = "/".join(parts[:-1]).strip("/")
+    return parent_path or normalized_base
 
 
 def is_subscription_anime_compatible_task(task: Dict[str, Any]) -> bool:
@@ -877,6 +912,109 @@ def normalize_resource_source(source: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def create_resource_quick_link_id() -> str:
+    seed = f"{time.time_ns()}-{os.urandom(8).hex()}"
+    return f"rql_{hashlib.sha1(seed.encode('utf-8')).hexdigest()[:12]}"
+
+
+def normalize_resource_quick_link_name(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip())
+
+
+def normalize_resource_quick_link_url(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    candidate = raw if re.match(r"^[a-z][a-z0-9+.-]*://", raw, re.I) else f"https://{raw}"
+    try:
+        parsed = urllib.parse.urlparse(candidate)
+    except Exception:
+        return ""
+    scheme = str(parsed.scheme or "").lower()
+    if scheme not in ("http", "https"):
+        return ""
+    netloc = str(parsed.netloc or "").strip()
+    if not netloc:
+        return ""
+    normalized = parsed._replace(scheme=scheme, fragment="")
+    return urllib.parse.urlunparse(normalized)
+
+
+def build_resource_quick_link_fingerprint(url: Any) -> str:
+    normalized_url = normalize_resource_quick_link_url(url)
+    if not normalized_url:
+        return ""
+    try:
+        parsed = urllib.parse.urlparse(normalized_url)
+    except Exception:
+        return normalized_url.lower()
+    normalized = parsed._replace(
+        scheme=str(parsed.scheme or "").lower(),
+        netloc=str(parsed.netloc or "").lower(),
+        fragment="",
+    )
+    return urllib.parse.urlunparse(normalized)
+
+
+def suggest_resource_quick_link_name(url: Any) -> str:
+    normalized_url = normalize_resource_quick_link_url(url)
+    if not normalized_url:
+        return "网盘分享"
+    try:
+        host = str(urllib.parse.urlparse(normalized_url).hostname or "").strip().lower()
+    except Exception:
+        host = ""
+    return host or "网盘分享"
+
+
+def normalize_resource_quick_link(item: Dict[str, Any]) -> Dict[str, Any]:
+    payload = item if isinstance(item, dict) else {}
+    normalized_url = normalize_resource_quick_link_url(
+        payload.get("url", "") or payload.get("link_url", "") or payload.get("href", "")
+    )
+    if not normalized_url:
+        return {}
+    fingerprint = build_resource_quick_link_fingerprint(normalized_url)
+    now_ms = int(time.time() * 1000)
+    created_at_raw = int(payload.get("created_at", now_ms) or now_ms)
+    updated_at_raw = int(payload.get("updated_at", created_at_raw) or created_at_raw)
+    last_used_at_raw = int(payload.get("last_used_at", 0) or 0)
+    return {
+        "id": str(payload.get("id", "") or "").strip() or create_resource_quick_link_id(),
+        "name": normalize_resource_quick_link_name(payload.get("name", "") or payload.get("title", ""))
+        or suggest_resource_quick_link_name(normalized_url),
+        "url": normalized_url,
+        "fingerprint": fingerprint,
+        "created_at": max(0, created_at_raw),
+        "updated_at": max(0, updated_at_raw),
+        "last_used_at": max(0, last_used_at_raw),
+    }
+
+
+def normalize_resource_quick_links(items: Any) -> List[Dict[str, Any]]:
+    source_list = items if isinstance(items, list) else []
+    normalized_links: List[Dict[str, Any]] = []
+    seen_fingerprints: Set[str] = set()
+    seen_ids: Set[str] = set()
+    for raw_item in source_list:
+        item = normalize_resource_quick_link(raw_item or {})
+        if not item:
+            continue
+        fingerprint = str(item.get("fingerprint", "") or "").strip()
+        if not fingerprint or fingerprint in seen_fingerprints:
+            continue
+        link_id = str(item.get("id", "") or "").strip() or create_resource_quick_link_id()
+        if link_id in seen_ids:
+            link_id = create_resource_quick_link_id()
+        item["id"] = link_id
+        seen_fingerprints.add(fingerprint)
+        seen_ids.add(link_id)
+        normalized_links.append(item)
+        if len(normalized_links) >= RESOURCE_QUICK_LINKS_LIMIT:
+            break
+    return normalized_links
+
+
 def normalize_sign115_cron_time(value: Any, fallback: str = "09:00") -> str:
     text = str(value or "").strip()
     if not text:
@@ -945,6 +1083,8 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         merged["subscription_tasks"] = []
     if "resource_sources" not in merged or not isinstance(merged["resource_sources"], list):
         merged["resource_sources"] = []
+    if "resource_quick_links" not in merged or not isinstance(merged["resource_quick_links"], list):
+        merged["resource_quick_links"] = []
 
     merged["trees"] = merged.get("trees") or [{"url": "", "prefix": "", "exclude": 1}]
     if not str(merged.get("extensions", "")).strip() or merged.get("extensions") == LEGACY_DEFAULT_EXTENSIONS:
@@ -995,6 +1135,7 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         seen_sources.add(source_key)
         normalized_sources.append(source)
     merged["resource_sources"] = normalized_sources
+    merged["resource_quick_links"] = normalize_resource_quick_links(merged.get("resource_quick_links", []))
     merged["mount_path"] = normalize_remote_path(merged.get("mount_path", "/115"))
     merged["alist_url"] = str(merged.get("alist_url", "")).strip().rstrip("/")
     merged["webhook_secret"] = str(merged.get("webhook_secret", "")).strip()
@@ -4490,6 +4631,7 @@ async def build_resource_state_payload(search: str = "") -> Dict[str, Any]:
     }
     return {
         "sources": clone_jsonable(sources),
+        "quick_links": clone_jsonable(cfg.get("resource_quick_links", [])),
         "items": clone_jsonable(items),
         "jobs": clone_jsonable(jobs),
         "monitor_tasks": clone_jsonable(cfg.get("monitor_tasks", [])),
@@ -5776,9 +5918,13 @@ def _build_115_share_snap_cache_key(share_code: str, receive_code: str, cid: str
     return hashlib.sha1(source.encode("utf-8")).hexdigest()
 
 
-def _throttle_115_share_snap_requests() -> None:
+def _throttle_115_share_snap_requests(rate_limit_seconds: float = 0.0) -> None:
     global _share_snap_last_request_monotonic
-    min_interval = max(0.0, float(SHARE_SNAP_RATE_LIMIT_SECONDS or 0.0))
+    requested_interval = float(rate_limit_seconds or 0.0)
+    if requested_interval > 0:
+        min_interval = max(0.0, requested_interval)
+    else:
+        min_interval = max(0.0, float(SHARE_SNAP_RATE_LIMIT_SECONDS or 0.0))
     if min_interval <= 0:
         return
     with _share_snap_rate_limit_lock:
@@ -5904,6 +6050,10 @@ def list_115_share_entries(
     raw_text: str = "",
     cid: str = "0",
     receive_code: str = "",
+    force_refresh: bool = False,
+    request_timeout: int = 45,
+    rate_limit_seconds: float = 0.0,
+    max_request_retries: int = 2,
 ) -> Dict[str, Any]:
     cookie = str(cookie or "").strip()
     if not cookie:
@@ -5912,10 +6062,14 @@ def list_115_share_entries(
     share_code = str(parsed.get("share_code", "") or "").strip()
     receive_code = str(parsed.get("receive_code", "") or "").strip()
     current_cid = str(cid or "0").strip() or "0"
-    fresh_cache = load_115_share_snap_cache(share_code, receive_code, current_cid, allow_expired=False)
-    if fresh_cache:
-        return fresh_cache
     stale_cache = load_115_share_snap_cache(share_code, receive_code, current_cid, allow_expired=True)
+    if not force_refresh:
+        fresh_cache = load_115_share_snap_cache(share_code, receive_code, current_cid, allow_expired=False)
+        if fresh_cache:
+            return fresh_cache
+
+    request_timeout_value = max(5, int(request_timeout or 45))
+    retry_total = max(0, int(max_request_retries or 0))
 
     headers = {
         "Cookie": cookie,
@@ -5927,7 +6081,6 @@ def list_115_share_entries(
     offset = 0
     limit = 200
     total_count = 0
-    max_request_retries = 2
 
     while True:
         query = urllib.parse.urlencode(
@@ -5944,19 +6097,19 @@ def list_115_share_entries(
         )
         result: Dict[str, Any] = {}
         last_request_error: Optional[Exception] = None
-        for attempt in range(0, max_request_retries + 1):
+        for attempt in range(0, retry_total + 1):
             try:
-                _throttle_115_share_snap_requests()
+                _throttle_115_share_snap_requests(rate_limit_seconds=rate_limit_seconds)
                 result = http_request_json(
                     f"https://webapi.115.com/share/snap?{query}",
                     extra_headers=headers,
-                    timeout=45,
+                    timeout=request_timeout_value,
                 )
                 last_request_error = None
                 break
             except Exception as exc:
                 last_request_error = exc
-                if (not _is_retryable_115_share_snap_error(exc)) or attempt >= max_request_retries:
+                if (not _is_retryable_115_share_snap_error(exc)) or attempt >= retry_total:
                     break
                 time.sleep(0.6 * (attempt + 1))
         if last_request_error is not None:

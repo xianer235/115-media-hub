@@ -15,7 +15,7 @@
             last_sign_at: '',
             last_trigger: ''
         };
-        let resourceState = { sources: [], items: [], jobs: [], channel_sections: [], channel_profiles: {}, search_sections: [], last_syncs: {}, monitor_tasks: [], stats: { source_count: 0, item_count: 0, filtered_item_count: 0, completed_job_count: 0 }, cookie_configured: false, search: '', search_meta: {} };
+        let resourceState = { sources: [], quick_links: [], items: [], jobs: [], channel_sections: [], channel_profiles: {}, search_sections: [], last_syncs: {}, monitor_tasks: [], stats: { source_count: 0, item_count: 0, filtered_item_count: 0, completed_job_count: 0 }, cookie_configured: false, search: '', search_meta: {} };
         let editingMonitorName = null;
         let editingSubscriptionName = null;
         let editingResourceSourceIndex = null;
@@ -89,6 +89,7 @@
         let resourceSourceImportModalOpen = false;
         let resourceSourceManagerOpen = false;
         let resourceQuickLinks = [];
+        let resourceQuickLinksMigrationChecked = false;
         let editingResourceQuickLinkId = '';
         let resourceSourceFilter = 'all';
         let resourceSourceEnabledFilter = 'all';
@@ -3626,29 +3627,70 @@
             }));
         }
 
-        function persistResourceQuickLinksToStorage() {
+        function readResourceQuickLinksFromStorage() {
             try {
-                localStorage.setItem(RESOURCE_QUICK_LINKS_MEMORY_KEY, JSON.stringify(serializeResourceQuickLinks(resourceQuickLinks)));
+                const raw = localStorage.getItem(RESOURCE_QUICK_LINKS_MEMORY_KEY);
+                return raw ? JSON.parse(raw) : [];
+            } catch (e) {
+                return [];
+            }
+        }
+
+        function clearResourceQuickLinksStorage() {
+            try {
+                localStorage.removeItem(RESOURCE_QUICK_LINKS_MEMORY_KEY);
             } catch (e) {}
         }
 
-        function setResourceQuickLinks(nextLinks, { persist = true, render = true } = {}) {
+        async function persistResourceQuickLinksToBackend(nextLinks, { silent = false, clearLocalOnSuccess = false } = {}) {
+            const payload = serializeResourceQuickLinks(nextLinks);
+            try {
+                const res = await fetch('/resource/quick_links/save', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ quick_links: payload })
+                });
+                const data = await res.json();
+                if (!res.ok || !data.ok) throw new Error(data.msg || '保存常用网盘链接失败');
+                setResourceQuickLinks(Array.isArray(data.quick_links) ? data.quick_links : payload, { render: true });
+                if (clearLocalOnSuccess) clearResourceQuickLinksStorage();
+                return true;
+            } catch (e) {
+                if (!silent) {
+                    showToast(`常用网盘链接保存失败：${e.message || '未知错误'}`, { tone: 'error', duration: 2800, placement: 'top-center' });
+                }
+                return false;
+            }
+        }
+
+        function setResourceQuickLinks(nextLinks, { render = true } = {}) {
             resourceQuickLinks = normalizeResourceQuickLinks(nextLinks);
-            if (persist) persistResourceQuickLinksToStorage();
             if (render) {
                 renderResourceQuickLinkStrip();
                 renderResourceQuickLinkList();
             }
         }
 
-        function loadResourceQuickLinksFromStorage() {
-            try {
-                const raw = localStorage.getItem(RESOURCE_QUICK_LINKS_MEMORY_KEY);
-                const parsed = raw ? JSON.parse(raw) : [];
-                setResourceQuickLinks(parsed, { persist: true, render: true });
-            } catch (e) {
-                setResourceQuickLinks([], { persist: false, render: true });
+        async function migrateResourceQuickLinksFromStorageIfNeeded(serverLinks = []) {
+            if (resourceQuickLinksMigrationChecked) return;
+            resourceQuickLinksMigrationChecked = true;
+            const localLinks = normalizeResourceQuickLinks(readResourceQuickLinksFromStorage());
+            if (!localLinks.length) {
+                clearResourceQuickLinksStorage();
+                return;
             }
+            if (Array.isArray(serverLinks) && serverLinks.length) {
+                clearResourceQuickLinksStorage();
+                return;
+            }
+            const migrated = await persistResourceQuickLinksToBackend(localLinks, { silent: true, clearLocalOnSuccess: true });
+            if (migrated) {
+                showToast('已将本地常用网盘链接迁移到后端，可多端同步', { tone: 'success', duration: 2600, placement: 'top-center' });
+            }
+        }
+
+        function loadResourceQuickLinksFromStorage() {
+            setResourceQuickLinks(readResourceQuickLinksFromStorage(), { render: true });
             syncResourceQuickLinkFormState();
         }
 
@@ -3824,7 +3866,9 @@
                     updated_at: Math.max(Number(item?.updated_at || 0), now),
                 };
             });
-            if (changed) setResourceQuickLinks(nextLinks, { persist: true, render: true });
+            if (!changed) return;
+            setResourceQuickLinks(nextLinks, { render: true });
+            void persistResourceQuickLinksToBackend(nextLinks, { silent: true });
         }
 
         async function useResourceQuickLinkForSearch(linkId, { closeModal = false } = {}) {
@@ -3863,7 +3907,7 @@
             }
         }
 
-        function saveResourceQuickLink() {
+        async function saveResourceQuickLink() {
             const nameInput = document.getElementById('resource-quick-link-name');
             const urlInput = document.getElementById('resource-quick-link-url');
             if (!nameInput || !urlInput) return;
@@ -3895,7 +3939,8 @@
                         updated_at: now,
                     };
                 });
-                setResourceQuickLinks(mergedLinks, { persist: true, render: true });
+                const saved = await persistResourceQuickLinksToBackend(mergedLinks);
+                if (!saved) return;
                 editingResourceQuickLinkId = String(duplicate?.id || '').trim();
                 syncResourceQuickLinkFormState();
                 nameInput.value = normalizedName;
@@ -3918,7 +3963,8 @@
                     };
                 });
                 if (updated) {
-                    setResourceQuickLinks(nextLinks, { persist: true, render: true });
+                    const saved = await persistResourceQuickLinksToBackend(nextLinks);
+                    if (!saved) return;
                     showToast('常用网盘链接已更新', { tone: 'success', duration: 2200, placement: 'top-center' });
                     resetResourceQuickLinkForm();
                     urlInput.value = normalizedUrl;
@@ -3937,7 +3983,9 @@
                 updated_at: now,
                 last_used_at: 0,
             };
-            setResourceQuickLinks([newItem, ...(resourceQuickLinks || [])], { persist: true, render: true });
+            const nextLinks = [newItem, ...(resourceQuickLinks || [])];
+            const saved = await persistResourceQuickLinksToBackend(nextLinks);
+            if (!saved) return;
             resetResourceQuickLinkForm();
             urlInput.value = normalizedUrl;
             nameInput.focus();
@@ -3949,13 +3997,14 @@
             );
         }
 
-        function deleteResourceQuickLink(linkId) {
+        async function deleteResourceQuickLink(linkId) {
             const item = getResourceQuickLinkById(linkId);
             if (!item) return;
             if (!confirm(`确认删除常用链接「${item.name || '未命名链接'}」吗？`)) return;
             const targetId = String(item.id || '').trim();
             const nextLinks = (resourceQuickLinks || []).filter(link => String(link?.id || '').trim() !== targetId);
-            setResourceQuickLinks(nextLinks, { persist: true, render: true });
+            const saved = await persistResourceQuickLinksToBackend(nextLinks);
+            if (!saved) return;
             if (String(editingResourceQuickLinkId || '').trim() === targetId) resetResourceQuickLinkForm();
             showToast('常用链接已删除', { tone: 'success', duration: 2200, placement: 'top-center' });
         }
@@ -4338,26 +4387,26 @@
                     <button type="button" data-resource-action="preview" data-resource-id="${item.id}" class="resource-card-preview-trigger shrink-0">
                         ${buildResourcePoster(item)}
                     </button>
-                    <div class="min-w-0">
-                        <div class="flex items-start justify-between gap-3">
+                    <div class="resource-card-content">
+                        <div class="resource-card-header">
                             <div class="min-w-0">
                                 <button type="button" data-resource-action="preview" data-resource-id="${item.id}" class="resource-card-title break-words text-left bg-transparent border-none p-0 hover:text-sky-700 transition-colors">${escapeHtml(item?.title || '未命名资源')}</button>
-                                    <div class="flex flex-wrap items-center gap-2 mt-2">
-                                        ${buildResourceStatusBadge(getResourceDisplayStatus(item))}
-                                        <span class="text-[10px] px-3 py-1 rounded-full bg-slate-700 text-slate-100">${escapeHtml(getResourceLinkTypeLabel(getEffectiveResourceLinkType(item)))}</span>
-                                        ${item?.quality ? `<span class="text-[10px] px-3 py-1 rounded-full bg-sky-500/15 text-sky-300 border border-sky-500/20">${escapeHtml(item.quality)}</span>` : ''}
-                                        ${item?.year ? `<span class="text-[10px] px-3 py-1 rounded-full bg-violet-500/15 text-violet-300 border border-violet-500/20">${escapeHtml(item.year)}</span>` : ''}
-                                    </div>
+                                <div class="resource-card-badges">
+                                    ${buildResourceStatusBadge(getResourceDisplayStatus(item))}
+                                    <span class="text-[10px] px-3 py-1 rounded-full bg-slate-700 text-slate-100">${escapeHtml(getResourceLinkTypeLabel(getEffectiveResourceLinkType(item)))}</span>
+                                    ${item?.quality ? `<span class="text-[10px] px-3 py-1 rounded-full bg-sky-500/15 text-sky-300 border border-sky-500/20">${escapeHtml(item.quality)}</span>` : ''}
+                                    ${item?.year ? `<span class="text-[10px] px-3 py-1 rounded-full bg-violet-500/15 text-violet-300 border border-violet-500/20">${escapeHtml(item.year)}</span>` : ''}
+                                </div>
                             </div>
-                            <button type="button" data-resource-action="subscribe" data-resource-id="${item.id}" class="resource-card-subscribe-btn shrink-0">转订阅</button>
                         </div>
-                        <div class="resource-card-meta mt-3">${buildResourceMeta(item)}</div>
-                        <div class="resource-card-desc mt-3">${buildResourceDescription(item)}</div>
-                        <div class="resource-card-actions">
-                            <button type="button" data-resource-action="preview" data-resource-id="${item.id}" class="resource-card-action-secondary">详情</button>
-                            <button type="button" data-resource-action="copy" data-resource-id="${item.id}" class="resource-card-action-secondary ${copyDisabled}" ${copyDisabled ? 'disabled' : ''}>${escapeHtml(getResourceCopyLabel(item))}</button>
-                            <button type="button" data-resource-action="import" data-resource-id="${item.id}" class="${importClass}" ${importOpenable ? '' : 'disabled'}>导入</button>
-                        </div>
+                        <div class="resource-card-meta">${buildResourceMeta(item)}</div>
+                    </div>
+                    <div class="resource-card-desc">${buildResourceDescription(item)}</div>
+                    <div class="resource-card-actions">
+                        <button type="button" data-resource-action="preview" data-resource-id="${item.id}" class="resource-card-action-secondary">详情</button>
+                        <button type="button" data-resource-action="copy" data-resource-id="${item.id}" class="resource-card-action-secondary ${copyDisabled}" ${copyDisabled ? 'disabled' : ''}>${escapeHtml(getResourceCopyLabel(item))}</button>
+                        <button type="button" data-resource-action="subscribe" data-resource-id="${item.id}" class="resource-card-action-subscribe">转订阅</button>
+                        <button type="button" data-resource-action="import" data-resource-id="${item.id}" class="${importClass}" ${importOpenable ? '' : 'disabled'}>导入</button>
                     </div>
                 </article>
             `;
@@ -4820,6 +4869,7 @@
         function applyResourceState(data) {
             if (!data) return;
             const nextSources = Array.isArray(data.sources) ? data.sources : (resourceState.sources || []);
+            const nextQuickLinks = Array.isArray(data.quick_links) ? data.quick_links : (resourceState.quick_links || []);
             const nextItems = hydrateResourceItems(Array.isArray(data.items) ? data.items : (resourceState.items || []));
             const nextJobs = Array.isArray(data.jobs) ? data.jobs : (resourceState.jobs || []);
             const nextStats = data.stats || {
@@ -4833,6 +4883,7 @@
                 ...resourceState,
                 ...data,
                 sources: nextSources,
+                quick_links: nextQuickLinks,
                 items: nextItems,
                 jobs: nextJobs,
                 channel_sections: hydrateResourceSections(Array.isArray(data.channel_sections) ? data.channel_sections : (resourceState.channel_sections || [])),
@@ -4848,6 +4899,8 @@
             };
             normalizeResourceSourceBulkSelections();
             syncResourceChannelPagingState();
+            setResourceQuickLinks(nextQuickLinks, { render: true });
+            void migrateResourceQuickLinksFromStorageIfNeeded(nextQuickLinks);
             if (selectedResourceId) {
                 const refreshedSelectedItem = findResourceItem(selectedResourceId);
                 if (refreshedSelectedItem) selectedResourceItem = refreshedSelectedItem;
@@ -8438,6 +8491,7 @@
                 applyResourceState({
                     ...resourceState,
                     sources: cfg.resource_sources || [],
+                    quick_links: cfg.resource_quick_links || [],
                     monitor_tasks: cfg.monitor_tasks || [],
                     cookie_configured: !!String(cfg.cookie_115 || '').trim()
                 });
@@ -8547,14 +8601,14 @@
                 return;
             }
             if (action === 'delete') {
-                deleteResourceQuickLink(linkId);
+                await deleteResourceQuickLink(linkId);
             }
         });
         ['resource-quick-link-name', 'resource-quick-link-url'].forEach(id => {
-            document.getElementById(id).addEventListener('keydown', (e) => {
+            document.getElementById(id).addEventListener('keydown', async (e) => {
                 if (e.key !== 'Enter' || e.isComposing) return;
                 e.preventDefault();
-                saveResourceQuickLink();
+                await saveResourceQuickLink();
             });
         });
         document.getElementById('resource-job-modal-toggle').addEventListener('click', () => {

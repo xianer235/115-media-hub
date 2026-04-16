@@ -2197,6 +2197,10 @@
             position: relative;
             display: grid;
             grid-template-columns: 108px minmax(0, 1fr);
+            grid-template-areas:
+                "poster main"
+                "poster desc"
+                "actions actions";
             gap: 1rem;
             align-items: start;
             padding: 1rem;
@@ -2205,6 +2209,29 @@
             border: 1px solid rgba(51, 65, 85, 0.92);
             box-shadow: 0 16px 34px rgba(2, 6, 23, 0.28);
             color: #e2e8f0;
+        }
+        .resource-card-preview-trigger {
+            grid-area: poster;
+            align-self: start;
+        }
+        .resource-card-content {
+            grid-area: main;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+        }
+        .resource-card-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: flex-start;
+            gap: 0.75rem;
+        }
+        .resource-card-badges {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.5rem;
+            margin-top: 0.6rem;
         }
         .resource-poster {
             width: 108px;
@@ -2234,11 +2261,14 @@
             color: #f8fafc;
         }
         .resource-card-meta {
+            margin-top: 0.75rem;
             font-size: 0.74rem;
             line-height: 1.6;
             color: #94a3b8;
         }
         .resource-card-desc {
+            grid-area: desc;
+            margin-top: 0;
             font-size: 0.78rem;
             line-height: 1.72;
             color: #cbd5e1;
@@ -2247,28 +2277,12 @@
             -webkit-box-orient: vertical;
             overflow: hidden;
         }
-        .resource-card-subscribe-btn {
-            min-height: 34px;
-            padding: 0.36rem 0.9rem;
-            border-radius: 9999px;
-            font-size: 0.72rem;
-            font-weight: 800;
-            color: #fcd34d;
-            background: rgba(245, 158, 11, 0.14);
-            border: 1px solid rgba(245, 158, 11, 0.42);
-            white-space: nowrap;
-            transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease;
-        }
-        .resource-card-subscribe-btn:hover {
-            background: rgba(245, 158, 11, 0.2);
-            border-color: rgba(251, 191, 36, 0.62);
-            color: #fde68a;
-        }
         .resource-card-actions {
+            grid-area: actions;
             display: grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
+            grid-template-columns: repeat(4, minmax(0, 1fr));
             gap: 0.55rem;
-            margin-top: 0.9rem;
+            margin-top: 0;
         }
         .resource-card-actions button,
         .resource-card-actions a {
@@ -2292,6 +2306,16 @@
             background: rgba(30, 41, 59, 0.88);
             color: #f8fafc;
             border-color: rgba(125, 211, 252, 0.45);
+        }
+        .resource-card-action-subscribe {
+            background: rgba(245, 158, 11, 0.14);
+            color: #fcd34d;
+            border: 1px solid rgba(245, 158, 11, 0.42);
+        }
+        .resource-card-action-subscribe:hover {
+            background: rgba(245, 158, 11, 0.2);
+            border-color: rgba(251, 191, 36, 0.62);
+            color: #fde68a;
         }
         .resource-card-action-primary {
             background: linear-gradient(135deg, #3b82f6, #2563eb);
@@ -3341,7 +3365,7 @@
                 font-size: 0.68rem;
             }
             .resource-card-actions {
-                grid-template-columns: repeat(3, minmax(0, 1fr));
+                grid-template-columns: repeat(4, minmax(0, 1fr));
                 gap: 0.42rem;
             }
             .resource-card-actions button,
@@ -3500,25 +3524,65 @@
             .resource-section-header { padding: 1rem; }
             .resource-section-body { padding: 0 1rem 1rem; }
             .resource-card {
-                grid-template-columns: 1fr;
-                gap: 0.6rem;
-                padding: 0.78rem;
+                grid-template-columns: 92px minmax(0, 1fr);
+                grid-template-areas:
+                    "poster main"
+                    "desc desc"
+                    "actions actions";
+                gap: 0.75rem;
+                padding: 0.82rem;
             }
             .resource-card > .resource-card-preview-trigger {
-                width: 100%;
+                width: 92px;
             }
             .resource-card .resource-poster,
             .resource-card .resource-placeholder {
-                width: 100%;
-                max-width: 124px;
-                height: 168px;
+                width: 92px;
+                max-width: none;
+                height: 126px;
             }
-            .resource-card .resource-card-meta,
+            .resource-card .resource-card-content {
+                gap: 0.45rem;
+            }
+            .resource-card .resource-card-header {
+                align-items: flex-start;
+                gap: 0.55rem;
+            }
+            .resource-card .resource-card-header > .min-w-0 {
+                flex: 1 1 auto;
+                min-width: 0;
+            }
+            .resource-card .resource-card-title {
+                display: -webkit-box;
+                -webkit-line-clamp: 2;
+                -webkit-box-orient: vertical;
+                overflow: hidden;
+            }
+            .resource-card .resource-card-badges {
+                gap: 0.35rem;
+                margin-top: 0.45rem;
+            }
+            .resource-card .resource-card-meta {
+                margin-top: 0;
+                font-size: 0.7rem;
+                line-height: 1.45;
+                display: -webkit-box;
+                -webkit-line-clamp: 2;
+                -webkit-box-orient: vertical;
+                overflow: hidden;
+            }
             .resource-card .resource-card-desc {
-                display: none;
+                display: -webkit-box;
+                margin-top: 0;
+                padding-top: 0.1rem;
+                font-size: 0.74rem;
+                line-height: 1.6;
+                -webkit-line-clamp: 3;
+                -webkit-box-orient: vertical;
+                overflow: hidden;
             }
             .resource-card .resource-card-actions {
-                margin-top: 0.45rem;
+                margin-top: 0.15rem;
             }
             .resource-browser-header,
             .resource-browser-row {
@@ -4195,6 +4259,16 @@
             background: #eff6ff;
             color: #2563eb;
             border-color: rgba(37, 99, 235, 0.12);
+        }
+        html.theme-day .resource-card-action-subscribe {
+            background: #fed7aa;
+            color: #9a3412;
+            border-color: rgba(194, 65, 12, 0.28);
+        }
+        html.theme-day .resource-card-action-subscribe:hover {
+            background: #fdba74;
+            color: #7c2d12;
+            border-color: rgba(154, 52, 18, 0.38);
         }
         html.theme-day .resource-card-subscribe-btn {
             color: #b45309;

@@ -38,6 +38,16 @@ async def save_resource_sources(request: Request) -> Dict[str, Any]:
     return {"ok": True, "sources": normalized}
 
 
+@router.post("/resource/quick_links/save")
+async def save_resource_quick_links_endpoint(request: Request) -> Dict[str, Any]:
+    data = await request.json()
+    normalized = normalize_resource_quick_links(data.get("quick_links", []))
+    cfg = get_config()
+    cfg["resource_quick_links"] = normalized
+    save_config(cfg)
+    return {"ok": True, "quick_links": clone_jsonable(normalized)}
+
+
 @router.post("/resource/channels/sync")
 async def sync_resource_channels_endpoint(request: Request) -> Dict[str, Any]:
     data = await request.json()
