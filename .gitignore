@@ -23,3 +23,9 @@ preview-runtime/
 # macOS Finder metadata
 .DS_Store
 **/.DS_Store
+
+# local editor settings
+.vscode/
+
+# local agent handoff context (not for repo)
+doc/

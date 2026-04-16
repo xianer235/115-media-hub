@@ -12,3 +12,7 @@ __pycache__/
 .cursor/
 .codex-ui-check/
 preview-runtime/
+.vscode/
+
+# local agent handoff context (not for image build context)
+doc/
