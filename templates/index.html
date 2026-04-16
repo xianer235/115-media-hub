@@ -102,6 +102,17 @@
         </div>
 
         <div id="page-resource" class="space-y-4">
+            <div id="resource-onboarding-card" class="group-card resource-onboarding-card hidden">
+                <div class="resource-onboarding-head">
+                    <div>
+                        <div class="resource-onboarding-title">新用户初始化引导</div>
+                        <div class="resource-onboarding-sub">按顺序完成 5 步配置，可快速打通「导入 -> 刷新 -> 生成 strm」链路。</div>
+                    </div>
+                    <button type="button" onclick="switchTab('settings')" class="resource-onboarding-action">前往参数配置</button>
+                </div>
+                <div id="resource-onboarding-steps" class="resource-onboarding-steps"></div>
+            </div>
+
             <div class="group-card resource-shell">
                 <div class="relative z-[1] resource-search-panel">
                     <div class="resource-search-head">
@@ -924,7 +935,11 @@
                         <h3 id="subscription-episode-modal-title" class="group-title mb-0">集数视图</h3>
                         <div id="subscription-episode-modal-summary" class="text-xs text-slate-400 mt-2">点击任务卡片里的“集数视图”查看。</div>
                     </div>
-                    <div class="flex items-center gap-2">
+                    <div class="flex items-center gap-2 flex-wrap justify-end">
+                        <div id="subscription-episode-view-mode-switch" class="hidden items-center gap-1 rounded-lg border border-slate-700 bg-slate-900/70 p-1">
+                            <button id="subscription-episode-mode-absolute" type="button" onclick="setSubscriptionEpisodeViewMode('absolute')" class="px-2.5 py-1.5 rounded-md text-[11px] font-bold bg-sky-500/20 text-sky-200">绝对集数</button>
+                            <button id="subscription-episode-mode-season" type="button" onclick="setSubscriptionEpisodeViewMode('season')" class="px-2.5 py-1.5 rounded-md text-[11px] font-bold bg-slate-700 text-slate-200">分季视图</button>
+                        </div>
                         <button type="button" onclick="rebuildCurrentSubscriptionEpisodeView()" class="px-3 py-2 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 text-sky-200 text-xs font-bold">按目录重建</button>
                         <button type="button" onclick="refreshSubscriptionEpisodeView(true)" class="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-bold">刷新</button>
                         <button type="button" onclick="closeSubscriptionEpisodeModal()" class="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-bold">关闭</button>
@@ -1149,6 +1164,20 @@
                         </div>
                         <div id="resource-import-save-panel" class="resource-import-side-column resource-import-side-stack">
                             <div id="resource-import-save-hint" class="hidden rounded-2xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm leading-6 text-amber-200"></div>
+                            <div id="resource-import-stepper" class="resource-import-stepper hidden">
+                                <div class="resource-import-step" data-step="1">
+                                    <span class="resource-import-step-index">1</span>
+                                    <span class="resource-import-step-text">选择资源</span>
+                                </div>
+                                <div class="resource-import-step" data-step="2">
+                                    <span class="resource-import-step-index">2</span>
+                                    <span class="resource-import-step-text">选择目录</span>
+                                </div>
+                                <div class="resource-import-step" data-step="3">
+                                    <span class="resource-import-step-index">3</span>
+                                    <span class="resource-import-step-text">提交导入</span>
+                                </div>
+                            </div>
                             <div class="resource-detail-card resource-import-side-shell">
                                 <div class="resource-import-side-header">
                                     <div class="text-sm font-black text-white">保存设置</div>
@@ -1200,6 +1229,7 @@
                             </div>
                         </div>
                     </div>
+                    <div id="resource-import-feedback-card" class="resource-import-feedback hidden"></div>
                     <div id="resource-import-footer" class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
                         <button id="resource-submit-btn" onclick="submitResourceJob()" class="bg-emerald-600 hover:bg-emerald-500 rounded-xl py-3 font-bold text-white">保存到 115</button>
                         <button id="resource-close-btn" onclick="closeResourceJobModal()" class="bg-slate-700 hover:bg-slate-600 rounded-xl py-3 font-bold text-white">取消</button>

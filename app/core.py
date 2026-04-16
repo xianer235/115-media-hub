@@ -167,7 +167,7 @@ TG_EXTRACT_CODE_REGEX = re.compile(
     r"(?:提取码|提取碼|访问码|訪問碼|密码|密碼|访问密码|訪問密碼|口令|pwd|pass(?:word|code)?|code)\s*(?:[:：=]|是|为|為)?\s*([A-Za-z0-9]{4,8})\b",
     re.IGNORECASE,
 )
-RESOURCE_SEASON_EPISODE_REGEX = re.compile(r"\bS(\d{1,2})\s*[-_. ]?\s*E(\d{1,3})\b", re.IGNORECASE)
+RESOURCE_SEASON_EPISODE_REGEX = re.compile(r"\bS(?:0|O)?(\d{1,2})\s*[-_. ]?\s*E(?:0|O)?(\d{1,3})\b", re.IGNORECASE)
 RESOURCE_EPISODE_ONLY_REGEX = re.compile(r"(?:第\s*)(\d{1,3})\s*(?:集|話|话)\b", re.IGNORECASE)
 RESOURCE_EPISODE_CODE_REGEX = re.compile(r"\b(?:EP|E)\s*[-_. ]?\s*(\d{1,3})\b", re.IGNORECASE)
 RESOURCE_EPISODE_RANGE_REGEXES = [
@@ -176,6 +176,7 @@ RESOURCE_EPISODE_RANGE_REGEXES = [
 ]
 RESOURCE_SEASON_ONLY_REGEX = re.compile(r"(?:第\s*)(\d{1,2})\s*季\b", re.IGNORECASE)
 RESOURCE_SEASON_ONLY_CN_REGEX = re.compile(r"(?:第\s*)([零〇一二三四五六七八九十两兩\d]{1,4})\s*季\b", re.IGNORECASE)
+RESOURCE_SEASON_ENGLISH_REGEX = re.compile(r"\bSeason\s*(?:0|O)?(\d{1,2})\b", re.IGNORECASE)
 RESOURCE_TOTAL_EPISODES_REGEXES = [
     re.compile(r"(?:全|共)\s*(\d{1,3})\s*(?:集|話|话)\b", re.IGNORECASE),
     re.compile(r"(\d{1,3})\s*(?:集|話|话)\s*(?:全|完结|完結)\b", re.IGNORECASE),
@@ -618,6 +619,46 @@ def convert_subscription_episode_range_to_absolute(
     if absolute_end > 0 and absolute_start > absolute_end:
         absolute_start, absolute_end = absolute_end, absolute_start
     return absolute_start, absolute_end
+
+
+def convert_subscription_absolute_to_season_episode(task: Dict[str, Any], absolute_episode: int) -> Tuple[int, int]:
+    absolute_value = max(0, int(absolute_episode or 0))
+    if absolute_value <= 0:
+        return 0, 0
+
+    season_map = normalize_tmdb_season_episode_map((task or {}).get("tmdb_season_episode_map", {}))
+    if not season_map:
+        return 0, absolute_value
+
+    remaining = absolute_value
+    season_no = 0
+    while True:
+        season_no += 1
+        season_total = max(0, int(season_map.get(str(season_no), 0) or 0))
+        if season_total <= 0:
+            return 0, absolute_value
+        if remaining <= season_total:
+            return season_no, remaining
+        remaining -= season_total
+
+
+def build_subscription_tv_savepath(task: Dict[str, Any], base_savepath: str, season: int = 0, episode: int = 0) -> str:
+    normalized_base = normalize_relative_path(base_savepath)
+    if not normalized_base:
+        return ""
+    if str((task or {}).get("media_type", "movie") or "movie").strip().lower() != "tv":
+        return normalized_base
+
+    resolved_season = max(0, int(season or 0))
+    resolved_episode = max(0, int(episode or 0))
+    if resolved_season <= 0 and resolved_episode > 0 and is_subscription_multi_season_mode(task):
+        mapped_season, _ = convert_subscription_absolute_to_season_episode(task, resolved_episode)
+        resolved_season = mapped_season
+    if resolved_season <= 0:
+        resolved_season = max(1, int((task or {}).get("season", 1) or 1))
+
+    season_folder = f"Season {resolved_season:02d}"
+    return join_relative_path(normalized_base, season_folder)
 
 
 def is_subscription_anime_compatible_task(task: Dict[str, Any]) -> bool:
@@ -2359,6 +2400,10 @@ def parse_resource_episode_meta(item: Dict[str, Any]) -> Dict[str, int]:
             season_cn_match = RESOURCE_SEASON_ONLY_CN_REGEX.search(text)
             if season_cn_match:
                 season = max(0, parse_small_cjk_number(season_cn_match.group(1), default=0, max_value=99))
+            else:
+                season_en_match = RESOURCE_SEASON_ENGLISH_REGEX.search(text)
+                if season_en_match:
+                    season = max(0, int(season_en_match.group(1) or 0))
         episode_match = RESOURCE_EPISODE_ONLY_REGEX.search(text) or RESOURCE_EPISODE_CODE_REGEX.search(text)
         if episode_match:
             episode = max(0, int(episode_match.group(1) or 0))

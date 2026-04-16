@@ -49,6 +49,7 @@
         let subscriptionEpisodeViewError = '';
         let subscriptionEpisodeViewData = null;
         let subscriptionEpisodeViewCache = {};
+        let subscriptionEpisodeViewMode = 'absolute';
         let subscriptionIntroEpisodeLookupLoading = {};
         let subscriptionIntroEpisodeLookupFailedAt = {};
         let resourceFolderValidationPromise = null;
@@ -99,6 +100,7 @@
         let resourceSourceTestResult = { total: 0, done: 0, success: 0, failed: 0, running: false, last_name: '', error: '' };
         let resourceSubmitBusy = false;
         let resourceJobFilter = 'all';
+        let resourceImportLastFeedback = null;
         let tgProxyTestState = { loading: false, ok: null, message: '', latency_ms: 0, mode: '', proxy_url: '', target_url: '' };
         let notifyTestState = { loading: false, ok: null, message: '', channel: '', target_desc: '', webhook_host: '', sent_at: '' };
         let resourceBoardHintText = '';
@@ -3049,6 +3051,56 @@
             }
         }
 
+        function convertAbsoluteEpisodeToSeasonEpisode(seasonEpisodeMap, absoluteEpisode) {
+            const target = Math.max(0, parseInt(absoluteEpisode || '0', 10) || 0);
+            if (target <= 0) return { season: 0, episode: 0 };
+            const normalizedMap = normalizeTmdbSeasonEpisodeMap(seasonEpisodeMap || {});
+            const seasonList = Object.entries(normalizedMap)
+                .map(([season, total]) => ({
+                    season: Math.max(0, parseInt(season || '0', 10) || 0),
+                    total: Math.max(0, parseInt(total || '0', 10) || 0),
+                }))
+                .filter((item) => item.season > 0 && item.total > 0)
+                .sort((a, b) => a.season - b.season);
+            if (!seasonList.length) return { season: 0, episode: target };
+
+            let remaining = target;
+            for (const item of seasonList) {
+                if (remaining <= item.total) {
+                    return { season: item.season, episode: remaining };
+                }
+                remaining -= item.total;
+            }
+            return { season: 0, episode: target };
+        }
+
+        function toggleSubscriptionEpisodeViewModeSwitch(task, payload) {
+            const switchWrap = document.getElementById('subscription-episode-view-mode-switch');
+            const absoluteBtn = document.getElementById('subscription-episode-mode-absolute');
+            const seasonBtn = document.getElementById('subscription-episode-mode-season');
+            if (!switchWrap || !absoluteBtn || !seasonBtn) return;
+
+            const multiSeason = !!(task?.multi_season_mode ?? task?.anime_mode ?? payload?.multi_season_mode);
+            if (multiSeason) {
+                switchWrap.classList.remove('hidden');
+                switchWrap.classList.add('inline-flex');
+            } else {
+                switchWrap.classList.add('hidden');
+                switchWrap.classList.remove('inline-flex');
+                subscriptionEpisodeViewMode = 'absolute';
+            }
+
+            const activeAbsolute = subscriptionEpisodeViewMode !== 'season';
+            absoluteBtn.className = `px-2.5 py-1.5 rounded-md text-[11px] font-bold ${activeAbsolute ? 'bg-sky-500/20 text-sky-200' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`;
+            seasonBtn.className = `px-2.5 py-1.5 rounded-md text-[11px] font-bold ${!activeAbsolute ? 'bg-sky-500/20 text-sky-200' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`;
+        }
+
+        function setSubscriptionEpisodeViewMode(mode) {
+            const normalized = String(mode || '').trim().toLowerCase();
+            subscriptionEpisodeViewMode = normalized === 'season' ? 'season' : 'absolute';
+            renderSubscriptionEpisodeModal();
+        }
+
         function renderSubscriptionEpisodeModal() {
             const titleEl = document.getElementById('subscription-episode-modal-title');
             const summaryEl = document.getElementById('subscription-episode-modal-summary');
@@ -3085,6 +3137,7 @@
             }
 
             const payload = subscriptionEpisodeViewData || {};
+            toggleSubscriptionEpisodeViewModeSwitch(task, payload);
             const existingEpisodes = normalizeEpisodeList(payload.existing_episodes);
             const existingSet = new Set(existingEpisodes);
             let displayTotal = parseInt(payload.display_total_episodes || '0', 10) || 0;
@@ -3106,23 +3159,93 @@
             const scanEntries = parseInt(scanStats.scanned_entries || '0', 10) || 0;
             const scanFailed = parseInt(scanStats.failed_dirs || '0', 10) || 0;
             const scanTruncated = !!scanStats.truncated;
+            const seasonEpisodeMap = normalizeTmdbSeasonEpisodeMap(task?.tmdb_season_episode_map || {});
+            const useSeasonView = subscriptionEpisodeViewMode === 'season' && !!(task?.multi_season_mode ?? task?.anime_mode);
 
             summaryEl.className = 'text-xs text-slate-300 mt-2';
-            summaryEl.innerText = `已存在 ${presentInRange} 集 / 展示 ${displayTotal} 集（缺失 ${missingCount} 集）`;
+
+            if (!useSeasonView) {
+                summaryEl.innerText = `已存在 ${presentInRange} 集 / 展示 ${displayTotal} 集（缺失 ${missingCount} 集）`;
+                noteEl.innerText = [
+                    `视图：绝对集数`,
+                    `保存路径：${payload.savepath || task?.savepath || '--'}`,
+                    totalEpisodes > 0 ? `总集数：E${totalEpisodes}` : '总集数：未配置（按已识别范围展示）',
+                    `扫描目录 ${scanDirs} 个 / 条目 ${scanEntries} 条${scanFailed > 0 ? ` / 失败 ${scanFailed}` : ''}${scanTruncated ? ' / 已截断' : ''}`,
+                ].join('；');
+
+                const cells = [];
+                for (let episodeNo = 1; episodeNo <= displayTotal; episodeNo += 1) {
+                    const present = existingSet.has(episodeNo);
+                    cells.push(
+                        `<div class="subscription-episode-cell ${present ? 'is-present' : 'is-missing'}" title="E${episodeNo}${present ? ' 已存在资源' : ' 缺失资源'}"><span class="subscription-episode-cell-no">${episodeNo}</span></div>`
+                    );
+                }
+                gridEl.innerHTML = cells.length ? cells.join('') : '<div class="subscription-episode-empty">没有可展示的集数</div>';
+                return;
+            }
+
+            const seasonBuckets = [];
+            const sortedSeasons = Object.keys(seasonEpisodeMap)
+                .map((seasonNo) => Math.max(0, parseInt(seasonNo || '0', 10) || 0))
+                .filter((seasonNo) => seasonNo > 0)
+                .sort((a, b) => a - b);
+
+            if (sortedSeasons.length) {
+                let absoluteStart = 1;
+                sortedSeasons.forEach((seasonNo) => {
+                    const seasonTotal = Math.max(0, parseInt(seasonEpisodeMap[String(seasonNo)] || '0', 10) || 0);
+                    if (seasonTotal <= 0) return;
+                    const absoluteEnd = absoluteStart + seasonTotal - 1;
+                    seasonBuckets.push({ seasonNo, seasonTotal, absoluteStart, absoluteEnd, episodes: [] });
+                    absoluteStart = absoluteEnd + 1;
+                });
+            }
+
+            if (!seasonBuckets.length) {
+                summaryEl.className = 'text-xs text-amber-300 mt-2';
+                summaryEl.innerText = '当前任务缺少 TMDB 分季集数映射，暂时无法切换分季视图。';
+                noteEl.innerText = [
+                    `视图：分季视图`,
+                    `保存路径：${payload.savepath || task?.savepath || '--'}`,
+                    '提示：请先绑定 TMDB 并确保“季集映射”有效',
+                ].join('；');
+                gridEl.innerHTML = '<div class="subscription-episode-empty">暂无可用分季映射，请改用“绝对集数”查看。</div>';
+                return;
+            }
+
+            existingEpisodes.forEach((absoluteEpisode) => {
+                const mapped = convertAbsoluteEpisodeToSeasonEpisode(seasonEpisodeMap, absoluteEpisode);
+                if (!mapped.season || !mapped.episode) return;
+                const bucket = seasonBuckets.find((item) => item.seasonNo === mapped.season);
+                if (!bucket) return;
+                bucket.episodes.push(mapped.episode);
+            });
+
+            const seasonBlocks = seasonBuckets.map((bucket) => {
+                const seasonSet = new Set(bucket.episodes);
+                const presentCount = seasonSet.size;
+                const missingSeasonCount = Math.max(0, bucket.seasonTotal - presentCount);
+                const seasonCells = [];
+                for (let ep = 1; ep <= bucket.seasonTotal; ep += 1) {
+                    const present = seasonSet.has(ep);
+                    seasonCells.push(`<div class="subscription-episode-cell ${present ? 'is-present' : 'is-missing'}" title="S${String(bucket.seasonNo).padStart(2, '0')}E${String(ep).padStart(2, '0')}${present ? ' 已存在资源' : ' 缺失资源'}"><span class="subscription-episode-cell-no">${ep}</span></div>`);
+                }
+                return `
+                    <div class="subscription-episode-season-block">
+                        <div class="subscription-episode-season-title">Season ${String(bucket.seasonNo).padStart(2, '0')} · 已存在 ${presentCount}/${bucket.seasonTotal}（缺失 ${missingSeasonCount}）</div>
+                        <div class="subscription-episode-grid">${seasonCells.join('')}</div>
+                    </div>
+                `;
+            });
+
+            summaryEl.innerText = `多季合一 · 分季视图（总已存在 ${presentInRange} 集，绝对集数范围展示 ${displayTotal}）`;
             noteEl.innerText = [
+                `视图：分季视图`,
                 `保存路径：${payload.savepath || task?.savepath || '--'}`,
-                totalEpisodes > 0 ? `总集数：E${totalEpisodes}` : '总集数：未配置（按已识别范围展示）',
+                `映射季数：${seasonBuckets.length} 季`,
                 `扫描目录 ${scanDirs} 个 / 条目 ${scanEntries} 条${scanFailed > 0 ? ` / 失败 ${scanFailed}` : ''}${scanTruncated ? ' / 已截断' : ''}`,
             ].join('；');
-
-            const cells = [];
-            for (let episodeNo = 1; episodeNo <= displayTotal; episodeNo += 1) {
-                const present = existingSet.has(episodeNo);
-                cells.push(
-                    `<div class="subscription-episode-cell ${present ? 'is-present' : 'is-missing'}" title="E${episodeNo}${present ? ' 已存在资源' : ' 缺失资源'}"><span class="subscription-episode-cell-no">${episodeNo}</span></div>`
-                );
-            }
-            gridEl.innerHTML = cells.length ? cells.join('') : '<div class="subscription-episode-empty">没有可展示的集数</div>';
+            gridEl.innerHTML = seasonBlocks.join('');
         }
 
         async function refreshSubscriptionEpisodeView(force = false) {
@@ -4371,6 +4494,7 @@
 
             renderResourceImportBehaviorHint(match.savepath);
             renderResourceImportSummary();
+            renderResourceImportFeedback();
         }
 
         function renderResourceImportSummary() {
@@ -4395,6 +4519,54 @@
             }
 
             if (selectionCountEl) selectionCountEl.textContent = selectionText;
+        }
+
+        function renderResourceImportStepper(item, importMode = false, isSubmitting = false) {
+            const wrapper = document.getElementById('resource-import-stepper');
+            if (!wrapper) return;
+            wrapper.classList.toggle('hidden', !importMode);
+            if (!importMode) return;
+
+            const steps = wrapper.querySelectorAll('.resource-import-step');
+            const hasItem = !!item;
+            const savepath = normalizeRelativePathInput(document.getElementById('resource_job_savepath')?.value || '');
+            const hasSavepath = !!savepath;
+            const activeStep = isSubmitting ? 3 : (hasSavepath ? 3 : (hasItem ? 2 : 1));
+
+            steps.forEach((node, idx) => {
+                const step = idx + 1;
+                node.classList.toggle('is-done', step < activeStep);
+                node.classList.toggle('is-active', step === activeStep);
+            });
+        }
+
+        function renderResourceImportFeedback() {
+            const card = document.getElementById('resource-import-feedback-card');
+            if (!card) return;
+            if (resourceModalMode !== 'import' || !resourceImportLastFeedback) {
+                card.classList.add('hidden');
+                card.innerHTML = '';
+                return;
+            }
+            const feedback = resourceImportLastFeedback;
+            const lines = [
+                `任务：${feedback.jobText || '--'}`,
+                `阶段：${feedback.stage || '--'}`,
+                `时间：${feedback.timeText || formatTimeText(new Date())}`,
+            ];
+            if (feedback.note) lines.push(`说明：${feedback.note}`);
+            card.innerHTML = lines.map(line => `<div>${escapeHtml(line)}</div>`).join('');
+            card.classList.remove('hidden');
+        }
+
+        function updateResourceImportFeedback(payload = {}) {
+            resourceImportLastFeedback = {
+                stage: String(payload.stage || '已提交').trim(),
+                jobText: String(payload.jobText || '--').trim(),
+                note: String(payload.note || '').trim(),
+                timeText: formatTimeText(new Date())
+            };
+            renderResourceImportFeedback();
         }
 
         function syncResourceChannelPagingState() {
@@ -4578,6 +4750,36 @@
             `;
         }
 
+        function renderResourceOnboardingCard() {
+            const card = document.getElementById('resource-onboarding-card');
+            const stepsEl = document.getElementById('resource-onboarding-steps');
+            if (!card || !stepsEl) return;
+
+            const hasCookie = !!resourceState.cookie_configured;
+            const hasSources = Array.isArray(resourceState.sources) && resourceState.sources.length > 0;
+            const hasMonitor = Array.isArray(resourceState.monitor_tasks) && resourceState.monitor_tasks.length > 0;
+            const hasResourceData = Number(resourceState?.stats?.item_count || 0) > 0;
+            const hasJobs = Array.isArray(resourceState.jobs) && resourceState.jobs.length > 0;
+            const steps = [
+                { label: '配置 AList/OpenList', done: !!String(document.getElementById('alist_url')?.value || '').trim(), tab: 'settings', meta: '播放链接基础配置' },
+                { label: '配置 115 Cookie', done: hasCookie, tab: 'settings', meta: '启用导入/转存能力' },
+                { label: '同步频道资源', done: hasSources && hasResourceData, tab: 'resource', meta: '先同步再搜索导入' },
+                { label: '创建监控任务', done: hasMonitor, tab: 'monitor', meta: '用于自动生成 strm' },
+                { label: '提交首个导入任务', done: hasJobs, tab: 'resource', meta: '验证全链路可用' },
+            ];
+            const doneCount = steps.filter(step => step.done).length;
+            card.classList.toggle('hidden', doneCount >= steps.length);
+            stepsEl.innerHTML = steps.map((step, index) => `
+                <button type="button" class="resource-onboarding-step ${step.done ? 'is-done' : ''}" data-onboarding-tab="${escapeHtml(step.tab)}">
+                    <span class="resource-onboarding-dot">${step.done ? '✓' : index + 1}</span>
+                    <span>
+                        <span class="resource-onboarding-label">${escapeHtml(step.label)}</span>
+                        <span class="resource-onboarding-meta">${escapeHtml(step.meta)}</span>
+                    </span>
+                </button>
+            `).join('');
+        }
+
         function renderResourceBoard() {
             const container = document.getElementById('resource-board');
             if (!container) return;
@@ -4662,6 +4864,7 @@
             document.getElementById('resource-cookie-hint').classList.toggle('hidden', !!resourceState.cookie_configured);
             syncResourceSourceSelect();
             syncResourceMonitorTaskOptions(document.getElementById('resource_job_savepath')?.value || '');
+            renderResourceOnboardingCard();
             renderResourceSources();
             renderResourceBoard();
             renderResourceJobs();
@@ -5446,7 +5649,15 @@
                 alert('请先在当前筛选结果中勾选要删除的频道');
                 return;
             }
-            const ok = confirm(`将删除 ${selectedIds.length} 个频道，确定继续吗？`);
+            const sampleNames = (resourceState.sources || [])
+                .filter(source => selectedIds.includes(getResourceSourceChannelId(source)))
+                .slice(0, 3)
+                .map(source => source?.name || getResourceSourceChannelId(source) || '未命名频道')
+                .filter(Boolean);
+            const summary = sampleNames.length
+                ? `将删除 ${selectedIds.length} 个频道（如：${sampleNames.join('、')}）\n此操作不可恢复，确定继续吗？`
+                : `将删除 ${selectedIds.length} 个频道，此操作不可恢复，确定继续吗？`;
+            const ok = confirm(summary);
             if (!ok) return;
             const selectedSet = new Set(selectedIds);
             const nextSources = (resourceState.sources || []).filter(source => !selectedSet.has(getResourceSourceChannelId(source)));
@@ -5458,9 +5669,9 @@
                 });
                 resourceSourceBulkSelected = nextSelected;
                 renderResourceSourceManagerModal();
-                alert(`✅ 已删除 ${selectedIds.length} 个频道`);
+                showToast(`已删除 ${selectedIds.length} 个频道`, { tone: 'success', duration: 2600, placement: 'top-center' });
             } catch (e) {
-                alert(`❌ ${e.message}`);
+                showToast(`删除失败：${e.message}`, { tone: 'error', duration: 3200, placement: 'top-center' });
             }
         }
 
@@ -7204,6 +7415,7 @@
 
             titleEl.innerText = importMode ? (batchMode ? '批量导入资源' : '导入资源') : '资源详情';
             detailGrid.className = importMode ? 'resource-import-layout' : 'grid grid-cols-1 gap-4';
+            renderResourceImportStepper(item, importMode, resourceSubmitBusy);
             rawCard.classList.toggle('hidden', importMode);
             savePanel.classList.toggle('hidden', !importMode);
             closeBtn.innerText = importMode ? '取消' : '关闭';
@@ -7345,6 +7557,7 @@
             selectedResourceItem = null;
             resourceModalMode = 'detail';
             resourceModalLinkType = '';
+            resourceImportLastFeedback = null;
             setResourceBatchImportItems([]);
             resetResourceShareState();
             hideLockedModal('resource-import-modal');
@@ -7390,6 +7603,11 @@
                         showToast('批量导入队列为空，请重新粘贴磁力链接后再试', { tone: 'warn', duration: 3200, placement: 'top-center' });
                         return;
                     }
+                    updateResourceImportFeedback({
+                        stage: '提交中',
+                        jobText: `批量 ${batchItems.length} 条`,
+                        note: '正在逐条创建导入任务，请稍候'
+                    });
                     const createdJobIds = [];
                     let duplicatedCount = 0;
                     let failedCount = 0;
@@ -7472,6 +7690,11 @@
                     }
                     const summaryText = summaryParts.join('，');
                     const tone = failedCount > 0 ? (createdJobIds.length > 0 || duplicatedCount > 0 ? 'warn' : 'error') : 'success';
+                    updateResourceImportFeedback({
+                        stage: failedCount > 0 ? '部分完成' : '已完成',
+                        jobText: createdJobIds.length ? `#${createdJobIds[0]} 等 ${createdJobIds.length} 条` : '无新任务',
+                        note: summaryText || '批量导入已处理完成'
+                    });
                     showToast(summaryText || '批量导入已处理完成', {
                         tone,
                         duration: failedCount > 0 ? 5200 : 3600,
@@ -7486,6 +7709,12 @@
                     }
                     return;
                 }
+
+                updateResourceImportFeedback({
+                    stage: '提交中',
+                    jobText: '等待返回任务编号',
+                    note: '正在向后端创建导入任务'
+                });
 
                 const payload = {
                     savepath,
@@ -7523,6 +7752,11 @@
                 const tail = matchedTaskName
                     ? (data.auto_refresh ? `，保存完成后会自动触发“${matchedTaskName}”` : `，已匹配“${matchedTaskName}”，可稍后手动触发刷新`)
                     : '，当前目录不会自动生成 strm';
+                updateResourceImportFeedback({
+                    stage: '已完成',
+                    jobText: `#${data.job_id}`,
+                    note: `${matchedTaskName ? `命中监控任务 ${matchedTaskName}` : '未命中监控任务'}，可在任务中心继续追踪进度`
+                });
                 showToast(`已创建导入任务 #${data.job_id}${tail}`, { tone: 'success', duration: 3000, placement: 'top-center' });
             } finally {
                 resourceSubmitBusy = false;
@@ -8401,10 +8635,23 @@
                 return;
             }
             if (action === 'delete') {
+                const source = (resourceState.sources || [])[index];
+                const name = source?.name || getResourceSourceChannelId(source) || '该频道';
+                const ok = confirm(`将删除“${name}”，此操作不可恢复，确定继续吗？`);
+                if (!ok) return;
                 await deleteResourceSource(index);
+                showToast(`已删除频道：${name}`, { tone: 'success', duration: 2400, placement: 'top-center' });
                 renderResourceSourceManagerModal();
             }
         });
+        document.getElementById('resource-onboarding-steps').addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-onboarding-tab]');
+            if (!btn) return;
+            const tab = String(btn.dataset.onboardingTab || '').trim();
+            if (!tab) return;
+            switchTab(tab);
+        });
+
         document.getElementById('resource-board').addEventListener('click', async (e) => {
             const toggleBtn = e.target.closest('[data-resource-section-toggle]');
             if (toggleBtn) {

@@ -3054,6 +3054,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
         selected_job_id = 0
         selected_auto_refresh = False
         selected_reused_existing = False
+        selected_job_savepath = effective_savepath
         baseline_last_episode = last_episode
         imported_episodes: Set[int] = set()
         successful_count = 0
@@ -3062,6 +3063,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
         batch_created_job_ids: Set[int] = set()
         share_subdir_selection_cache: Dict[str, Dict[str, Any]] = {}
         share_subdir_selection_stats_cache: Dict[str, Dict[str, Any]] = {}
+        savepath_folder_id_cache: Dict[str, str] = {effective_savepath: str(folder_id or "").strip()}
         batch_refresh_result: Dict[str, Any] = {
             "run_id": subscription_run_id,
             "created_jobs": 0,
@@ -3153,6 +3155,16 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 task_share_subdir,
                 candidate_share_subdir_cid,
             )
+            candidate_savepath = effective_savepath
+            if task["media_type"] == "tv":
+                candidate_savepath = build_subscription_tv_savepath(
+                    task,
+                    base_savepath,
+                    season=candidate_season,
+                    episode=episode,
+                ) or effective_savepath
+            candidate_matched_monitor = match_monitor_task_for_savepath(cfg, candidate_savepath)
+            candidate_monitor_task_name = str(candidate_matched_monitor.get("task_name", "") or "").strip()
 
             if (
                 task["media_type"] == "tv"
@@ -3383,9 +3395,18 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                             await maybe_wait_between_attempts()
                             continue
 
-            existing = find_existing_resource_job(item, effective_savepath)
+            candidate_folder_id = str(savepath_folder_id_cache.get(candidate_savepath, "") or "").strip()
+            if not candidate_folder_id:
+                candidate_folder_id = await asyncio.to_thread(
+                    ensure_115_folder_id_by_path,
+                    cookie_115,
+                    candidate_savepath,
+                )
+                savepath_folder_id_cache[candidate_savepath] = str(candidate_folder_id or "").strip()
+
+            existing = find_existing_resource_job(item, candidate_savepath)
             job_id = 0
-            auto_refresh = bool(monitor_task_name)
+            auto_refresh = bool(candidate_monitor_task_name)
             reused_existing = False
             selected_share_episode_values: Set[int] = set()
             duplicate_validation_applied = False
@@ -3456,12 +3477,12 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 await write_subscription_log(f"候选资源 #{index} 命中历史任务 #{job_id}，复用执行记录", "warn")
             else:
                 job_payload = {
-                    "folder_id": folder_id,
-                    "savepath": effective_savepath,
+                    "folder_id": candidate_folder_id,
+                    "savepath": candidate_savepath,
                     "sharetitle": "",
-                    "monitor_task_name": monitor_task_name,
+                    "monitor_task_name": candidate_monitor_task_name,
                     "refresh_delay_seconds": 0,
-                    "auto_refresh": bool(monitor_task_name) and (not batch_refresh_enabled),
+                    "auto_refresh": bool(candidate_monitor_task_name) and (not batch_refresh_enabled),
                     "extra": {
                         "job_source": "subscription_auto",
                         "subscription_task_name": task_name,
@@ -3665,7 +3686,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 await job_runner
                 latest_job = get_resource_job(job_id, include_private=True)
                 latest_status = str((latest_job or {}).get("status", "") or "").strip().lower()
-                auto_refresh = bool((latest_job or {}).get("auto_refresh", bool(monitor_task_name)))
+                auto_refresh = bool((latest_job or {}).get("auto_refresh", bool(candidate_monitor_task_name)))
                 if latest_status == "failed":
                     failed_attempts += 1
                     last_failed_detail = str((latest_job or {}).get("status_detail", "") or "资源导入失败").strip()
@@ -3902,6 +3923,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 selected_job_id = job_id
                 selected_auto_refresh = auto_refresh
                 selected_reused_existing = reused_existing
+                selected_job_savepath = candidate_savepath
             else:
                 selected_episode = int(selected_candidate.get("episode", 0) or 0)
                 selected_score = int(selected_candidate.get("score", 0) or 0)
@@ -3911,6 +3933,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                     selected_job_id = job_id
                     selected_auto_refresh = auto_refresh
                     selected_reused_existing = reused_existing
+                    selected_job_savepath = candidate_savepath
             selected_auto_refresh = bool(previous_auto_refresh or selected_auto_refresh or auto_refresh)
 
             await write_subscription_log(
@@ -4062,21 +4085,21 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             detail = (
                 f"本次批量导入 {successful_count} 条候选资源{batch_tail}；"
                 f"最新命中「{matched_display_title}」"
-                f"（评分 {score}），{action_text} #{job_id}，保存到 {effective_savepath}"
+                f"（评分 {score}），{action_text} #{job_id}，保存到 {selected_job_savepath}"
             )
         else:
             detail = (
                 f"命中「{matched_display_title}」"
-                f"（评分 {score}），{action_text} #{job_id}，保存到 {effective_savepath}"
+                f"（评分 {score}），{action_text} #{job_id}，保存到 {selected_job_savepath}"
             )
-        if monitor_task_name:
+        if selected_auto_refresh:
             if batch_refresh_enabled:
                 triggered_groups = int(batch_refresh_result.get("triggered_groups", 0) or 0)
                 successful_jobs = int(batch_refresh_result.get("successful_jobs", 0) or 0)
                 refresh_eligible_jobs = int(batch_refresh_result.get("refresh_eligible_jobs", 0) or 0)
                 missing_jobs = int(batch_refresh_result.get("missing_monitor_task_jobs", 0) or 0)
                 if triggered_groups > 0:
-                    detail += f"；批次收口已统一触发监控「{monitor_task_name}」"
+                    detail += "；批次收口已统一触发监控任务"
                 elif missing_jobs > 0:
                     detail += "；批次收口未触发监控（目标监控任务不存在）"
                 elif successful_jobs > 0 and refresh_eligible_jobs <= 0:
@@ -4088,7 +4111,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 else:
                     detail += "；未创建新导入任务，沿用历史任务状态"
             else:
-                detail += f"；自动触发监控「{monitor_task_name}」"
+                detail += "；自动触发监控任务"
         else:
             detail += "；当前目录未命中文件夹监控任务"
 
@@ -4158,7 +4181,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 cfg=cfg,
                 task=task,
                 item=item,
-                effective_savepath=effective_savepath,
+                effective_savepath=selected_job_savepath,
                 job_id=job_id,
                 successful_count=successful_count,
                 imported_episode_list=imported_episode_list,
