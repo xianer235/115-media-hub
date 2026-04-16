@@ -939,9 +939,9 @@
                         <div id="subscription-episode-modal-summary" class="text-xs text-slate-400 mt-2">点击任务卡片里的“集数视图”查看。</div>
                     </div>
                     <div class="flex items-center gap-2 flex-wrap justify-end">
-                        <div id="subscription-episode-view-mode-switch" class="hidden items-center gap-1 rounded-lg border border-slate-700 bg-slate-900/70 p-1">
-                            <button id="subscription-episode-mode-absolute" type="button" onclick="setSubscriptionEpisodeViewMode('absolute')" class="px-2.5 py-1.5 rounded-md text-[11px] font-bold bg-sky-500/20 text-sky-200">绝对集数</button>
-                            <button id="subscription-episode-mode-season" type="button" onclick="setSubscriptionEpisodeViewMode('season')" class="px-2.5 py-1.5 rounded-md text-[11px] font-bold bg-slate-700 text-slate-200">分季视图</button>
+                        <div id="subscription-episode-view-mode-switch" class="subscription-episode-view-mode-switch hidden items-center gap-1">
+                            <button id="subscription-episode-mode-absolute" type="button" onclick="setSubscriptionEpisodeViewMode('absolute')" class="subscription-episode-view-mode-btn is-active" aria-pressed="true">绝对集数</button>
+                            <button id="subscription-episode-mode-season" type="button" onclick="setSubscriptionEpisodeViewMode('season')" class="subscription-episode-view-mode-btn" aria-pressed="false">分季视图</button>
                         </div>
                         <button type="button" onclick="rebuildCurrentSubscriptionEpisodeView()" class="px-3 py-2 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 text-sky-200 text-xs font-bold">按目录重建</button>
                         <button type="button" onclick="refreshSubscriptionEpisodeView(true)" class="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-bold">刷新</button>

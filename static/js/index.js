@@ -3093,8 +3093,10 @@
             }
 
             const activeAbsolute = subscriptionEpisodeViewMode !== 'season';
-            absoluteBtn.className = `px-2.5 py-1.5 rounded-md text-[11px] font-bold ${activeAbsolute ? 'bg-sky-500/20 text-sky-200' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`;
-            seasonBtn.className = `px-2.5 py-1.5 rounded-md text-[11px] font-bold ${!activeAbsolute ? 'bg-sky-500/20 text-sky-200' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`;
+            absoluteBtn.classList.toggle('is-active', activeAbsolute);
+            seasonBtn.classList.toggle('is-active', !activeAbsolute);
+            absoluteBtn.setAttribute('aria-pressed', activeAbsolute ? 'true' : 'false');
+            seasonBtn.setAttribute('aria-pressed', !activeAbsolute ? 'true' : 'false');
         }
 
         function setSubscriptionEpisodeViewMode(mode) {

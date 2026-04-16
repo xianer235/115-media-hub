@@ -115,6 +115,44 @@
             align-items: center;
             gap: 0.75rem 1.25rem;
         }
+        .subscription-episode-view-mode-switch {
+            padding: 0.28rem;
+            border-radius: 0.95rem;
+            border: 1px solid rgba(71, 85, 105, 0.82);
+            background: rgba(15, 23, 42, 0.7);
+            box-shadow: inset 0 1px 0 rgba(148, 163, 184, 0.08);
+        }
+        .subscription-episode-view-mode-btn {
+            min-height: 2.1rem;
+            padding: 0.38rem 0.9rem;
+            border-radius: 0.72rem;
+            border: 1px solid transparent;
+            background: rgba(51, 65, 85, 0.82);
+            color: #cbd5e1;
+            font-size: 0.7rem;
+            font-weight: 800;
+            letter-spacing: 0.02em;
+            transition:
+                background-color 0.16s ease,
+                border-color 0.16s ease,
+                color 0.16s ease,
+                box-shadow 0.16s ease,
+                transform 0.16s ease;
+        }
+        .subscription-episode-view-mode-btn:hover {
+            background: rgba(71, 85, 105, 0.96);
+            color: #f8fafc;
+        }
+        .subscription-episode-view-mode-btn:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.22);
+        }
+        .subscription-episode-view-mode-btn.is-active {
+            background: linear-gradient(180deg, rgba(56, 189, 248, 0.28), rgba(37, 99, 235, 0.3));
+            border-color: rgba(56, 189, 248, 0.52);
+            color: #f8fafc;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 8px 18px rgba(2, 132, 199, 0.18);
+        }
         .subscription-episode-legend-item {
             display: inline-flex;
             align-items: center;
@@ -437,6 +475,9 @@
             color-scheme: dark;
             padding-right: 2.4rem;
             letter-spacing: 0.01em;
+            border-color: rgba(71, 85, 105, 0.96);
+            background: linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(15, 23, 42, 0.9));
+            box-shadow: inset 0 1px 0 rgba(148, 163, 184, 0.08), 0 0 0 1px rgba(15, 23, 42, 0.24);
         }
         input[type="time"]::-webkit-datetime-edit {
             color: #e2e8f0;
@@ -444,6 +485,10 @@
         input[type="time"]::-webkit-calendar-picker-indicator {
             opacity: 0.9;
             cursor: pointer;
+            filter: brightness(1.08);
+        }
+        input[type="time"]:hover {
+            border-color: rgba(100, 116, 139, 0.98);
         }
         input[type="time"]::-webkit-calendar-picker-indicator:hover {
             opacity: 1;
@@ -1202,6 +1247,7 @@
             color: #94a3b8;
             font-size: 0.68rem;
             font-weight: 700;
+            box-shadow: inset 0 1px 0 rgba(148, 163, 184, 0.04);
         }
         .resource-import-step.is-active,
         .resource-import-step.is-done {
@@ -4252,6 +4298,19 @@
             border-color: #0ea5e9;
             color: #0369a1;
         }
+        html.theme-day .resource-source-compact-btn-danger,
+        html.theme-day .resource-source-manager-danger-btn {
+            background: linear-gradient(180deg, rgba(254, 242, 242, 0.98), rgba(254, 226, 226, 0.94));
+            border-color: rgba(248, 113, 113, 0.68);
+            color: #dc2626;
+            box-shadow: none;
+        }
+        html.theme-day .resource-source-compact-btn-danger:hover,
+        html.theme-day .resource-source-manager-danger-btn:hover {
+            background: linear-gradient(180deg, rgba(254, 228, 230, 1), rgba(254, 205, 211, 0.96));
+            border-color: rgba(239, 68, 68, 0.8);
+            color: #b91c1c;
+        }
         html.theme-day .resource-source-manager-filter-tab-active {
             background: rgba(14, 165, 233, 0.14);
             border-color: rgba(14, 165, 233, 0.5);
@@ -4268,6 +4327,39 @@
             border-color: rgba(14, 165, 233, 0.5);
             color: #075985;
             box-shadow: none;
+        }
+        html.theme-day .resource-import-step {
+            border-color: rgba(203, 213, 225, 0.96);
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.94));
+            color: #64748b;
+            box-shadow: 0 8px 16px rgba(15, 23, 42, 0.06);
+        }
+        html.theme-day .resource-import-step.is-active {
+            border-color: rgba(71, 85, 105, 0.78);
+            background: linear-gradient(135deg, #64748b, #475569);
+            color: #ffffff;
+            box-shadow: 0 10px 18px rgba(71, 85, 105, 0.16);
+        }
+        html.theme-day .resource-import-step.is-done {
+            border-color: rgba(16, 185, 129, 0.46);
+            background: linear-gradient(180deg, rgba(220, 252, 231, 0.98), rgba(209, 250, 229, 0.94));
+            color: #166534;
+            box-shadow: 0 10px 18px rgba(22, 163, 74, 0.1);
+        }
+        html.theme-day .resource-import-step-index {
+            border-color: rgba(148, 163, 184, 0.74);
+            background: rgba(255, 255, 255, 0.9);
+            color: #475569;
+        }
+        html.theme-day .resource-import-step.is-active .resource-import-step-index {
+            border-color: rgba(255, 255, 255, 0.42);
+            background: rgba(255, 255, 255, 0.16);
+            color: #ffffff;
+        }
+        html.theme-day .resource-import-step.is-done .resource-import-step-index {
+            border-color: rgba(16, 185, 129, 0.44);
+            background: rgba(255, 255, 255, 0.82);
+            color: #047857;
         }
         html.theme-day #page-about .about-workflow-card {
             background: rgba(255, 255, 255, 0.94);
@@ -4917,6 +5009,27 @@
         }
         html.theme-day .subscription-episode-legend-item {
             color: #475569;
+        }
+        html.theme-day .subscription-episode-view-mode-switch {
+            border-color: rgba(148, 163, 184, 0.7);
+            background: linear-gradient(180deg, rgba(226, 232, 240, 0.96), rgba(203, 213, 225, 0.92));
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.88), 0 10px 18px rgba(15, 23, 42, 0.08);
+        }
+        html.theme-day .subscription-episode-view-mode-btn {
+            background: rgba(255, 255, 255, 0.94);
+            border-color: rgba(203, 213, 225, 0.92);
+            color: #475569;
+        }
+        html.theme-day .subscription-episode-view-mode-btn:hover {
+            background: rgba(255, 255, 255, 1);
+            border-color: rgba(14, 165, 233, 0.4);
+            color: #0f172a;
+        }
+        html.theme-day .subscription-episode-view-mode-btn.is-active {
+            background: linear-gradient(135deg, #2563eb, #0ea5e9);
+            border-color: rgba(2, 132, 199, 0.82);
+            color: #ffffff;
+            box-shadow: 0 10px 18px rgba(37, 99, 235, 0.24);
         }
         html.theme-day .subscription-episode-dot {
             background: rgba(203, 213, 225, 0.75);
