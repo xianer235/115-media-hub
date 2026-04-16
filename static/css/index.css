@@ -1030,6 +1030,28 @@
             font-size: 0.68rem;
             color: #94a3b8;
         }
+        .resource-source-manager-toolbar {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 0.5rem;
+            align-items: center;
+        }
+        .resource-source-manager-search,
+        .resource-source-manager-sort {
+            min-height: 38px;
+            border-radius: 0.8rem;
+            border: 1px solid rgba(71, 85, 105, 0.8);
+            background: rgba(15, 23, 42, 0.68);
+            color: #e2e8f0;
+            padding: 0.36rem 0.58rem;
+            font-size: 0.72rem;
+        }
+        .resource-source-manager-search::placeholder {
+            color: #94a3b8;
+        }
+        .resource-source-manager-sort {
+            min-width: 10.6rem;
+        }
         .resource-source-manager-bulk-meta {
             font-size: 0.72rem;
             color: #cbd5e1;
@@ -1106,6 +1128,17 @@
             display: flex;
             align-items: center;
             gap: 0.38rem;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+        .resource-source-compact-btn-danger {
+            border-color: rgba(239, 68, 68, 0.45) !important;
+            color: #fca5a5 !important;
+            background: rgba(127, 29, 29, 0.2) !important;
+        }
+        .resource-source-compact-btn-danger:hover {
+            background: rgba(153, 27, 27, 0.28) !important;
+            color: #fecaca !important;
         }
         .resource-source-panel-head {
             display: grid;

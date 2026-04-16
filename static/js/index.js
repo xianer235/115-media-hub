@@ -92,6 +92,8 @@
         let resourceSourceFilter = 'all';
         let resourceSourceEnabledFilter = 'all';
         let resourceSourceActivityFilter = 'all';
+        let resourceSourceKeyword = '';
+        let resourceSourceSortMode = 'recent';
         let resourceSourceBulkSelected = {};
         let resourceSourceTestBusy = false;
         let resourceSourceTestResult = { total: 0, done: 0, success: 0, failed: 0, running: false, last_name: '', error: '' };
@@ -4187,8 +4189,15 @@
             if (sourceName) tokens.push(sourceName);
             if (item?.year) tokens.push(String(item.year));
             if (item?.quality) tokens.push(String(item.quality));
-            const published = item?.published_at || item?.created_at || '';
-            if (published) tokens.push(formatTimeText(published));
+            const publishedRaw = item?.published_at || item?.created_at || '';
+            const publishedMs = parseResourceTimeMs(publishedRaw);
+            if (publishedMs) {
+                const relative = formatResourceAgeText(publishedMs);
+                const absolute = formatTimeText(publishedRaw);
+                tokens.push(`${relative}（${absolute}）`);
+            } else if (publishedRaw) {
+                tokens.push(String(publishedRaw));
+            }
             return escapeHtml(tokens.join(' / ') || '暂无附加信息');
         }
 
@@ -5189,6 +5198,8 @@
                 const activityBucket = getResourceSourceActivityBucket(profile);
                 const dominantTypes = sanitizeResourceLinkTypeList(profile?.dominant_link_types);
                 const sourceTypes = getResourceSourceTypes(profile);
+                const latestPublishedAt = String(profile?.latest_published_at || '').trim();
+                const latestPublishedMs = parseResourceTimeMs(latestPublishedAt);
                 return {
                     source,
                     index,
@@ -5200,6 +5211,8 @@
                     primaryType,
                     dominantTypes,
                     sourceTypes,
+                    latestPublishedAt,
+                    latestPublishedMs,
                 };
             });
         }
@@ -5363,12 +5376,36 @@
             const sources = resourceState.sources || [];
             const sectionIndex = getResourceSourceSectionIndex();
             const list = getResourceSourceViewList(sources, sectionIndex);
-            return list.filter(view => {
+            const keyword = String(resourceSourceKeyword || '').trim().toLowerCase();
+            const filtered = list.filter(view => {
                 if (!isResourceSourceVisibleByFilter(view.source, sectionIndex, resourceSourceFilter)) return false;
                 if (!isResourceSourceVisibleByEnabled(view.source, resourceSourceEnabledFilter)) return false;
                 if (!isResourceSourceVisibleByActivity(view.source, sectionIndex, resourceSourceActivityFilter)) return false;
+                if (keyword) {
+                    const name = String(view?.source?.name || '').trim().toLowerCase();
+                    const id = String(view?.channelId || '').trim().toLowerCase();
+                    const typeText = (Array.isArray(view?.sourceTypes) ? view.sourceTypes : []).join(' ').toLowerCase();
+                    if (!name.includes(keyword) && !id.includes(keyword) && !typeText.includes(keyword)) return false;
+                }
                 return true;
             });
+
+            const mode = String(resourceSourceSortMode || 'recent').trim().toLowerCase();
+            filtered.sort((a, b) => {
+                if (mode === 'name') {
+                    return String(a?.source?.name || a?.channelId || '').localeCompare(String(b?.source?.name || b?.channelId || ''));
+                }
+                if (mode === 'activity') {
+                    const ad = (a?.activityBucket === 'week' ? 4 : a?.activityBucket === 'month' ? 3 : a?.activityBucket === 'half_year' ? 2 : a?.activityBucket === 'older' ? 1 : 0);
+                    const bd = (b?.activityBucket === 'week' ? 4 : b?.activityBucket === 'month' ? 3 : b?.activityBucket === 'half_year' ? 2 : b?.activityBucket === 'older' ? 1 : 0);
+                    if (bd !== ad) return bd - ad;
+                }
+                const aMs = Number(a?.latestPublishedMs || 0);
+                const bMs = Number(b?.latestPublishedMs || 0);
+                if (bMs !== aMs) return bMs - aMs;
+                return String(a?.source?.name || a?.channelId || '').localeCompare(String(b?.source?.name || b?.channelId || ''));
+            });
+            return filtered;
         }
 
         function getSelectedResourceSourceIdsInFiltered() {
@@ -5434,6 +5471,8 @@
             const typeFiltersEl = document.getElementById('resource-source-manager-type-filters');
             const statusFiltersEl = document.getElementById('resource-source-manager-status-filters');
             const activityFiltersEl = document.getElementById('resource-source-manager-activity-filters');
+            const searchInputEl = document.getElementById('resource-source-manager-search');
+            const sortSelectEl = document.getElementById('resource-source-manager-sort');
             const hintEl = document.getElementById('resource-source-manager-filter-hint');
             const listEl = document.getElementById('resource-source-manager-list');
             const selectedCountEl = document.getElementById('resource-source-manager-selected-count');
@@ -5441,7 +5480,7 @@
             const testBtn = document.getElementById('resource-source-manager-test-btn');
             const selectAllBtn = document.getElementById('resource-source-manager-select-all-btn');
             const invertBtn = document.getElementById('resource-source-manager-invert-btn');
-            if (!typeFiltersEl || !statusFiltersEl || !activityFiltersEl || !hintEl || !listEl || !selectedCountEl || !resultEl || !testBtn || !selectAllBtn || !invertBtn) return;
+            if (!typeFiltersEl || !statusFiltersEl || !activityFiltersEl || !searchInputEl || !sortSelectEl || !hintEl || !listEl || !selectedCountEl || !resultEl || !testBtn || !selectAllBtn || !invertBtn) return;
 
             const sources = resourceState.sources || [];
             const sectionIndex = getResourceSourceSectionIndex();
@@ -5460,12 +5499,9 @@
                 resourceSourceActivityFilter = 'all';
             }
 
-            const filtered = sourceViews.filter(view => {
-                if (!isResourceSourceVisibleByFilter(view.source, sectionIndex, resourceSourceFilter)) return false;
-                if (!isResourceSourceVisibleByEnabled(view.source, resourceSourceEnabledFilter)) return false;
-                if (!isResourceSourceVisibleByActivity(view.source, sectionIndex, resourceSourceActivityFilter)) return false;
-                return true;
-            });
+            const filtered = getFilteredResourceSourceViewList();
+            searchInputEl.value = resourceSourceKeyword;
+            sortSelectEl.value = resourceSourceSortMode;
 
             typeFiltersEl.innerHTML = typeOptions.map(option => `
                 <button
@@ -5539,7 +5575,8 @@
             listEl.innerHTML = filtered.map(view => {
                 const checked = !!resourceSourceBulkSelected[view.channelId];
                 const enabled = view.source.enabled !== false;
-                const latest = String(view.profile?.latest_published_at || '').trim();
+                const latest = String(view.latestPublishedAt || '').trim();
+                const latestAge = view.latestPublishedMs ? formatResourceAgeText(view.latestPublishedMs) : '待同步';
                 const typeText = (Array.isArray(view.sourceTypes) ? view.sourceTypes : [])
                     .slice(0, 3)
                     .map(type => getResourceLinkTypeLabel(type))
@@ -5557,10 +5594,12 @@
                                 <span class="text-[10px] px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-200 border border-sky-500/20">${escapeHtml(getResourceLinkTypeLabel(view.primaryType))}</span>
                                 <span class="text-[10px] px-2 py-0.5 rounded-full ${enabled ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20' : 'bg-slate-700 text-slate-300 border border-slate-600'}">${enabled ? '已启用' : '已停用'}</span>
                             </div>
-                            <div class="resource-source-manager-row-meta">类型：${escapeHtml(typeText || getResourceLinkTypeLabel(view.primaryType || 'unknown'))} · 活跃度：${escapeHtml(getResourceSourceActivityBucketLabel(view.activityBucket))} · 最近发布时间 ${escapeHtml(latest ? formatTimeText(latest) : '--')}</div>
+                            <div class="resource-source-manager-row-meta">类型：${escapeHtml(typeText || getResourceLinkTypeLabel(view.primaryType || 'unknown'))} · 活跃度：${escapeHtml(getResourceSourceActivityBucketLabel(view.activityBucket))} · 最近：${escapeHtml(latestAge)}${latest ? `（${escapeHtml(formatTimeText(latest))}）` : ''}</div>
                         </div>
                         <div class="resource-source-manager-row-actions">
+                            <button type="button" data-resource-source-manager-action="toggle" data-source-index="${view.index}" data-enabled="${enabled ? '1' : '0'}" class="resource-source-compact-btn">${enabled ? '停用' : '启用'}</button>
                             <button type="button" data-resource-source-manager-action="edit" data-source-index="${view.index}" class="resource-source-compact-btn">编辑</button>
+                            <button type="button" data-resource-source-manager-action="delete" data-source-index="${view.index}" class="resource-source-compact-btn resource-source-compact-btn-danger">删除</button>
                         </div>
                     </div>
                 `;
@@ -8330,6 +8369,14 @@
             resourceSourceActivityFilter = nextFilter;
             renderResourceSourceManagerModal();
         });
+        document.getElementById('resource-source-manager-search').addEventListener('input', (e) => {
+            resourceSourceKeyword = String(e.target?.value || '');
+            renderResourceSourceManagerModal();
+        });
+        document.getElementById('resource-source-manager-sort').addEventListener('change', (e) => {
+            resourceSourceSortMode = String(e.target?.value || 'recent') || 'recent';
+            renderResourceSourceManagerModal();
+        });
         document.getElementById('resource-source-manager-list').addEventListener('change', (e) => {
             const checkbox = e.target.closest('[data-resource-source-bulk-toggle]');
             if (!checkbox) return;
@@ -8340,12 +8387,22 @@
             const btn = e.target.closest('[data-resource-source-manager-action]');
             if (!btn) return;
             const action = String(btn.dataset.resourceSourceManagerAction || '').trim();
+            const index = parseInt(btn.dataset.sourceIndex || '-1', 10);
+            if (index < 0) return;
             if (action === 'edit') {
-                const index = parseInt(btn.dataset.sourceIndex || '-1', 10);
-                if (index >= 0) {
-                    closeResourceSourceManagerModal();
-                    openResourceSourceModal(index);
-                }
+                closeResourceSourceManagerModal();
+                openResourceSourceModal(index);
+                return;
+            }
+            if (action === 'toggle') {
+                const enabled = String(btn.dataset.enabled || '0') === '1';
+                await toggleResourceSourceEnabled(index, !enabled);
+                renderResourceSourceManagerModal();
+                return;
+            }
+            if (action === 'delete') {
+                await deleteResourceSource(index);
+                renderResourceSourceManagerModal();
             }
         });
         document.getElementById('resource-board').addEventListener('click', async (e) => {
