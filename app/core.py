@@ -4623,6 +4623,7 @@ async def build_resource_state_payload(search: str = "") -> Dict[str, Any]:
     completed_job_count = count_resource_jobs(status="completed")
     failed_job_count = count_resource_jobs(status="failed")
     sources = cfg.get("resource_sources", [])
+    enabled_sources = [source for source in sources if source.get("enabled")]
     channel_sections = build_resource_channel_sections(sources, per_channel=10)
     channel_profiles = {
         str(section.get("channel_id", "")).strip(): section.get("channel_profile", {})
@@ -4636,6 +4637,14 @@ async def build_resource_state_payload(search: str = "") -> Dict[str, Any]:
         "jobs": clone_jsonable(jobs),
         "monitor_tasks": clone_jsonable(cfg.get("monitor_tasks", [])),
         "cookie_configured": bool(str(cfg.get("cookie_115", "")).strip()),
+        "setup_status": {
+            "alist_configured": bool(str(cfg.get("alist_url", "")).strip()),
+            "cookie_configured": bool(str(cfg.get("cookie_115", "")).strip()),
+            "has_sources": bool(enabled_sources),
+            "has_monitor": bool(cfg.get("monitor_tasks", [])),
+            "has_resource_data": total_item_count > 0,
+            "has_jobs": bool(jobs),
+        },
         "search": keyword,
         "channel_sections": clone_jsonable(channel_sections),
         "channel_profiles": clone_jsonable(channel_profiles),
@@ -4651,7 +4660,7 @@ async def build_resource_state_payload(search: str = "") -> Dict[str, Any]:
             }
         ),
         "stats": {
-            "source_count": len([source for source in sources if source.get("enabled")]),
+            "source_count": len(enabled_sources),
             "item_count": total_item_count,
             "filtered_item_count": filtered_item_count,
             "completed_job_count": completed_job_count,

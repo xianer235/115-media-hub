@@ -15,7 +15,7 @@
             last_sign_at: '',
             last_trigger: ''
         };
-        let resourceState = { sources: [], quick_links: [], items: [], jobs: [], channel_sections: [], channel_profiles: {}, search_sections: [], last_syncs: {}, monitor_tasks: [], stats: { source_count: 0, item_count: 0, filtered_item_count: 0, completed_job_count: 0 }, cookie_configured: false, search: '', search_meta: {} };
+        let resourceState = { sources: [], quick_links: [], items: [], jobs: [], channel_sections: [], channel_profiles: {}, search_sections: [], last_syncs: {}, monitor_tasks: [], stats: { source_count: 0, item_count: 0, filtered_item_count: 0, completed_job_count: 0 }, cookie_configured: false, setup_status: null, search: '', search_meta: {} };
         let editingMonitorName = null;
         let editingSubscriptionName = null;
         let editingResourceSourceIndex = null;
@@ -4804,13 +4804,22 @@
             const stepsEl = document.getElementById('resource-onboarding-steps');
             if (!card || !stepsEl) return;
 
-            const hasCookie = !!resourceState.cookie_configured;
-            const hasSources = Array.isArray(resourceState.sources) && resourceState.sources.length > 0;
-            const hasMonitor = Array.isArray(resourceState.monitor_tasks) && resourceState.monitor_tasks.length > 0;
-            const hasResourceData = Number(resourceState?.stats?.item_count || 0) > 0;
-            const hasJobs = Array.isArray(resourceState.jobs) && resourceState.jobs.length > 0;
+            const setupStatus = resourceState?.setup_status && typeof resourceState.setup_status === 'object'
+                ? resourceState.setup_status
+                : null;
+            if (!setupStatus) {
+                card.classList.add('hidden');
+                stepsEl.innerHTML = '';
+                return;
+            }
+
+            const hasCookie = !!setupStatus.cookie_configured;
+            const hasSources = !!setupStatus.has_sources;
+            const hasMonitor = !!setupStatus.has_monitor;
+            const hasResourceData = !!setupStatus.has_resource_data;
+            const hasJobs = !!setupStatus.has_jobs;
             const steps = [
-                { label: '配置 AList/OpenList', done: !!String(document.getElementById('alist_url')?.value || '').trim(), tab: 'settings', meta: '播放链接基础配置' },
+                { label: '配置 AList/OpenList', done: !!setupStatus.alist_configured, tab: 'settings', meta: '播放链接基础配置' },
                 { label: '配置 115 Cookie', done: hasCookie, tab: 'settings', meta: '启用导入/转存能力' },
                 { label: '同步频道资源', done: hasSources && hasResourceData, tab: 'resource', meta: '先同步再搜索导入' },
                 { label: '创建监控任务', done: hasMonitor, tab: 'monitor', meta: '用于自动生成 strm' },
@@ -4893,6 +4902,9 @@
                 search_sections: hydrateResourceSections(Array.isArray(data.search_sections) ? data.search_sections : (resourceState.search_sections || [])),
                 last_syncs: data.last_syncs || resourceState.last_syncs || {},
                 monitor_tasks: Array.isArray(data.monitor_tasks) ? data.monitor_tasks : (resourceState.monitor_tasks || monitorState.tasks || []),
+                setup_status: data.setup_status && typeof data.setup_status === 'object'
+                    ? data.setup_status
+                    : (resourceState.setup_status || null),
                 stats: nextStats,
                 search: typeof data.search === 'string' ? data.search : (resourceState.search || ''),
                 search_meta: data.search_meta || resourceState.search_meta || {}
