@@ -15,4 +15,5 @@ preview-runtime/
 .vscode/
 
 # local agent handoff context (not for image build context)
+AGENTS.md
 doc/

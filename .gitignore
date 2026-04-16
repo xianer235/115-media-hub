@@ -28,4 +28,5 @@ preview-runtime/
 .vscode/
 
 # local agent handoff context (not for repo)
+AGENTS.md
 doc/

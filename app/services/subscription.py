@@ -1329,6 +1329,114 @@ def _format_candidate_episode_label(candidate: Dict[str, Any]) -> str:
     return "未知集数"
 
 
+def _build_subscription_episode_bucket_key(episode_values: Set[int]) -> str:
+    normalized = sorted({max(0, int(value or 0)) for value in (episode_values or set()) if max(0, int(value or 0)) > 0})
+    if not normalized:
+        return ""
+    if len(normalized) == 1:
+        return f"e:{normalized[0]}"
+    start = normalized[0]
+    end = normalized[-1]
+    expected = list(range(start, end + 1))
+    if normalized == expected:
+        return f"r:{start}-{end}"
+    return f"m:{','.join([str(value) for value in normalized[:24]])}"
+
+
+def _build_subscription_share_file_quality_rank(task: Dict[str, Any], entry: Dict[str, Any]) -> Tuple[int, int, int, str]:
+    entry_name = normalize_relative_path(str((entry or {}).get("name", "") or "").strip())
+    pseudo_item = {
+        "title": entry_name,
+        "raw_text": entry_name,
+        "quality": entry_name,
+    }
+    quality_bonus, resolution, _ = score_subscription_quality_preference(task, pseudo_item)
+    size_value = max(0, int((entry or {}).get("size", 0) or 0))
+    return (
+        max(0, int(quality_bonus or 0)),
+        max(0, int(resolution or 0)),
+        size_value,
+        entry_name.lower(),
+    )
+
+
+def _pick_best_tv_share_files_by_episode_bucket(
+    task: Dict[str, Any],
+    file_entries: List[Dict[str, Any]],
+    missing_episodes: Set[int],
+) -> Dict[str, Any]:
+    target_missing = _clamp_episode_values(missing_episodes or set())
+    picked_by_bucket: Dict[str, Dict[str, Any]] = {}
+    duplicate_bucket_hits = 0
+
+    for raw_entry in file_entries if isinstance(file_entries, list) else []:
+        if not isinstance(raw_entry, dict):
+            continue
+        entry_id = str(raw_entry.get("id", "") or raw_entry.get("fid", "") or "").strip()
+        entry_name = normalize_relative_path(str(raw_entry.get("name", "") or "").strip())
+        if not entry_id or not entry_name:
+            continue
+
+        entry_episodes = _clamp_episode_values(
+            {
+                max(0, int(value or 0))
+                for value in (raw_entry.get("episodes", []) if isinstance(raw_entry.get("episodes"), list) else [])
+                if max(0, int(value or 0)) > 0
+            }
+        )
+        if not entry_episodes:
+            continue
+        episode_hit = entry_episodes.intersection(target_missing) if target_missing else set(entry_episodes)
+        if not episode_hit:
+            continue
+
+        bucket_key = _build_subscription_episode_bucket_key(entry_episodes) or f"id:{entry_id}"
+        rank = _build_subscription_share_file_quality_rank(task, raw_entry)
+        current = picked_by_bucket.get(bucket_key)
+        if current:
+            duplicate_bucket_hits += 1
+            if rank <= current.get("rank", (0, 0, 0, "")):
+                continue
+
+        picked_by_bucket[bucket_key] = {
+            "entry": {
+                "id": entry_id,
+                "name": entry_name,
+                "is_dir": False,
+                "parent_id": str(raw_entry.get("parent_id", "0") or "0").strip() or "0",
+                "cid": "",
+                "fid": str(raw_entry.get("fid", "") or entry_id).strip(),
+            },
+            "episodes": entry_episodes,
+            "episode_hit": episode_hit,
+            "rank": rank,
+        }
+
+    ordered_entries = sorted(
+        picked_by_bucket.values(),
+        key=lambda item: (
+            min(item.get("episodes", {999999})) if item.get("episodes") else 999999,
+            normalize_relative_path(str((item.get("entry", {}) or {}).get("name", "") or "")).lower(),
+        ),
+    )
+    covered_missing: Set[int] = set()
+    selected_entries: List[Dict[str, Any]] = []
+    for payload in ordered_entries:
+        entry = payload.get("entry", {}) if isinstance(payload.get("entry"), dict) else {}
+        if not entry:
+            continue
+        selected_entries.append(entry)
+        covered_missing.update(payload.get("episode_hit", set()))
+
+    return {
+        "selected_entries": selected_entries,
+        "selected_ids": [str(entry.get("id", "")).strip() for entry in selected_entries if str(entry.get("id", "")).strip()],
+        "covered_missing": covered_missing,
+        "bucket_count": len(selected_entries),
+        "duplicate_bucket_hits": duplicate_bucket_hits,
+    }
+
+
 def _scan_115_existing_tv_episodes(
     cookie: str,
     root_folder_id: str,
@@ -2325,8 +2433,7 @@ async def _build_tv_share_selection_for_missing_episodes(
 
     queue: List[Tuple[str, int, str]] = [(start_cid, 0, start_parent_path)]
     visited: Set[str] = set()
-    selected_entries: List[Dict[str, Any]] = []
-    selected_ids: Set[str] = set()
+    matched_file_entries: List[Dict[str, Any]] = []
     covered_missing: Set[int] = set()
     share_root_title = ""
     scanned_dirs = 0
@@ -2400,11 +2507,7 @@ async def _build_tv_share_selection_for_missing_episodes(
                 entry_id = str(entry.get("id", "") or entry.get("fid", "") or "").strip()
                 if not entry_id:
                     continue
-                if entry_id in selected_ids:
-                    covered_missing.update(episode_hit)
-                    continue
-                selected_ids.add(entry_id)
-                selected_entries.append(
+                matched_file_entries.append(
                     {
                         "id": entry_id,
                         "name": full_name or rel_name,
@@ -2412,6 +2515,9 @@ async def _build_tv_share_selection_for_missing_episodes(
                         "parent_id": str(entry.get("parent_id", normalized_cid) or normalized_cid).strip() or "0",
                         "cid": "",
                         "fid": str(entry.get("fid", "") or entry_id).strip(),
+                        "size": max(0, int(entry.get("size", 0) or 0)),
+                        "modified_at": str(entry.get("modified_at", "") or "").strip(),
+                        "episodes": sorted(matched_episodes),
                     }
                 )
                 covered_missing.update(episode_hit)
@@ -2428,12 +2534,31 @@ async def _build_tv_share_selection_for_missing_episodes(
         "covered_total": len(covered_missing),
         "covered_episodes": sorted(covered_missing)[:300],
         "covered_preview": _format_episode_preview(covered_missing) if covered_missing else "--",
-        "selected_count": len(selected_ids),
+        "selected_count": 0,
         "share_subdir": share_subdir,
         "share_subdir_cid": share_subdir_cid,
         "share_scope_cid": start_cid,
         "share_scope_path": start_parent_path,
     }
+
+    best_selection = _pick_best_tv_share_files_by_episode_bucket(task, matched_file_entries, target_missing)
+    selected_entries = (
+        best_selection.get("selected_entries", [])
+        if isinstance(best_selection.get("selected_entries"), list)
+        else []
+    )
+    selected_ids = (
+        best_selection.get("selected_ids", [])
+        if isinstance(best_selection.get("selected_ids"), list)
+        else []
+    )
+    covered_missing = _clamp_episode_values(best_selection.get("covered_missing", set()))
+    stats["covered_total"] = len(covered_missing)
+    stats["covered_episodes"] = sorted(covered_missing)[:300]
+    stats["covered_preview"] = _format_episode_preview(covered_missing) if covered_missing else "--"
+    stats["selected_count"] = len(selected_ids)
+    stats["bucket_count"] = max(0, int(best_selection.get("bucket_count", 0) or 0))
+    stats["duplicate_bucket_hits"] = max(0, int(best_selection.get("duplicate_bucket_hits", 0) or 0))
 
     if not selected_ids:
         stats["reason"] = "no_precise_episode_match"
@@ -2441,7 +2566,7 @@ async def _build_tv_share_selection_for_missing_episodes(
 
     selection = normalize_share_selection_meta(
         {
-            "selected_ids": sorted(selected_ids),
+            "selected_ids": selected_ids,
             "selected_entries": selected_entries,
             "refresh_target_type": "file" if len(selected_ids) == 1 else "mixed",
             "share_root_title": share_root_title,
@@ -2585,6 +2710,8 @@ async def _scan_subscription_share_tree_snapshot(
                         "parent_id": str(entry.get("parent_id", normalized_cid) or normalized_cid).strip() or "0",
                         "cid": "",
                         "fid": str(entry.get("fid", "") or entry_id).strip(),
+                        "size": max(0, int(entry.get("size", 0) or 0)),
+                        "modified_at": str(entry.get("modified_at", "") or "").strip(),
                         "episodes": matched_episodes,
                     }
                 )
@@ -2938,6 +3065,8 @@ async def _scan_subscription_share_episode_manifest(
                         "parent_id": str(entry.get("parent_id", normalized_cid) or normalized_cid).strip() or "0",
                         "cid": "",
                         "fid": str(entry.get("fid", "") or entry_id).strip(),
+                        "size": max(0, int(entry.get("size", 0) or 0)),
+                        "modified_at": str(entry.get("modified_at", "") or "").strip(),
                         "episodes": matched_episodes,
                     }
                 )
@@ -2963,6 +3092,7 @@ async def _scan_subscription_share_episode_manifest(
 def _build_tv_share_selection_from_manifest(
     manifest: Dict[str, Any],
     missing_episodes: Set[int],
+    task: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     payload = manifest if isinstance(manifest, dict) else {}
     target_missing = {max(0, int(value or 0)) for value in (missing_episodes or set()) if max(0, int(value or 0)) > 0}
@@ -2970,35 +3100,18 @@ def _build_tv_share_selection_from_manifest(
         return {}, {"reason": "missing_episodes_empty", "from_runtime_cache": True}
 
     file_entries = payload.get("files", []) if isinstance(payload.get("files"), list) else []
-    selected_entries: List[Dict[str, Any]] = []
-    selected_ids: Set[str] = set()
-    covered_missing: Set[int] = set()
-    for raw_entry in file_entries:
-        if not isinstance(raw_entry, dict):
-            continue
-        entry_id = str(raw_entry.get("id", "") or raw_entry.get("fid", "") or "").strip()
-        if not entry_id or entry_id in selected_ids:
-            continue
-        entry_episodes = {
-            max(0, int(value or 0))
-            for value in (raw_entry.get("episodes", []) if isinstance(raw_entry.get("episodes"), list) else [])
-            if max(0, int(value or 0)) > 0
-        }
-        episode_hit = entry_episodes.intersection(target_missing)
-        if not episode_hit:
-            continue
-        selected_ids.add(entry_id)
-        selected_entries.append(
-            {
-                "id": entry_id,
-                "name": normalize_relative_path(str(raw_entry.get("name", "") or "").strip()),
-                "is_dir": False,
-                "parent_id": str(raw_entry.get("parent_id", "0") or "0").strip() or "0",
-                "cid": "",
-                "fid": str(raw_entry.get("fid", "") or entry_id).strip(),
-            }
-        )
-        covered_missing.update(episode_hit)
+    best_selection = _pick_best_tv_share_files_by_episode_bucket(task or {}, file_entries, target_missing)
+    selected_entries = (
+        best_selection.get("selected_entries", [])
+        if isinstance(best_selection.get("selected_entries"), list)
+        else []
+    )
+    selected_ids = (
+        best_selection.get("selected_ids", [])
+        if isinstance(best_selection.get("selected_ids"), list)
+        else []
+    )
+    covered_missing = _clamp_episode_values(best_selection.get("covered_missing", set()))
 
     stats = {
         "reason": "",
@@ -3015,6 +3128,8 @@ def _build_tv_share_selection_from_manifest(
         "truncated": bool(payload.get("truncated", False)),
         "share_scope_cid": str(payload.get("share_scope_cid", "") or "").strip(),
         "share_scope_path": normalize_relative_path(str(payload.get("share_scope_path", "") or "").strip()),
+        "bucket_count": max(0, int(best_selection.get("bucket_count", 0) or 0)),
+        "duplicate_bucket_hits": max(0, int(best_selection.get("duplicate_bucket_hits", 0) or 0)),
     }
     if not selected_entries:
         stats["reason"] = "no_precise_episode_match"
@@ -3022,7 +3137,7 @@ def _build_tv_share_selection_from_manifest(
 
     selection = normalize_share_selection_meta(
         {
-            "selected_ids": sorted(selected_ids),
+            "selected_ids": selected_ids,
             "selected_entries": selected_entries,
             "refresh_target_type": "file" if len(selected_entries) == 1 else "mixed",
             "share_root_title": str(payload.get("share_root_title", "") or "").strip(),
@@ -4473,6 +4588,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                             precise_selection, precise_stats = _build_tv_share_selection_from_manifest(
                                 fixed_share_runtime_manifest,
                                 precise_missing_episode_values,
+                                task=task,
                             )
                         else:
                             precise_selection, precise_stats = await _build_tv_share_selection_for_missing_episodes(
@@ -4499,11 +4615,13 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                                 )
                                 if max(0, int(value or 0)) > 0
                             }
+                            dedupe_hits = int((precise_stats or {}).get("duplicate_bucket_hits", 0) or 0)
+                            dedupe_tail = f"，同集/同范围已优选 {dedupe_hits} 条重复版本" if dedupe_hits > 0 else ""
                             await write_subscription_log(
                                 (
                                     f"候选资源 #{index} 固定链接模式已启用文件级筛选"
                                     f"{'（运行期缓存）' if bool((precise_stats or {}).get('from_runtime_cache', False)) else ''}，"
-                                    f"自动命中 {len(precise_ids)} 个剧集文件后再转存（避免整包导入）"
+                                    f"自动命中 {len(precise_ids)} 个剧集文件后再转存（避免整包导入）{dedupe_tail}"
                                 ),
                                 "info",
                             )
@@ -4542,6 +4660,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                             share_selection, selection_stats = _build_tv_share_selection_from_manifest(
                                 fixed_share_runtime_manifest,
                                 missing_for_candidate,
+                                task=task,
                             )
                         else:
                             share_selection, selection_stats = await _build_tv_share_selection_for_missing_episodes(
@@ -4559,10 +4678,12 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                                 for value in (selection_stats.get("covered_episodes", []) if isinstance(selection_stats, dict) else [])
                                 if max(0, int(value or 0)) > 0
                             }
+                            dedupe_hits = int((selection_stats or {}).get("duplicate_bucket_hits", 0) or 0)
+                            dedupe_tail = f"，同集/同范围已优选 {dedupe_hits} 条重复版本" if dedupe_hits > 0 else ""
                             await write_subscription_log(
                                 (
                                     f"候选资源 #{index} 检测到大包与目录重叠，缺失 {_format_episode_preview(missing_for_candidate)}；"
-                                    f"已自动选中 {len(selected_ids)} 个文件精细转存"
+                                    f"已自动选中 {len(selected_ids)} 个文件精细转存{dedupe_tail}"
                                 ),
                                 "info",
                             )
