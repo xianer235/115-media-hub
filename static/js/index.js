@@ -97,6 +97,7 @@
         let resourceSourceKeyword = '';
         let resourceSourceSortMode = 'recent';
         let resourceSourceBulkSelected = {};
+        let resourceSourceManagerMobilePanel = 'list';
         let resourceSourceTestBusy = false;
         let resourceSourceTestResult = { total: 0, done: 0, success: 0, failed: 0, running: false, last_name: '', error: '' };
         let resourceSubmitBusy = false;
@@ -5580,9 +5581,22 @@
             resourceSourceBulkSelected = next;
         }
 
+        function normalizeResourceSourceManagerMobilePanel(panel) {
+            return String(panel || '').trim().toLowerCase() === 'tools' ? 'tools' : 'list';
+        }
+
+        function isCompactPortraitResourceSourceManager() {
+            return !!window.matchMedia && window.matchMedia('(orientation: portrait) and (max-width: 900px)').matches;
+        }
+
+        function setResourceSourceManagerMobilePanel(panel) {
+            resourceSourceManagerMobilePanel = normalizeResourceSourceManagerMobilePanel(panel);
+        }
+
         function openResourceSourceManagerModal() {
             switchTab('settings');
             resourceSourceManagerOpen = true;
+            setResourceSourceManagerMobilePanel('list');
             normalizeResourceSourceBulkSelections();
             showLockedModal('resource-source-manager-modal');
             renderResourceSourceManagerModal();
@@ -5744,6 +5758,7 @@
             const modal = document.getElementById('resource-source-manager-modal');
             if (!modal || !resourceSourceManagerOpen) return;
 
+            const shell = modal.querySelector('.resource-source-manager-shell');
             const typeFiltersEl = document.getElementById('resource-source-manager-type-filters');
             const statusFiltersEl = document.getElementById('resource-source-manager-status-filters');
             const activityFiltersEl = document.getElementById('resource-source-manager-activity-filters');
@@ -5752,11 +5767,15 @@
             const hintEl = document.getElementById('resource-source-manager-filter-hint');
             const listEl = document.getElementById('resource-source-manager-list');
             const selectedCountEl = document.getElementById('resource-source-manager-selected-count');
+            const mobileFilteredCountEl = document.getElementById('resource-source-manager-mobile-filtered-count');
+            const mobileSelectedCountEl = document.getElementById('resource-source-manager-mobile-selected-count');
+            const mobileListTabEl = document.getElementById('resource-source-manager-mobile-list-tab');
+            const mobileToolsTabEl = document.getElementById('resource-source-manager-mobile-tools-tab');
             const resultEl = document.getElementById('resource-source-manager-test-result');
             const testBtn = document.getElementById('resource-source-manager-test-btn');
             const selectAllBtn = document.getElementById('resource-source-manager-select-all-btn');
             const invertBtn = document.getElementById('resource-source-manager-invert-btn');
-            if (!typeFiltersEl || !statusFiltersEl || !activityFiltersEl || !searchInputEl || !sortSelectEl || !hintEl || !listEl || !selectedCountEl || !resultEl || !testBtn || !selectAllBtn || !invertBtn) return;
+            if (!shell || !typeFiltersEl || !statusFiltersEl || !activityFiltersEl || !searchInputEl || !sortSelectEl || !hintEl || !listEl || !selectedCountEl || !mobileFilteredCountEl || !mobileSelectedCountEl || !mobileListTabEl || !mobileToolsTabEl || !resultEl || !testBtn || !selectAllBtn || !invertBtn) return;
 
             const sources = resourceState.sources || [];
             const sectionIndex = getResourceSourceSectionIndex();
@@ -5808,7 +5827,19 @@
 
             const selectedCount = Object.keys(resourceSourceBulkSelected || {}).filter(channelId => resourceSourceBulkSelected[channelId]).length;
             const selectedInFiltered = filtered.filter(view => !!resourceSourceBulkSelected[view.channelId]).length;
+            const compactPortrait = isCompactPortraitResourceSourceManager();
+            const activeMobilePanel = compactPortrait ? normalizeResourceSourceManagerMobilePanel(resourceSourceManagerMobilePanel) : 'list';
+            shell.classList.toggle('resource-source-manager-shell-mobile', compactPortrait);
+            shell.classList.toggle('resource-source-manager-shell-mobile-list', compactPortrait && activeMobilePanel === 'list');
+            shell.classList.toggle('resource-source-manager-shell-mobile-tools', compactPortrait && activeMobilePanel === 'tools');
+
             selectedCountEl.textContent = String(selectedInFiltered);
+            mobileFilteredCountEl.textContent = String(filtered.length);
+            mobileSelectedCountEl.textContent = String(selectedCount);
+            mobileListTabEl.classList.toggle('resource-source-manager-mobile-tab-active', activeMobilePanel === 'list');
+            mobileListTabEl.setAttribute('aria-pressed', activeMobilePanel === 'list' ? 'true' : 'false');
+            mobileToolsTabEl.classList.toggle('resource-source-manager-mobile-tab-active', activeMobilePanel === 'tools');
+            mobileToolsTabEl.setAttribute('aria-pressed', activeMobilePanel === 'tools' ? 'true' : 'false');
             hintEl.textContent = selectedCount > selectedInFiltered
                 ? `当前筛选结果 ${filtered.length} 个频道，已选中 ${selectedInFiltered} 个（全局已选 ${selectedCount} 个）。`
                 : `当前筛选结果 ${filtered.length} 个频道，已选中 ${selectedInFiltered} 个。`;
@@ -8710,6 +8741,9 @@
                 renderResourceSourceManagerModal();
             }
         });
+        window.addEventListener('resize', () => {
+            if (resourceSourceManagerOpen) renderResourceSourceManagerModal();
+        });
         document.getElementById('resource-onboarding-steps').addEventListener('click', (e) => {
             const btn = e.target.closest('[data-onboarding-tab]');
             if (!btn) return;
@@ -8826,6 +8860,12 @@
             if (e.target.id === 'resource-source-import-modal') closeResourceSourceImportModal();
         });
         document.getElementById('resource-source-manager-modal').addEventListener('click', (e) => {
+            const panelBtn = e.target.closest('[data-resource-source-manager-panel]');
+            if (panelBtn) {
+                setResourceSourceManagerMobilePanel(panelBtn.dataset.resourceSourceManagerPanel || 'list');
+                renderResourceSourceManagerModal();
+                return;
+            }
             if (e.target.id === 'resource-source-manager-modal') closeResourceSourceManagerModal();
         });
         document.getElementById('resource-import-modal').addEventListener('click', (e) => {

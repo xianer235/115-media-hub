@@ -1036,6 +1036,16 @@
                     </div>
                     <button type="button" class="resource-source-modal-close" onclick="closeResourceSourceManagerModal()" aria-label="关闭频道管理弹窗">✕</button>
                 </div>
+                <div class="resource-source-manager-mobile-bar" aria-label="竖屏频道管理视图切换">
+                    <div class="resource-source-manager-mobile-summary">
+                        <div class="resource-source-manager-mobile-pill">筛选结果 <span id="resource-source-manager-mobile-filtered-count">0</span></div>
+                        <div class="resource-source-manager-mobile-pill">已选频道 <span id="resource-source-manager-mobile-selected-count">0</span></div>
+                    </div>
+                    <div class="resource-source-manager-mobile-tabs" role="tablist" aria-label="频道管理模式">
+                        <button id="resource-source-manager-mobile-list-tab" type="button" data-resource-source-manager-panel="list" class="resource-source-manager-mobile-tab">频道列表</button>
+                        <button id="resource-source-manager-mobile-tools-tab" type="button" data-resource-source-manager-panel="tools" class="resource-source-manager-mobile-tab">筛选与批量</button>
+                    </div>
+                </div>
                 <div class="resource-source-manager-body">
                     <div class="resource-source-manager-side">
                         <div class="resource-source-manager-card">
