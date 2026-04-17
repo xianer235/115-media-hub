@@ -147,6 +147,23 @@ Requirements:
 
 Quick links are not a hidden utility. They are part of the core resource exploration workflow.
 
+### Resource workflow parity
+
+The resource workspace must preserve the existing operational flows, not just the browsing shell.
+
+This includes:
+
+- channel sync
+- keyword search across enabled channels
+- direct import recognition from magnet and supported share links
+- resource detail and import entry points
+- quick link open and quick link management
+- resource source management entry points from the resource workflow where appropriate
+- resource job center with task filtering and clear actions
+- folder selection and folder creation during import
+- share-folder browsing, share code handling, and related import-side helpers
+- batch magnet handling where already supported
+
 ### Default content mode
 
 Before search executes, the result board displays grouped channel or source sections as a content stream.
@@ -194,6 +211,65 @@ The resource module should preserve:
 - expanded or collapsed section state when practical
 
 This prevents module switching from feeling destructive.
+
+### Existing module parity requirements
+
+The redesign is not allowed to reduce module capability just because the shell and resource entry flow are changing. Existing task management, logs, testing utilities, and import helpers remain part of the product unless they are explicitly replaced with equivalent functionality.
+
+The spec must therefore preserve parity for the following module-level feature families.
+
+#### Tree module parity
+
+The tree module must preserve:
+
+- progress summary with current step, detail, percent, and next scheduled run
+- manual run actions for network sync, local debug parse, and force full refresh
+- log panel and log clearing
+
+#### Subscription module parity
+
+The subscription module must preserve:
+
+- task list and summary state
+- task creation and editing flows
+- log panel and log clearing
+- TMDB binding and TMDB search flow
+- local folder picker and share-folder picker flows
+- episode view modal and view-mode switching
+
+#### Monitor module parity
+
+The monitor module must preserve:
+
+- task list and summary state
+- task creation and editing flows
+- webhook-oriented monitor behavior and related configuration cues
+- log panel and log clearing
+
+#### Settings module parity
+
+The settings module must preserve:
+
+- TG or TMDB proxy settings and latency test flow
+- TMDB enhancement settings
+- TG source management including add, edit, import, export, bulk management, filter, and classification test flows
+- 115 import settings and manual sign-in controls
+- sign-in schedule and sign-in status card
+- notification channel settings and notification test flow
+- backend security settings
+- webhook secret generation
+- userscript installation entry
+- field-level explanatory help where it materially affects correct configuration
+
+#### About and version parity
+
+The redesign must preserve:
+
+- a low-frequency about or version area
+- version status, version notes, and manual version check
+- project, changelog, and support links
+- the workflow diagram entry and modal or equivalent viewer
+- lightweight version reminder behavior that can direct users to the about area without taking over the resource workspace
 
 ## Global Tools and Utility Placement
 
@@ -329,6 +405,7 @@ Shell summary state includes:
 - task badge and task center summary
 - theme preference
 - low-frequency app-wide notices such as version badge
+- lightweight version reminder banner state
 
 This state must stay lightweight and should not trigger full module refreshes.
 
