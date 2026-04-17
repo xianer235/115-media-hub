@@ -120,29 +120,10 @@
         const monitorActionLocks = new Set();
         let versionInfo = { local: null, latest: null, has_update: false, checked_at: 0, error: '', source: '' };
         let versionBannerDismissed = false;
-        let currentTab = 'resource';
-        let shellMoreMenuOpen = false;
-        let shellRailExpanded = false;
         let aboutWorkflowImageLoaded = false;
         let aboutWorkflowImageLoadingPromise = null;
         let modalScrollLockCount = 0;
         let modalScrollLockY = 0;
-        const moduleVisitState = {
-            resource: true,
-            subscription: false,
-            monitor: false,
-            task: false,
-            settings: false,
-            about: false
-        };
-        const SHELL_TAB_META = {
-            resource: { title: '资源中心' },
-            subscription: { title: '影视订阅' },
-            monitor: { title: '文件夹监控' },
-            task: { title: '目录树任务' },
-            settings: { title: '参数配置' },
-            about: { title: '关于与版本' }
-        };
         const btnTexts = ["🌐 联网同步更新", "🛠 本地调试解析", "🔥 强制全量重刷"];
         const DEFAULT_EXTENSIONS = "mp4,mkv,avi,mov,wmv,flv,webm,vob,mpg,mpeg,ts,m2ts,mts,rmvb,rm,asf,3gp,m4v,f4v,iso";
         const STATUS_FALLBACK_INTERVAL = 15000;
@@ -157,7 +138,6 @@
         const RESOURCE_QUICK_LINKS_MEMORY_KEY = 'resource-quick-links-v1';
         const RESOURCE_QUICK_LINKS_LIMIT = 60;
         const MAIN_TAB_ROW_HINT_MEMORY_KEY = 'main-tab-row-hint-v1';
-        const SHELL_RAIL_EXPANDED_MEMORY_KEY = 'shell-rail-expanded-v1';
         const TOAST_DEFAULT_DURATION_MS = 3000;
         const SUBSCRIPTION_EPISODE_CACHE_TTL_MS = 1000 * 60 * 3;
         const SUBSCRIPTION_INTRO_EPISODE_RETRY_MS = 1000 * 60;
@@ -241,86 +221,62 @@
             settingsPage.classList.toggle('has-inline-save-dock', shouldInline);
         }
 
-        function syncShellHeader(tab = currentTab) {
-            const meta = SHELL_TAB_META[tab] || SHELL_TAB_META.resource;
-            const titleEl = document.getElementById('shell-current-title');
-            if (titleEl) titleEl.innerText = meta.title;
-        }
-
-        function readShellRailExpandedFromStorage() {
-            try {
-                return localStorage.getItem(SHELL_RAIL_EXPANDED_MEMORY_KEY) === '1';
-            } catch (e) {
-                return false;
-            }
-        }
-
-        function applyShellRailState(expanded = shellRailExpanded) {
-            shellRailExpanded = !!expanded;
-            const shell = document.querySelector('[data-app-shell]');
-            const toggle = document.getElementById('shell-rail-toggle');
-            if (shell) shell.dataset.shellExpanded = shellRailExpanded ? 'true' : 'false';
-            document.body.classList.toggle('shell-rail-expanded', shellRailExpanded);
-            if (toggle) {
-                const label = shellRailExpanded ? '收起侧边栏' : '展开侧边栏';
-                toggle.setAttribute('aria-expanded', shellRailExpanded ? 'true' : 'false');
-                toggle.setAttribute('aria-label', label);
-                toggle.title = label;
-            }
-        }
-
-        function toggleShellRail(force = null) {
-            shellRailExpanded = typeof force === 'boolean' ? force : !shellRailExpanded;
-            try {
-                localStorage.setItem(SHELL_RAIL_EXPANDED_MEMORY_KEY, shellRailExpanded ? '1' : '0');
-            } catch (e) {}
-            applyShellRailState(shellRailExpanded);
-        }
-
-        function syncShellMoreMenuState() {
-            const menu = document.getElementById('shell-more-menu');
-            const toggle = document.getElementById('shell-more-toggle');
-            if (menu) menu.classList.toggle('hidden', !shellMoreMenuOpen);
-            if (toggle) toggle.setAttribute('aria-expanded', shellMoreMenuOpen ? 'true' : 'false');
-        }
-
-        function closeShellMoreMenu() {
-            if (!shellMoreMenuOpen) return;
-            shellMoreMenuOpen = false;
-            syncShellMoreMenuState();
-        }
-
-        function toggleShellMoreMenu(force = null) {
-            shellMoreMenuOpen = typeof force === 'boolean' ? force : !shellMoreMenuOpen;
-            syncShellMoreMenuState();
-        }
-
         function syncMainTabRowState() {
-            document.querySelectorAll('[data-tab-target]').forEach((button) => {
-                const target = String(button.dataset.tabTarget || '').trim();
-                const active = target === currentTab;
-                button.classList.toggle('is-active', active);
-                button.setAttribute('aria-current', active ? 'page' : 'false');
-            });
-            syncShellHeader(currentTab);
+            const shell = document.getElementById('tab-row-shell');
+            const row = document.getElementById('tab-row');
+            if (!shell || !row) return;
+            const maxScrollLeft = Math.max(0, row.scrollWidth - row.clientWidth);
+            const canScrollLeft = row.scrollLeft > 2;
+            const canScrollRight = row.scrollLeft < maxScrollLeft - 2;
+            shell.classList.toggle('can-scroll-left', canScrollLeft);
+            shell.classList.toggle('can-scroll-right', canScrollRight);
         }
 
         function focusMainTab(tab, behavior = 'smooth') {
-            const button = document.getElementById(`tab-${tab}`) || document.querySelector(`[data-tab-target="${tab}"]`);
-            if (!button) return;
-            button.scrollIntoView({ inline: 'nearest', block: 'nearest', behavior });
+            const row = document.getElementById('tab-row');
+            const button = document.getElementById(`tab-${tab}`);
+            if (!row || !button) return;
+            button.scrollIntoView({ inline: 'center', block: 'nearest', behavior });
         }
 
-        function scrollMainTabs() {}
+        function scrollMainTabs(direction = 1) {
+            const row = document.getElementById('tab-row');
+            if (!row) return;
+            const dir = Number(direction) < 0 ? -1 : 1;
+            const step = Math.max(140, Math.round(row.clientWidth * 0.72));
+            row.scrollBy({ left: dir * step, behavior: 'smooth' });
+        }
 
-        function nudgeMainTabRowOnFirstVisit() {}
+        function nudgeMainTabRowOnFirstVisit() {
+            const row = document.getElementById('tab-row');
+            if (!row) return;
+            const isSmallScreen = window.matchMedia('(max-width: 768px)').matches;
+            if (!isSmallScreen) return;
+            const canScroll = row.scrollWidth > row.clientWidth + 8;
+            if (!canScroll) return;
+            if (row.scrollLeft > 1) return;
+            if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+            try {
+                if (sessionStorage.getItem(MAIN_TAB_ROW_HINT_MEMORY_KEY) === '1') return;
+                sessionStorage.setItem(MAIN_TAB_ROW_HINT_MEMORY_KEY, '1');
+            } catch (e) {}
+            window.setTimeout(() => {
+                row.scrollBy({ left: 28, behavior: 'smooth' });
+                window.setTimeout(() => {
+                    row.scrollBy({ left: -28, behavior: 'smooth' });
+                }, 260);
+            }, 260);
+        }
 
         function initMainTabRow() {
-            shellRailExpanded = readShellRailExpandedFromStorage();
-            applyShellRailState(shellRailExpanded);
+            const row = document.getElementById('tab-row');
+            if (!row) return;
+            row.addEventListener('scroll', syncMainTabRowState, { passive: true });
+            window.addEventListener('resize', syncMainTabRowState);
             syncMainTabRowState();
-            syncShellMoreMenuState();
             focusMainTab('resource', 'auto');
+            syncMainTabRowState();
+            nudgeMainTabRowOnFirstVisit();
         }
 
         function showLockedModal(modalId) {
@@ -339,51 +295,17 @@
             if (wasVisible) unlockPageScroll();
         }
 
-        async function ensureTabData(tab) {
-            if (tab === 'resource') {
-                moduleVisitState.resource = true;
-                await refreshResourceState();
-                return;
-            }
-            if (tab === 'subscription' && !moduleVisitState.subscription) {
-                await refreshSubscriptionState();
-                moduleVisitState.subscription = true;
-                return;
-            }
-            if (tab === 'monitor' && !moduleVisitState.monitor) {
-                await refreshMonitorState();
-                moduleVisitState.monitor = true;
-                return;
-            }
-            if (tab === 'task' && !moduleVisitState.task) {
-                await refreshMainLogs();
-                moduleVisitState.task = true;
-                return;
-            }
-            if (tab === 'settings') {
-                moduleVisitState.settings = true;
-                return;
-            }
-            if (tab === 'about') {
-                if (!versionInfo?.checked_at) await refreshVersionInfo(false);
-                moduleVisitState.about = true;
-            }
-        }
-
-        async function switchTab(tab) {
-            const nextTab = SHELL_TAB_META[tab] ? tab : 'resource';
-            currentTab = nextTab;
+        function switchTab(tab) {
             ['task', 'resource', 'subscription', 'settings', 'monitor', 'about'].forEach(name => {
-                const page = document.getElementById(`page-${name}`);
-                if (page) page.classList.toggle('hidden', nextTab !== name);
+                document.getElementById(`page-${name}`).classList.toggle('hidden', tab !== name);
+                document.getElementById(`tab-${name}`).className = tab === name ? 'tab-active uppercase' : 'tab-inactive uppercase';
             });
-            if (nextTab !== 'resource') toggleResourceJobModal(false);
-            closeShellMoreMenu();
-            syncMainTabRowState();
-            await ensureTabData(nextTab);
+            if (tab !== 'resource') toggleResourceJobModal(false);
+            if (tab === 'resource') refreshResourceState();
             syncResourceBackTopButton();
             syncSettingsSaveDock();
-            focusMainTab(nextTab);
+            focusMainTab(tab);
+            syncMainTabRowState();
         }
 
         function normalizeToastPlacement(placement) {
@@ -533,25 +455,9 @@
             return `${timestamp}${prefix} ${metrics}`;
         }
 
-        function formatMonitorTaskDividerHtml(text) {
-            const raw = String(text || '').trim();
-            const match = raw.match(/^(\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+[-—]{3,}\s*(.*?)\s*[-—]{3,}\s*$/u);
-            if (!match) return escapeHtml(raw);
-
-            const timestamp = escapeHtml(match[1] || '');
-            const label = escapeHtml(match[2] || '');
-            return `
-                <span class="log-task-divider-time">${timestamp}</span>
-                <span class="log-task-divider-rule" aria-hidden="true"></span>
-                <span class="log-task-divider-label">${label}</span>
-                <span class="log-task-divider-rule" aria-hidden="true"></span>
-            `;
-        }
-
         function formatMonitorLogHtml(item) {
             const level = item?.level || 'info';
             const text = String(item?.text || '');
-            if (level === 'task-divider') return formatMonitorTaskDividerHtml(text);
             if (level === 'info' && (text.includes('生成汇总:') || text.includes('清理汇总:'))) {
                 return decorateMonitorSummaryText(text);
             }
@@ -640,7 +546,6 @@
         function renderSign115Indicator() {
             const chip = document.getElementById('sign115-indicator');
             const textEl = document.getElementById('sign115-indicator-text');
-            const menuLabelEl = document.getElementById('shell-more-sign-label');
             if (!chip || !textEl) return;
 
             const state = String(sign115State.state || 'idle');
@@ -658,28 +563,21 @@
                 'hover:bg-slate-600'
             ];
             let label = '签到';
-            let tone = 'idle';
             if (running || state === 'checking') {
                 label = '签中';
-                tone = 'checking';
                 toneClasses.splice(0, toneClasses.length, 'bg-sky-500/20', 'text-sky-200', 'border-sky-400/40', 'hover:bg-sky-500/30');
             } else if (state === 'signed' || sign115State.signed_today === true) {
                 label = '已签';
-                tone = 'signed';
                 toneClasses.splice(0, toneClasses.length, 'bg-emerald-500/20', 'text-emerald-200', 'border-emerald-400/40', 'hover:bg-emerald-500/30');
             } else if (state === 'unsigned' || sign115State.signed_today === false) {
                 label = '未签';
-                tone = 'unsigned';
                 toneClasses.splice(0, toneClasses.length, 'bg-amber-500/20', 'text-amber-200', 'border-amber-400/40', 'hover:bg-amber-500/30');
             } else if (state === 'error') {
                 label = '异常';
-                tone = 'error';
                 toneClasses.splice(0, toneClasses.length, 'bg-rose-500/20', 'text-rose-200', 'border-rose-400/40', 'hover:bg-rose-500/30');
             }
 
             textEl.innerText = label;
-            if (menuLabelEl) menuLabelEl.innerText = label;
-            chip.dataset.signTone = tone;
             chip.classList.remove(
                 'bg-slate-700/50', 'text-slate-100', 'border-slate-500/40', 'hover:bg-slate-600',
                 'bg-sky-500/20', 'text-sky-200', 'border-sky-400/40', 'hover:bg-sky-500/30',
@@ -3832,12 +3730,16 @@
             const overflow = Math.max(0, links.length - preview.length);
             container.classList.remove('hidden');
             container.innerHTML = `
+                <div class="resource-quick-link-strip-label">常用网盘链接</div>
                 <div class="resource-quick-link-strip-list">
                     ${hasLinks
                         ? preview.map(item => `
-                            <button type="button" class="resource-quick-link-pill" data-resource-quick-link-action="search" data-resource-quick-link-id="${escapeHtml(item.id)}" title="${escapeHtml(item.url)}">${escapeHtml(item.name || '未命名')}</button>
+                            <div class="resource-quick-link-chip-group">
+                                <button type="button" class="resource-quick-link-chip" data-resource-quick-link-action="search" data-resource-quick-link-id="${escapeHtml(item.id)}" title="${escapeHtml(item.url)}">${escapeHtml(item.name || '未命名')}</button>
+                                <button type="button" class="resource-quick-link-chip-open" data-resource-quick-link-action="open" data-resource-quick-link-id="${escapeHtml(item.id)}" title="跳转到原链接" aria-label="跳转到 ${escapeHtml(item.name || '网盘链接')}">↗</button>
+                            </div>
                         `).join('')
-                        : '<span class="resource-quick-link-strip-empty">暂无常用链接</span>'}
+                        : '<span class="resource-quick-link-strip-empty">暂无快捷项</span>'}
                     <button type="button" class="resource-quick-link-manage-btn" data-resource-quick-link-action="manage">${overflow > 0 ? `管理 +${overflow}` : '管理'}</button>
                 </div>
             `;
@@ -4490,17 +4392,19 @@
                     </button>
                     <div class="resource-card-content">
                         <div class="resource-card-header">
-                            <button type="button" data-resource-action="preview" data-resource-id="${item.id}" class="resource-card-title break-words text-left bg-transparent border-none p-0 hover:text-sky-700 transition-colors">${escapeHtml(item?.title || '未命名资源')}</button>
-                            <div class="resource-card-badges">
-                                ${buildResourceStatusBadge(getResourceDisplayStatus(item))}
-                                <span class="text-[10px] px-3 py-1 rounded-full bg-slate-700 text-slate-100">${escapeHtml(getResourceLinkTypeLabel(getEffectiveResourceLinkType(item)))}</span>
-                                ${item?.quality ? `<span class="text-[10px] px-3 py-1 rounded-full bg-sky-500/15 text-sky-300 border border-sky-500/20">${escapeHtml(item.quality)}</span>` : ''}
-                                ${item?.year ? `<span class="text-[10px] px-3 py-1 rounded-full bg-violet-500/15 text-violet-300 border border-violet-500/20">${escapeHtml(item.year)}</span>` : ''}
+                            <div class="min-w-0">
+                                <button type="button" data-resource-action="preview" data-resource-id="${item.id}" class="resource-card-title break-words text-left bg-transparent border-none p-0 hover:text-sky-700 transition-colors">${escapeHtml(item?.title || '未命名资源')}</button>
+                                <div class="resource-card-badges">
+                                    ${buildResourceStatusBadge(getResourceDisplayStatus(item))}
+                                    <span class="text-[10px] px-3 py-1 rounded-full bg-slate-700 text-slate-100">${escapeHtml(getResourceLinkTypeLabel(getEffectiveResourceLinkType(item)))}</span>
+                                    ${item?.quality ? `<span class="text-[10px] px-3 py-1 rounded-full bg-sky-500/15 text-sky-300 border border-sky-500/20">${escapeHtml(item.quality)}</span>` : ''}
+                                    ${item?.year ? `<span class="text-[10px] px-3 py-1 rounded-full bg-violet-500/15 text-violet-300 border border-violet-500/20">${escapeHtml(item.year)}</span>` : ''}
+                                </div>
                             </div>
                         </div>
                         <div class="resource-card-meta">${buildResourceMeta(item)}</div>
-                        <div class="resource-card-desc">${buildResourceDescription(item)}</div>
                     </div>
+                    <div class="resource-card-desc">${buildResourceDescription(item)}</div>
                     <div class="resource-card-actions">
                         <button type="button" data-resource-action="preview" data-resource-id="${item.id}" class="resource-card-action-secondary">详情</button>
                         <button type="button" data-resource-action="copy" data-resource-id="${item.id}" class="resource-card-action-secondary ${copyDisabled}" ${copyDisabled ? 'disabled' : ''}>${escapeHtml(getResourceCopyLabel(item))}</button>
@@ -4839,19 +4743,19 @@
             const normalizedChannelId = normalizeTelegramChannelIdInput(section?.channel_id || '');
             const shownCount = sectionItems.length;
             const primaryBadge = isSearchSection
-                ? `命中 ${shownCount}`
-                : `显示 ${shownCount}`;
+                ? `命中 ${shownCount} 条`
+                : `最近 ${Math.min((Array.isArray(section.items) ? section.items.length : 0), 10)} 条`;
             const secondaryBadge = isSearchSection
-                ? `${escapeHtml(String(section?.pages_scanned || 0))} 页`
-                : `缓存 ${escapeHtml(String(section.item_count || (section.items || []).length || 0))}`;
+                ? `${escapeHtml(String(section?.pages_scanned || 0))} 页搜索结果`
+                : `首页缓存 ${escapeHtml(String(section.item_count || (section.items || []).length || 0))} 条`;
             const primaryType = getResourceLinkTypeLabel(section?.primary_link_type || section?.channel_profile?.primary_link_type || 'unknown');
             const latestPublishedAt = String(section?.latest_published_at || section?.channel_profile?.latest_published_at || '').trim();
             const subtleText = isSearchSection
-                ? `关键词「${escapeHtml(keyword)}」`
-                : `最近资源 ${escapeHtml(latestPublishedAt ? formatTimeText(latestPublishedAt) : '--')} · 最近同步 ${escapeHtml(formatResourceSyncTime(section.last_sync_at))}`;
+                ? '当前按频道源分组展示命中结果，可继续获取更早匹配内容。'
+                : `最近资源：${escapeHtml(latestPublishedAt ? formatTimeText(latestPublishedAt) : '--')} / 最近同步：${escapeHtml(formatResourceSyncTime(section.last_sync_at))}`;
             const footerText = isSearchSection
                 ? `当前已显示 ${escapeHtml(String(shownCount))} 条命中结果。`
-                : `当前已显示 ${escapeHtml(String(shownCount))} 条，频道缓存 ${escapeHtml(String(section.item_count || 0))} 条。`;
+                : `当前已展开 ${escapeHtml(String(shownCount))} 条；首页缓存 ${escapeHtml(String(section.item_count || 0))} 条最新记录。`;
             const emptyText = isSearchSection
                 ? '这个频道暂时没有可展示的命中结果。'
                 : '这个频道还没有同步到资源，稍后再试一次同步。';
@@ -4860,19 +4764,19 @@
                 <section class="resource-section-card" data-collapsed="${isResourceSectionCollapsed(section.channel_id) ? 'true' : 'false'}">
                     <div class="resource-section-header">
                         <button type="button" data-resource-section-toggle="${escapeHtml(section.channel_id || '')}" class="resource-section-header-main min-w-0 flex-1 text-left bg-transparent border-none p-0">
-                            <div class="resource-section-title-row">
-                                <h4 class="resource-section-title">${escapeHtml(section.name || section.channel_id || '未命名频道')}</h4>
-                                <span class="resource-section-chip">@${escapeHtml(section.channel_id || '--')}</span>
-                                <span class="resource-section-chip resource-section-chip-accent">${primaryBadge}</span>
-                                <span class="resource-section-chip">${secondaryBadge}</span>
-                                ${!isSearchSection ? `<span class="resource-section-chip">${escapeHtml(primaryType)}</span>` : ''}
-                                ${!isSearchSection && section.last_error ? '<span class="resource-section-chip resource-section-chip-warn">同步异常</span>' : ''}
+                            <div class="flex flex-wrap items-center gap-2">
+                                <h4 class="text-lg font-black text-white">${escapeHtml(section.name || section.channel_id || '未命名频道')}</h4>
+                                <span class="text-[11px] px-3 py-1 rounded-full bg-slate-800 text-slate-300 border border-slate-700">@${escapeHtml(section.channel_id || '--')}</span>
+                                <span class="text-[11px] px-3 py-1 rounded-full bg-sky-500/10 text-sky-300 border border-sky-500/20">${primaryBadge}</span>
+                                <span class="text-[11px] px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">${secondaryBadge}</span>
+                                ${!isSearchSection ? `<span class="text-[11px] px-3 py-1 rounded-full bg-violet-500/10 text-violet-300 border border-violet-500/20">${escapeHtml(primaryType)}</span>` : ''}
+                                ${!isSearchSection && section.last_error ? '<span class="text-[11px] px-3 py-1 rounded-full bg-rose-500/10 text-rose-300 border border-rose-500/20">同步异常</span>' : ''}
                             </div>
-                            <div class="resource-section-subtle">${subtleText}</div>
+                            <div class="subtle mt-2">${subtleText}</div>
                         </button>
-                        <div class="resource-section-actions">
-                            <a href="${escapeHtml(section.url || '#')}" target="_blank" rel="noopener noreferrer" class="resource-section-link">打开频道</a>
-                            <button type="button" data-resource-section-toggle="${escapeHtml(section.channel_id || '')}" class="resource-section-toggle bg-transparent border-none p-0" aria-label="展开或收起频道">⌄</button>
+                        <div class="flex items-center gap-2 shrink-0">
+                            <a href="${escapeHtml(section.url || '#')}" target="_blank" rel="noopener noreferrer" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 text-sm font-bold border border-slate-700">打开频道</a>
+                            <button type="button" data-resource-section-toggle="${escapeHtml(section.channel_id || '')}" class="resource-section-toggle bg-transparent border-none p-0">⌄</button>
                         </div>
                     </div>
                     <div class="resource-section-body">
@@ -9045,13 +8949,6 @@
             if (e.target.id === 'resource-job-modal') toggleResourceJobModal(false);
         });
         document.addEventListener('click', (e) => {
-            if (shellMoreMenuOpen) {
-                const menu = document.getElementById('shell-more-menu');
-                const toggle = document.getElementById('shell-more-toggle');
-                const clickedInsideMenu = !!menu && menu.contains(e.target);
-                const clickedToggle = !!toggle && toggle.contains(e.target);
-                if (!clickedInsideMenu && !clickedToggle) closeShellMoreMenu();
-            }
             if (!resourceJobClearMenuOpen) return;
             const menu = document.getElementById('resource-job-clear-menu');
             if (!menu) return;
@@ -9059,10 +8956,6 @@
             closeResourceJobClearMenu();
         });
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && shellMoreMenuOpen) {
-                closeShellMoreMenu();
-                return;
-            }
             if (e.key === 'Escape' && resourceJobClearMenuOpen) {
                 closeResourceJobClearMenu();
                 return;
@@ -9172,7 +9065,7 @@
                 const isDay = localStorage.getItem('theme-day') === 'day';
                 document.documentElement.classList.toggle('theme-day', isDay);
                 const btn = document.getElementById('theme-toggle');
-                if (btn) btn.textContent = isDay ? '日间' : '夜间';
+                if (btn) btn.textContent = isDay ? '☀️日间' : '🌙夜间';
             } catch (e) {}
         }
         function toggleTheme() {
@@ -9187,7 +9080,7 @@
                     localStorage.setItem('theme-day', 'night');
                 }
                 const btn = document.getElementById('theme-toggle');
-                if (btn) btn.textContent = isDay ? '日间' : '夜间';
+                if (btn) btn.textContent = isDay ? '☀️日间' : '🌙夜间';
             } catch (e) {}
         }
         applyThemeFromStorage();
@@ -9197,9 +9090,11 @@
         syncResourceBackTopButton();
         syncSettingsSaveDock();
         syncMainTabRowState();
+        refreshMainLogs();
+        refreshMonitorState();
+        refreshSubscriptionState();
         refreshResourceState();
         initPromise.finally(() => {
-            moduleVisitState.settings = true;
             connectStatusStream();
         });
         refreshVersionInfo();
