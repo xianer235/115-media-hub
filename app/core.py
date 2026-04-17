@@ -4369,6 +4369,8 @@ def infer_log_level_from_text(text: str) -> str:
         return "task-divider"
     if "··" in normalized and normalized.count("··") >= 2:
         return "section-divider"
+    if "生成汇总:" in normalized or "清理汇总:" in normalized:
+        return "info"
     lowered = normalized.lower()
     if "error" in lowered or "fail" in lowered or "失败" in normalized or "❌" in normalized:
         return "error"

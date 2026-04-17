@@ -5536,6 +5536,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
     finally:
         _subscription_share_entry_runtime_cache_var.reset(share_runtime_cache_token)
         _subscription_share_entry_refreshed_keys_var.reset(share_refreshed_keys_token)
+        tail_status = "idle"
         try:
             tail_state = load_subscription_task_state(task_name, task.get("media_type", "movie"))
             tail_status = str(tail_state.get("status", "idle") or "idle").strip().lower()
@@ -5553,6 +5554,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                     await write_subscription_log(fallback_detail, "warn")
                 except Exception:
                     pass
+                tail_status = "failed"
         except Exception:
             pass
 
@@ -5561,8 +5563,16 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
         subscription_status["current_task"] = ""
         subscription_control["cancel"] = False
         schedule_ui_state_push(0)
+        tail_status_label = {
+            'completed': '执行成功',
+            'cancelled': '已中断',
+            'failed': '执行失败',
+        }.get(tail_status, "已结束")
         try:
-            await write_subscription_log(f"━━━━━━━━━━【订阅结束 | {task_name}】━━━━━━━━━━", "task-divider")
+            await write_subscription_log(
+                f"━━━━━━━━━━【订阅结束 | {task_name} | {tail_status_label or '已结束'}】━━━━━━━━━━",
+                "task-divider",
+            )
         except Exception:
             pass
         try:

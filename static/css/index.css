@@ -71,7 +71,7 @@
         .btn-disabled { opacity: 0.5; cursor: not-allowed; pointer-events: none; filter: grayscale(1); }
         .group-card { background: linear-gradient(180deg, rgba(30,41,59,0.96), rgba(15,23,42,0.96)); border: 1px solid #334155; border-radius: 1.5rem; padding: 1.5rem; box-shadow: 0 10px 28px rgba(2, 6, 23, 0.35); }
         .group-title { color: #38bdf8; font-weight: 800; font-size: 0.875rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 1.25rem; border-left: 4px solid #38bdf8; padding-left: 0.75rem; }
-        .footer-text { text-align: center; padding: 2.5rem 0 1.5rem 0; color: #64748b; font-size: 0.75rem; letter-spacing: 0.05em; }
+        .footer-text { text-align: center; padding: 1.4rem 0 1.2rem 0; color: #64748b; font-size: 0.75rem; letter-spacing: 0.05em; }
         .tab-active { color: #38bdf8; border-bottom: 2px solid #38bdf8; padding-bottom: 0.25rem; }
         .tab-inactive { color: #94a3b8; padding-bottom: 0.25rem; }
         .tab-inactive:hover { color: #fff; }
@@ -87,13 +87,18 @@
             border-bottom: 1px dashed rgba(148, 163, 184, 0.2);
         }
         .log-task-divider {
-            color: #cbd5e1;
+            --log-task-divider-text: #cbd5e1;
+            --log-task-divider-border-strong: rgba(148, 163, 184, 0.5);
+            --log-task-divider-border-soft: rgba(148, 163, 184, 0.3);
+            --log-task-divider-rule-start: rgba(71, 85, 105, 0.12);
+            --log-task-divider-rule-mid: rgba(71, 85, 105, 0.82);
+            color: var(--log-task-divider-text);
             margin: 12px 0 8px;
             padding: 6px 0;
             font-weight: 700;
             letter-spacing: 0.02em;
-            border-top: 1px dashed rgba(148, 163, 184, 0.5);
-            border-bottom: 1px dashed rgba(148, 163, 184, 0.3);
+            border-top: 1px dashed var(--log-task-divider-border-strong);
+            border-bottom: 1px dashed var(--log-task-divider-border-soft);
             display: flex;
             align-items: center;
             gap: 0.7rem;
@@ -114,7 +119,35 @@
             flex: 1 1 6rem;
             min-width: 2.5rem;
             height: 1px;
-            background: linear-gradient(90deg, rgba(71, 85, 105, 0.12), rgba(71, 85, 105, 0.82), rgba(71, 85, 105, 0.12));
+            background: linear-gradient(90deg, var(--log-task-divider-rule-start), var(--log-task-divider-rule-mid), var(--log-task-divider-rule-start));
+        }
+        .log-task-divider.log-task-divider-start {
+            --log-task-divider-text: #7dd3fc;
+            --log-task-divider-border-strong: rgba(56, 189, 248, 0.46);
+            --log-task-divider-border-soft: rgba(56, 189, 248, 0.24);
+            --log-task-divider-rule-start: rgba(56, 189, 248, 0.12);
+            --log-task-divider-rule-mid: rgba(56, 189, 248, 0.76);
+        }
+        .log-task-divider.log-task-divider-success {
+            --log-task-divider-text: #4ade80;
+            --log-task-divider-border-strong: rgba(74, 222, 128, 0.46);
+            --log-task-divider-border-soft: rgba(74, 222, 128, 0.24);
+            --log-task-divider-rule-start: rgba(74, 222, 128, 0.12);
+            --log-task-divider-rule-mid: rgba(74, 222, 128, 0.76);
+        }
+        .log-task-divider.log-task-divider-warn {
+            --log-task-divider-text: #fbbf24;
+            --log-task-divider-border-strong: rgba(251, 191, 36, 0.46);
+            --log-task-divider-border-soft: rgba(251, 191, 36, 0.24);
+            --log-task-divider-rule-start: rgba(251, 191, 36, 0.12);
+            --log-task-divider-rule-mid: rgba(251, 191, 36, 0.76);
+        }
+        .log-task-divider.log-task-divider-error {
+            --log-task-divider-text: #f87171;
+            --log-task-divider-border-strong: rgba(248, 113, 113, 0.46);
+            --log-task-divider-border-soft: rgba(248, 113, 113, 0.24);
+            --log-task-divider-rule-start: rgba(248, 113, 113, 0.12);
+            --log-task-divider-rule-mid: rgba(248, 113, 113, 0.76);
         }
         .log-section-divider {
             color: #94a3b8;
@@ -3310,7 +3343,7 @@
 
         @media (max-width: 1024px) {
             #main-nav-actions { width: auto; justify-content: flex-end; }
-            .footer-text { padding: 1.8rem 0 1.2rem; }
+            .footer-text { padding: 1rem 0 1rem; }
         }
 
         @media (max-width: 960px) {
@@ -5188,12 +5221,42 @@
             border-bottom-color: rgba(100, 116, 139, 0.25) !important;
         }
         html.theme-day .log-task-divider {
-            color: #334155 !important;
-            border-top-color: rgba(100, 116, 139, 0.55) !important;
-            border-bottom-color: rgba(100, 116, 139, 0.35) !important;
+            --log-task-divider-text: #334155;
+            --log-task-divider-border-strong: rgba(100, 116, 139, 0.55);
+            --log-task-divider-border-soft: rgba(100, 116, 139, 0.35);
+            --log-task-divider-rule-start: rgba(100, 116, 139, 0.12);
+            --log-task-divider-rule-mid: rgba(100, 116, 139, 0.72);
+            color: var(--log-task-divider-text) !important;
+            border-top-color: var(--log-task-divider-border-strong) !important;
+            border-bottom-color: var(--log-task-divider-border-soft) !important;
         }
-        html.theme-day .log-task-divider-rule {
-            background: linear-gradient(90deg, rgba(100, 116, 139, 0.12), rgba(100, 116, 139, 0.72), rgba(100, 116, 139, 0.12));
+        html.theme-day .log-task-divider.log-task-divider-start {
+            --log-task-divider-text: #0369a1;
+            --log-task-divider-border-strong: rgba(3, 105, 161, 0.4);
+            --log-task-divider-border-soft: rgba(3, 105, 161, 0.22);
+            --log-task-divider-rule-start: rgba(3, 105, 161, 0.1);
+            --log-task-divider-rule-mid: rgba(3, 105, 161, 0.68);
+        }
+        html.theme-day .log-task-divider.log-task-divider-success {
+            --log-task-divider-text: var(--success);
+            --log-task-divider-border-strong: rgba(21, 128, 61, 0.4);
+            --log-task-divider-border-soft: rgba(21, 128, 61, 0.22);
+            --log-task-divider-rule-start: rgba(21, 128, 61, 0.1);
+            --log-task-divider-rule-mid: rgba(21, 128, 61, 0.68);
+        }
+        html.theme-day .log-task-divider.log-task-divider-warn {
+            --log-task-divider-text: var(--warn);
+            --log-task-divider-border-strong: rgba(180, 83, 9, 0.38);
+            --log-task-divider-border-soft: rgba(180, 83, 9, 0.2);
+            --log-task-divider-rule-start: rgba(180, 83, 9, 0.1);
+            --log-task-divider-rule-mid: rgba(180, 83, 9, 0.66);
+        }
+        html.theme-day .log-task-divider.log-task-divider-error {
+            --log-task-divider-text: var(--danger);
+            --log-task-divider-border-strong: rgba(220, 38, 38, 0.38);
+            --log-task-divider-border-soft: rgba(220, 38, 38, 0.2);
+            --log-task-divider-rule-start: rgba(220, 38, 38, 0.1);
+            --log-task-divider-rule-mid: rgba(220, 38, 38, 0.66);
         }
         html.theme-day .log-section-divider {
             color: #64748b !important;
@@ -6464,7 +6527,7 @@
 
         .shell-workspace {
             width: min(1384px, 100%);
-            padding: 18px 0 56px;
+            padding: 18px 0 28px;
         }
 
         .resource-page {
@@ -6996,7 +7059,7 @@
 
             .shell-workspace {
                 padding-top: 12px;
-                padding-bottom: 84px;
+                padding-bottom: 32px;
             }
 
             .shell-mobile-nav {

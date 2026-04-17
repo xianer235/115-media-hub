@@ -533,13 +533,41 @@
             return `${timestamp}${prefix} ${metrics}`;
         }
 
+        function parseTaskDividerText(text) {
+            const raw = String(text || '').trim();
+            const match = raw.match(/^(\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+[-—━]{3,}\s*(.*?)\s*[-—━]{3,}\s*$/u);
+            if (!match) return null;
+            return {
+                timestamp: String(match[1] || ''),
+                label: String(match[2] || '')
+            };
+        }
+
+        function getTaskDividerTone(label) {
+            const raw = String(label || '').trim();
+            if (!raw) return '';
+            if (/(任务开始|订阅开始)/.test(raw)) return 'start';
+            if (/(执行成功|订阅成功|已完成|完成)/.test(raw)) return 'success';
+            if (/(已中断|中断|取消)/.test(raw)) return 'warn';
+            if (/(执行失败|失败|异常|错误)/.test(raw)) return 'error';
+            return '';
+        }
+
+        function getLogEntryClass(item) {
+            const level = item?.level || 'info';
+            if (level !== 'task-divider') return `log-${level}`;
+            const parsed = parseTaskDividerText(item?.text || '');
+            const tone = getTaskDividerTone(parsed?.label || item?.text || '');
+            return ['log-task-divider', tone ? `log-task-divider-${tone}` : ''].filter(Boolean).join(' ');
+        }
+
         function formatMonitorTaskDividerHtml(text) {
             const raw = String(text || '').trim();
-            const match = raw.match(/^(\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+[-—]{3,}\s*(.*?)\s*[-—]{3,}\s*$/u);
-            if (!match) return escapeHtml(raw);
+            const parsed = parseTaskDividerText(raw);
+            if (!parsed) return escapeHtml(raw);
 
-            const timestamp = escapeHtml(match[1] || '');
-            const label = escapeHtml(match[2] || '');
+            const timestamp = escapeHtml(parsed.timestamp || '');
+            const label = escapeHtml(parsed.label || '');
             return `
                 <span class="log-task-divider-time">${timestamp}</span>
                 <span class="log-task-divider-rule" aria-hidden="true"></span>
@@ -1889,7 +1917,7 @@
             const logs = monitorState.logs || [];
             const logSignature = buildLogSignature(logs, (item) => `${item?.level || 'info'}:${item?.text || ''}`);
             if (logSignature === lastMonitorLogSignature) return;
-            box.innerHTML = logs.map(item => `<div class="log-${item.level || 'info'}">${formatMonitorLogHtml(item)}</div>`).join('');
+            box.innerHTML = logs.map(item => `<div class="${getLogEntryClass(item)}">${formatMonitorLogHtml(item)}</div>`).join('');
             box.scrollTop = box.scrollHeight;
             lastMonitorLogSignature = logSignature;
         }
@@ -2046,7 +2074,7 @@
             const logs = subscriptionState.logs || [];
             const logSignature = buildLogSignature(logs, (item) => `${item?.level || 'info'}:${item?.text || ''}`);
             if (logSignature === lastSubscriptionLogSignature) return;
-            box.innerHTML = logs.map(item => `<div class="log-${item.level || 'info'}">${formatMonitorLogHtml(item)}</div>`).join('');
+            box.innerHTML = logs.map(item => `<div class="${getLogEntryClass(item)}">${formatMonitorLogHtml(item)}</div>`).join('');
             box.scrollTop = box.scrollHeight;
             lastSubscriptionLogSignature = logSignature;
         }

@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 import re
 import unittest
@@ -5,6 +6,8 @@ import unittest
 
 CSS_PATH = Path("/Users/xianer/Documents/code/115-media-hub/static/css/index.css")
 JS_PATH = Path("/Users/xianer/Documents/code/115-media-hub/static/js/index.js")
+SUBSCRIPTION_SERVICE_PATH = Path("/Users/xianer/Documents/code/115-media-hub/app/services/subscription.py")
+CORE_PATH = Path("/Users/xianer/Documents/code/115-media-hub/app/core.py")
 
 
 def extract_media_block(css: str, max_width: int) -> str:
@@ -41,6 +44,23 @@ class ResourceCardCssBreakpointTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.css = CSS_PATH.read_text(encoding="utf-8")
         cls.js = JS_PATH.read_text(encoding="utf-8")
+        cls.subscription_service = SUBSCRIPTION_SERVICE_PATH.read_text(encoding="utf-8")
+        cls.core_source = CORE_PATH.read_text(encoding="utf-8")
+
+    def infer_log_level(self, text: str) -> str:
+        module = ast.parse(self.core_source)
+        target = None
+        for node in module.body:
+            if isinstance(node, ast.FunctionDef) and node.name == "infer_log_level_from_text":
+                target = node
+                break
+        if target is None:
+            self.fail("infer_log_level_from_text not found in core.py")
+        isolated = ast.Module(body=[target], type_ignores=[])
+        ast.fix_missing_locations(isolated)
+        namespace = {}
+        exec(compile(isolated, str(CORE_PATH), "exec"), namespace)
+        return namespace["infer_log_level_from_text"](text)
 
     def test_1120_breakpoint_keeps_preview_width_in_sync(self) -> None:
         block = extract_media_block(self.css, 1120)
@@ -127,6 +147,46 @@ class ResourceCardCssBreakpointTests(unittest.TestCase):
             ),
         )
 
+    def test_desktop_footer_spacing_is_tighter(self) -> None:
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"\.shell-workspace\s*\{[^}]*padding:\s*18px\s+0\s+28px;",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"\.footer-text\s*\{[^}]*padding:\s*1\.4rem\s+0\s+1\.2rem\s+0;",
+                re.DOTALL,
+            ),
+        )
+
+    def test_1180_breakpoint_keeps_footer_closer_to_content(self) -> None:
+        block = extract_media_block_by_marker(
+            self.css,
+            "@media (max-width: 1180px) {\n            .app-shell,\n            .app-shell[data-shell-expanded=\"true\"] {",
+        )
+        self.assertRegex(
+            block,
+            re.compile(
+                r"\.shell-workspace\s*\{"
+                r"[^}]*padding-top:\s*12px;[^}]*padding-bottom:\s*32px;",
+                re.DOTALL,
+            ),
+        )
+
+    def test_1024_breakpoint_keeps_footer_text_padding_tight(self) -> None:
+        block = extract_media_block(self.css, 1024)
+        self.assertRegex(
+            block,
+            re.compile(
+                r"\.footer-text\s*\{[^}]*padding:\s*1rem\s+0\s+1rem;",
+                re.DOTALL,
+            ),
+        )
+
     def test_portrait_log_scrollbars_tune_vertical_and_horizontal_sizes(self) -> None:
         block = extract_media_block_by_marker(
             self.css,
@@ -169,6 +229,10 @@ class ResourceCardCssBreakpointTests(unittest.TestCase):
         )
         self.assertRegex(
             self.js,
+            re.compile(r"\[\-—━\]\{3,\}", re.DOTALL),
+        )
+        self.assertRegex(
+            self.js,
             re.compile(
                 r"if \(level === 'task-divider'\) return formatMonitorTaskDividerHtml\(text\);",
                 re.DOTALL,
@@ -178,6 +242,102 @@ class ResourceCardCssBreakpointTests(unittest.TestCase):
             self.js,
             re.compile(
                 r"log-task-divider-time.*log-task-divider-rule.*log-task-divider-label",
+                re.DOTALL,
+            ),
+        )
+
+    def test_task_divider_supports_result_tone_variants(self) -> None:
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"\.log-task-divider\.log-task-divider-start\s*\{"
+                r"[^}]*--log-task-divider-text:",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"\.log-task-divider\.log-task-divider-success\s*\{"
+                r"[^}]*--log-task-divider-text:",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"\.log-task-divider\.log-task-divider-warn\s*\{"
+                r"[^}]*--log-task-divider-text:",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"\.log-task-divider\.log-task-divider-error\s*\{"
+                r"[^}]*--log-task-divider-text:",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"html\.theme-day\s+\.log-task-divider\.log-task-divider-success\s*\{"
+                r"[^}]*--log-task-divider-text:\s*var\(--success\);",
+                re.DOTALL,
+            ),
+        )
+
+    def test_task_divider_tone_class_is_inferred_from_result_text(self) -> None:
+        self.assertRegex(
+            self.js,
+            re.compile(r"function getTaskDividerTone\(label\) \{", re.DOTALL),
+        )
+        self.assertRegex(
+            self.js,
+            re.compile(r"/\(任务开始\|订阅开始\)/", re.DOTALL),
+        )
+        self.assertRegex(
+            self.js,
+            re.compile(r"/\(执行成功\|订阅成功\|已完成\|完成\)/", re.DOTALL),
+        )
+        self.assertRegex(
+            self.js,
+            re.compile(r"/\(已中断\|中断\|取消\)/", re.DOTALL),
+        )
+        self.assertRegex(
+            self.js,
+            re.compile(r"/\(执行失败\|失败\|异常\|错误\)/", re.DOTALL),
+        )
+        self.assertRegex(
+            self.js,
+            re.compile(
+                r"return \['log-task-divider',\s*tone \? `log-task-divider-\$\{tone\}` : ''\]\.filter\(Boolean\)\.join\(' '\);",
+                re.DOTALL,
+            ),
+        )
+
+    def test_subscription_footer_includes_terminal_status_text(self) -> None:
+        self.assertRegex(
+            self.subscription_service,
+            re.compile(
+                r"tail_status_label\s*=\s*\{"
+                r"[^}]*'completed':\s*'执行成功'"
+                r"[^}]*'cancelled':\s*'已中断'"
+                r"[^}]*'failed':\s*'执行失败'",
+                re.DOTALL,
+            ),
+        )
+
+    def test_summary_log_inference_keeps_failed_dir_metrics_as_info(self) -> None:
+        self.assertEqual(
+            self.infer_log_level("04-18 00:15:48 生成汇总: 新增/更新 0 | 跳过文件 89 | 跳过目录 0 | 失败目录 0"),
+            "info",
+        )
+        self.assertRegex(
+            self.subscription_service,
+            re.compile(
+                r"━━━━━━━━━━【订阅结束 \| \{task_name\} \| \{tail_status_label or '已结束'\}】━━━━━━━━━━",
                 re.DOTALL,
             ),
         )
