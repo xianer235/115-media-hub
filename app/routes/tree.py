@@ -24,7 +24,8 @@ async def get_logs(request: Request) -> Dict[str, Any]:
 
 @router.post("/logs/clear")
 async def clear_logs(request: Request) -> Dict[str, Any]:
-    task_status["logs"] = ["系统日志已清空"]
-    await asyncio.to_thread(clear_log_file, MAIN_LOG_PATH, f"{format_log_time(True)} 系统日志已清空")
+    line = f"{format_log_time(True)} 系统日志已清空"
+    task_status["logs"] = [{"text": line, "level": "info"}]
+    await asyncio.to_thread(clear_log_file, MAIN_LOG_PATH, line)
     schedule_ui_state_push(0)
     return {"ok": True}

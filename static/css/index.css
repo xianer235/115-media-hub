@@ -48,7 +48,23 @@
             min-width: 5.2rem;
         }
         #theme-toggle.nav-action-btn {
-            min-width: 4.8rem;
+            width: 40px;
+            min-width: 40px;
+            padding: 0;
+            flex: 0 0 40px;
+        }
+        .theme-toggle-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 18px;
+            height: 18px;
+            pointer-events: none;
+        }
+        .theme-toggle-icon svg {
+            width: 18px;
+            height: 18px;
+            display: block;
         }
         a.nav-action-btn[href="/logout"] {
             min-width: 4.6rem;
@@ -3466,9 +3482,10 @@
                 max-width: 2.4rem;
             }
             #theme-toggle.nav-action-btn {
-                min-width: 4.2rem;
-                padding-left: 0.5rem !important;
-                padding-right: 0.5rem !important;
+                width: 38px;
+                min-width: 38px;
+                padding: 0 !important;
+                flex-basis: 38px;
             }
             a.nav-action-btn[href="/logout"] {
                 min-width: 4.2rem;
@@ -3629,9 +3646,10 @@
                 padding-right: 0.48rem !important;
             }
             #theme-toggle.nav-action-btn {
-                min-width: 3.6rem;
-                padding-left: 0.48rem !important;
-                padding-right: 0.48rem !important;
+                width: 36px;
+                min-width: 36px;
+                padding: 0 !important;
+                flex-basis: 36px;
             }
             a.nav-action-btn[href="/logout"] {
                 min-width: 3.8rem;
@@ -3841,15 +3859,20 @@
                 padding: 0.95rem;
             }
             .resource-job-modal-header {
-                flex-direction: column;
+                flex-direction: row;
+                align-items: flex-start;
+                justify-content: space-between;
             }
             .resource-job-modal-actions {
-                width: 100%;
-                justify-content: flex-start;
+                width: auto;
+                flex: 0 0 auto;
+                flex-wrap: nowrap;
+                justify-content: flex-end;
+                align-self: flex-start;
             }
             .resource-job-clear-dropdown {
-                left: 0;
-                right: auto;
+                left: auto;
+                right: 0;
             }
             .resource-job-modal-toolbar {
                 flex-direction: column;
@@ -4928,9 +4951,14 @@
             border-color: rgba(203, 213, 225, 0.92);
         }
         html.theme-day .resource-job-modal-eyebrow,
-        html.theme-day .resource-job-field-label,
-        html.theme-day .resource-job-meta-chip {
+        html.theme-day .resource-job-field-label {
             color: #64748b;
+        }
+        html.theme-day .resource-job-meta-chip {
+            background: rgba(248, 250, 252, 0.96);
+            border-color: rgba(191, 219, 254, 0.9);
+            color: #334155;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
         }
         html.theme-day .resource-job-field-value,
         html.theme-day .resource-job-status-note {
@@ -6118,11 +6146,11 @@
             --shell-rail-collapsed: 92px;
             --shell-rail-expanded: 320px;
             --shell-rail-width: var(--shell-rail-collapsed);
-            --shell-glass-fill: linear-gradient(180deg, rgba(18, 24, 35, 0.82), rgba(10, 16, 26, 0.74));
+            --shell-glass-fill: linear-gradient(180deg, rgba(18, 24, 35, 0.9), rgba(10, 16, 26, 0.84));
             --shell-glass-stroke: rgba(233, 242, 255, 0.12);
             --shell-glass-highlight: rgba(255, 255, 255, 0.24);
             --shell-glass-shadow: 0 34px 74px rgba(2, 7, 17, 0.42);
-            --shell-floating-fill: linear-gradient(180deg, rgba(18, 25, 37, 0.58), rgba(9, 15, 25, 0.42));
+            --shell-floating-fill: linear-gradient(180deg, rgba(18, 25, 37, 0.68), rgba(9, 15, 25, 0.56));
             --shell-floating-stroke: rgba(228, 239, 255, 0.18);
             --shell-floating-shadow: 0 28px 56px rgba(3, 9, 20, 0.24);
             --panel-entity-fill: linear-gradient(180deg, rgba(18, 23, 34, 0.96), rgba(10, 14, 23, 0.985));
@@ -6489,7 +6517,10 @@
         }
 
         #theme-toggle.nav-action-btn {
-            min-width: 4.1rem;
+            width: 40px;
+            min-width: 40px;
+            padding: 0;
+            flex: 0 0 40px;
         }
 
         .shell-more-menu {
@@ -7284,7 +7315,7 @@
         html.theme-day .shell-toolbar,
         html.theme-day .shell-mobile-nav,
         html.theme-day .shell-more-menu {
-            background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(241, 247, 255, 0.88));
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.985), rgba(241, 247, 255, 0.94));
             border-color: var(--shell-day-stroke);
             box-shadow: var(--shell-day-shadow);
         }
@@ -7292,7 +7323,7 @@
         html.theme-day .shell-toolbar,
         html.theme-day .shell-mobile-nav {
             background:
-                linear-gradient(180deg, rgba(255, 255, 255, 0.68), rgba(241, 247, 255, 0.5));
+                linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(241, 247, 255, 0.72));
             border-color: rgba(137, 159, 186, 0.26);
             box-shadow: 0 20px 40px rgba(111, 135, 166, 0.12);
         }

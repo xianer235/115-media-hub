@@ -4384,7 +4384,10 @@ def infer_log_level_from_text(text: str) -> str:
 def restore_runtime_logs_from_files() -> None:
     main_lines = read_log_tail(MAIN_LOG_PATH, limit=500)
     if main_lines:
-        task_status["logs"] = main_lines
+        task_status["logs"] = [
+            {"text": line, "level": infer_log_level_from_text(line)}
+            for line in main_lines
+        ]
 
     monitor_lines = read_log_tail(MONITOR_LOG_PATH, limit=800)
     if monitor_lines:
@@ -4455,7 +4458,7 @@ def validate_tmdb_runtime_config(cfg: Optional[Dict[str, Any]] = None) -> Option
 task_status = {
     "running": False,
     "next_run": None,
-    "logs": ["系统已就绪"],
+    "logs": [{"text": "系统已就绪", "level": "info"}],
     "progress": {"step": "空闲", "percent": 0, "detail": "等待指令"},
 }
 
@@ -4902,13 +4905,13 @@ async def update_progress(step: str, percent: float, detail: str) -> None:
     await asyncio.sleep(0)
 
 
-async def write_log(msg: str) -> None:
-    line = f"[{format_log_time()}] {msg}"
-    task_status["logs"].append(line)
+async def write_log(msg: str, level: Optional[str] = None) -> None:
+    line = f"{format_log_time(True)} {msg}"
+    task_status["logs"].append({"text": line, "level": level or infer_log_level_from_text(line)})
     if len(task_status["logs"]) > 500:
         task_status["logs"].pop(0)
     schedule_ui_state_push()
-    await asyncio.to_thread(append_log_file, MAIN_LOG_PATH, f"{format_log_time(True)} {msg}")
+    await asyncio.to_thread(append_log_file, MAIN_LOG_PATH, line)
     await asyncio.sleep(0)
 
 

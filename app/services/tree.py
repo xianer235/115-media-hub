@@ -31,7 +31,8 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
         if check_hash_enabled and not can_skip_by_hash:
             await write_log("ℹ 已开启 MD5 校验，但当前为全量模式，跳过策略不生效")
         await write_log(
-            f"开始目录树任务：源 {len(trees)} 个，模式 {cfg.get('sync_mode', 'incremental')}，MD5校验 {'开' if check_hash_enabled else '关'}"
+            f"━━━━━━━━━━【任务开始 | 目录树 | 源 {len(trees)} 个 | 模式 {cfg.get('sync_mode', 'incremental')} | MD5校验 {'开' if check_hash_enabled else '关'}】━━━━━━━━━━",
+            "task-divider",
         )
 
         for idx, tree in enumerate(trees):
@@ -122,6 +123,7 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
         if can_skip_by_hash and trees and skipped_tree_count == len(trees) and not tree_layout_changed:
             await write_log(f"本轮概况：下载 {downloaded_tree_count} 个，缓存复用 {skipped_tree_count} 个，解析 {parsed_tree_count} 个")
             await write_log("✅ MD5 校验命中：全部目录树无变动，跳过解析与同步")
+            await write_log("━━━━━━━━━━【任务结束 | 目录树 | MD5 校验命中】━━━━━━━━━━", "task-divider")
             await update_progress("任务完成", 100, "MD5 校验命中：无变动")
             return
 
@@ -131,6 +133,7 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
         if total_files == 0:
             if downloaded_tree_count > 0 or use_local:
                 await write_log("⚠ 目录树下载成功，但未匹配到可生成文件；本次按成功结束并跳过清理")
+                await write_log("━━━━━━━━━━【任务结束 | 目录树 | 执行成功】━━━━━━━━━━", "task-divider")
                 await update_progress("任务完成", 100, "目录树下载成功，但未匹配可生成文件")
                 return
             raise RuntimeError("扫描结果为空，且未成功下载目录树")
@@ -171,11 +174,11 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
         conn.commit()
         conn.close()
         await update_progress("任务完成", 100, f"同步成功: {total_files} 文件")
-        await write_log("✅ 任务结束")
+        await write_log("━━━━━━━━━━【任务结束 | 目录树 | 执行成功】━━━━━━━━━━", "task-divider")
     except Exception as exc:
         await write_log(f"❌ 运行故障: {exc}")
+        await write_log("━━━━━━━━━━【任务结束 | 目录树 | 执行失败】━━━━━━━━━━", "task-divider")
         await update_progress("任务中止", 0, str(exc))
     finally:
         task_status["running"] = False
         schedule_ui_state_push(0)
-

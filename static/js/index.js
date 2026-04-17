@@ -801,9 +801,9 @@
 
             const logBox = document.getElementById('log-box');
             const logs = Array.isArray(data.logs) ? data.logs : [];
-            const logSignature = buildLogSignature(logs, (line) => String(line || ''));
+            const logSignature = buildLogSignature(logs, (item) => `${item?.level || 'info'}:${item?.text || ''}`);
             if (logSignature !== lastLogSignature) {
-                logBox.innerHTML = logs.map(line => escapeHtml(line)).join('<br>');
+                logBox.innerHTML = logs.map(item => `<div class="${getLogEntryClass(item)}">${formatMonitorLogHtml(item)}</div>`).join('');
                 logBox.scrollTop = logBox.scrollHeight;
                 lastLogSignature = logSignature;
             }
@@ -3048,8 +3048,14 @@
                         detail: String(task?.detail || '').trim(),
                     })
                     : '';
-                const startDisabled = subscriptionState.running || running;
-                const stopDisabled = !running;
+                const toggleRunLabel = running ? '中断' : (queued ? '排队中' : '运行');
+                const toggleRunAction = running ? 'stop' : 'start';
+                const toggleRunDisabled = queued || (subscriptionState.running && !running);
+                const toggleRunClass = running
+                    ? 'bg-amber-500/15 hover:bg-amber-500/25 text-amber-300'
+                    : (queued
+                        ? 'bg-slate-700/80 text-slate-300'
+                        : 'bg-emerald-600 hover:bg-emerald-500 text-white');
                 const rebuildDisabled = running;
                 const actionGridClass = isTv
                     ? 'subscription-task-actions subscription-task-actions-tv grid grid-cols-3 sm:grid-cols-6 gap-2 shrink-0 w-full lg:w-auto'
@@ -3081,8 +3087,7 @@
                                 >${introExpanded ? '收起简介' : '展开简介'}</button>
                             </div>
                             <div class="${actionGridClass}">
-                                <button type="button" data-subscription-action="start" data-task-name="${encodeURIComponent(taskName)}" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold ${startDisabled ? 'btn-disabled' : ''}" ${startDisabled ? 'disabled' : ''}>运行</button>
-                                <button type="button" data-subscription-action="stop" data-task-name="${encodeURIComponent(taskName)}" class="px-4 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 text-sm font-bold ${stopDisabled ? 'btn-disabled' : ''}" ${stopDisabled ? 'disabled' : ''}>中断</button>
+                                <button type="button" data-subscription-action="toggle-run" data-subscription-run-action="${toggleRunAction}" data-task-name="${encodeURIComponent(taskName)}" class="px-4 py-2 rounded-xl text-sm font-bold ${toggleRunClass} ${toggleRunDisabled ? 'btn-disabled' : ''}" ${toggleRunDisabled ? 'disabled' : ''}>${toggleRunLabel}</button>
                                 <button type="button" data-subscription-action="edit" data-task-name="${encodeURIComponent(taskName)}" class="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">编辑</button>
                                 <button type="button" data-subscription-action="delete" data-task-name="${encodeURIComponent(taskName)}" class="px-4 py-2 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-300 text-sm font-bold">删除</button>
                                 ${rebuildButton}
@@ -6626,16 +6631,10 @@
         function renderResourceJobs() {
             const container = document.getElementById('resource-job-list');
             const jobs = Array.isArray(resourceState.jobs) ? resourceState.jobs : [];
-            const summary = document.getElementById('resource-job-modal-summary');
             const counts = getResourceJobCounts(jobs);
             if (!container) return;
 
             renderResourceJobFilters(counts);
-
-            if (summary) {
-                if (!jobs.length) summary.innerText = '最近还没有导入记录。';
-                else summary.innerText = `最近 ${counts.total} 条任务，处理中 ${counts.active} 条，已完成 ${counts.completed} 条${counts.failed ? `，失败 ${counts.failed} 条` : ''}`;
-            }
 
             const visibleJobs = jobs.filter(job => isResourceJobVisible(job, resourceJobFilter));
             if (!visibleJobs.length) {
@@ -8930,8 +8929,11 @@
             const action = btn.dataset.subscriptionAction || '';
             const name = decodeURIComponent(btn.dataset.taskName || '');
             if (!name) return;
-            if (action === 'start') await startSubscriptionTask(name);
-            if (action === 'stop') await stopSubscriptionTask(name);
+            if (action === 'toggle-run') {
+                if (btn.dataset.subscriptionRunAction === 'stop') await stopSubscriptionTask(name);
+                else await startSubscriptionTask(name);
+                return;
+            }
             if (action === 'edit') editSubscriptionTask(name);
             if (action === 'delete') await deleteSubscriptionTask(name);
             if (action === 'rebuild') await rebuildSubscriptionTask(name);
@@ -9195,12 +9197,32 @@
             syncResourceBackTopButton();
             syncSettingsSaveDock();
         });
+        const THEME_DAY_ICON = `
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="1.8"/>
+                <path d="M12 2.75V5.25M12 18.75V21.25M21.25 12H18.75M5.25 12H2.75M18.54 5.46L16.77 7.23M7.23 16.77L5.46 18.54M18.54 18.54L16.77 16.77M7.23 7.23L5.46 5.46" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+        `;
+        const THEME_NIGHT_ICON = `
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M14.5 3.5C11.19 4.2 8.7 7.14 8.7 10.65C8.7 14.68 11.97 17.95 16 17.95C17.31 17.95 18.53 17.6 19.58 16.99C18.23 19.58 15.52 21.35 12.4 21.35C7.94 21.35 4.33 17.74 4.33 13.28C4.33 8.83 7.93 5.22 12.38 5.22C13.1 5.22 13.81 5.31 14.5 5.5V3.5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+            </svg>
+        `;
+        function updateThemeToggleButton(isDay) {
+            const btn = document.getElementById('theme-toggle');
+            if (!btn) return;
+            const icon = btn.querySelector('.theme-toggle-icon');
+            if (!icon) return;
+            const label = isDay ? '当前为日间模式，点击切换为夜间模式' : '当前为夜间模式，点击切换为日间模式';
+            icon.innerHTML = isDay ? THEME_DAY_ICON : THEME_NIGHT_ICON;
+            btn.setAttribute('aria-label', label);
+            btn.setAttribute('title', label);
+        }
         function applyThemeFromStorage() {
             try {
                 const isDay = localStorage.getItem('theme-day') === 'day';
                 document.documentElement.classList.toggle('theme-day', isDay);
-                const btn = document.getElementById('theme-toggle');
-                if (btn) btn.textContent = isDay ? '日间' : '夜间';
+                updateThemeToggleButton(isDay);
             } catch (e) {}
         }
         function toggleTheme() {
@@ -9214,8 +9236,7 @@
                     el.classList.remove('theme-day');
                     localStorage.setItem('theme-day', 'night');
                 }
-                const btn = document.getElementById('theme-toggle');
-                if (btn) btn.textContent = isDay ? '日间' : '夜间';
+                updateThemeToggleButton(isDay);
             } catch (e) {}
         }
         applyThemeFromStorage();

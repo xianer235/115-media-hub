@@ -6,7 +6,9 @@ import unittest
 
 CSS_PATH = Path("/Users/xianer/Documents/code/115-media-hub/static/css/index.css")
 JS_PATH = Path("/Users/xianer/Documents/code/115-media-hub/static/js/index.js")
+TEMPLATE_PATH = Path("/Users/xianer/Documents/code/115-media-hub/templates/index.html")
 SUBSCRIPTION_SERVICE_PATH = Path("/Users/xianer/Documents/code/115-media-hub/app/services/subscription.py")
+TREE_SERVICE_PATH = Path("/Users/xianer/Documents/code/115-media-hub/app/services/tree.py")
 CORE_PATH = Path("/Users/xianer/Documents/code/115-media-hub/app/core.py")
 
 
@@ -44,7 +46,9 @@ class ResourceCardCssBreakpointTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.css = CSS_PATH.read_text(encoding="utf-8")
         cls.js = JS_PATH.read_text(encoding="utf-8")
+        cls.template_source = TEMPLATE_PATH.read_text(encoding="utf-8")
         cls.subscription_service = SUBSCRIPTION_SERVICE_PATH.read_text(encoding="utf-8")
+        cls.tree_service = TREE_SERVICE_PATH.read_text(encoding="utf-8")
         cls.core_source = CORE_PATH.read_text(encoding="utf-8")
 
     def infer_log_level(self, text: str) -> str:
@@ -119,7 +123,15 @@ class ResourceCardCssBreakpointTests(unittest.TestCase):
             self.css,
             re.compile(
                 r"--shell-floating-fill:\s*linear-gradient\(180deg,\s*"
-                r"rgba\(18,\s*25,\s*37,\s*0\.58\),\s*rgba\(9,\s*15,\s*25,\s*0\.42\)\);",
+                r"rgba\(18,\s*25,\s*37,\s*0\.68\),\s*rgba\(9,\s*15,\s*25,\s*0\.56\)\);",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"--shell-glass-fill:\s*linear-gradient\(180deg,\s*"
+                r"rgba\(18,\s*24,\s*35,\s*0\.9\),\s*rgba\(10,\s*16,\s*26,\s*0\.84\)\);",
                 re.DOTALL,
             ),
         )
@@ -138,10 +150,22 @@ class ResourceCardCssBreakpointTests(unittest.TestCase):
         self.assertRegex(
             self.css,
             re.compile(
+                r"html\.theme-day\s+\.shell-rail,\s*"
+                r"html\.theme-day\s+\.shell-toolbar,\s*"
+                r"html\.theme-day\s+\.shell-mobile-nav,\s*"
+                r"html\.theme-day\s+\.shell-more-menu\s*\{"
+                r"[^}]*rgba\(255,\s*255,\s*255,\s*0\.985\)"
+                r"[^}]*rgba\(241,\s*247,\s*255,\s*0\.94\)",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.css,
+            re.compile(
                 r"html\.theme-day\s+\.shell-toolbar,\s*"
                 r"html\.theme-day\s+\.shell-mobile-nav\s*\{"
-                r"[^}]*rgba\(255,\s*255,\s*255,\s*0\.68\)"
-                r"[^}]*rgba\(241,\s*247,\s*255,\s*0\.5\)"
+                r"[^}]*rgba\(255,\s*255,\s*255,\s*0\.84\)"
+                r"[^}]*rgba\(241,\s*247,\s*255,\s*0\.72\)"
                 r"[^}]*box-shadow:\s*0\s+20px\s+40px\s+rgba\(111,\s*135,\s*166,\s*0\.12\);",
                 re.DOTALL,
             ),
@@ -340,6 +364,263 @@ class ResourceCardCssBreakpointTests(unittest.TestCase):
                 r"━━━━━━━━━━【订阅结束 \| \{task_name\} \| \{tail_status_label or '已结束'\}】━━━━━━━━━━",
                 re.DOTALL,
             ),
+        )
+
+    def test_subscription_tasks_use_single_toggle_run_button(self) -> None:
+        self.assertRegex(
+            self.js,
+            re.compile(r"data-subscription-action=\"toggle-run\"", re.DOTALL),
+        )
+        self.assertNotRegex(
+            self.js,
+            re.compile(r"data-subscription-action=\"start\"", re.DOTALL),
+        )
+        self.assertNotRegex(
+            self.js,
+            re.compile(r"data-subscription-action=\"stop\"", re.DOTALL),
+        )
+        self.assertRegex(
+            self.js,
+            re.compile(r"const toggleRunLabel = running\s*\?\s*'中断'\s*:\s*\(queued\s*\?\s*'排队中'\s*:\s*'运行'\);", re.DOTALL),
+        )
+        self.assertRegex(
+            self.js,
+            re.compile(r"const toggleRunAction = running\s*\?\s*'stop'\s*:\s*'start';", re.DOTALL),
+        )
+
+    def test_subscription_task_click_handler_routes_toggle_run(self) -> None:
+        self.assertRegex(
+            self.js,
+            re.compile(
+                r"if \(action === 'toggle-run'\) \{\s*"
+                r"if \(btn\.dataset\.subscriptionRunAction === 'stop'\) await stopSubscriptionTask\(name\);\s*"
+                r"else await startSubscriptionTask\(name\);\s*"
+                r"return;\s*\}",
+                re.DOTALL,
+            ),
+        )
+
+    def test_subscription_tv_actions_fit_single_row_at_compact_breakpoint(self) -> None:
+        block = extract_media_block_by_marker(
+            self.css,
+            "@media (orientation: portrait)",
+        )
+        self.assertRegex(
+            block,
+            re.compile(
+                r"#page-subscription\s+\.subscription-task-actions\.subscription-task-actions-tv,\s*"
+                r"#subscription-task-list\s+\.grid\.grid-cols-2\.sm\\:grid-cols-3\.md\\:grid-cols-5\s*\{"
+                r"[^}]*grid-template-columns:\s*repeat\(5,\s*minmax\(0,\s*1fr\)\)\s*!important;",
+                re.DOTALL,
+            ),
+        )
+
+    def test_main_logs_use_structured_items_and_shared_log_renderer(self) -> None:
+        self.assertRegex(
+            self.core_source,
+            re.compile(
+                r'task_status\s*=\s*\{'
+                r'[^}]*"logs":\s*\[\{"text":\s*"系统已就绪",\s*"level":\s*"info"\}\]',
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.core_source,
+            re.compile(
+                r'task_status\["logs"\]\s*=\s*\[\s*\{"text":\s*line,\s*"level":\s*infer_log_level_from_text\(line\)\}\s*for line in main_lines\s*\]',
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.js,
+            re.compile(
+                r"const logSignature = buildLogSignature\(logs,\s*\(item\)\s*=>\s*`\$\{item\?\.level \|\| 'info'\}:\$\{item\?\.text \|\| ''\}`\);",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.js,
+            re.compile(
+                r"logBox\.innerHTML = logs\.map\(item => `<div class=\"\$\{getLogEntryClass\(item\)\}\">\$\{formatMonitorLogHtml\(item\)\}</div>`\)\.join\(''\);",
+                re.DOTALL,
+            ),
+        )
+
+    def test_tree_task_logs_emit_task_divider_headers_and_footers(self) -> None:
+        self.assertRegex(
+            self.tree_service,
+            re.compile(
+                r"━━━━━━━━━━【任务开始 \| 目录树 \| 源 \{len\(trees\)\} 个 \| 模式 \{cfg\.get\('sync_mode', 'incremental'\)\} \| MD5校验 \{'开' if check_hash_enabled else '关'\}】━━━━━━━━━━",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.tree_service,
+            re.compile(
+                r"━━━━━━━━━━【任务结束 \| 目录树 \| MD5 校验命中】━━━━━━━━━━",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.tree_service,
+            re.compile(
+                r"━━━━━━━━━━【任务结束 \| 目录树 \| 执行成功】━━━━━━━━━━",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.tree_service,
+            re.compile(
+                r"━━━━━━━━━━【任务结束 \| 目录树 \| 执行失败】━━━━━━━━━━",
+                re.DOTALL,
+            ),
+        )
+
+    def test_theme_toggle_uses_icon_only_markup(self) -> None:
+        self.assertRegex(
+            self.template_source,
+            re.compile(
+                r"<button[^>]*id=\"theme-toggle\"[^>]*aria-label=\"切换夜间/日间模式\"[^>]*title=\"切换夜间/日间模式\"[^>]*>"
+                r"\s*<span class=\"theme-toggle-icon\" aria-hidden=\"true\"></span>\s*</button>",
+                re.DOTALL,
+            ),
+        )
+        self.assertNotRegex(
+            self.template_source,
+            re.compile(
+                r"<button[^>]*id=\"theme-toggle\"[^>]*>\s*(?:日间|夜间)\s*</button>",
+                re.DOTALL,
+            ),
+        )
+
+    def test_theme_toggle_css_uses_compact_icon_button_sizing(self) -> None:
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"#theme-toggle\.nav-action-btn\s*\{"
+                r"[^}]*width:\s*40px;[^}]*min-width:\s*40px;[^}]*padding:\s*0;",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"\.theme-toggle-icon\s*\{"
+                r"[^}]*display:\s*inline-flex;[^}]*align-items:\s*center;[^}]*justify-content:\s*center;"
+                r"[^}]*width:\s*18px;[^}]*height:\s*18px;",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"\.theme-toggle-icon\s+svg\s*\{"
+                r"[^}]*width:\s*18px;[^}]*height:\s*18px;",
+                re.DOTALL,
+            ),
+        )
+
+    def test_theme_toggle_js_updates_icon_and_accessibility_copy(self) -> None:
+        self.assertRegex(
+            self.js,
+            re.compile(r"const THEME_DAY_ICON\s*=\s*`", re.DOTALL),
+        )
+        self.assertRegex(
+            self.js,
+            re.compile(r"const THEME_NIGHT_ICON\s*=\s*`", re.DOTALL),
+        )
+        self.assertRegex(
+            self.js,
+            re.compile(r"function updateThemeToggleButton\(isDay\) \{", re.DOTALL),
+        )
+        self.assertRegex(
+            self.js,
+            re.compile(r"btn\.querySelector\('\.theme-toggle-icon'\)", re.DOTALL),
+        )
+        self.assertRegex(
+            self.js,
+            re.compile(
+                r"const label = isDay\s*\?\s*'当前为日间模式，点击切换为夜间模式'\s*:\s*'当前为夜间模式，点击切换为日间模式';",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.js,
+            re.compile(r"btn\.setAttribute\('aria-label',\s*label\);", re.DOTALL),
+        )
+        self.assertRegex(
+            self.js,
+            re.compile(r"btn\.setAttribute\('title',\s*label\);", re.DOTALL),
+        )
+        self.assertRegex(
+            self.js,
+            re.compile(r"icon\.innerHTML = isDay \? THEME_DAY_ICON : THEME_NIGHT_ICON;", re.DOTALL),
+        )
+        self.assertNotRegex(
+            self.js,
+            re.compile(r"btn\.textContent = isDay \? '日间' : '夜间';", re.DOTALL),
+        )
+
+    def test_portrait_resource_job_modal_keeps_actions_in_top_right(self) -> None:
+        block = extract_media_block_by_marker(
+            self.css,
+            "@media (max-width: 640px) {\n            body { font-size: 16px; }",
+        )
+        self.assertRegex(
+            block,
+            re.compile(
+                r"\.resource-job-modal-header\s*\{"
+                r"[^}]*flex-direction:\s*row;[^}]*justify-content:\s*space-between;",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            block,
+            re.compile(
+                r"\.resource-job-modal-actions\s*\{"
+                r"[^}]*width:\s*auto;[^}]*flex-wrap:\s*nowrap;[^}]*justify-content:\s*flex-end;[^}]*align-self:\s*flex-start;",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            block,
+            re.compile(
+                r"\.resource-job-clear-dropdown\s*\{"
+                r"[^}]*left:\s*auto;[^}]*right:\s*0;",
+                re.DOTALL,
+            ),
+        )
+
+    def test_resource_job_modal_removes_live_summary_copy(self) -> None:
+        self.assertNotRegex(
+            self.template_source,
+            re.compile(r"id=\"resource-job-modal-summary\"", re.DOTALL),
+        )
+        self.assertNotRegex(
+            self.js,
+            re.compile(r"document\.getElementById\('resource-job-modal-summary'\)", re.DOTALL),
+        )
+        self.assertNotRegex(
+            self.js,
+            re.compile(r"最近 \$\{counts\.total\} 条任务，处理中 \$\{counts\.active\} 条，已完成 \$\{counts\.completed\} 条", re.DOTALL),
+        )
+
+    def test_day_theme_resource_job_meta_chips_use_light_surface_treatment(self) -> None:
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"html\.theme-day\s+\.resource-job-meta-chip\s*\{"
+                r"[^}]*background:\s*rgba\(248,\s*250,\s*252,\s*0\.96\);"
+                r"[^}]*border-color:\s*rgba\(191,\s*219,\s*254,\s*0\.9\);"
+                r"[^}]*color:\s*#334155;",
+                re.DOTALL,
+            ),
+        )
+
+    def test_subscription_log_header_removes_helper_copy(self) -> None:
+        self.assertNotRegex(
+            self.template_source,
+            re.compile(r"匹配评分、任务创建和追更状态都会记录在这里", re.DOTALL),
         )
 
 

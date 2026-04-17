@@ -5,6 +5,8 @@ logs/
 # 忽略缓存
 __pycache__/
 *.pyc
+.pytest_cache/
+.mypy_cache/
 
 # 忽略数据/临时文件
 strm/

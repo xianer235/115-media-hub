@@ -113,7 +113,7 @@
                         <span class="nav-task-center-text">任务</span>
                         <span id="resource-job-modal-badge" class="resource-job-trigger-badge hidden">0</span>
                     </button>
-                    <button id="theme-toggle" class="nav-action-btn shell-action-btn" onclick="toggleTheme()" aria-label="切换夜间/日间模式" title="切换夜间/日间模式">夜间</button>
+                    <button id="theme-toggle" type="button" class="nav-action-btn shell-action-btn" onclick="toggleTheme()" aria-label="切换夜间/日间模式" title="切换夜间/日间模式"><span class="theme-toggle-icon" aria-hidden="true"></span></button>
                     <button id="shell-more-toggle" type="button" class="nav-action-btn shell-action-btn shell-more-toggle" onclick="toggleShellMoreMenu()" aria-expanded="false" aria-label="打开更多菜单">更多</button>
                 </div>
                 <div id="shell-more-menu" class="shell-more-menu hidden">
@@ -233,7 +233,6 @@
                 <div class="flex justify-between items-center mb-4">
                     <h3 class="group-title mb-0">订阅日志</h3>
                     <div class="flex items-center gap-2 flex-wrap">
-                        <div class="text-xs text-slate-400">匹配评分、任务创建和追更状态都会记录在这里</div>
                         <button onclick="clearSubscriptionLogs()" class="px-3 py-1 text-xs rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300">清空日志</button>
                     </div>
                 </div>
@@ -1380,7 +1379,6 @@
                     <div class="min-w-0">
                         <div class="resource-job-modal-eyebrow">任务中心</div>
                         <div class="resource-job-modal-title">任务列表</div>
-                        <div id="resource-job-modal-summary" class="resource-job-modal-subtitle">等待导入任务</div>
                     </div>
                     <div class="resource-job-modal-actions">
                         <div id="resource-job-clear-menu" class="resource-job-clear-menu">

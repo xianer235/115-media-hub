@@ -5,6 +5,10 @@ __pycache__/
 .Python
 .pytest_cache/
 .mypy_cache/
+logs/
+*.log
+strm/
+config/
 .DS_Store
 .git
 .gitignore
