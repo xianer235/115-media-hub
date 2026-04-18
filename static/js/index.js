@@ -7645,7 +7645,9 @@
             const canSubmitNow = canImportResource(item);
             const canSubmit = canSubmitNow && !resourceSubmitBusy;
             const showPrimaryAction = importMode ? true : canOpenImport;
-            footer.className = showPrimaryAction ? 'grid grid-cols-1 md:grid-cols-2 gap-3 pt-2' : 'grid grid-cols-1 gap-3 pt-2';
+            footer.className = showPrimaryAction
+                ? 'resource-import-footer-shell grid grid-cols-1 md:grid-cols-2 gap-3 pt-2'
+                : 'resource-import-footer-shell grid grid-cols-1 gap-3 pt-2';
             submitBtn.classList.toggle('hidden', !showPrimaryAction);
             submitBtn.onclick = importMode
                 ? submitResourceJob

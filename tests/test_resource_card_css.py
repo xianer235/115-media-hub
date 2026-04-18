@@ -268,6 +268,33 @@ class ResourceCardCssBreakpointTests(unittest.TestCase):
             ),
         )
 
+    def test_subscription_footer_removed_and_monitor_footer_sticky_only_in_mobile_fullscreen_mode(self) -> None:
+        compact_block = extract_media_block_by_marker(
+            self.css,
+            "@media (max-width: 768px) {\n            body { font-size: 15px; }",
+        )
+        self.assertNotRegex(
+            compact_block,
+            re.compile(r"#monitor-modal-footer\s*\{[^}]*position:\s*sticky;", re.DOTALL),
+        )
+        self.assertNotRegex(
+            compact_block,
+            re.compile(r"#subscription-modal-footer\s*\{", re.DOTALL),
+        )
+
+        mobile_block = extract_media_block_by_marker(
+            self.css,
+            "@media (max-width: 640px) {\n            body { font-size: 16px; }",
+        )
+        self.assertRegex(
+            mobile_block,
+            re.compile(r"#monitor-modal-footer\s*\{[^}]*position:\s*sticky;", re.DOTALL),
+        )
+        self.assertNotRegex(
+            mobile_block,
+            re.compile(r"#subscription-modal-footer\s*\{", re.DOTALL),
+        )
+
     def test_portrait_log_scrollbars_tune_vertical_and_horizontal_sizes(self) -> None:
         block = extract_media_block_by_marker(
             self.css,
@@ -741,7 +768,30 @@ class ResourceCardCssBreakpointTests(unittest.TestCase):
             ),
         )
 
-    def test_mobile_resource_import_footer_uses_two_column_glass_layout(self) -> None:
+    def test_narrow_screen_monitor_footer_keeps_two_columns_without_sticky(self) -> None:
+        block = extract_media_block_by_marker(
+            self.css,
+            "@media (max-width: 768px) {\n            body { font-size: 15px; }",
+        )
+        self.assertRegex(
+            block,
+            re.compile(
+                r"#monitor-modal-footer\s*\{"
+                r"[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);"
+                r"[^}]*padding-bottom:\s*0\.78rem;",
+                re.DOTALL,
+            ),
+        )
+        self.assertNotRegex(
+            block,
+            re.compile(r"#monitor-modal-footer\s*\{[^}]*position:\s*sticky;", re.DOTALL),
+        )
+        self.assertNotRegex(
+            block,
+            re.compile(r"#subscription-modal-footer\s*\{", re.DOTALL),
+        )
+
+    def test_mobile_resource_import_footer_uses_dedicated_sticky_layout(self) -> None:
         block = extract_media_block_by_marker(
             self.css,
             "@media (max-width: 640px) {\n            body { font-size: 16px; }",
@@ -750,6 +800,9 @@ class ResourceCardCssBreakpointTests(unittest.TestCase):
             block,
             re.compile(
                 r"#resource-import-footer\s*\{"
+                r"[^}]*position:\s*sticky;"
+                r"[^}]*bottom:\s*0;"
+                r"[^}]*z-index:\s*16;"
                 r"[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);",
                 re.DOTALL,
             ),
@@ -757,22 +810,26 @@ class ResourceCardCssBreakpointTests(unittest.TestCase):
         self.assertRegex(
             self.css,
             re.compile(
-                r"#resource-import-footer\s*\{"
-                r"[^}]*position:\s*sticky;",
+                r"\.resource-import-footer-shell\s*\{"
+                r"[^}]*position:\s*relative;"
+                r"[^}]*isolation:\s*isolate;"
+                r"[^}]*overflow:\s*hidden;"
+                r"[^}]*background:\s*transparent;",
                 re.DOTALL,
             ),
         )
         self.assertRegex(
             self.css,
             re.compile(
-                r"\.modal-glass-footer\s*\{"
-                r"[^}]*background:\s*var\(--shell-floating-fill\);"
-                r"[^}]*backdrop-filter:\s*blur\(34px\)\s*saturate\(190%\);",
+                r"\.resource-import-footer-shell::before\s*\{"
+                r"[^}]*border:\s*1px\s+solid\s+var\(--modal-footer-glass-stroke\);"
+                r"[^}]*background:[^;]*var\(--modal-footer-glass-fill\);"
+                r"[^}]*backdrop-filter:\s*blur\(46px\)\s*saturate\(220%\);",
                 re.DOTALL,
             ),
         )
         self.assertRegex(
-            self.css,
+            block,
             re.compile(
                 r"#resource-import-footer\s+button\s*\{"
                 r"[^}]*width:\s*100%;",
@@ -780,14 +837,32 @@ class ResourceCardCssBreakpointTests(unittest.TestCase):
             ),
         )
 
-    def test_day_theme_resource_import_footer_uses_light_glass(self) -> None:
+    def test_mobile_resource_import_footer_uses_dedicated_glass_panel(self) -> None:
         self.assertRegex(
             self.css,
             re.compile(
-                r"html\.theme-day\s+\.modal-glass-footer\s*\{"
-                r"[^}]*border:\s*1px\s+solid\s+rgba\(137,\s*159,\s*186,\s*0\.26\);"
-                r"[^}]*background:\s*radial-gradient\(circle at 14%\s+20%,\s*rgba\(255,\s*255,\s*255,\s*0\.72\),\s*transparent\s*34%\),\s*linear-gradient\(180deg,\s*rgba\(255,\s*255,\s*255,\s*0\.78\),\s*rgba\(241,\s*247,\s*255,\s*0\.6\)\);"
-                r"[^}]*box-shadow:\s*0\s+20px\s+40px\s+rgba\(111,\s*135,\s*166,\s*0\.14\);",
+                r"#resource-import-footer::before\s*\{"
+                r"[^}]*background:[^;]*var\(--modal-footer-glass-fill\);"
+                r"[^}]*backdrop-filter:\s*blur\(20px\)\s*saturate\(170%\);",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"html\.theme-day\s*\{"
+                r"[^}]*--modal-footer-glass-fill:\s*linear-gradient\(180deg,\s*rgba\(255,\s*255,\s*255,\s*0\.58\),\s*rgba\(237,\s*244,\s*255,\s*0\.4\)\);",
+                re.DOTALL,
+            ),
+        )
+
+    def test_resource_modal_layout_keeps_dedicated_footer_classes_when_toggling_columns(self) -> None:
+        self.assertRegex(
+            self.js,
+            re.compile(
+                r"footer\.className\s*=\s*showPrimaryAction\s*\?"
+                r"\s*'resource-import-footer-shell grid grid-cols-1 md:grid-cols-2 gap-3 pt-2'"
+                r"\s*:\s*'resource-import-footer-shell grid grid-cols-1 gap-3 pt-2';",
                 re.DOTALL,
             ),
         )
@@ -813,7 +888,7 @@ class ResourceCardCssBreakpointTests(unittest.TestCase):
             ),
         )
 
-    def test_mobile_subscription_modal_footer_uses_two_column_glass_layout(self) -> None:
+    def test_mobile_subscription_modal_uses_inline_action_buttons_without_legacy_footer(self) -> None:
         block = extract_media_block_by_marker(
             self.css,
             "@media (max-width: 640px) {\n            body { font-size: 16px; }",
@@ -827,113 +902,102 @@ class ResourceCardCssBreakpointTests(unittest.TestCase):
                 re.DOTALL,
             ),
         )
-        self.assertRegex(
+        self.assertNotRegex(
             block,
+            re.compile(r"#subscription-modal-footer\s*\{", re.DOTALL),
+        )
+        self.assertNotRegex(
+            self.template_source,
+            re.compile(r"id=\"subscription-modal-footer\"", re.DOTALL),
+        )
+        self.assertRegex(
+            self.template_source,
             re.compile(
-                r"#subscription-modal-footer\s*\{"
-                r"[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);",
+                r"class=\"subscription-modal-actions-inline\s+grid\s+grid-cols-1\s+md:grid-cols-2\s+gap-3\s+pt-2\"",
                 re.DOTALL,
             ),
         )
         self.assertRegex(
-            block,
+            self.template_source,
             re.compile(
-                r"#subscription-modal-footer\s*\{"
-                r"[^}]*position:\s*sticky;",
+                r"<button[^>]*onclick=\"saveSubscriptionTask\(\)\"[^>]*class=\"[^\"]*task-modal-save-btn",
                 re.DOTALL,
             ),
         )
         self.assertRegex(
-            self.css,
+            self.template_source,
             re.compile(
-                r"\.modal-glass-footer\s*\{"
-                r"[^}]*background:\s*var\(--shell-floating-fill\);"
-                r"[^}]*backdrop-filter:\s*blur\(34px\)\s*saturate\(190%\);",
+                r"<button[^>]*onclick=\"closeSubscriptionModal\(\)\"[^>]*class=\"[^\"]*task-modal-cancel-btn",
                 re.DOTALL,
             ),
         )
 
-    def test_day_theme_subscription_modal_footer_uses_light_glass(self) -> None:
-        self.assertRegex(
-            self.css,
+    def test_modal_footers_use_dedicated_footer_shell_classes(self) -> None:
+        self.assertNotRegex(
+            self.template_source,
             re.compile(
-                r"html\.theme-day\s+\.modal-glass-footer\s*\{"
-                r"[^}]*border:\s*1px\s+solid\s+rgba\(137,\s*159,\s*186,\s*0\.26\);"
-                r"[^}]*background:\s*radial-gradient\(circle at 14%\s+20%,\s*rgba\(255,\s*255,\s*255,\s*0\.72\),\s*transparent\s*34%\),\s*linear-gradient\(180deg,\s*rgba\(255,\s*255,\s*255,\s*0\.78\),\s*rgba\(241,\s*247,\s*255,\s*0\.6\)\);",
+                r"id=\"subscription-modal-footer\"",
                 re.DOTALL,
             ),
         )
+        self.assertRegex(
+            self.template_source,
+            re.compile(
+                r"id=\"resource-import-footer\"[^>]*resource-import-footer-shell",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.template_source,
+            re.compile(
+                r"id=\"monitor-modal-footer\"[^>]*monitor-modal-footer-shell",
+                re.DOTALL,
+            ),
+        )
+        self.assertNotRegex(
+            self.template_source,
+            re.compile(
+                r"id=\"(?:resource-import-footer|monitor-modal-footer)\"[^>]*modal-glass-footer",
+                re.DOTALL,
+            ),
+        )
+        self.assertNotIn("modal-glass-footer", self.js)
 
-    def test_dark_theme_modal_footers_share_same_glass_surface(self) -> None:
+    def test_task_modal_footer_buttons_use_dedicated_visual_classes(self) -> None:
         self.assertRegex(
             self.template_source,
             re.compile(
-                r"id=\"subscription-modal-footer\"[^>]*modal-glass-footer",
-                re.DOTALL,
-            ),
-        )
-        self.assertRegex(
-            self.template_source,
-            re.compile(
-                r"id=\"resource-import-footer\"[^>]*modal-glass-footer",
+                r"id=\"monitor-modal-footer\"[\s\S]*?<button[^>]*onclick=\"saveMonitorTask\(\)\"[^>]*class=\"[^\"]*task-modal-save-btn",
                 re.DOTALL,
             ),
         )
         self.assertRegex(
             self.template_source,
             re.compile(
-                r"id=\"monitor-modal-footer\"[^>]*modal-glass-footer",
+                r"id=\"monitor-modal-footer\"[\s\S]*?<button[^>]*onclick=\"closeMonitorModal\(\)\"[^>]*class=\"[^\"]*task-modal-cancel-btn",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.template_source,
+            re.compile(
+                r"<button[^>]*onclick=\"saveSubscriptionTask\(\)\"[^>]*class=\"[^\"]*task-modal-save-btn",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.template_source,
+            re.compile(
+                r"<button[^>]*onclick=\"closeSubscriptionModal\(\)\"[^>]*class=\"[^\"]*task-modal-cancel-btn",
                 re.DOTALL,
             ),
         )
         self.assertRegex(
             self.css,
             re.compile(
-                r"\.modal-glass-footer\s*\{"
-                r"[^}]*background:\s*var\(--shell-floating-fill\);"
-                r"[^}]*backdrop-filter:\s*blur\(34px\)\s*saturate\(190%\);",
-                re.DOTALL,
-            ),
-        )
-        self.assertRegex(
-            self.css,
-            re.compile(
-                r"\.modal-glass-footer\s*\{[^}]*border:\s*1px\s+solid\s+var\(--shell-floating-stroke\);",
-                re.DOTALL,
-            ),
-        )
-        self.assertRegex(
-            self.css,
-            re.compile(
-                r"\.modal-glass-footer\s*\{[^}]*border-radius:\s*1\.35rem;",
-                re.DOTALL,
-            ),
-        )
-        self.assertRegex(
-            self.css,
-            re.compile(
-                r"\.modal-glass-footer\s*\{[^}]*padding:\s*0\.78rem;",
-                re.DOTALL,
-            ),
-        )
-        self.assertRegex(
-            self.css,
-            re.compile(
-                r"\.modal-glass-footer\s*\{[^}]*box-shadow:\s*var\(--shell-floating-shadow\);",
-                re.DOTALL,
-            ),
-        )
-        self.assertNotRegex(
-            self.css,
-            re.compile(
-                r"\.modal-glass-footer\s*\{[^}]*border-top:",
-                re.DOTALL,
-            ),
-        )
-        self.assertNotRegex(
-            self.css,
-            re.compile(
-                r"\.modal-glass-footer\s*\{[^}]*inset\s+0\s+1px",
+                r"\.task-modal-save-btn,\s*\.task-modal-cancel-btn\s*\{"
+                r"[^}]*min-height:\s*44px;"
+                r"[^}]*font-size:\s*0\.9rem;",
                 re.DOTALL,
             ),
         )
@@ -959,7 +1023,7 @@ class ResourceCardCssBreakpointTests(unittest.TestCase):
             ),
         )
 
-    def test_mobile_monitor_modal_footer_uses_two_column_glass_layout(self) -> None:
+    def test_mobile_monitor_modal_footer_uses_dedicated_sticky_layout(self) -> None:
         block = extract_media_block_by_marker(
             self.css,
             "@media (max-width: 640px) {\n            body { font-size: 16px; }",
@@ -977,13 +1041,23 @@ class ResourceCardCssBreakpointTests(unittest.TestCase):
             block,
             re.compile(
                 r"#monitor-modal-footer\s*\{"
-                r"[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);"
-                r"[^}]*position:\s*sticky;",
+                r"[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);",
                 re.DOTALL,
             ),
         )
         self.assertRegex(
-            self.css,
+            block,
+            re.compile(
+                r"#monitor-modal-footer\s*\{"
+                r"[^}]*position:\s*sticky;"
+                r"[^}]*bottom:\s*0;"
+                r"[^}]*z-index:\s*16;"
+                r"[^}]*padding-bottom:\s*max\(1\.42rem,\s*calc\(env\(safe-area-inset-bottom\)\s*\+\s*0\.56rem\)\);",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            block,
             re.compile(
                 r"#monitor-modal-footer\s+button\s*\{"
                 r"[^}]*width:\s*100%;",
@@ -991,13 +1065,15 @@ class ResourceCardCssBreakpointTests(unittest.TestCase):
             ),
         )
 
-    def test_day_theme_monitor_modal_footer_uses_light_glass(self) -> None:
+    def test_day_theme_modal_footers_use_light_glass_tokens(self) -> None:
         self.assertRegex(
             self.css,
             re.compile(
-                r"html\.theme-day\s+\.modal-glass-footer\s*\{"
-                r"[^}]*border:\s*1px\s+solid\s+rgba\(137,\s*159,\s*186,\s*0\.26\);"
-                r"[^}]*background:\s*radial-gradient\(circle at 14%\s+20%,\s*rgba\(255,\s*255,\s*255,\s*0\.72\),\s*transparent\s*34%\),\s*linear-gradient\(180deg,\s*rgba\(255,\s*255,\s*255,\s*0\.78\),\s*rgba\(241,\s*247,\s*255,\s*0\.6\)\);",
+                r"html\.theme-day\s*\{"
+                r"[^}]*--modal-footer-glass-fill:\s*linear-gradient\(180deg,\s*rgba\(255,\s*255,\s*255,\s*0\.58\),\s*rgba\(237,\s*244,\s*255,\s*0\.4\)\);"
+                r"[^}]*--modal-footer-glass-stroke:\s*rgba\(129,\s*152,\s*182,\s*0\.34\);"
+                r"[^}]*--modal-footer-glass-highlight:\s*rgba\(255,\s*255,\s*255,\s*0\.74\);"
+                r"[^}]*--modal-footer-glass-shadow:\s*0\s+24px\s+48px\s+rgba\(111,\s*135,\s*166,\s*0\.16\);",
                 re.DOTALL,
             ),
         )

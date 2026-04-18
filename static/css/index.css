@@ -1097,19 +1097,109 @@
             border: 2px solid transparent;
             background-clip: padding-box;
         }
-        .modal-glass-footer {
+        .monitor-modal-footer-shell,
+        .resource-import-footer-shell {
             margin-top: 1rem;
-            padding: 0.78rem;
-            border: 1px solid var(--shell-floating-stroke);
-            border-radius: 1.35rem;
-            background: var(--shell-floating-fill);
-            box-shadow: var(--shell-floating-shadow);
-            background-clip: padding-box;
-            backdrop-filter: blur(34px) saturate(190%);
-            -webkit-backdrop-filter: blur(34px) saturate(190%);
+            padding: 0.82rem;
+            border: 0;
+            border-radius: 1.4rem;
+            position: relative;
+            isolation: isolate;
+            overflow: hidden;
+            background: transparent;
+            box-shadow: none;
         }
-        #subscription-modal-footer {
-            margin-top: 1rem;
+        .monitor-modal-footer-shell::before,
+        .resource-import-footer-shell::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            border: 1px solid var(--modal-footer-glass-stroke);
+            background:
+                radial-gradient(circle at 16% 18%, rgba(255, 255, 255, 0.18), transparent 34%),
+                linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
+                var(--modal-footer-glass-fill);
+            box-shadow: var(--modal-footer-glass-shadow), inset 0 1px 0 var(--modal-footer-glass-highlight);
+            backdrop-filter: blur(46px) saturate(220%);
+            -webkit-backdrop-filter: blur(46px) saturate(220%);
+            pointer-events: none;
+        }
+        .monitor-modal-footer-shell > *,
+        .resource-import-footer-shell > * {
+            position: relative;
+            z-index: 1;
+        }
+        .task-modal-save-btn,
+        .task-modal-cancel-btn {
+            width: 100%;
+            min-width: 0;
+            min-height: 44px;
+            border-radius: 0.95rem;
+            border: 1px solid transparent;
+            padding: 0.62rem 0.82rem;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.9rem;
+            line-height: 1;
+            font-weight: 820;
+            letter-spacing: 0.01em;
+            text-align: center;
+            transition:
+                transform 0.16s ease,
+                border-color 0.16s ease,
+                background-color 0.16s ease,
+                box-shadow 0.16s ease,
+                color 0.16s ease;
+        }
+        .task-modal-save-btn {
+            color: #eff8ff;
+            border-color: rgba(125, 211, 252, 0.66);
+            background:
+                linear-gradient(180deg, rgba(56, 189, 248, 0.26), rgba(56, 189, 248, 0.12)),
+                linear-gradient(135deg, #0ea5e9 0%, #0284c7 48%, #2563eb 100%);
+            box-shadow: 0 8px 16px rgba(2, 132, 199, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+        }
+        .task-modal-save-btn:hover {
+            border-color: rgba(186, 230, 253, 0.84);
+            box-shadow: 0 10px 18px rgba(2, 132, 199, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+            transform: translateY(-1px);
+        }
+        .task-modal-save-btn:active {
+            transform: translateY(0);
+            box-shadow: 0 4px 10px rgba(2, 132, 199, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+        }
+        .task-modal-cancel-btn {
+            color: #e2e8f0;
+            border-color: rgba(100, 116, 139, 0.72);
+            background:
+                linear-gradient(180deg, rgba(71, 85, 105, 0.92), rgba(51, 65, 85, 0.92)),
+                rgba(30, 41, 59, 0.88);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+        }
+        .task-modal-cancel-btn:hover {
+            color: #f8fafc;
+            border-color: rgba(148, 163, 184, 0.9);
+            background:
+                linear-gradient(180deg, rgba(100, 116, 139, 0.94), rgba(71, 85, 105, 0.94)),
+                rgba(51, 65, 85, 0.9);
+            transform: translateY(-1px);
+        }
+        .task-modal-cancel-btn:active {
+            transform: translateY(0);
+        }
+        .task-modal-save-btn:focus-visible,
+        .task-modal-cancel-btn:focus-visible {
+            outline: 2px solid rgba(56, 189, 248, 0.45);
+            outline-offset: 2px;
+        }
+        .task-modal-save-btn:disabled,
+        .task-modal-cancel-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
         }
         .resource-source-manager-mobile-bar {
             display: none;
@@ -3638,22 +3728,21 @@
             #resource-share-browser-card .resource-browser-table {
                 max-height: min(40vh, 320px);
             }
-            #resource-import-footer {
+            #monitor-modal-footer {
                 grid-template-columns: repeat(2, minmax(0, 1fr));
-                gap: 0.65rem;
+                gap: 0.56rem;
+                padding-top: 0.68rem;
+                padding-bottom: 0.78rem;
             }
-            #resource-import-footer {
-                position: sticky;
-                bottom: 0;
-                z-index: 12;
-                padding-top: 0.7rem;
-                padding-bottom: max(0.7rem, env(safe-area-inset-bottom));
-            }
-            #resource-import-footer button {
+            #monitor-modal-footer button {
                 width: 100%;
                 min-width: 0;
                 min-height: 44px;
-                font-size: 0.86rem;
+                font-size: 0.88rem;
+            }
+            #resource-import-footer {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 0.65rem;
             }
             .resource-source-manager-row {
                 grid-template-columns: 1fr;
@@ -3771,21 +3860,6 @@
             .monitor-modal-body {
                 padding-bottom: calc(0.9rem + env(safe-area-inset-bottom));
             }
-            #monitor-modal-footer {
-                grid-template-columns: repeat(2, minmax(0, 1fr));
-                gap: 0.65rem;
-                position: sticky;
-                bottom: 0;
-                z-index: 12;
-                padding-top: 0.7rem;
-                padding-bottom: max(0.7rem, env(safe-area-inset-bottom));
-            }
-            #monitor-modal-footer button {
-                width: 100%;
-                min-width: 0;
-                min-height: 44px;
-                font-size: 0.86rem;
-            }
             #subscription-modal .subscription-modal-shell {
                 width: 100vw;
                 max-width: 100vw;
@@ -3800,16 +3874,49 @@
             .subscription-modal-body {
                 padding-bottom: calc(0.9rem + env(safe-area-inset-bottom));
             }
-            #subscription-modal-footer {
-                grid-template-columns: repeat(2, minmax(0, 1fr));
-                gap: 0.65rem;
+            #monitor-modal-footer {
                 position: sticky;
                 bottom: 0;
-                z-index: 12;
-                padding-top: 0.7rem;
-                padding-bottom: max(0.7rem, env(safe-area-inset-bottom));
+                z-index: 16;
+                margin-top: auto;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 0.56rem;
+                padding-top: 0.68rem;
+                padding-bottom: max(1.42rem, calc(env(safe-area-inset-bottom) + 0.56rem));
             }
-            #subscription-modal-footer button {
+            #resource-import-footer {
+                position: sticky;
+                bottom: 0;
+                z-index: 16;
+                margin-top: auto;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 0.65rem;
+                padding-top: 0.72rem;
+                padding-bottom: max(0.78rem, env(safe-area-inset-bottom));
+                margin-left: -1rem;
+                margin-right: -1rem;
+                padding-left: 1rem;
+                padding-right: 1rem;
+                border-radius: 0;
+            }
+            #resource-import-footer::before {
+                border: 0;
+                border-top: 1px solid rgba(148, 163, 184, 0.22);
+                border-radius: 0;
+                background:
+                    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
+                    var(--modal-footer-glass-fill);
+                box-shadow: 0 -12px 24px rgba(2, 6, 23, 0.18);
+                backdrop-filter: blur(20px) saturate(170%);
+                -webkit-backdrop-filter: blur(20px) saturate(170%);
+            }
+            #monitor-modal-footer button {
+                width: 100%;
+                min-width: 0;
+                min-height: 44px;
+                font-size: 0.88rem;
+            }
+            #resource-import-footer button {
                 width: 100%;
                 min-width: 0;
                 min-height: 44px;
@@ -4369,6 +4476,10 @@
             --success: #15803d;
             --warn: #b45309;
             --danger: #dc2626;
+            --modal-footer-glass-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.58), rgba(237, 244, 255, 0.4));
+            --modal-footer-glass-stroke: rgba(129, 152, 182, 0.34);
+            --modal-footer-glass-highlight: rgba(255, 255, 255, 0.74);
+            --modal-footer-glass-shadow: 0 24px 48px rgba(111, 135, 166, 0.16);
         }
         html.theme-day body { background: var(--bg) !important; color: var(--text) !important; }
         html.theme-day nav { background: rgba(255, 255, 255, 0.95) !important; border-color: var(--border) !important; }
@@ -5529,17 +5640,35 @@
             background: #334155 !important;
             color: #ffffff !important;
         }
+        html.theme-day .task-modal-save-btn {
+            color: #eff6ff;
+            border-color: rgba(59, 130, 246, 0.64);
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.08)),
+                linear-gradient(135deg, #1d4ed8 0%, #2563eb 50%, #0ea5e9 100%);
+            box-shadow: 0 8px 16px rgba(37, 99, 235, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+        }
+        html.theme-day .task-modal-save-btn:hover {
+            border-color: rgba(147, 197, 253, 0.86);
+            box-shadow: 0 10px 18px rgba(37, 99, 235, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.34);
+        }
+        html.theme-day .task-modal-cancel-btn {
+            color: #f8fafc;
+            border-color: rgba(71, 85, 105, 0.68);
+            background:
+                linear-gradient(180deg, rgba(100, 116, 139, 0.9), rgba(71, 85, 105, 0.94)),
+                rgba(51, 65, 85, 0.9);
+        }
+        html.theme-day .task-modal-cancel-btn:hover {
+            border-color: rgba(148, 163, 184, 0.86);
+            background:
+                linear-gradient(180deg, rgba(100, 116, 139, 0.98), rgba(51, 65, 85, 0.98)),
+                rgba(51, 65, 85, 0.95);
+        }
         html.theme-day .monitor-modal-body::-webkit-scrollbar-thumb,
         html.theme-day .subscription-modal-body::-webkit-scrollbar-thumb {
             background: rgba(148, 163, 184, 0.88);
             border-color: transparent;
-        }
-        html.theme-day .modal-glass-footer {
-            border: 1px solid rgba(137, 159, 186, 0.26);
-            background:
-                radial-gradient(circle at 14% 20%, rgba(255, 255, 255, 0.72), transparent 34%),
-                linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(241, 247, 255, 0.6));
-            box-shadow: 0 20px 40px rgba(111, 135, 166, 0.14);
         }
         html.theme-day #subscription-share-folder-modal button.bg-slate-700:disabled {
             background: #cbd5e1 !important;
@@ -6292,6 +6421,10 @@
             --shell-floating-fill: linear-gradient(180deg, rgba(18, 25, 37, 0.68), rgba(9, 15, 25, 0.56));
             --shell-floating-stroke: rgba(228, 239, 255, 0.18);
             --shell-floating-shadow: 0 28px 56px rgba(3, 9, 20, 0.24);
+            --modal-footer-glass-fill: linear-gradient(180deg, rgba(18, 25, 37, 0.54), rgba(9, 15, 25, 0.44));
+            --modal-footer-glass-stroke: rgba(228, 239, 255, 0.28);
+            --modal-footer-glass-highlight: rgba(255, 255, 255, 0.26);
+            --modal-footer-glass-shadow: 0 30px 60px rgba(3, 9, 20, 0.22);
             --panel-entity-fill: linear-gradient(180deg, rgba(18, 23, 34, 0.96), rgba(10, 14, 23, 0.985));
             --panel-entity-muted: rgba(17, 24, 36, 0.84);
             --panel-entity-stroke: rgba(142, 160, 188, 0.16);
@@ -6426,7 +6559,16 @@
             display: inline-flex;
             align-items: center;
             justify-content: center;
+            overflow: hidden;
             box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 18px 32px rgba(24, 44, 74, 0.18);
+        }
+
+        .shell-brand-mark-image {
+            width: 100%;
+            height: 100%;
+            display: block;
+            border-radius: inherit;
+            object-fit: cover;
         }
 
         .shell-brand-name {
@@ -7776,16 +7918,15 @@
                 align-items: center;
             }
 
-            html.theme-day .settings-save-card:not(.is-inline) {
-                border-color: rgba(120, 155, 206, 0.28);
-                background:
-                    radial-gradient(circle at 18% 24%, rgba(255, 255, 255, 0.88), transparent 38%),
-                    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(242, 247, 255, 0.9));
-                box-shadow: 0 18px 34px rgba(111, 135, 166, 0.2);
-            }
-
-            html.theme-day .settings-save-card:not(.is-inline) .settings-save-compact-label {
-                color: #18314e;
-            }
+        html.theme-day .settings-save-card:not(.is-inline) {
+            border-color: rgba(120, 155, 206, 0.28);
+            background:
+                radial-gradient(circle at 18% 24%, rgba(255, 255, 255, 0.88), transparent 38%),
+                linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(242, 247, 255, 0.9));
+            box-shadow: 0 18px 34px rgba(111, 135, 166, 0.2);
+        }
+        html.theme-day .settings-save-card:not(.is-inline) .settings-save-compact-label {
+            color: #18314e;
+        }
         }
     

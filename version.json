@@ -1,10 +1,8 @@
 {
-  "version": "0.1.12",
-  "buildDate": "2026-04-18T02:18:31+08:00",
+  "version": "0.1.13",
+  "buildDate": "2026-04-18T22:53:12+08:00",
   "notes": [
-    "主题切换按钮改为纯图标，按当前模式显示太阳或月亮图标，并保留无障碍说明。",
-    "优化任务中心在竖屏下的头部布局与日间模式信息胶囊样式，清空和关闭按钮固定在右上角。",
-    "精简任务中心与订阅日志的辅助文案，并略微提高顶部栏与导航栏的玻璃表面不透明度。"
+    "横屏菜单左上角品牌位改为应用图标，统一品牌视觉。"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"
