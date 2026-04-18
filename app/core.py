@@ -278,6 +278,25 @@ def default_config() -> Dict[str, Any]:
     }
 
 
+def normalize_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if not normalized:
+            return bool(default)
+        if normalized in {"1", "true", "yes", "y", "on", "enabled", "enable", "checked"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off", "disabled", "disable", "unchecked", "null", "none"}:
+            return False
+        return bool(default)
+    return bool(value)
+
+
 def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
     name = str(task.get("name", "")).strip()
     retries = int(task.get("retries", 3) or 3)
@@ -288,11 +307,11 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
     cron_minutes = int(task.get("cron_minutes", 0) or 0)
     return {
         "name": name,
-        "webhook_enabled": bool(task.get("webhook_enabled", False)),
+        "webhook_enabled": normalize_bool(task.get("webhook_enabled", False), default=False),
         "scan_path": normalize_remote_path(task.get("scan_path", "")),
         "target_path": normalize_relative_path(task.get("target_path", "")),
-        "skip_by_dir_mtime": bool(task.get("skip_by_dir_mtime", False)),
-        "incremental": bool(task.get("incremental", False)),
+        "skip_by_dir_mtime": normalize_bool(task.get("skip_by_dir_mtime", False), default=False),
+        "incremental": normalize_bool(task.get("incremental", False), default=False),
         "retries": retries,
         "list_delay_ms": max(0, list_delay_ms),
         "min_file_size_mb": max(0, min_file_size_mb),
@@ -870,7 +889,7 @@ def normalize_subscription_task(task: Dict[str, Any]) -> Dict[str, Any]:
         "share_link_receive_code": share_link_receive_code if share_link_url else "",
         "share_subdir": share_subdir,
         "share_subdir_cid": share_subdir_cid,
-        "enabled": bool(task.get("enabled", True)),
+        "enabled": normalize_bool(task.get("enabled", True), default=True),
         # 兼容旧前端字段：cron_minutes 保留为“时段内查询间隔”镜像值。
         "cron_minutes": schedule_interval_minutes,
         "schedule_weekdays": schedule_weekdays,
@@ -908,7 +927,7 @@ def normalize_resource_source(source: Dict[str, Any]) -> Dict[str, Any]:
         "channel_id": channel_id,
         "url": build_telegram_channel_url(channel_id) if channel_id else url,
         "notes": notes,
-        "enabled": bool(source.get("enabled", True)),
+        "enabled": normalize_bool(source.get("enabled", True), default=True),
     }
 
 
@@ -1140,18 +1159,18 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     merged["alist_url"] = str(merged.get("alist_url", "")).strip().rstrip("/")
     merged["webhook_secret"] = str(merged.get("webhook_secret", "")).strip()
     merged["cookie_115"] = str(merged.get("cookie_115", "")).strip()
-    merged["sign115_enabled"] = bool(merged.get("sign115_enabled", False))
+    merged["sign115_enabled"] = normalize_bool(merged.get("sign115_enabled", False), default=False)
     merged["sign115_cron_time"] = normalize_sign115_cron_time(merged.get("sign115_cron_time", "09:00"))
     # 订阅批次收口刷新已固定为内置策略，不再保留配置项。
     merged.pop("subscription_batch_refresh_enabled", None)
-    merged["tg_proxy_enabled"] = bool(merged.get("tg_proxy_enabled", False))
+    merged["tg_proxy_enabled"] = normalize_bool(merged.get("tg_proxy_enabled", False), default=False)
     merged["tg_proxy_protocol"] = str(merged.get("tg_proxy_protocol", "http") or "http").strip().lower()
     if merged["tg_proxy_protocol"] not in ("http", "https"):
         merged["tg_proxy_protocol"] = "http"
     merged["tg_proxy_host"] = str(merged.get("tg_proxy_host", "")).strip()
     merged["tg_proxy_port"] = str(merged.get("tg_proxy_port", "")).strip()
-    merged["notify_push_enabled"] = bool(merged.get("notify_push_enabled", False))
-    merged["notify_monitor_enabled"] = bool(merged.get("notify_monitor_enabled", False))
+    merged["notify_push_enabled"] = normalize_bool(merged.get("notify_push_enabled", False), default=False)
+    merged["notify_monitor_enabled"] = normalize_bool(merged.get("notify_monitor_enabled", False), default=False)
     notify_channel = str(merged.get("notify_channel", "wecom_bot") or "wecom_bot").strip().lower()
     merged["notify_channel"] = notify_channel if notify_channel in ("wecom_bot", "wecom_app") else "wecom_bot"
     merged["notify_wecom_webhook"] = str(merged.get("notify_wecom_webhook", "")).strip()
@@ -1159,7 +1178,7 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     merged["notify_wecom_app_agent_id"] = str(merged.get("notify_wecom_app_agent_id", "")).strip()
     merged["notify_wecom_app_secret"] = str(merged.get("notify_wecom_app_secret", "")).strip()
     merged["notify_wecom_app_touser"] = str(merged.get("notify_wecom_app_touser", "")).strip()
-    merged["tmdb_enabled"] = bool(merged.get("tmdb_enabled", False))
+    merged["tmdb_enabled"] = normalize_bool(merged.get("tmdb_enabled", False), default=False)
     merged["tmdb_api_key"] = str(merged.get("tmdb_api_key", "")).strip()
     tmdb_lang = str(merged.get("tmdb_language", "zh-CN") or "zh-CN").strip()
     merged["tmdb_language"] = tmdb_lang if re.fullmatch(r"[a-z]{2}-[A-Z]{2}", tmdb_lang) else "zh-CN"

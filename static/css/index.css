@@ -1053,6 +1053,64 @@
             gap: 0.9rem;
             align-items: stretch;
         }
+        .monitor-modal-shell {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .monitor-modal-body {
+            margin-top: 1rem;
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow-y: auto;
+            scrollbar-gutter: stable;
+            padding-right: 0.2rem;
+        }
+        .monitor-modal-body::-webkit-scrollbar {
+            width: 8px;
+        }
+        .monitor-modal-body::-webkit-scrollbar-thumb {
+            background: rgba(71, 85, 105, 0.82);
+            border-radius: 999px;
+            border: 2px solid transparent;
+            background-clip: padding-box;
+        }
+        .subscription-modal-shell {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .subscription-modal-body {
+            margin-top: 1rem;
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow-y: auto;
+            scrollbar-gutter: stable;
+            padding-right: 0.2rem;
+        }
+        .subscription-modal-body::-webkit-scrollbar {
+            width: 8px;
+        }
+        .subscription-modal-body::-webkit-scrollbar-thumb {
+            background: rgba(71, 85, 105, 0.82);
+            border-radius: 999px;
+            border: 2px solid transparent;
+            background-clip: padding-box;
+        }
+        .modal-glass-footer {
+            margin-top: 1rem;
+            padding: 0.78rem;
+            border: 1px solid var(--shell-floating-stroke);
+            border-radius: 1.35rem;
+            background: var(--shell-floating-fill);
+            box-shadow: var(--shell-floating-shadow);
+            background-clip: padding-box;
+            backdrop-filter: blur(34px) saturate(190%);
+            -webkit-backdrop-filter: blur(34px) saturate(190%);
+        }
+        #subscription-modal-footer {
+            margin-top: 1rem;
+        }
         .resource-source-manager-mobile-bar {
             display: none;
         }
@@ -1481,13 +1539,15 @@
             align-items: center;
             justify-content: center;
             min-height: 40px;
-            padding: 0.55rem 0.9rem;
+            min-width: 40px;
+            padding: 0.55rem;
             border-radius: 9999px;
             border: 1px solid rgba(56, 189, 248, 0.38);
             background: linear-gradient(135deg, rgba(14, 165, 233, 0.92), rgba(37, 99, 235, 0.92));
             color: #f8fafc;
-            font-size: 0.76rem;
+            font-size: 1rem;
             font-weight: 900;
+            line-height: 1;
             box-shadow: 0 14px 28px rgba(2, 6, 23, 0.32);
             transition: transform 0.18s ease, filter 0.18s ease;
             backdrop-filter: blur(6px);
@@ -3578,17 +3638,20 @@
             #resource-share-browser-card .resource-browser-table {
                 max-height: min(40vh, 320px);
             }
-            #resource-import-footer { grid-template-columns: 1fr; }
+            #resource-import-footer {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 0.65rem;
+            }
             #resource-import-footer {
                 position: sticky;
                 bottom: 0;
                 z-index: 12;
-                background: linear-gradient(180deg, rgba(15, 23, 42, 0.05), rgba(15, 23, 42, 0.96));
-                border-top: 1px solid rgba(71, 85, 105, 0.58);
                 padding-top: 0.7rem;
                 padding-bottom: max(0.7rem, env(safe-area-inset-bottom));
             }
             #resource-import-footer button {
+                width: 100%;
+                min-width: 0;
                 min-height: 44px;
                 font-size: 0.86rem;
             }
@@ -3670,13 +3733,17 @@
             #monitor-modal .modal-card { max-height: 95vh; }
             #monitor-modal .modal-card { margin-top: 1vh; }
             #monitor-modal .grid.grid-cols-2 { grid-template-columns: 1fr; }
+            #monitor-modal,
             #resource-import-modal,
+            #subscription-modal,
             #resource-source-manager-modal,
             #resource-source-modal,
             #resource-source-import-modal {
                 padding: 0 !important;
             }
+            #monitor-modal .monitor-modal-shell,
             #resource-import-modal .modal-card,
+            #subscription-modal .subscription-modal-shell,
             #resource-source-manager-modal .modal-card,
             #resource-source-modal .modal-card,
             #resource-source-import-modal .modal-card {
@@ -3689,6 +3756,64 @@
                 border-left: 0;
                 border-right: 0;
                 padding-bottom: calc(0.9rem + env(safe-area-inset-bottom));
+            }
+            #monitor-modal .monitor-modal-shell {
+                width: 100vw;
+                max-width: 100vw;
+                height: 100dvh;
+                max-height: 100dvh;
+                margin-top: 0 !important;
+                border-radius: 0;
+                border-left: 0;
+                border-right: 0;
+                padding-bottom: 0;
+            }
+            .monitor-modal-body {
+                padding-bottom: calc(0.9rem + env(safe-area-inset-bottom));
+            }
+            #monitor-modal-footer {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 0.65rem;
+                position: sticky;
+                bottom: 0;
+                z-index: 12;
+                padding-top: 0.7rem;
+                padding-bottom: max(0.7rem, env(safe-area-inset-bottom));
+            }
+            #monitor-modal-footer button {
+                width: 100%;
+                min-width: 0;
+                min-height: 44px;
+                font-size: 0.86rem;
+            }
+            #subscription-modal .subscription-modal-shell {
+                width: 100vw;
+                max-width: 100vw;
+                height: 100dvh;
+                max-height: 100dvh;
+                margin-top: 0 !important;
+                border-radius: 0;
+                border-left: 0;
+                border-right: 0;
+                padding-bottom: 0;
+            }
+            .subscription-modal-body {
+                padding-bottom: calc(0.9rem + env(safe-area-inset-bottom));
+            }
+            #subscription-modal-footer {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 0.65rem;
+                position: sticky;
+                bottom: 0;
+                z-index: 12;
+                padding-top: 0.7rem;
+                padding-bottom: max(0.7rem, env(safe-area-inset-bottom));
+            }
+            #subscription-modal-footer button {
+                width: 100%;
+                min-width: 0;
+                min-height: 44px;
+                font-size: 0.86rem;
             }
             .resource-grid { grid-template-columns: 1fr; }
             .resource-section-header { padding: 1rem; }
@@ -3911,7 +4036,7 @@
                 width: 100%;
                 min-width: 0;
             }
-            #resource-import-footer { grid-template-columns: 1fr; }
+            #resource-import-footer { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
         @media (orientation: portrait) {
             #page-monitor .monitor-task-actions {
@@ -4082,10 +4207,12 @@
             }
             .resource-back-top-btn {
                 right: max(0.75rem, env(safe-area-inset-right));
-                bottom: max(0.8rem, env(safe-area-inset-bottom));
+                bottom: calc(env(safe-area-inset-bottom) + 6.85rem);
+                z-index: 49;
                 min-height: 38px;
-                padding: 0.5rem 0.8rem;
-                font-size: 0.72rem;
+                min-width: 38px;
+                padding: 0.5rem;
+                font-size: 0.96rem;
             }
         }
         @media (orientation: portrait) and (max-width: 900px) {
@@ -5401,6 +5528,18 @@
         html.theme-day #subscription-episode-modal button.bg-slate-700:hover {
             background: #334155 !important;
             color: #ffffff !important;
+        }
+        html.theme-day .monitor-modal-body::-webkit-scrollbar-thumb,
+        html.theme-day .subscription-modal-body::-webkit-scrollbar-thumb {
+            background: rgba(148, 163, 184, 0.88);
+            border-color: transparent;
+        }
+        html.theme-day .modal-glass-footer {
+            border: 1px solid rgba(137, 159, 186, 0.26);
+            background:
+                radial-gradient(circle at 14% 20%, rgba(255, 255, 255, 0.72), transparent 34%),
+                linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(241, 247, 255, 0.6));
+            box-shadow: 0 20px 40px rgba(111, 135, 166, 0.14);
         }
         html.theme-day #subscription-share-folder-modal button.bg-slate-700:disabled {
             background: #cbd5e1 !important;
@@ -7180,6 +7319,21 @@
         }
 
         @media (max-width: 1120px) and (orientation: portrait) {
+            .resource-search-controls {
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 0.45rem;
+            }
+
+            .resource-search-input-shell {
+                grid-column: 1 / -1;
+            }
+
+            .resource-search-btn {
+                width: 100%;
+                min-width: 0;
+            }
+
             .resource-card-actions {
                 justify-content: center;
                 padding-left: 0;

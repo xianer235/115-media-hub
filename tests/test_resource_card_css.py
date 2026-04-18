@@ -1,8 +1,10 @@
 import ast
+import importlib.util
 from pathlib import Path
 import re
+import sys
+import types
 import unittest
-
 
 CSS_PATH = Path("/Users/xianer/Documents/code/115-media-hub/static/css/index.css")
 JS_PATH = Path("/Users/xianer/Documents/code/115-media-hub/static/js/index.js")
@@ -10,6 +12,61 @@ TEMPLATE_PATH = Path("/Users/xianer/Documents/code/115-media-hub/templates/index
 SUBSCRIPTION_SERVICE_PATH = Path("/Users/xianer/Documents/code/115-media-hub/app/services/subscription.py")
 TREE_SERVICE_PATH = Path("/Users/xianer/Documents/code/115-media-hub/app/services/tree.py")
 CORE_PATH = Path("/Users/xianer/Documents/code/115-media-hub/app/core.py")
+
+
+def _install_fastapi_stubs() -> None:
+    if "fastapi" in sys.modules:
+        return
+
+    fastapi_module = types.ModuleType("fastapi")
+
+    class _FakeFastAPI:
+        def __init__(self, *args, **kwargs) -> None:
+            return None
+
+        def add_middleware(self, *args, **kwargs) -> None:
+            return None
+
+        def mount(self, *args, **kwargs) -> None:
+            return None
+
+    fastapi_module.FastAPI = _FakeFastAPI
+    fastapi_module.BackgroundTasks = type("BackgroundTasks", (), {})
+    fastapi_module.Request = type("Request", (), {})
+    sys.modules["fastapi"] = fastapi_module
+
+    fastapi_responses = types.ModuleType("fastapi.responses")
+    for name in (
+        "FileResponse",
+        "HTMLResponse",
+        "JSONResponse",
+        "RedirectResponse",
+        "Response",
+        "StreamingResponse",
+    ):
+        setattr(fastapi_responses, name, type(name, (), {}))
+    sys.modules["fastapi.responses"] = fastapi_responses
+
+    fastapi_staticfiles = types.ModuleType("fastapi.staticfiles")
+    fastapi_staticfiles.StaticFiles = type("StaticFiles", (), {"__init__": lambda self, *args, **kwargs: None})
+    sys.modules["fastapi.staticfiles"] = fastapi_staticfiles
+
+    starlette_sessions = types.ModuleType("starlette.middleware.sessions")
+    starlette_sessions.SessionMiddleware = type("SessionMiddleware", (), {})
+    sys.modules["starlette.middleware.sessions"] = starlette_sessions
+
+
+def _load_core_helpers():
+    _install_fastapi_stubs()
+    spec = importlib.util.spec_from_file_location("test_core_module", CORE_PATH)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Unable to load core.py for tests")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.normalize_config, module.normalize_resource_source
+
+
+normalize_config, normalize_resource_source = _load_core_helpers()
 
 
 def extract_media_block(css: str, max_width: int) -> str:
@@ -622,6 +679,360 @@ class ResourceCardCssBreakpointTests(unittest.TestCase):
             self.template_source,
             re.compile(r"匹配评分、任务创建和追更状态都会记录在这里", re.DOTALL),
         )
+
+    def test_portrait_resource_search_actions_use_two_column_grid(self) -> None:
+        block = extract_media_block_by_marker(
+            self.css,
+            "@media (max-width: 1120px) and (orientation: portrait)",
+        )
+        self.assertRegex(
+            block,
+            re.compile(
+                r"\.resource-search-controls\s*\{"
+                r"[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            block,
+            re.compile(
+                r"\.resource-search-input-shell\s*\{"
+                r"[^}]*grid-column:\s*1\s*/\s*-1;",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            block,
+            re.compile(
+                r"\.resource-search-btn\s*\{"
+                r"[^}]*width:\s*100%;",
+                re.DOTALL,
+            ),
+        )
+
+    def test_resource_back_top_button_uses_arrow_glyph(self) -> None:
+        self.assertRegex(
+            self.template_source,
+            re.compile(
+                r"<button id=\"resource-back-top-btn\"[^>]*aria-label=\"回到资源页顶部\"[^>]*>\s*↑\s*</button>",
+                re.DOTALL,
+            ),
+        )
+        self.assertNotRegex(
+            self.template_source,
+            re.compile(
+                r"<button id=\"resource-back-top-btn\"[^>]*>\s*回到顶部\s*</button>",
+                re.DOTALL,
+            ),
+        )
+
+    def test_mobile_resource_back_top_button_avoids_bottom_nav(self) -> None:
+        block = extract_media_block_by_marker(
+            self.css,
+            "@media (max-width: 767px)",
+        )
+        self.assertRegex(
+            block,
+            re.compile(
+                r"\.resource-back-top-btn\s*\{"
+                r"[^}]*bottom:\s*calc\(env\(safe-area-inset-bottom\)\s*\+\s*6\.85rem\);"
+                r"[^}]*z-index:\s*49;",
+                re.DOTALL,
+            ),
+        )
+
+    def test_mobile_resource_import_footer_uses_two_column_glass_layout(self) -> None:
+        block = extract_media_block_by_marker(
+            self.css,
+            "@media (max-width: 640px) {\n            body { font-size: 16px; }",
+        )
+        self.assertRegex(
+            block,
+            re.compile(
+                r"#resource-import-footer\s*\{"
+                r"[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"#resource-import-footer\s*\{"
+                r"[^}]*position:\s*sticky;",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"\.modal-glass-footer\s*\{"
+                r"[^}]*background:\s*var\(--shell-floating-fill\);"
+                r"[^}]*backdrop-filter:\s*blur\(34px\)\s*saturate\(190%\);",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"#resource-import-footer\s+button\s*\{"
+                r"[^}]*width:\s*100%;",
+                re.DOTALL,
+            ),
+        )
+
+    def test_day_theme_resource_import_footer_uses_light_glass(self) -> None:
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"html\.theme-day\s+\.modal-glass-footer\s*\{"
+                r"[^}]*border:\s*1px\s+solid\s+rgba\(137,\s*159,\s*186,\s*0\.26\);"
+                r"[^}]*background:\s*radial-gradient\(circle at 14%\s+20%,\s*rgba\(255,\s*255,\s*255,\s*0\.72\),\s*transparent\s*34%\),\s*linear-gradient\(180deg,\s*rgba\(255,\s*255,\s*255,\s*0\.78\),\s*rgba\(241,\s*247,\s*255,\s*0\.6\)\);"
+                r"[^}]*box-shadow:\s*0\s+20px\s+40px\s+rgba\(111,\s*135,\s*166,\s*0\.14\);",
+                re.DOTALL,
+            ),
+        )
+
+    def test_subscription_modal_body_owns_scrollbar(self) -> None:
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"\.subscription-modal-shell\s*\{"
+                r"[^}]*display:\s*flex;"
+                r"[^}]*flex-direction:\s*column;"
+                r"[^}]*overflow:\s*hidden;",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"\.subscription-modal-body\s*\{"
+                r"[^}]*overflow-y:\s*auto;"
+                r"[^}]*scrollbar-gutter:\s*stable;",
+                re.DOTALL,
+            ),
+        )
+
+    def test_mobile_subscription_modal_footer_uses_two_column_glass_layout(self) -> None:
+        block = extract_media_block_by_marker(
+            self.css,
+            "@media (max-width: 640px) {\n            body { font-size: 16px; }",
+        )
+        self.assertRegex(
+            block,
+            re.compile(
+                r"#subscription-modal\s+\.subscription-modal-shell\s*\{"
+                r"[^}]*width:\s*100vw;"
+                r"[^}]*height:\s*100dvh;",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            block,
+            re.compile(
+                r"#subscription-modal-footer\s*\{"
+                r"[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            block,
+            re.compile(
+                r"#subscription-modal-footer\s*\{"
+                r"[^}]*position:\s*sticky;",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"\.modal-glass-footer\s*\{"
+                r"[^}]*background:\s*var\(--shell-floating-fill\);"
+                r"[^}]*backdrop-filter:\s*blur\(34px\)\s*saturate\(190%\);",
+                re.DOTALL,
+            ),
+        )
+
+    def test_day_theme_subscription_modal_footer_uses_light_glass(self) -> None:
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"html\.theme-day\s+\.modal-glass-footer\s*\{"
+                r"[^}]*border:\s*1px\s+solid\s+rgba\(137,\s*159,\s*186,\s*0\.26\);"
+                r"[^}]*background:\s*radial-gradient\(circle at 14%\s+20%,\s*rgba\(255,\s*255,\s*255,\s*0\.72\),\s*transparent\s*34%\),\s*linear-gradient\(180deg,\s*rgba\(255,\s*255,\s*255,\s*0\.78\),\s*rgba\(241,\s*247,\s*255,\s*0\.6\)\);",
+                re.DOTALL,
+            ),
+        )
+
+    def test_dark_theme_modal_footers_share_same_glass_surface(self) -> None:
+        self.assertRegex(
+            self.template_source,
+            re.compile(
+                r"id=\"subscription-modal-footer\"[^>]*modal-glass-footer",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.template_source,
+            re.compile(
+                r"id=\"resource-import-footer\"[^>]*modal-glass-footer",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.template_source,
+            re.compile(
+                r"id=\"monitor-modal-footer\"[^>]*modal-glass-footer",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"\.modal-glass-footer\s*\{"
+                r"[^}]*background:\s*var\(--shell-floating-fill\);"
+                r"[^}]*backdrop-filter:\s*blur\(34px\)\s*saturate\(190%\);",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"\.modal-glass-footer\s*\{[^}]*border:\s*1px\s+solid\s+var\(--shell-floating-stroke\);",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"\.modal-glass-footer\s*\{[^}]*border-radius:\s*1\.35rem;",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"\.modal-glass-footer\s*\{[^}]*padding:\s*0\.78rem;",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"\.modal-glass-footer\s*\{[^}]*box-shadow:\s*var\(--shell-floating-shadow\);",
+                re.DOTALL,
+            ),
+        )
+        self.assertNotRegex(
+            self.css,
+            re.compile(
+                r"\.modal-glass-footer\s*\{[^}]*border-top:",
+                re.DOTALL,
+            ),
+        )
+        self.assertNotRegex(
+            self.css,
+            re.compile(
+                r"\.modal-glass-footer\s*\{[^}]*inset\s+0\s+1px",
+                re.DOTALL,
+            ),
+        )
+
+    def test_monitor_modal_body_owns_scrollbar(self) -> None:
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"\.monitor-modal-shell\s*\{"
+                r"[^}]*display:\s*flex;"
+                r"[^}]*flex-direction:\s*column;"
+                r"[^}]*overflow:\s*hidden;",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"\.monitor-modal-body\s*\{"
+                r"[^}]*overflow-y:\s*auto;"
+                r"[^}]*scrollbar-gutter:\s*stable;",
+                re.DOTALL,
+            ),
+        )
+
+    def test_mobile_monitor_modal_footer_uses_two_column_glass_layout(self) -> None:
+        block = extract_media_block_by_marker(
+            self.css,
+            "@media (max-width: 640px) {\n            body { font-size: 16px; }",
+        )
+        self.assertRegex(
+            block,
+            re.compile(
+                r"#monitor-modal\s+\.monitor-modal-shell\s*\{"
+                r"[^}]*width:\s*100vw;"
+                r"[^}]*height:\s*100dvh;",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            block,
+            re.compile(
+                r"#monitor-modal-footer\s*\{"
+                r"[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);"
+                r"[^}]*position:\s*sticky;",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"#monitor-modal-footer\s+button\s*\{"
+                r"[^}]*width:\s*100%;",
+                re.DOTALL,
+            ),
+        )
+
+    def test_day_theme_monitor_modal_footer_uses_light_glass(self) -> None:
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"html\.theme-day\s+\.modal-glass-footer\s*\{"
+                r"[^}]*border:\s*1px\s+solid\s+rgba\(137,\s*159,\s*186,\s*0\.26\);"
+                r"[^}]*background:\s*radial-gradient\(circle at 14%\s+20%,\s*rgba\(255,\s*255,\s*255,\s*0\.72\),\s*transparent\s*34%\),\s*linear-gradient\(180deg,\s*rgba\(255,\s*255,\s*255,\s*0\.78\),\s*rgba\(241,\s*247,\s*255,\s*0\.6\)\);",
+                re.DOTALL,
+            ),
+        )
+
+    def test_resource_import_stepper_is_before_resource_selection_card(self) -> None:
+        stepper_index = self.template_source.find('id="resource-import-stepper"')
+        browser_index = self.template_source.find('id="resource-share-browser-card"')
+        self.assertNotEqual(stepper_index, -1)
+        self.assertNotEqual(browser_index, -1)
+        self.assertLess(stepper_index, browser_index)
+
+    def test_normalize_resource_source_treats_false_like_disabled(self) -> None:
+        source = normalize_resource_source(
+            {
+                "name": "测试频道",
+                "channel_id": "testchannel",
+                "enabled": "false",
+            }
+        )
+        self.assertFalse(source["enabled"])
+
+    def test_normalize_config_treats_string_false_resource_source_as_disabled(self) -> None:
+        cfg = normalize_config(
+            {
+                "resource_sources": [
+                    {
+                        "name": "测试频道",
+                        "channel_id": "testchannel",
+                        "enabled": "false",
+                    }
+                ]
+            }
+        )
+        self.assertEqual(len(cfg["resource_sources"]), 1)
+        self.assertFalse(cfg["resource_sources"][0]["enabled"])
 
 
 if __name__ == "__main__":
