@@ -161,6 +161,25 @@ class ResourceCardCssBreakpointTests(unittest.TestCase):
             ),
         )
 
+    def test_860_breakpoint_uses_compact_channel_action_alignment(self) -> None:
+        block = extract_media_block(self.css, 860)
+        self.assertRegex(
+            block,
+            re.compile(
+                r"\.resource-section-actions\s*\{"
+                r"[^}]*justify-content:\s*flex-start;"
+                r"[^}]*flex-wrap:\s*wrap;",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            block,
+            re.compile(
+                r"\.resource-section-toggle\s*\{[^}]*margin-left:\s*auto;",
+                re.DOTALL,
+            ),
+        )
+
     def test_portrait_breakpoint_centers_resource_actions(self) -> None:
         block = extract_media_block_by_marker(
             self.css,
@@ -737,6 +756,37 @@ class ResourceCardCssBreakpointTests(unittest.TestCase):
             ),
         )
 
+    def test_portrait_resource_section_actions_use_compact_grid_layout(self) -> None:
+        block = extract_media_block_by_marker(
+            self.css,
+            "@media (max-width: 1120px) and (orientation: portrait)",
+        )
+        self.assertRegex(
+            block,
+            re.compile(
+                r"\.resource-section-actions\s*\{"
+                r"[^}]*display:\s*grid;"
+                r"[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)\s*auto;"
+                r"[^}]*justify-content:\s*initial;",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            block,
+            re.compile(
+                r"\.resource-section-manage-btn,\s*\.resource-section-link\s*\{"
+                r"[^}]*width:\s*100%;[^}]*min-width:\s*0;",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            block,
+            re.compile(
+                r"\.resource-section-toggle\s*\{[^}]*justify-self:\s*end;",
+                re.DOTALL,
+            ),
+        )
+
     def test_resource_back_top_button_uses_arrow_glyph(self) -> None:
         self.assertRegex(
             self.template_source,
@@ -1109,6 +1159,101 @@ class ResourceCardCssBreakpointTests(unittest.TestCase):
         )
         self.assertEqual(len(cfg["resource_sources"]), 1)
         self.assertFalse(cfg["resource_sources"][0]["enabled"])
+
+    def test_resource_section_card_has_local_manage_entry(self) -> None:
+        self.assertRegex(
+            self.js,
+            re.compile(
+                r"data-resource-section-manage=\"\$\{escapeHtml\(section\.channel_id \|\| ''\)\}\"",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.js,
+            re.compile(
+                r"class=\"resource-section-manage-btn\"[^>]*>管理</button>",
+                re.DOTALL,
+            ),
+        )
+
+    def test_resource_channel_manage_modal_keeps_only_high_frequency_actions(self) -> None:
+        self.assertRegex(
+            self.template_source,
+            re.compile(r"id=\"resource-channel-manage-modal\"", re.DOTALL),
+        )
+        self.assertRegex(
+            self.template_source,
+            re.compile(r"id=\"resource-channel-manage-name\"", re.DOTALL),
+        )
+        self.assertRegex(
+            self.template_source,
+            re.compile(r"id=\"resource-channel-manage-enabled\"", re.DOTALL),
+        )
+        self.assertRegex(
+            self.template_source,
+            re.compile(
+                r"id=\"resource-channel-manage-pin-btn\"[^>]*>置顶（排序挪到1号）</button>",
+                re.DOTALL,
+            ),
+        )
+
+    def test_resource_channel_manage_modal_supports_save_and_pin_to_top(self) -> None:
+        self.assertRegex(
+            self.js,
+            re.compile(r"function openResourceChannelManageModal\(channelId\) \{", re.DOTALL),
+        )
+        self.assertRegex(
+            self.js,
+            re.compile(r"function saveResourceChannelManage\(\) \{", re.DOTALL),
+        )
+        self.assertRegex(
+            self.js,
+            re.compile(r"function pinResourceChannelToTop\(\) \{", re.DOTALL),
+        )
+        self.assertRegex(
+            self.js,
+            re.compile(
+                r"sources\.splice\(index,\s*1\);\s*sources\.unshift\(source\);",
+                re.DOTALL,
+            ),
+        )
+
+    def test_resource_type_badges_highlight_magnet_and_115share(self) -> None:
+        self.assertRegex(
+            self.js,
+            re.compile(r"function getResourceLinkTypeBadgeClass\(linkType\) \{", re.DOTALL),
+        )
+        self.assertRegex(
+            self.js,
+            re.compile(r"resource-card-type-badge-magnet", re.DOTALL),
+        )
+        self.assertRegex(
+            self.js,
+            re.compile(r"resource-card-type-badge-115share", re.DOTALL),
+        )
+        self.assertRegex(
+            self.js,
+            re.compile(
+                r"class=\"\$\{escapeHtml\(getResourceLinkTypeBadgeClass\(getEffectiveResourceLinkType\(item\)\)\)\}\"",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.css,
+            re.compile(r"\.resource-card-type-badge-magnet\s*\{", re.DOTALL),
+        )
+        self.assertRegex(
+            self.css,
+            re.compile(r"\.resource-card-type-badge-115share\s*\{", re.DOTALL),
+        )
+        self.assertRegex(
+            self.css,
+            re.compile(r"html\.theme-day\s+\.resource-card-type-badge-magnet\s*\{", re.DOTALL),
+        )
+        self.assertRegex(
+            self.css,
+            re.compile(r"html\.theme-day\s+\.resource-card-type-badge-115share\s*\{", re.DOTALL),
+        )
 
 
 if __name__ == "__main__":

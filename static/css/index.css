@@ -4643,6 +4643,11 @@
             color: #075985;
             box-shadow: none;
         }
+        html.theme-day .resource-channel-manage-meta {
+            border-color: rgba(129, 152, 182, 0.32);
+            background: rgba(248, 250, 252, 0.95);
+            color: #334155;
+        }
         html.theme-day .resource-import-step {
             border-color: rgba(203, 213, 225, 0.96);
             background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.94));
@@ -7116,6 +7121,26 @@
             justify-content: center;
         }
 
+        .resource-section-manage-btn {
+            min-height: 34px;
+            padding: 0.45rem 0.8rem;
+            border-radius: 999px;
+            border: 1px solid rgba(125, 211, 252, 0.34);
+            background: rgba(2, 132, 199, 0.2);
+            color: #e0f2fe;
+            font-size: 0.74rem;
+            font-weight: 760;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: border-color 0.18s ease, background-color 0.18s ease, color 0.18s ease;
+        }
+        .resource-section-manage-btn:hover {
+            border-color: rgba(125, 211, 252, 0.66);
+            background: rgba(14, 165, 233, 0.26);
+            color: #f0f9ff;
+        }
+
         .resource-section-toggle {
             width: 34px;
             height: 34px;
@@ -7125,6 +7150,16 @@
             display: inline-flex;
             align-items: center;
             justify-content: center;
+        }
+
+        .resource-channel-manage-meta {
+            border-radius: 0.85rem;
+            border: 1px solid rgba(56, 189, 248, 0.22);
+            background: rgba(14, 116, 144, 0.12);
+            color: #bae6fd;
+            font-size: 0.74rem;
+            line-height: 1.55;
+            padding: 0.5rem 0.72rem;
         }
 
         .resource-section-body {
@@ -7209,6 +7244,30 @@
             line-height: 1 !important;
             padding: 0.26rem 0.52rem !important;
             border-radius: 999px !important;
+        }
+
+        .resource-card-type-badge {
+            border: 1px solid rgba(148, 163, 184, 0.28);
+            background: rgba(51, 65, 85, 0.7);
+            color: #e2e8f0;
+        }
+
+        .resource-card-type-badge-115share {
+            border-color: rgba(56, 189, 248, 0.48);
+            background: rgba(2, 132, 199, 0.24);
+            color: #bae6fd;
+        }
+
+        .resource-card-type-badge-magnet {
+            border-color: rgba(251, 146, 60, 0.48);
+            background: rgba(234, 88, 12, 0.24);
+            color: #fed7aa;
+        }
+
+        .resource-card-type-badge-default {
+            border-color: rgba(148, 163, 184, 0.28);
+            background: rgba(51, 65, 85, 0.7);
+            color: #e2e8f0;
         }
 
         .resource-card-meta,
@@ -7440,7 +7499,13 @@
             }
 
             .resource-section-actions {
-                justify-content: space-between;
+                justify-content: flex-start;
+                flex-wrap: wrap;
+                gap: 8px;
+            }
+
+            .resource-section-toggle {
+                margin-left: auto;
             }
 
             .resource-card > .resource-card-preview-trigger {
@@ -7474,6 +7539,25 @@
             .resource-search-btn {
                 width: 100%;
                 min-width: 0;
+            }
+
+            .resource-section-actions {
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+                gap: 0.45rem;
+                align-items: center;
+                justify-content: initial;
+            }
+
+            .resource-section-manage-btn,
+            .resource-section-link {
+                width: 100%;
+                min-width: 0;
+            }
+
+            .resource-section-toggle {
+                margin-left: 0;
+                justify-self: end;
             }
 
             .resource-card-actions {
@@ -7634,6 +7718,7 @@
         html.theme-day .resource-search-stat,
         html.theme-day .resource-section-chip,
         html.theme-day .resource-quick-link-pill,
+        html.theme-day .resource-section-manage-btn,
         html.theme-day .resource-section-link,
         html.theme-day .resource-section-toggle,
         html.theme-day .resource-card-action-secondary {
@@ -7732,6 +7817,24 @@
 
         html.theme-day .resource-card-desc {
             color: #3e5167;
+        }
+
+        html.theme-day .resource-card-type-badge-115share {
+            border-color: rgba(14, 165, 233, 0.4);
+            background: rgba(224, 242, 254, 0.98);
+            color: #0c4a6e;
+        }
+
+        html.theme-day .resource-card-type-badge-magnet {
+            border-color: rgba(249, 115, 22, 0.38);
+            background: rgba(255, 237, 213, 0.98);
+            color: #9a3412;
+        }
+
+        html.theme-day .resource-card-type-badge-default {
+            border-color: rgba(148, 163, 184, 0.4);
+            background: rgba(241, 245, 249, 0.98);
+            color: #334155;
         }
 
         html.theme-day .resource-card-preview-trigger {

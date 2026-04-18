@@ -88,6 +88,9 @@
         let resourceSourceModalOpen = false;
         let resourceSourceImportModalOpen = false;
         let resourceSourceManagerOpen = false;
+        let resourceChannelManageModalOpen = false;
+        let resourceChannelManageSourceIndex = -1;
+        let resourceChannelManageChannelId = '';
         let resourceQuickLinks = [];
         let resourceQuickLinksMigrationChecked = false;
         let editingResourceQuickLinkId = '';
@@ -3605,6 +3608,13 @@
             return map[normalized] || normalized || '待识别';
         }
 
+        function getResourceLinkTypeBadgeClass(linkType) {
+            const normalized = String(linkType || 'unknown').trim().toLowerCase();
+            if (normalized === 'magnet') return 'resource-card-type-badge resource-card-type-badge-magnet';
+            if (normalized === '115share') return 'resource-card-type-badge resource-card-type-badge-115share';
+            return 'resource-card-type-badge resource-card-type-badge-default';
+        }
+
         function detectResourceLinkTypeByUrl(url) {
             const raw = String(url || '').trim();
             const lowered = raw.toLowerCase();
@@ -4526,7 +4536,7 @@
                             <button type="button" data-resource-action="preview" data-resource-id="${item.id}" class="resource-card-title break-words text-left bg-transparent border-none p-0 hover:text-sky-700 transition-colors">${escapeHtml(item?.title || '未命名资源')}</button>
                             <div class="resource-card-badges">
                                 ${buildResourceStatusBadge(getResourceDisplayStatus(item))}
-                                <span class="text-[10px] px-3 py-1 rounded-full bg-slate-700 text-slate-100">${escapeHtml(getResourceLinkTypeLabel(getEffectiveResourceLinkType(item)))}</span>
+                                <span class="${escapeHtml(getResourceLinkTypeBadgeClass(getEffectiveResourceLinkType(item)))}">${escapeHtml(getResourceLinkTypeLabel(getEffectiveResourceLinkType(item)))}</span>
                                 ${item?.quality ? `<span class="text-[10px] px-3 py-1 rounded-full bg-sky-500/15 text-sky-300 border border-sky-500/20">${escapeHtml(item.quality)}</span>` : ''}
                                 ${item?.year ? `<span class="text-[10px] px-3 py-1 rounded-full bg-violet-500/15 text-violet-300 border border-violet-500/20">${escapeHtml(item.year)}</span>` : ''}
                             </div>
@@ -4904,6 +4914,7 @@
                             <div class="resource-section-subtle">${subtleText}</div>
                         </button>
                         <div class="resource-section-actions">
+                            ${!isSearchSection ? `<button type="button" data-resource-section-manage="${escapeHtml(section.channel_id || '')}" class="resource-section-manage-btn">管理</button>` : ''}
                             <a href="${escapeHtml(section.url || '#')}" target="_blank" rel="noopener noreferrer" class="resource-section-link">打开频道</a>
                             <button type="button" data-resource-section-toggle="${escapeHtml(section.channel_id || '')}" class="resource-section-toggle bg-transparent border-none p-0" aria-label="展开或收起频道">⌄</button>
                         </div>
@@ -5063,6 +5074,12 @@
             syncResourceMonitorTaskOptions(document.getElementById('resource_job_savepath')?.value || '');
             renderResourceOnboardingCard();
             renderResourceSources();
+            if (resourceChannelManageModalOpen) {
+                const nextIndex = getResourceSourceIndexByChannelId(resourceChannelManageChannelId);
+                resourceChannelManageSourceIndex = nextIndex;
+                if (nextIndex < 0) closeResourceChannelManageModal();
+                else syncResourceChannelManageModalState();
+            }
             renderResourceBoard();
             renderResourceJobs();
             syncResourceJobModalTrigger();
@@ -5494,6 +5511,16 @@
                 index[channelId] = section;
             });
             return index;
+        }
+
+        function getResourceSourceIndexByChannelId(channelId) {
+            const normalized = normalizeTelegramChannelIdInput(channelId || '');
+            if (!normalized) return -1;
+            const sources = Array.isArray(resourceState.sources) ? resourceState.sources : [];
+            for (let i = 0; i < sources.length; i += 1) {
+                if (getResourceSourceChannelId(sources[i]) === normalized) return i;
+            }
+            return -1;
         }
 
         function getResourceSourceProfileFromIndex(source, sectionIndex = {}) {
@@ -6197,6 +6224,127 @@
             resourceSourceModalOpen = false;
             document.getElementById('resource-source-modal').classList.add('hidden');
             resetResourceSourceForm();
+        }
+
+        function syncResourceChannelManageModalState() {
+            const titleEl = document.getElementById('resource-channel-manage-title');
+            const orderEl = document.getElementById('resource-channel-manage-order');
+            const pinBtn = document.getElementById('resource-channel-manage-pin-btn');
+            const enabledEl = document.getElementById('resource-channel-manage-enabled');
+            const nameEl = document.getElementById('resource-channel-manage-name');
+            const sources = Array.isArray(resourceState.sources) ? resourceState.sources : [];
+            const index = resourceChannelManageSourceIndex;
+            const source = index >= 0 ? sources[index] : null;
+            if (!source) {
+                if (titleEl) titleEl.innerText = '频道快捷管理';
+                if (orderEl) orderEl.innerText = '--';
+                if (pinBtn) {
+                    pinBtn.disabled = true;
+                    pinBtn.classList.add('btn-disabled');
+                    pinBtn.innerText = '置顶（排序挪到1号）';
+                }
+                if (enabledEl) enabledEl.checked = false;
+                if (nameEl) nameEl.value = '';
+                return;
+            }
+            const displayName = String(source?.name || getResourceSourceChannelId(source) || '未命名频道').trim() || '未命名频道';
+            if (titleEl) titleEl.innerText = `频道快捷管理 · ${displayName}`;
+            if (orderEl) orderEl.innerText = `#${index + 1}`;
+            if (pinBtn) {
+                const alreadyTop = index <= 0;
+                pinBtn.disabled = alreadyTop;
+                pinBtn.classList.toggle('btn-disabled', alreadyTop);
+                pinBtn.innerText = alreadyTop ? '已在1号位' : '置顶（排序挪到1号）';
+            }
+            if (enabledEl) enabledEl.checked = source?.enabled !== false;
+            if (nameEl && !nameEl.value.trim()) {
+                nameEl.value = displayName;
+            }
+        }
+
+        function resetResourceChannelManageForm() {
+            resourceChannelManageSourceIndex = -1;
+            resourceChannelManageChannelId = '';
+            const nameEl = document.getElementById('resource-channel-manage-name');
+            const enabledEl = document.getElementById('resource-channel-manage-enabled');
+            if (nameEl) nameEl.value = '';
+            if (enabledEl) enabledEl.checked = true;
+            syncResourceChannelManageModalState();
+        }
+
+        function openResourceChannelManageModal(channelId) {
+            const normalized = normalizeTelegramChannelIdInput(channelId || '');
+            const index = getResourceSourceIndexByChannelId(normalized);
+            if (!normalized || index < 0) {
+                showToast('未找到对应频道，可能已被删除或停用', { tone: 'warn', duration: 2600, placement: 'top-center' });
+                return;
+            }
+            const source = (resourceState.sources || [])[index] || {};
+            resourceChannelManageSourceIndex = index;
+            resourceChannelManageChannelId = normalized;
+            const nameEl = document.getElementById('resource-channel-manage-name');
+            const enabledEl = document.getElementById('resource-channel-manage-enabled');
+            if (nameEl) nameEl.value = String(source?.name || normalized).trim() || normalized;
+            if (enabledEl) enabledEl.checked = source?.enabled !== false;
+            syncResourceChannelManageModalState();
+            resourceChannelManageModalOpen = true;
+            showLockedModal('resource-channel-manage-modal');
+            requestAnimationFrame(() => {
+                const input = document.getElementById('resource-channel-manage-name');
+                if (!input) return;
+                input.focus();
+                input.select?.();
+            });
+        }
+
+        function closeResourceChannelManageModal() {
+            resourceChannelManageModalOpen = false;
+            hideLockedModal('resource-channel-manage-modal');
+            resetResourceChannelManageForm();
+        }
+
+        async function saveResourceChannelManage() {
+            const index = resourceChannelManageSourceIndex;
+            const channelId = resourceChannelManageChannelId;
+            const sources = [...(resourceState.sources || [])];
+            if (index < 0 || index >= sources.length) {
+                showToast('频道不存在，无法保存', { tone: 'warn', duration: 2400, placement: 'top-center' });
+                return;
+            }
+            const nameEl = document.getElementById('resource-channel-manage-name');
+            const enabledEl = document.getElementById('resource-channel-manage-enabled');
+            const nextName = String(nameEl?.value || '').trim() || channelId;
+            sources[index] = {
+                ...sources[index],
+                name: nextName,
+                enabled: !!enabledEl?.checked,
+            };
+            try {
+                await persistResourceSources(sources);
+                resourceChannelManageSourceIndex = getResourceSourceIndexByChannelId(channelId);
+                syncResourceChannelManageModalState();
+                showToast('频道设置已保存', { tone: 'success', duration: 2200, placement: 'top-center' });
+            } catch (e) {
+                showToast(`保存失败：${e.message || '未知错误'}`, { tone: 'error', duration: 3000, placement: 'top-center' });
+            }
+        }
+
+        async function pinResourceChannelToTop() {
+            const index = resourceChannelManageSourceIndex;
+            const channelId = resourceChannelManageChannelId;
+            const sources = [...(resourceState.sources || [])];
+            if (index <= 0 || index >= sources.length) return;
+            const source = sources[index];
+            sources.splice(index, 1);
+            sources.unshift(source);
+            try {
+                await persistResourceSources(sources);
+                resourceChannelManageSourceIndex = getResourceSourceIndexByChannelId(channelId);
+                syncResourceChannelManageModalState();
+                showToast('已置顶到1号位', { tone: 'success', duration: 2200, placement: 'top-center' });
+            } catch (e) {
+                showToast(`置顶失败：${e.message || '未知错误'}`, { tone: 'error', duration: 3000, placement: 'top-center' });
+            }
         }
 
         function buildResourceSourceExportPayload(sources = []) {
@@ -8713,6 +8861,11 @@
                 await saveResourceSource();
             });
         });
+        document.getElementById('resource-channel-manage-name').addEventListener('keydown', async (e) => {
+            if (e.key !== 'Enter' || e.isComposing) return;
+            e.preventDefault();
+            await saveResourceChannelManage();
+        });
         document.getElementById('resource_source_import_json').addEventListener('keydown', async (e) => {
             if (e.key !== 'Enter' || e.isComposing || (!e.metaKey && !e.ctrlKey)) return;
             e.preventDefault();
@@ -8880,6 +9033,11 @@
         });
 
         document.getElementById('resource-board').addEventListener('click', async (e) => {
+            const manageBtn = e.target.closest('[data-resource-section-manage]');
+            if (manageBtn) {
+                openResourceChannelManageModal(manageBtn.dataset.resourceSectionManage || '');
+                return;
+            }
             const toggleBtn = e.target.closest('[data-resource-section-toggle]');
             if (toggleBtn) {
                 toggleResourceSection(toggleBtn.dataset.resourceSectionToggle || '');
@@ -8985,6 +9143,9 @@
         });
         document.getElementById('resource-source-modal').addEventListener('click', (e) => {
             if (e.target.id === 'resource-source-modal') closeResourceSourceModal();
+        });
+        document.getElementById('resource-channel-manage-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'resource-channel-manage-modal') closeResourceChannelManageModal();
         });
         document.getElementById('resource-source-import-modal').addEventListener('click', (e) => {
             if (e.target.id === 'resource-source-import-modal') closeResourceSourceImportModal();
@@ -9143,6 +9304,10 @@
             }
             if (e.key === 'Escape' && resourceSourceModalOpen) {
                 closeResourceSourceModal();
+                return;
+            }
+            if (e.key === 'Escape' && resourceChannelManageModalOpen) {
+                closeResourceChannelManageModal();
                 return;
             }
             if (e.key === 'Escape' && resourceJobModalOpen) toggleResourceJobModal(false);

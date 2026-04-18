@@ -1062,6 +1062,38 @@
             </div>
         </div>
 
+        <div id="resource-channel-manage-modal" class="hidden fixed inset-0 bg-black/65 backdrop-blur-sm z-[58] p-4">
+            <div class="w-full max-w-xl mx-auto mt-[8vh] group-card modal-card resource-source-modal-shell">
+                <div class="resource-source-modal-header">
+                    <div class="min-w-0">
+                        <div class="resource-source-modal-eyebrow">Quick Manage</div>
+                        <div id="resource-channel-manage-title" class="resource-source-modal-title">频道快捷管理</div>
+                        <div class="resource-source-modal-subtitle">只保留高频操作：启用/停用、改名、置顶（排序挪到 1 号）。</div>
+                    </div>
+                    <button type="button" class="resource-source-modal-close" onclick="closeResourceChannelManageModal()" aria-label="关闭频道快捷管理弹窗">✕</button>
+                </div>
+                <div class="space-y-4 mt-5">
+                    <label class="block">
+                        <span class="text-xs text-slate-500">频道名称</span>
+                        <input id="resource-channel-manage-name" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="请输入频道名称">
+                    </label>
+                    <label class="ui-switch-field">
+                        <span class="text-sm text-slate-200">启用频道</span>
+                        <span class="ui-switch">
+                            <input type="checkbox" id="resource-channel-manage-enabled" checked>
+                            <span class="ui-switch-slider"></span>
+                        </span>
+                    </label>
+                    <div class="resource-channel-manage-meta">当前排序：<span id="resource-channel-manage-order">--</span></div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                        <button id="resource-channel-manage-pin-btn" type="button" onclick="pinResourceChannelToTop()" class="resource-source-modal-action-btn resource-source-modal-action-btn-secondary">置顶（排序挪到1号）</button>
+                        <button type="button" onclick="saveResourceChannelManage()" class="resource-source-modal-action-btn resource-source-modal-action-btn-primary">保存</button>
+                        <button type="button" onclick="closeResourceChannelManageModal()" class="resource-source-modal-action-btn resource-source-modal-action-btn-secondary md:col-span-2">关闭</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div id="resource-source-import-modal" class="hidden fixed inset-0 bg-black/65 backdrop-blur-sm z-[58] p-4">
             <div class="w-full max-w-2xl mx-auto mt-[8vh] group-card modal-card resource-source-modal-shell">
                 <div class="resource-source-modal-header">
