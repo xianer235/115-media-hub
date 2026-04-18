@@ -325,6 +325,11 @@ TMDB 相关：
 
 - `NOTIFY_DEDUPE_TTL_DAYS`：通知去重记录保留天数，默认 `180`，最小 `7`
 
+日志与可观测性：
+
+- `LOG_BRIEF_MODE`：是否启用“简要日志模式”，默认 `1`（开启，仅保留开始/结束、失败、汇总；设为 `0` 可恢复详细日志）
+- `UVICORN_ACCESS_LOG`：是否启用 HTTP 访问日志，默认 `0`（关闭，减少轮询刷屏；设为 `1` 可开启）
+
 频道缓存治理：
 
 - `RESOURCE_CHANNEL_TYPE_SAMPLE_SIZE`：频道类型识别采样条数

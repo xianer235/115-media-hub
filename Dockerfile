@@ -5,7 +5,9 @@ LABEL org.opencontainers.image.title="115-media-hub" \
       org.opencontainers.image.version="${APP_VERSION}" \
       org.opencontainers.image.description="FastAPI media automation hub for 115 and AList/OpenList" \
       org.opencontainers.image.source="https://github.com/xianer235/115-media-hub"
-ENV APP_VERSION=${APP_VERSION}
+ENV APP_VERSION=${APP_VERSION} \
+    UVICORN_ACCESS_LOG=0 \
+    LOG_BRIEF_MODE=1
 
 WORKDIR /app
 
@@ -28,5 +30,5 @@ RUN pip install --no-cache-dir \
 COPY . .
 EXPOSE 18080
 
-# 启动（确保文件名是 main.py，app 对象名是 app）
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "18080"]
+# 启动（默认关闭 access log，避免轮询接口刷屏；可通过 UVICORN_ACCESS_LOG=1 开启）
+CMD ["sh", "-c", "if [ \"${UVICORN_ACCESS_LOG:-0}\" = \"1\" ]; then exec uvicorn main:app --host 0.0.0.0 --port 18080; else exec uvicorn main:app --host 0.0.0.0 --port 18080 --no-access-log; fi"]
