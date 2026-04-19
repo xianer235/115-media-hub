@@ -818,6 +818,133 @@ class ResourceCardCssBreakpointTests(unittest.TestCase):
             ),
         )
 
+    def test_switch_tab_tracks_scroll_position_per_module(self) -> None:
+        self.assertRegex(
+            self.js,
+            re.compile(
+                r"const\s+moduleScrollTopState\s*=\s*\{"
+                r"[^}]*resource:\s*0,"
+                r"[^}]*subscription:\s*0,"
+                r"[^}]*monitor:\s*0,"
+                r"[^}]*task:\s*0,"
+                r"[^}]*settings:\s*0,"
+                r"[^}]*about:\s*0",
+                re.DOTALL,
+            ),
+        )
+
+    def test_switch_tab_restores_scroll_position_when_switching_modules(self) -> None:
+        self.assertRegex(
+            self.js,
+            re.compile(
+                r"async function switchTab\(tab\)\s*\{"
+                r"[\s\S]*?const prevTab = currentTab;"
+                r"[\s\S]*?moduleScrollTopState\[prevTab\]\s*=\s*Math\.max\(0,\s*window\.scrollY\s*\|\|\s*window\.pageYOffset\s*\|\|\s*0\);"
+                r"[\s\S]*?const targetScrollTop = Math\.max\(0,\s*Number\(moduleScrollTopState\[nextTab\]\s*\|\|\s*0\)\);"
+                r"[\s\S]*?window\.scrollTo\(\s*0,\s*targetScrollTop\s*\);",
+                re.DOTALL,
+            ),
+        )
+
+    def test_resource_share_browser_uses_paged_requests(self) -> None:
+        self.assertRegex(
+            self.js,
+            re.compile(
+                r"params\.set\('paged',\s*'1'\);"
+                r"[\s\S]*?params\.set\('limit',\s*String\(normalizedLimit\)\);",
+                re.DOTALL,
+            ),
+        )
+        self.assertNotRegex(
+            self.js,
+            re.compile(r"params\.set\('folders_only',\s*'1'\);", re.DOTALL),
+        )
+        self.assertRegex(
+            self.js,
+            re.compile(
+                r"body:\s*JSON\.stringify\(\{"
+                r"[\s\S]*?paged:\s*(?:true|\!\!paged),"
+                r"[\s\S]*?offset:\s*normalizedOffset,"
+                r"[\s\S]*?limit:\s*normalizedLimit",
+                re.DOTALL,
+            ),
+        )
+
+    def test_resource_share_browser_exposes_load_more_folder_action(self) -> None:
+        self.assertRegex(
+            self.js,
+            re.compile(r"data-resource-share-action=\"load-more\"", re.DOTALL),
+        )
+        self.assertRegex(
+            self.js,
+            re.compile(
+                r"if \(action === 'load-more'\)\s*\{\s*await loadMoreResourceShareCurrentFolder\(\);\s*\}",
+                re.DOTALL,
+            ),
+        )
+
+    def test_resource_share_submit_requires_selection_when_any_options_exist(self) -> None:
+        self.assertRegex(
+            self.js,
+            re.compile(
+                r"const hasLoadedShareSelectableOption = Object\.keys\(resourceShareEntryIndex \|\| \{\}\)\.length > 0;"
+                r"[\s\S]*?!selectionState\.selected_ids\.length && hasLoadedShareSelectableOption\)",
+                re.DOTALL,
+            ),
+        )
+
+    def test_subscription_share_folder_browser_uses_paged_requests(self) -> None:
+        self.assertRegex(
+            self.js,
+            re.compile(
+                r"async function fetchSubscriptionShareFolderData\("
+                r"[\s\S]*?body:\s*JSON\.stringify\(\{"
+                r"[\s\S]*?paged:\s*(?:true|\!\!paged),"
+                r"[\s\S]*?offset:\s*normalizedOffset,"
+                r"[\s\S]*?limit:\s*normalizedLimit,",
+                re.DOTALL,
+            ),
+        )
+
+    def test_subscription_share_folder_browser_lists_current_level_entries(self) -> None:
+        self.assertNotRegex(
+            self.js,
+            re.compile(
+                r"const folders = getCurrentSubscriptionShareFolderEntries\(\)\.filter\(entry => !!entry\?\.is_dir\);",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.js,
+            re.compile(
+                r"const currentEntries = getCurrentSubscriptionShareFolderEntries\(\);"
+                r"[\s\S]*?currentEntries\.map\(entry => buildResourceEntryRow\(entry,\s*\{"
+                r"[\s\S]*?showOpenButton:\s*true,"
+                r"[\s\S]*?openActionPrefix:\s*'subscription-share-folder',",
+                re.DOTALL,
+            ),
+        )
+
+    def test_subscription_share_folder_browser_exposes_load_more_action(self) -> None:
+        self.assertRegex(
+            self.js,
+            re.compile(r"data-subscription-share-folder-action=\"load-more\"", re.DOTALL),
+        )
+        self.assertRegex(
+            self.js,
+            re.compile(
+                r"if \(action === 'load-more'\)\s*\{\s*await loadMoreSubscriptionShareCurrentFolder\(\);\s*\}",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.js,
+            re.compile(
+                r"await loadSubscriptionShareFolderBranch\(branchId,\s*\{\s*append:\s*true\s*\}\);",
+                re.DOTALL,
+            ),
+        )
+
     def test_narrow_screen_monitor_footer_keeps_two_columns_without_sticky(self) -> None:
         block = extract_media_block_by_marker(
             self.css,
@@ -1069,6 +1196,20 @@ class ResourceCardCssBreakpointTests(unittest.TestCase):
                 r"\.monitor-modal-body\s*\{"
                 r"[^}]*overflow-y:\s*auto;"
                 r"[^}]*scrollbar-gutter:\s*stable;",
+                re.DOTALL,
+            ),
+        )
+
+    def test_task_modals_use_viewport_height_budget_outside_mobile_fullscreen(self) -> None:
+        self.assertRegex(
+            self.css,
+            re.compile(
+                r"#monitor-modal\s+\.monitor-modal-shell,\s*"
+                r"#subscription-modal\s+\.subscription-modal-shell\s*\{"
+                r"[^}]*--task-modal-overlay-pad:\s*1rem;"
+                r"[^}]*--task-modal-top-gap:\s*clamp\(0\.35rem,\s*4vh,\s*2\.25rem\);"
+                r"[^}]*max-height:\s*calc\(100vh\s*-\s*\(var\(--task-modal-overlay-pad,\s*1rem\)\s*\*\s*2\)\s*-\s*var\(--task-modal-top-gap,\s*1rem\)\);"
+                r"[^}]*max-height:\s*calc\(100dvh\s*-\s*\(var\(--task-modal-overlay-pad,\s*1rem\)\s*\*\s*2\)\s*-\s*var\(--task-modal-top-gap,\s*1rem\)\);",
                 re.DOTALL,
             ),
         )

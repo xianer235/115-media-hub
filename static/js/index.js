@@ -36,6 +36,10 @@
         let subscriptionShareFolderEntriesByParent = { '0': [] };
         let subscriptionShareFolderCurrentCid = '0';
         let subscriptionShareFolderLoading = false;
+        let subscriptionShareFolderLoadingParents = {};
+        let subscriptionShareFolderLoadingMoreParents = {};
+        let subscriptionShareFolderNextOffsetByParent = { '0': 0 };
+        let subscriptionShareFolderHasMoreByParent = {};
         let subscriptionShareFolderError = '';
         let subscriptionShareFolderInfo = { title: '', count: 0, share_code: '', receive_code: '' };
         let subscriptionShareFolderRootLoaded = false;
@@ -62,6 +66,9 @@
         let resourceShareEntryIndex = {};
         let resourceShareExpanded = {};
         let resourceShareLoadingParents = {};
+        let resourceShareLoadingMoreParents = {};
+        let resourceShareNextOffsetByParent = { '0': 0 };
+        let resourceShareHasMoreByParent = {};
         let resourceShareSelected = {};
         let resourceShareLoading = false;
         let resourceShareError = '';
@@ -124,6 +131,14 @@
         let versionInfo = { local: null, latest: null, has_update: false, checked_at: 0, error: '', source: '' };
         let versionBannerDismissed = false;
         let currentTab = 'resource';
+        const moduleScrollTopState = {
+            resource: 0,
+            subscription: 0,
+            monitor: 0,
+            task: 0,
+            settings: 0,
+            about: 0
+        };
         let shellMoreMenuOpen = false;
         let shellRailExpanded = false;
         let aboutWorkflowImageLoaded = false;
@@ -164,6 +179,7 @@
         const TOAST_DEFAULT_DURATION_MS = 3000;
         const SUBSCRIPTION_EPISODE_CACHE_TTL_MS = 1000 * 60 * 3;
         const SUBSCRIPTION_INTRO_EPISODE_RETRY_MS = 1000 * 60;
+        const RESOURCE_SHARE_BROWSE_PAGE_LIMIT = 200;
         const SUBSCRIPTION_WEEKDAY_LABELS = {
             1: '周一',
             2: '周二',
@@ -375,6 +391,8 @@
 
         async function switchTab(tab) {
             const nextTab = SHELL_TAB_META[tab] ? tab : 'resource';
+            const prevTab = currentTab;
+            moduleScrollTopState[prevTab] = Math.max(0, window.scrollY || window.pageYOffset || 0);
             currentTab = nextTab;
             ['task', 'resource', 'subscription', 'settings', 'monitor', 'about'].forEach(name => {
                 const page = document.getElementById(`page-${name}`);
@@ -384,6 +402,8 @@
             closeShellMoreMenu();
             syncMainTabRowState();
             await ensureTabData(nextTab);
+            const targetScrollTop = Math.max(0, Number(moduleScrollTopState[nextTab] || 0));
+            window.scrollTo(0, targetScrollTop);
             syncResourceBackTopButton();
             syncSettingsSaveDock();
             focusMainTab(nextTab);
@@ -6975,6 +6995,9 @@
             resourceShareEntryIndex = {};
             resourceShareExpanded = {};
             resourceShareLoadingParents = {};
+            resourceShareLoadingMoreParents = {};
+            resourceShareNextOffsetByParent = { '0': 0 };
+            resourceShareHasMoreByParent = {};
             resourceShareSelected = {};
             resourceShareLoading = false;
             resourceShareError = '';
@@ -7035,8 +7058,18 @@
             await loadResourceShareBranch(selectedResourceId, '0', { resetSelection: true });
         }
 
-        async function fetchResourceShareData(resourceId, cid = '0') {
+        async function fetchResourceShareData(
+            resourceId,
+            cid = '0',
+            {
+                offset = 0,
+                limit = RESOURCE_SHARE_BROWSE_PAGE_LIMIT,
+                paged = true
+            } = {}
+        ) {
             const receiveCode = normalizeReceiveCodeInput(resourceShareReceiveCode);
+            const normalizedOffset = Math.max(0, Number(offset || 0));
+            const normalizedLimit = Math.max(20, Math.min(Number(limit || RESOURCE_SHARE_BROWSE_PAGE_LIMIT), 400));
             let res;
             if (Number(resourceId || 0) > 0) {
                 const params = new URLSearchParams({
@@ -7044,6 +7077,9 @@
                     cid: String(cid || '0')
                 });
                 if (receiveCode) params.set('receive_code', receiveCode);
+                if (paged) params.set('paged', '1');
+                params.set('offset', String(normalizedOffset));
+                params.set('limit', String(normalizedLimit));
                 res = await fetch(`/resource/115/share_entries?${params.toString()}`);
             } else {
                 res = await fetch('/resource/115/share_entries_preview', {
@@ -7053,16 +7089,30 @@
                         cid,
                         link_url: String(selectedResourceItem?.link_url || '').trim(),
                         raw_text: String(selectedResourceItem?.raw_text || '').trim(),
-                        receive_code: receiveCode
+                        receive_code: receiveCode,
+                        paged: !!paged,
+                        offset: normalizedOffset,
+                        limit: normalizedLimit
                     })
                 });
             }
             const data = await res.json();
             if (!res.ok || !data.ok) throw new Error(data.msg || '读取分享内容失败');
+            const entries = Array.isArray(data.entries) ? data.entries : [];
+            const paging = data.paging && typeof data.paging === 'object' ? data.paging : {};
+            const nextOffset = Math.max(
+                normalizedOffset + entries.length,
+                Number(paging.next_offset ?? (normalizedOffset + entries.length)) || (normalizedOffset + entries.length)
+            );
             return {
-                entries: Array.isArray(data.entries) ? data.entries : [],
+                entries,
                 summary: data.summary || { folder_count: 0, file_count: 0 },
-                share: data.share || { title: '', share_code: '', receive_code: '', count: 0 }
+                share: data.share || { title: '', share_code: '', receive_code: '', count: 0 },
+                paging: {
+                    offset: Math.max(0, Number(paging.offset ?? normalizedOffset) || normalizedOffset),
+                    next_offset: nextOffset,
+                    has_more: !!paging.has_more
+                }
             };
         }
 
@@ -7228,60 +7278,99 @@
             }
         }
 
-        async function loadResourceShareBranch(resourceId, cid = '0', { resetSelection = false } = {}) {
+        async function loadResourceShareBranch(resourceId, cid = '0', { resetSelection = false, append = false } = {}) {
             if (!resourceState.cookie_configured || !isCurrentResource115Share()) {
                 renderResourceShareBrowser();
                 return;
             }
             const branchId = String(cid || '0');
             const isRoot = branchId === '0';
+            const appendMode = !!append;
             let currentToken = resourceShareRequestToken;
             if (isRoot) {
-                if (resetSelection) {
+                if (resetSelection && !appendMode) {
                     resourceShareEntriesByParent = { '0': [] };
                     resourceShareEntryIndex = {};
                     resourceShareExpanded = {};
                     resourceShareLoadingParents = {};
+                    resourceShareLoadingMoreParents = {};
+                    resourceShareNextOffsetByParent = { '0': 0 };
+                    resourceShareHasMoreByParent = {};
                     resourceShareSelected = {};
                 }
-                resourceShareLoading = true;
-                resourceShareError = '';
-                resourceShareRequestToken += 1;
-                currentToken = resourceShareRequestToken;
-                resourceShareCurrentCid = '0';
-                resourceShareTrail = [{ cid: '0', name: resourceShareInfo?.title || '分享根目录' }];
+                if (!appendMode) {
+                    resourceShareLoading = true;
+                    resourceShareError = '';
+                    resourceShareRequestToken += 1;
+                    currentToken = resourceShareRequestToken;
+                    resourceShareCurrentCid = '0';
+                    resourceShareTrail = [{ cid: '0', name: resourceShareInfo?.title || '分享根目录' }];
+                }
             }
-            resourceShareLoadingParents[branchId] = true;
+            if (appendMode) resourceShareLoadingMoreParents[branchId] = true;
+            else resourceShareLoadingParents[branchId] = true;
             renderResourceShareBrowser();
             try {
-                const result = await fetchResourceShareData(resourceId, branchId);
+                const requestOffset = appendMode
+                    ? Math.max(0, Number(resourceShareNextOffsetByParent[branchId] || 0))
+                    : 0;
+                const result = await fetchResourceShareData(resourceId, branchId, {
+                    offset: requestOffset,
+                    limit: RESOURCE_SHARE_BROWSE_PAGE_LIMIT,
+                    paged: true
+                });
                 if (selectedResourceId !== Number(resourceId)) return;
-                if (isRoot && currentToken !== resourceShareRequestToken) return;
-                const entries = Array.isArray(result.entries) ? result.entries : [];
-                resourceShareEntriesByParent[branchId] = entries;
-                entries.forEach(entry => {
+                if (isRoot && !appendMode && currentToken !== resourceShareRequestToken) return;
+                const incomingEntries = Array.isArray(result.entries) ? result.entries : [];
+                const existingEntries = Array.isArray(resourceShareEntriesByParent?.[branchId]) ? resourceShareEntriesByParent[branchId] : [];
+                let mergedEntries = incomingEntries;
+                if (appendMode) {
+                    const seen = new Set(existingEntries.map(item => String(item?.id || '').trim()).filter(Boolean));
+                    const appended = incomingEntries.filter(item => {
+                        const id = String(item?.id || '').trim();
+                        if (!id || seen.has(id)) return false;
+                        seen.add(id);
+                        return true;
+                    });
+                    mergedEntries = existingEntries.concat(appended);
+                }
+                resourceShareEntriesByParent[branchId] = mergedEntries;
+                mergedEntries.forEach(entry => {
                     const normalized = buildResourceShareSelectableEntry(entry);
                     if (normalized.id) resourceShareEntryIndex[normalized.id] = { ...entry, ...normalized };
                 });
+                const nextOffset = Math.max(
+                    requestOffset + incomingEntries.length,
+                    Number(result?.paging?.next_offset ?? (requestOffset + incomingEntries.length)) || (requestOffset + incomingEntries.length)
+                );
+                resourceShareNextOffsetByParent[branchId] = nextOffset;
+                resourceShareHasMoreByParent[branchId] = !!result?.paging?.has_more;
                 if (isRoot) {
-                    resourceShareRootLoaded = true;
-                    resourceShareInfo = result.share || { title: '', share_code: '', receive_code: '', count: 0 };
-                    const serverReceiveCode = normalizeReceiveCodeInput(resourceShareInfo?.receive_code || '');
-                    if (serverReceiveCode && !resourceShareReceiveCode) {
-                        resourceShareReceiveCode = serverReceiveCode;
-                    }
-                    resourceShareTrail = [{ cid: '0', name: resourceShareInfo?.title || '分享根目录' }];
-                    if (resetSelection || !getResourceShareSelectedEntries().length) {
-                        selectAllResourceShareRoot({ renderAfter: false });
+                    if (!appendMode) {
+                        resourceShareRootLoaded = true;
+                        resourceShareInfo = result.share || { title: '', share_code: '', receive_code: '', count: 0 };
+                        const serverReceiveCode = normalizeReceiveCodeInput(resourceShareInfo?.receive_code || '');
+                        if (serverReceiveCode && !resourceShareReceiveCode) {
+                            resourceShareReceiveCode = serverReceiveCode;
+                        }
+                        resourceShareTrail = [{ cid: '0', name: resourceShareInfo?.title || '分享根目录' }];
+                        if (resetSelection || !getResourceShareSelectedEntries().length) {
+                            selectAllResourceShareRoot({ renderAfter: false });
+                        } else {
+                            syncResourceSharetitleFromSelection();
+                        }
                     } else {
                         syncResourceSharetitleFromSelection();
                     }
                 }
             } catch (e) {
                 if (selectedResourceId !== Number(resourceId)) return;
-                if (isRoot) {
+                if (isRoot && !appendMode) {
                     resourceShareEntriesByParent = { '0': [] };
                     resourceShareEntryIndex = {};
+                    resourceShareLoadingMoreParents = {};
+                    resourceShareNextOffsetByParent = { '0': 0 };
+                    resourceShareHasMoreByParent = {};
                     resourceShareSelected = {};
                     resourceShareRootLoaded = false;
                     resourceShareInfo = { title: '', count: 0, share_code: '', receive_code: '' };
@@ -7293,11 +7382,20 @@
                     alert(`❌ ${e.message || '读取子目录失败'}`);
                 }
             } finally {
-                delete resourceShareLoadingParents[branchId];
-                if (isRoot) resourceShareLoading = false;
-                if (isRoot) syncResourceShareReceiveCodeSection();
+                if (appendMode) delete resourceShareLoadingMoreParents[branchId];
+                else delete resourceShareLoadingParents[branchId];
+                if (isRoot && !appendMode) resourceShareLoading = false;
+                if (isRoot && !appendMode) syncResourceShareReceiveCodeSection();
                 renderResourceShareBrowser();
             }
+        }
+
+        async function loadMoreResourceShareCurrentFolder() {
+            if (!selectedResourceItem || !isCurrentResource115Share()) return;
+            const branchId = String(resourceShareCurrentCid || '0').trim() || '0';
+            if (!resourceShareHasMoreByParent[branchId]) return;
+            if (resourceShareLoadingMoreParents[branchId]) return;
+            await loadResourceShareBranch(selectedResourceId, branchId, { append: true });
         }
 
         async function goResourceShareRoot() {
@@ -7430,6 +7528,8 @@
 
             const currentEntries = getCurrentResourceShareEntries();
             const currentFolderLoading = !!resourceShareLoadingParents[resourceShareCurrentCid];
+            const currentFolderLoadingMore = !!resourceShareLoadingMoreParents[resourceShareCurrentCid];
+            const currentFolderHasMore = !!resourceShareHasMoreByParent[resourceShareCurrentCid];
             const breadcrumbHtml = [
                 '<span class="text-slate-400">当前路径</span>',
                 '<span class="resource-browser-sep">/</span>',
@@ -7454,16 +7554,28 @@
             } else if (resourceShareError) {
                 treeEl.innerHTML = `<div class="resource-browser-empty text-red-300">${escapeHtml(resourceShareError)}</div>`;
             } else if (!resourceShareRootLoaded) {
-                treeEl.innerHTML = '<div class="resource-browser-empty">这里会显示分享里的目录列表，你可以进入文件夹后再勾选具体内容。</div>';
+                treeEl.innerHTML = '<div class="resource-browser-empty">这里会显示分享里的目录和文件列表，你可以进入文件夹后再勾选具体内容。</div>';
             } else if (!currentEntries.length) {
                 treeEl.innerHTML = '<div class="resource-browser-empty">这个目录下暂时没有可转存的内容。</div>';
             } else {
-                treeEl.innerHTML = buildResourceShareRows(currentEntries);
+                const loadMoreHtml = currentFolderHasMore
+                    ? `
+                        <div class="resource-browser-load-more-row">
+                            <button
+                                type="button"
+                                data-resource-share-action="load-more"
+                                class="resource-browser-load-more-btn ${currentFolderLoadingMore ? 'btn-disabled' : ''}"
+                                ${currentFolderLoadingMore ? 'disabled' : ''}
+                            >${currentFolderLoadingMore ? '加载中...' : '加载更多条目'}</button>
+                        </div>
+                    `
+                    : '';
+                treeEl.innerHTML = `${buildResourceShareRows(currentEntries)}${loadMoreHtml}`;
             }
 
             const selectedInCurrentCount = currentEntries.filter(entry => isResourceShareEntryEffectivelySelected(entry)).length;
             if (currentCheckAllEl) {
-                currentCheckAllEl.disabled = !currentEntries.length || !resourceState.cookie_configured || !!resourceShareError || resourceShareLoading || currentFolderLoading;
+                currentCheckAllEl.disabled = !currentEntries.length || !resourceState.cookie_configured || !!resourceShareError || resourceShareLoading || currentFolderLoading || currentFolderLoadingMore;
                 currentCheckAllEl.checked = !!currentEntries.length && selectedInCurrentCount === currentEntries.length;
                 currentCheckAllEl.indeterminate = selectedInCurrentCount > 0 && selectedInCurrentCount < currentEntries.length;
             }
@@ -7946,8 +8058,9 @@
                 const batchMode = isResourceBatchImportMode();
                 const batchItems = batchMode ? getResourceBatchMagnetItems() : [];
                 const selectionState = getResourceShareSelectionState();
-                if (!batchMode && isCurrentResource115Share() && resourceShareRootLoaded && !selectionState.selected_ids.length) {
-                    return alert('请先至少勾选一个要转存的目录或文件');
+                const hasLoadedShareSelectableOption = Object.keys(resourceShareEntryIndex || {}).length > 0;
+                if (!batchMode && isCurrentResource115Share() && resourceShareRootLoaded && !selectionState.selected_ids.length && hasLoadedShareSelectableOption) {
+                    return alert('请先至少勾选一个要转存的条目');
                 }
                 let receiveCode = '';
                 if (!batchMode && isCurrentResource115Share()) {
@@ -8456,6 +8569,10 @@
             subscriptionShareFolderEntriesByParent = { '0': [] };
             subscriptionShareFolderCurrentCid = '0';
             subscriptionShareFolderLoading = false;
+            subscriptionShareFolderLoadingParents = {};
+            subscriptionShareFolderLoadingMoreParents = {};
+            subscriptionShareFolderNextOffsetByParent = { '0': 0 };
+            subscriptionShareFolderHasMoreByParent = {};
             subscriptionShareFolderError = '';
             subscriptionShareFolderInfo = { title: '', count: 0, share_code: '', receive_code: '' };
             subscriptionShareFolderRootLoaded = false;
@@ -8483,8 +8600,17 @@
             };
         }
 
-        async function fetchSubscriptionShareFolderData(cid = '0') {
+        async function fetchSubscriptionShareFolderData(
+            cid = '0',
+            {
+                offset = 0,
+                limit = RESOURCE_SHARE_BROWSE_PAGE_LIMIT,
+                paged = true
+            } = {}
+        ) {
             const payload = getSubscriptionShareLinkPayload();
+            const normalizedOffset = Math.max(0, Number(offset || 0));
+            const normalizedLimit = Math.max(20, Math.min(Number(limit || RESOURCE_SHARE_BROWSE_PAGE_LIMIT), 400));
             const res = await fetch('/resource/115/share_entries_preview', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -8493,14 +8619,28 @@
                     link_url: payload.link_url,
                     raw_text: payload.raw_text,
                     receive_code: payload.receive_code,
+                    paged: !!paged,
+                    offset: normalizedOffset,
+                    limit: normalizedLimit,
                 }),
             });
             const data = await res.json();
             if (!res.ok || !data.ok) throw new Error(data.msg || '读取分享目录失败');
+            const entries = Array.isArray(data.entries) ? data.entries : [];
+            const paging = data.paging && typeof data.paging === 'object' ? data.paging : {};
+            const nextOffset = Math.max(
+                normalizedOffset + entries.length,
+                Number(paging.next_offset ?? (normalizedOffset + entries.length)) || (normalizedOffset + entries.length)
+            );
             return {
-                entries: Array.isArray(data.entries) ? data.entries : [],
+                entries,
                 summary: data.summary || { folder_count: 0, file_count: 0 },
                 share: data.share || { title: '', share_code: '', receive_code: '', count: 0 },
+                paging: {
+                    offset: Math.max(0, Number(paging.offset ?? normalizedOffset) || normalizedOffset),
+                    next_offset: nextOffset,
+                    has_more: !!paging.has_more
+                }
             };
         }
 
@@ -8532,16 +8672,22 @@
             const container = document.getElementById('subscription-share-folder-list');
             const summary = document.getElementById('subscription-share-folder-summary');
             if (!container) return;
+            const currentEntries = getCurrentSubscriptionShareFolderEntries();
+            const currentFolderLoading = !!subscriptionShareFolderLoadingParents[subscriptionShareFolderCurrentCid];
+            const currentFolderLoadingMore = !!subscriptionShareFolderLoadingMoreParents[subscriptionShareFolderCurrentCid];
+            const currentFolderHasMore = !!subscriptionShareFolderHasMoreByParent[subscriptionShareFolderCurrentCid];
             if (summary) {
                 const rootTitle = String(subscriptionShareFolderInfo?.title || '').trim();
+                const folderCount = Number(currentEntries.filter(entry => !!entry?.is_dir).length);
+                const fileCount = Math.max(0, Number(currentEntries.length) - folderCount);
                 const counts = subscriptionShareFolderRootLoaded
-                    ? `当前目录下共有 ${Number(getCurrentSubscriptionShareFolderEntries().filter(entry => !!entry?.is_dir).length)} 个子文件夹。`
+                    ? `当前目录已加载 ${folderCount} 个子文件夹 / ${fileCount} 个文件。`
                     : '先填写固定分享链接，再浏览并选择链接中的目标子目录。';
                 summary.innerText = rootTitle
                     ? `分享标题：${rootTitle}。${counts}`
                     : counts;
             }
-            if (subscriptionShareFolderLoading) {
+            if (subscriptionShareFolderLoading || currentFolderLoading) {
                 container.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">正在读取分享目录...</div>';
                 return;
             }
@@ -8550,44 +8696,115 @@
                 return;
             }
             if (!subscriptionShareFolderRootLoaded) {
-                container.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">点击“浏览链接目录”后，这里会显示分享内的子文件夹。</div>';
+                container.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">点击“浏览链接目录”后，这里会显示分享内当前层级的目录和文件。</div>';
                 return;
             }
-            const folders = getCurrentSubscriptionShareFolderEntries().filter(entry => !!entry?.is_dir);
-            if (!folders.length) {
-                container.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">当前目录没有子文件夹，可以直接选择这里。</div>';
+            if (!currentEntries.length) {
+                container.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">当前目录没有可用条目，可以直接选择这里。</div>';
                 return;
             }
-            container.innerHTML = folders.map(entry => buildResourceEntryRow(entry, {
+            const loadMoreHtml = currentFolderHasMore
+                ? `
+                    <div class="resource-browser-load-more-row">
+                        <button
+                            type="button"
+                            data-subscription-share-folder-action="load-more"
+                            class="resource-browser-load-more-btn ${currentFolderLoadingMore ? 'btn-disabled' : ''}"
+                            ${currentFolderLoadingMore ? 'disabled' : ''}
+                        >${currentFolderLoadingMore ? '加载中...' : '加载更多条目'}</button>
+                    </div>
+                `
+                : '';
+            container.innerHTML = `${currentEntries.map(entry => buildResourceEntryRow(entry, {
                 showOpenButton: true,
                 openActionPrefix: 'subscription-share-folder',
-            })).join('');
+            })).join('')}${loadMoreHtml}`;
         }
 
-        async function loadSubscriptionShareFolderBranch(cid = '0') {
-            subscriptionShareFolderLoading = true;
-            subscriptionShareFolderError = '';
+        async function loadSubscriptionShareFolderBranch(
+            cid = '0',
+            {
+                append = false,
+                forceRefresh = false
+            } = {}
+        ) {
+            const normalizedCid = String(cid || '0').trim() || '0';
+            const appendMode = !!append;
+            const forceMode = !!forceRefresh;
+            const hasCachedBranch = Object.prototype.hasOwnProperty.call(subscriptionShareFolderEntriesByParent, normalizedCid);
+            if (!appendMode && hasCachedBranch && !forceMode) {
+                subscriptionShareFolderError = '';
+                renderSubscriptionShareFolderBreadcrumbs();
+                renderSubscriptionShareFolderList();
+                return;
+            }
+            if (!appendMode) {
+                subscriptionShareFolderError = '';
+                if (normalizedCid === '0') subscriptionShareFolderLoading = true;
+            }
+            if (appendMode) subscriptionShareFolderLoadingMoreParents[normalizedCid] = true;
+            else subscriptionShareFolderLoadingParents[normalizedCid] = true;
             renderSubscriptionShareFolderBreadcrumbs();
             renderSubscriptionShareFolderList();
             const requestToken = ++subscriptionShareFolderRequestToken;
             try {
-                const result = await fetchSubscriptionShareFolderData(cid);
+                const requestOffset = appendMode
+                    ? Math.max(0, Number(subscriptionShareFolderNextOffsetByParent[normalizedCid] || 0))
+                    : 0;
+                if (!appendMode && forceMode) {
+                    subscriptionShareFolderEntriesByParent[normalizedCid] = [];
+                    subscriptionShareFolderNextOffsetByParent[normalizedCid] = 0;
+                    subscriptionShareFolderHasMoreByParent[normalizedCid] = false;
+                }
+                const result = await fetchSubscriptionShareFolderData(normalizedCid, {
+                    offset: requestOffset,
+                    limit: RESOURCE_SHARE_BROWSE_PAGE_LIMIT,
+                    paged: true,
+                });
                 if (requestToken !== subscriptionShareFolderRequestToken) return;
-                const normalizedCid = String(cid || '0');
-                subscriptionShareFolderEntriesByParent[normalizedCid] = result.entries;
+                const incomingEntries = Array.isArray(result.entries) ? result.entries : [];
+                const existingEntries = Array.isArray(subscriptionShareFolderEntriesByParent?.[normalizedCid]) ? subscriptionShareFolderEntriesByParent[normalizedCid] : [];
+                let mergedEntries = incomingEntries;
+                if (appendMode) {
+                    const seen = new Set(existingEntries.map(item => String(item?.id || '').trim()).filter(Boolean));
+                    const appended = incomingEntries.filter(item => {
+                        const id = String(item?.id || '').trim();
+                        if (!id || seen.has(id)) return false;
+                        seen.add(id);
+                        return true;
+                    });
+                    mergedEntries = existingEntries.concat(appended);
+                }
+                subscriptionShareFolderEntriesByParent[normalizedCid] = mergedEntries;
+                const nextOffset = Math.max(
+                    requestOffset + incomingEntries.length,
+                    Number(result?.paging?.next_offset ?? (requestOffset + incomingEntries.length)) || (requestOffset + incomingEntries.length)
+                );
+                subscriptionShareFolderNextOffsetByParent[normalizedCid] = nextOffset;
+                subscriptionShareFolderHasMoreByParent[normalizedCid] = !!result?.paging?.has_more;
                 subscriptionShareFolderInfo = result.share;
                 subscriptionShareFolderRootLoaded = true;
+                subscriptionShareFolderError = '';
             } catch (e) {
                 if (requestToken !== subscriptionShareFolderRequestToken) return;
-                subscriptionShareFolderEntriesByParent[String(cid || '0')] = [];
+                if (!appendMode) subscriptionShareFolderEntriesByParent[normalizedCid] = [];
                 subscriptionShareFolderError = e?.message || '读取分享目录失败';
                 subscriptionShareFolderRootLoaded = false;
             } finally {
                 if (requestToken !== subscriptionShareFolderRequestToken) return;
-                subscriptionShareFolderLoading = false;
+                if (appendMode) delete subscriptionShareFolderLoadingMoreParents[normalizedCid];
+                else delete subscriptionShareFolderLoadingParents[normalizedCid];
+                if (!appendMode && normalizedCid === '0') subscriptionShareFolderLoading = false;
                 renderSubscriptionShareFolderBreadcrumbs();
                 renderSubscriptionShareFolderList();
             }
+        }
+
+        async function loadMoreSubscriptionShareCurrentFolder() {
+            const branchId = String(subscriptionShareFolderCurrentCid || '0').trim() || '0';
+            if (!subscriptionShareFolderHasMoreByParent[branchId]) return;
+            if (subscriptionShareFolderLoadingMoreParents[branchId]) return;
+            await loadSubscriptionShareFolderBranch(branchId, { append: true });
         }
 
         async function openSubscriptionShareFolderModal() {
@@ -8606,7 +8823,7 @@
             showLockedModal('subscription-share-folder-modal');
             renderSubscriptionShareFolderBreadcrumbs();
             renderSubscriptionShareFolderList();
-            await loadSubscriptionShareFolderBranch(subscriptionShareFolderCurrentCid || '0');
+            await loadSubscriptionShareFolderBranch(subscriptionShareFolderCurrentCid || '0', { forceRefresh: true });
         }
 
         function closeSubscriptionShareFolderModal() {
@@ -8617,27 +8834,53 @@
             if (subscriptionShareFolderTrail.length <= 1) return;
             subscriptionShareFolderTrail = subscriptionShareFolderTrail.slice(0, -1);
             subscriptionShareFolderCurrentCid = String(subscriptionShareFolderTrail[subscriptionShareFolderTrail.length - 1]?.cid || '0');
-            await loadSubscriptionShareFolderBranch(subscriptionShareFolderCurrentCid);
+            const branchId = String(subscriptionShareFolderCurrentCid || '0').trim() || '0';
+            if (!Object.prototype.hasOwnProperty.call(subscriptionShareFolderEntriesByParent, branchId)) {
+                await loadSubscriptionShareFolderBranch(branchId);
+                return;
+            }
+            subscriptionShareFolderError = '';
+            renderSubscriptionShareFolderBreadcrumbs();
+            renderSubscriptionShareFolderList();
         }
 
         async function goSubscriptionShareFolderRoot() {
             subscriptionShareFolderTrail = [{ cid: '0', name: '分享根目录' }];
             subscriptionShareFolderCurrentCid = '0';
-            await loadSubscriptionShareFolderBranch('0');
+            if (!Object.prototype.hasOwnProperty.call(subscriptionShareFolderEntriesByParent, '0') || !subscriptionShareFolderRootLoaded) {
+                await loadSubscriptionShareFolderBranch('0');
+                return;
+            }
+            subscriptionShareFolderError = '';
+            renderSubscriptionShareFolderBreadcrumbs();
+            renderSubscriptionShareFolderList();
         }
 
         async function openSubscriptionShareFolderTrail(index) {
             const targetIndex = Math.max(0, Math.min(Number(index || 0), subscriptionShareFolderTrail.length - 1));
             subscriptionShareFolderTrail = subscriptionShareFolderTrail.slice(0, targetIndex + 1);
             subscriptionShareFolderCurrentCid = String(subscriptionShareFolderTrail[targetIndex]?.cid || '0');
-            await loadSubscriptionShareFolderBranch(subscriptionShareFolderCurrentCid);
+            const branchId = String(subscriptionShareFolderCurrentCid || '0').trim() || '0';
+            if (!Object.prototype.hasOwnProperty.call(subscriptionShareFolderEntriesByParent, branchId)) {
+                await loadSubscriptionShareFolderBranch(branchId);
+                return;
+            }
+            subscriptionShareFolderError = '';
+            renderSubscriptionShareFolderBreadcrumbs();
+            renderSubscriptionShareFolderList();
         }
 
         async function openSubscriptionShareFolderChild(folderId, folderName) {
             const nextCid = String(folderId || '0').trim() || '0';
             subscriptionShareFolderCurrentCid = nextCid;
             subscriptionShareFolderTrail = subscriptionShareFolderTrail.concat([{ cid: nextCid, name: String(folderName || '--') }]);
-            await loadSubscriptionShareFolderBranch(nextCid);
+            if (!Object.prototype.hasOwnProperty.call(subscriptionShareFolderEntriesByParent, nextCid)) {
+                await loadSubscriptionShareFolderBranch(nextCid);
+                return;
+            }
+            subscriptionShareFolderError = '';
+            renderSubscriptionShareFolderBreadcrumbs();
+            renderSubscriptionShareFolderList();
         }
 
         function selectCurrentSubscriptionShareFolder() {
@@ -9200,6 +9443,10 @@
             const action = btn.dataset.subscriptionShareFolderAction || '';
             if (action === 'open') {
                 await openSubscriptionShareFolderChild(btn.dataset.subscriptionShareFolderId || '0', btn.dataset.subscriptionShareFolderName || '--');
+                return;
+            }
+            if (action === 'load-more') {
+                await loadMoreSubscriptionShareCurrentFolder();
             }
         });
         document.getElementById('subscription_tmdb_result_list').addEventListener('click', async (e) => {
@@ -9318,6 +9565,10 @@
             const action = btn.dataset.resourceShareAction || '';
             if (action === 'enter') {
                 await openResourceShareFolder(btn.dataset.resourceShareId || '');
+                return;
+            }
+            if (action === 'load-more') {
+                await loadMoreResourceShareCurrentFolder();
             }
         });
         document.getElementById('resource-share-root-title').addEventListener('click', async (e) => {

@@ -414,6 +414,10 @@ async def get_115_share_entries_endpoint(request: Request) -> Dict[str, Any]:
     receive_code = normalize_receive_code(receive_code_raw)
     if receive_code_raw and not receive_code:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "提取码格式不正确，请输入 1-16 位字母或数字"})
+    paged = request.query_params.get("paged") == "1"
+    folders_only = request.query_params.get("folders_only") == "1"
+    offset = max(0, parse_int(request.query_params.get("offset", 0), default=0))
+    limit = max(20, min(parse_int(request.query_params.get("limit", 200), default=200), 400))
     try:
         result = await asyncio.to_thread(
             list_115_share_entries,
@@ -422,6 +426,14 @@ async def get_115_share_entries_endpoint(request: Request) -> Dict[str, Any]:
             str(resource.get("raw_text", "") or ""),
             cid,
             receive_code,
+            False,
+            45,
+            0.0,
+            2,
+            offset,
+            limit,
+            1 if paged else 0,
+            folders_only,
         )
         return {
             "ok": True,
@@ -433,6 +445,13 @@ async def get_115_share_entries_endpoint(request: Request) -> Dict[str, Any]:
                 "share_code": result.get("share_code", ""),
                 "receive_code": result.get("receive_code", ""),
                 "count": result.get("count", 0),
+            },
+            "paging": {
+                "offset": result.get("offset", offset),
+                "next_offset": result.get("next_offset", offset + len(result.get("entries", []))),
+                "has_more": bool(result.get("has_more", False)),
+                "paged": paged,
+                "folders_only": folders_only,
             },
         }
     except Exception as exc:
@@ -455,6 +474,10 @@ async def preview_115_share_entries_endpoint(request: Request) -> Dict[str, Any]
     if not link_url:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "资源链接为空"})
     cid = str(data.get("cid", "0") or "0").strip() or "0"
+    paged = bool(data.get("paged", False))
+    folders_only = bool(data.get("folders_only", False))
+    offset = max(0, parse_int(data.get("offset", 0), default=0))
+    limit = max(20, min(parse_int(data.get("limit", 200), default=200), 400))
     try:
         result = await asyncio.to_thread(
             list_115_share_entries,
@@ -463,6 +486,14 @@ async def preview_115_share_entries_endpoint(request: Request) -> Dict[str, Any]
             raw_text,
             cid,
             receive_code,
+            False,
+            45,
+            0.0,
+            2,
+            offset,
+            limit,
+            1 if paged else 0,
+            folders_only,
         )
         return {
             "ok": True,
@@ -474,6 +505,13 @@ async def preview_115_share_entries_endpoint(request: Request) -> Dict[str, Any]
                 "share_code": result.get("share_code", ""),
                 "receive_code": result.get("receive_code", ""),
                 "count": result.get("count", 0),
+            },
+            "paging": {
+                "offset": result.get("offset", offset),
+                "next_offset": result.get("next_offset", offset + len(result.get("entries", []))),
+                "has_more": bool(result.get("has_more", False)),
+                "paged": paged,
+                "folders_only": folders_only,
             },
         }
     except Exception as exc:

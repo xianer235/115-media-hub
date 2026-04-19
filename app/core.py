@@ -6133,6 +6133,10 @@ def list_115_share_entries(
     request_timeout: int = 45,
     rate_limit_seconds: float = 0.0,
     max_request_retries: int = 2,
+    offset: int = 0,
+    limit: int = 200,
+    max_pages: int = 0,
+    folders_only: bool = False,
 ) -> Dict[str, Any]:
     cookie = str(cookie or "").strip()
     if not cookie:
@@ -6141,11 +6145,18 @@ def list_115_share_entries(
     share_code = str(parsed.get("share_code", "") or "").strip()
     receive_code = str(parsed.get("receive_code", "") or "").strip()
     current_cid = str(cid or "0").strip() or "0"
-    stale_cache = load_115_share_snap_cache(share_code, receive_code, current_cid, allow_expired=True)
-    if not force_refresh:
-        fresh_cache = load_115_share_snap_cache(share_code, receive_code, current_cid, allow_expired=False)
-        if fresh_cache:
-            return fresh_cache
+    start_offset = max(0, int(offset or 0))
+    page_limit = max(20, min(400, int(limit or 200)))
+    max_pages_limit = max(0, int(max_pages or 0))
+    folder_only_mode = bool(folders_only)
+    use_full_cache = start_offset == 0 and max_pages_limit <= 0 and not folder_only_mode
+    stale_cache: Dict[str, Any] = {}
+    if use_full_cache:
+        stale_cache = load_115_share_snap_cache(share_code, receive_code, current_cid, allow_expired=True)
+        if not force_refresh:
+            fresh_cache = load_115_share_snap_cache(share_code, receive_code, current_cid, allow_expired=False)
+            if fresh_cache:
+                return fresh_cache
 
     request_timeout_value = max(5, int(request_timeout or 45))
     retry_total = max(0, int(max_request_retries or 0))
@@ -6157,9 +6168,9 @@ def list_115_share_entries(
         "User-Agent": "Mozilla/5.0 115-media-hub",
     }
     entries: List[Dict[str, Any]] = []
-    offset = 0
-    limit = 200
+    offset_cursor = start_offset
     total_count = 0
+    pages_scanned = 0
 
     while True:
         query = urllib.parse.urlencode(
@@ -6167,8 +6178,8 @@ def list_115_share_entries(
                 "share_code": share_code,
                 "receive_code": receive_code,
                 "cid": current_cid,
-                "offset": offset,
-                "limit": limit,
+                "offset": offset_cursor,
+                "limit": page_limit,
                 "asc": 1,
                 "o": "file_name",
                 "format": "json",
@@ -6192,7 +6203,7 @@ def list_115_share_entries(
                     break
                 time.sleep(0.6 * (attempt + 1))
         if last_request_error is not None:
-            if stale_cache:
+            if use_full_cache and stale_cache:
                 stale_payload = dict(stale_cache)
                 stale_payload["cache_stale"] = True
                 stale_payload["cache_error"] = str(last_request_error or "").strip()[:180]
@@ -6210,7 +6221,7 @@ def list_115_share_entries(
                 or str(result.get("message", "")).strip()
                 or "读取 115 分享内容失败"
             )
-            if stale_cache:
+            if use_full_cache and stale_cache:
                 stale_payload = dict(stale_cache)
                 stale_payload["cache_stale"] = True
                 stale_payload["cache_error"] = detail[:180]
@@ -6226,6 +6237,8 @@ def list_115_share_entries(
             entry_id = dir_cid if is_dir else fid
             name = str(item.get("n") or item.get("name") or "").strip()
             if not entry_id or not name:
+                continue
+            if folder_only_mode and not is_dir:
                 continue
             entries.append(
                 {
@@ -6243,7 +6256,12 @@ def list_115_share_entries(
                 }
             )
 
-        if not batch or len(batch) < limit or (total_count and len(entries) >= total_count):
+        pages_scanned += 1
+        next_offset = offset_cursor + len(batch)
+        reached_end = not batch or len(batch) < page_limit or (total_count and next_offset >= total_count)
+        reached_page_cap = max_pages_limit > 0 and pages_scanned >= max_pages_limit
+
+        if reached_end or reached_page_cap:
             shareinfo = payload.get("shareinfo") or {}
             entries.sort(key=lambda item: (0 if item.get("is_dir") else 1, str(item.get("name", "")).lower()))
             result_payload = {
@@ -6257,16 +6275,21 @@ def list_115_share_entries(
                 "share_title": str(shareinfo.get("share_title") or "").strip(),
                 "current_cid": current_cid,
                 "count": total_count or len(entries),
+                "offset": start_offset,
+                "next_offset": next_offset,
+                "has_more": not reached_end,
+                "pages_scanned": pages_scanned,
             }
-            save_115_share_snap_cache(
-                share_code,
-                receive_code,
-                current_cid,
-                result_payload,
-                ttl_seconds=SHARE_SNAP_CACHE_TTL_SECONDS,
-            )
+            if use_full_cache:
+                save_115_share_snap_cache(
+                    share_code,
+                    receive_code,
+                    current_cid,
+                    result_payload,
+                    ttl_seconds=SHARE_SNAP_CACHE_TTL_SECONDS,
+                )
             return result_payload
-        offset += len(batch)
+        offset_cursor = next_offset
 
 
 def prepare_115_share_receive(

@@ -1059,6 +1059,14 @@
             flex-direction: column;
             overflow: hidden;
         }
+        #monitor-modal .monitor-modal-shell,
+        #subscription-modal .subscription-modal-shell {
+            --task-modal-overlay-pad: 1rem;
+            --task-modal-top-gap: clamp(0.35rem, 4vh, 2.25rem);
+            margin-top: var(--task-modal-top-gap);
+            max-height: calc(100vh - (var(--task-modal-overlay-pad, 1rem) * 2) - var(--task-modal-top-gap, 1rem));
+            max-height: calc(100dvh - (var(--task-modal-overlay-pad, 1rem) * 2) - var(--task-modal-top-gap, 1rem));
+        }
         .monitor-modal-body {
             margin-top: 1rem;
             flex: 1 1 auto;
@@ -3428,6 +3436,30 @@
             color: #94a3b8;
             font-size: 0.85rem;
         }
+        .resource-browser-load-more-row {
+            display: flex;
+            justify-content: center;
+            padding: 0.72rem 0.85rem 0.82rem;
+            border-top: 1px solid rgba(51, 65, 85, 0.68);
+            background: rgba(2, 6, 23, 0.3);
+        }
+        .resource-browser-load-more-btn {
+            border: 1px solid rgba(56, 189, 248, 0.35);
+            background: rgba(56, 189, 248, 0.14);
+            color: #e0f2fe;
+            border-radius: 9999px;
+            font-size: 0.74rem;
+            font-weight: 800;
+            letter-spacing: 0.01em;
+            padding: 0.38rem 0.92rem;
+            cursor: pointer;
+            transition: all 0.18s ease;
+        }
+        .resource-browser-load-more-btn:hover {
+            background: rgba(56, 189, 248, 0.2);
+            border-color: rgba(56, 189, 248, 0.5);
+            color: #f0f9ff;
+        }
         .resource-folder-pathbar {
             border-radius: 1rem;
             border: 1px solid rgba(51, 65, 85, 0.88);
@@ -5712,6 +5744,20 @@
         html.theme-day .resource-browser-col-size,
         html.theme-day .resource-browser-empty {
             color: #64748b;
+        }
+        html.theme-day .resource-browser-load-more-row {
+            border-top-color: rgba(203, 213, 225, 0.88);
+            background: rgba(248, 250, 252, 0.96);
+        }
+        html.theme-day .resource-browser-load-more-btn {
+            border-color: rgba(59, 130, 246, 0.28);
+            background: rgba(59, 130, 246, 0.12);
+            color: #1d4ed8;
+        }
+        html.theme-day .resource-browser-load-more-btn:hover {
+            border-color: rgba(59, 130, 246, 0.42);
+            background: rgba(59, 130, 246, 0.18);
+            color: #1e3a8a;
         }
         html.theme-day .resource-folder-pathbar {
             background: linear-gradient(180deg, rgba(248, 250, 252, 0.98), rgba(241, 245, 249, 0.98));
