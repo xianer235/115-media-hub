@@ -145,6 +145,7 @@
         let aboutWorkflowImageLoadingPromise = null;
         let modalScrollLockCount = 0;
         let modalScrollLockY = 0;
+        let viewportMetricsRafId = 0;
         const moduleVisitState = {
             resource: true,
             subscription: false,
@@ -258,6 +259,23 @@
 
             dock.classList.toggle('is-inline', shouldInline);
             settingsPage.classList.toggle('has-inline-save-dock', shouldInline);
+        }
+
+        function syncViewportMetrics() {
+            const viewportHeight = Math.max(
+                0,
+                window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0,
+            );
+            if (!viewportHeight) return;
+            document.documentElement.style.setProperty('--app-vh', `${viewportHeight}px`);
+        }
+
+        function requestViewportMetricsSync() {
+            if (viewportMetricsRafId) return;
+            viewportMetricsRafId = window.requestAnimationFrame(() => {
+                viewportMetricsRafId = 0;
+                syncViewportMetrics();
+            });
         }
 
         function syncShellHeader(tab = currentTab) {
@@ -1694,11 +1712,11 @@
 
         function openNewMonitorTask() {
             resetMonitorForm();
-            document.getElementById('monitor-modal').classList.remove('hidden');
+            showLockedModal('monitor-modal');
         }
 
         function closeMonitorModal() {
-            document.getElementById('monitor-modal').classList.add('hidden');
+            hideLockedModal('monitor-modal');
         }
 
         function refreshWebhookHint() {
@@ -1769,7 +1787,7 @@
             document.getElementById('monitor_delay_seconds').value = task.delay_seconds ?? 0;
             document.getElementById('monitor_cron_minutes').value = task.cron_minutes ?? 0;
             refreshWebhookHint();
-            document.getElementById('monitor-modal').classList.remove('hidden');
+            showLockedModal('monitor-modal');
             switchTab('monitor');
         }
 
@@ -2038,6 +2056,7 @@
             const titleText = String(task?.title || task?.name || '').trim() || '未命名影视';
             const savepath = String(task?.savepath || '').trim() || '--';
             const fixedShareLink = String(task?.share_link_url || '').trim();
+            const fixedLinkChannelSearch = !!task?.fixed_link_channel_search;
             const shareSubdir = normalizeRelativePathInput(task?.share_subdir || '');
             const shareSubdirCid = normalizeShareCidInput(task?.share_subdir_cid || '');
             const scheduleWeekdays = normalizeSubscriptionWeekdays(task?.schedule_weekdays || []);
@@ -2060,7 +2079,9 @@
             const latestMatched = String(task?.matched_resource_title || '').trim();
             const latestText = latestMatched ? `最近命中：${latestMatched}` : '最近尚未命中资源';
             const modeText = isTv ? (multiSeasonMode ? '多季合一追更' : '单季追更') : '命中资源后即执行';
-            const fixedShareText = fixedShareLink ? '，固定分享链接模式' : '';
+            const fixedShareText = fixedShareLink
+                ? `，固定分享链接模式${fixedLinkChannelSearch ? '（频道补搜兜底）' : ''}`
+                : '';
             const shareScopeText = shareSubdir
                 ? `，分享子目录 ${shareSubdir}${shareSubdirCid ? `（CID ${shareSubdirCid}）` : ''}`
                 : (shareSubdirCid ? `，分享子目录 CID ${shareSubdirCid}` : '');
@@ -2697,6 +2718,7 @@
             const shareSubdirCid = shareSubdir
                 ? normalizeShareCidInput(document.getElementById('subscription_share_subdir_cid')?.value || '')
                 : '';
+            const fixedLinkChannelSearch = !!document.getElementById('subscription_fixed_link_channel_search')?.checked;
             return {
                 name: title,
                 media_type: normalizeSubscriptionMediaType(document.getElementById('subscription_media_type').value),
@@ -2712,6 +2734,7 @@
                 share_link_receive_code: normalizedReceiveCode,
                 share_subdir: shareSubdir,
                 share_subdir_cid: shareSubdirCid,
+                fixed_link_channel_search: fixedLinkChannelSearch,
                 schedule_weekdays: scheduleWeekdays,
                 schedule_start_time: scheduleStartTime,
                 schedule_end_time: scheduleEndTime,
@@ -2748,6 +2771,8 @@
             if (shareLinkInput) shareLinkInput.value = '';
             const shareReceiveInput = document.getElementById('subscription_share_receive_code');
             if (shareReceiveInput) shareReceiveInput.value = '';
+            const fixedLinkChannelSearchInput = document.getElementById('subscription_fixed_link_channel_search');
+            if (fixedLinkChannelSearchInput) fixedLinkChannelSearchInput.checked = false;
             setSubscriptionShareSubdirSelection('', '');
             resetSubscriptionShareFolderBrowser();
             subscriptionFolderTrail = [{ id: '0', name: '根目录' }];
@@ -2830,6 +2855,7 @@
                 task.share_link_receive_code = '';
                 task.share_subdir = normalizeRelativePathInput(task.share_subdir || '');
                 task.share_subdir_cid = '';
+                task.fixed_link_channel_search = false;
             }
             if (!task.share_subdir) task.share_subdir_cid = '';
             if (task.year && !/^(19|20)\d{2}$/.test(task.year)) return alert('年份格式不正确，请输入四位年份');
@@ -2915,6 +2941,8 @@
             if (shareLinkInput) shareLinkInput.value = String(task.share_link_url || '').trim();
             const shareReceiveInput = document.getElementById('subscription_share_receive_code');
             if (shareReceiveInput) shareReceiveInput.value = normalizeReceiveCodeInput(task.share_link_receive_code || '');
+            const fixedLinkChannelSearchInput = document.getElementById('subscription_fixed_link_channel_search');
+            if (fixedLinkChannelSearchInput) fixedLinkChannelSearchInput.checked = !!task.fixed_link_channel_search;
             setSubscriptionShareSubdirSelection(task.share_subdir || '', task.share_subdir_cid || '');
             resetSubscriptionShareFolderBrowser();
             setSubscriptionWeekdaysToForm(task.schedule_weekdays || SUBSCRIPTION_DEFAULT_WEEKDAYS);
@@ -9614,7 +9642,13 @@
         window.addEventListener('resize', () => {
             syncResourceBackTopButton();
             syncSettingsSaveDock();
+            requestViewportMetricsSync();
         });
+        window.addEventListener('orientationchange', requestViewportMetricsSync);
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', requestViewportMetricsSync);
+            window.visualViewport.addEventListener('scroll', requestViewportMetricsSync);
+        }
         const THEME_DAY_ICON = `
             <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="1.8"/>
@@ -9657,6 +9691,7 @@
                 updateThemeToggleButton(isDay);
             } catch (e) {}
         }
+        syncViewportMetrics();
         applyThemeFromStorage();
         loadResourceQuickLinksFromStorage();
         initMainTabRow();

@@ -745,9 +745,9 @@
                         <input id="monitor_cron_minutes" type="number" min="0" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
                     </label>
                 </div>
-                <div id="monitor-modal-footer" class="monitor-modal-footer-shell monitor-modal-footer-portrait grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
-                    <button onclick="saveMonitorTask()" class="monitor-modal-save-btn">保存任务</button>
-                    <button onclick="closeMonitorModal()" class="monitor-modal-cancel-btn">取消</button>
+                <div id="monitor-modal-footer" class="monitor-modal-footer-shell grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                    <button onclick="saveMonitorTask()" class="task-modal-save-btn monitor-modal-save-btn">保存任务</button>
+                    <button onclick="closeMonitorModal()" class="task-modal-cancel-btn monitor-modal-cancel-btn">取消</button>
                 </div>
             </div>
         </div>
@@ -836,6 +836,11 @@
                             <button type="button" onclick="openSubscriptionShareFolderModal(true)" class="px-4 py-3 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold whitespace-nowrap">应用并浏览</button>
                         </div>
                         <div class="text-[11px] text-slate-500 leading-5">填写后将优先使用这个固定分享链接，不再依赖频道搜索；适合长期更新的合集链接。</div>
+                        <label class="flex items-center gap-3 cursor-pointer text-sm">
+                            <input type="checkbox" id="subscription_fixed_link_channel_search" class="ui-checkbox">
+                            固定链接后再补搜一次频道（兜底）
+                        </label>
+                        <div class="text-[11px] text-slate-500 leading-5">开启后会先尝试固定链接候选，再执行一次频道搜索并追加候选；固定链接候选仍保持优先。</div>
                     </div>
                     <label class="block">
                         <span class="text-xs text-slate-500">115 分享子目录（可选）</span>
@@ -916,12 +921,12 @@
                         启用任务（关闭后不参与定时，但仍可手动运行）
                     </label>
                     <div class="text-xs text-slate-500 leading-6">
-                        匹配策略：若填写了固定 115 分享链接，会直接在该链接内扫描；未填写时，才会在已启用频道按标题/别名主动搜索并评分命中。
+                        匹配策略：若填写了固定 115 分享链接，默认只在该链接内扫描；可开启“固定链接后再补搜一次频道”作为兜底。未填写固定链接时，会在已启用频道按标题/别名主动搜索并评分命中。
                     </div>
                 </div>
                 <div class="subscription-modal-actions-inline subscription-modal-footer-shell grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
-                    <button onclick="saveSubscriptionTask()" class="subscription-modal-save-btn">保存任务</button>
-                    <button onclick="closeSubscriptionModal()" class="subscription-modal-cancel-btn">取消</button>
+                    <button onclick="saveSubscriptionTask()" class="task-modal-save-btn subscription-modal-save-btn">保存任务</button>
+                    <button onclick="closeSubscriptionModal()" class="task-modal-cancel-btn subscription-modal-cancel-btn">取消</button>
                 </div>
             </div>
         </div>

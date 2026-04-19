@@ -889,6 +889,13 @@ def normalize_subscription_task(task: Dict[str, Any]) -> Dict[str, Any]:
             task.get("share_subdir_id", task.get("share_subfolder_cid", "")),
         )
     )
+    fixed_link_channel_search = normalize_bool(
+        task.get(
+            "fixed_link_channel_search",
+            task.get("fixed_link_followup_channel_search", False),
+        ),
+        default=False,
+    )
     if not share_subdir:
         share_subdir_cid = ""
     return {
@@ -904,6 +911,7 @@ def normalize_subscription_task(task: Dict[str, Any]) -> Dict[str, Any]:
         "share_link_receive_code": share_link_receive_code if share_link_url else "",
         "share_subdir": share_subdir,
         "share_subdir_cid": share_subdir_cid,
+        "fixed_link_channel_search": fixed_link_channel_search if share_link_url else False,
         "enabled": normalize_bool(task.get("enabled", True), default=True),
         # 兼容旧前端字段：cron_minutes 保留为“时段内查询间隔”镜像值。
         "cron_minutes": schedule_interval_minutes,

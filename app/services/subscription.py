@@ -3446,6 +3446,162 @@ async def find_subscription_task_match_candidate_by_search(
     }
 
 
+def merge_subscription_search_results(
+    fixed_result: Dict[str, Any],
+    channel_result: Dict[str, Any],
+) -> Dict[str, Any]:
+    fixed_payload = fixed_result if isinstance(fixed_result, dict) else {}
+    channel_payload = channel_result if isinstance(channel_result, dict) else {}
+
+    def collect_candidates(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        result: List[Dict[str, Any]] = []
+        candidate = payload.get("candidate")
+        if isinstance(candidate, dict) and candidate:
+            result.append(candidate)
+        raw_candidates = payload.get("candidates")
+        if isinstance(raw_candidates, list):
+            for item in raw_candidates:
+                if isinstance(item, dict) and item:
+                    result.append(item)
+        return result
+
+    def build_candidate_key(candidate: Dict[str, Any]) -> str:
+        item = candidate.get("item") if isinstance(candidate.get("item"), dict) else {}
+        extra = item.get("extra") if isinstance(item.get("extra"), dict) else {}
+        source_post_id = str(item.get("source_post_id", "") or extra.get("source_post_id", "")).strip()
+        if source_post_id:
+            return f"post:{source_post_id}"
+        message_url = str(item.get("message_url", "")).strip()
+        if message_url:
+            return f"msg:{message_url}"
+        link_url = str(item.get("link_url", "")).strip()
+        if link_url:
+            return f"link:{link_url}"
+        title = str(item.get("title", "")).strip()
+        raw_text = str(item.get("raw_text", "")).strip()
+        return f"title:{title}|raw:{raw_text[:120]}"
+
+    def merge_keywords(*payloads: Dict[str, Any]) -> List[str]:
+        seen: Set[str] = set()
+        merged: List[str] = []
+        for payload in payloads:
+            keywords = payload.get("keywords")
+            if not isinstance(keywords, list):
+                continue
+            for token in keywords:
+                text = str(token or "").strip()
+                if not text or text in seen:
+                    continue
+                seen.add(text)
+                merged.append(text)
+        return merged
+
+    def merge_errors(*payloads: Dict[str, Any]) -> List[Dict[str, Any]]:
+        merged_errors: List[Dict[str, Any]] = []
+        seen: Set[str] = set()
+        for payload in payloads:
+            errors = payload.get("errors")
+            if not isinstance(errors, list):
+                continue
+            for item in errors:
+                if not isinstance(item, dict):
+                    continue
+                channel_id = str(item.get("channel_id", "")).strip()
+                channel_name = str(item.get("name", "")).strip()
+                message = str(item.get("message", "")).strip()
+                if not message:
+                    continue
+                key = "|".join([channel_id, channel_name, message])
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged_errors.append(
+                    {
+                        "channel_id": channel_id,
+                        "name": channel_name,
+                        "message": message,
+                    }
+                )
+        return merged_errors
+
+    fixed_candidates = collect_candidates(fixed_payload)
+    channel_candidates = collect_candidates(channel_payload)
+    merged_candidates: List[Dict[str, Any]] = []
+    seen_candidate_keys: Set[str] = set()
+    for candidate in fixed_candidates + channel_candidates:
+        key = build_candidate_key(candidate)
+        if not key or key in seen_candidate_keys:
+            continue
+        seen_candidate_keys.add(key)
+        merged_candidates.append(candidate)
+
+    fixed_stats = fixed_payload.get("stats") if isinstance(fixed_payload.get("stats"), dict) else {}
+    channel_stats = channel_payload.get("stats") if isinstance(channel_payload.get("stats"), dict) else {}
+    sum_stat_keys = (
+        "search_keywords",
+        "searched_sources",
+        "matched_channels",
+        "pages_scanned",
+        "raw_items",
+        "deduped_items",
+        "persisted_items",
+        "supported_items",
+        "unsupported_items",
+        "media_guard_filtered",
+        "season_guard_filtered",
+        "scored_items",
+        "scored_candidates",
+        "relaxed_candidates",
+        "search_errors",
+    )
+    merged_stats: Dict[str, Any] = {}
+    for key in sum_stat_keys:
+        merged_stats[key] = int(fixed_stats.get(key, 0) or 0) + int(channel_stats.get(key, 0) or 0)
+
+    merged_reasons: Dict[str, int] = {}
+    for part in [fixed_stats.get("media_guard_reasons", {}), channel_stats.get("media_guard_reasons", {})]:
+        if not isinstance(part, dict):
+            continue
+        for reason_key, reason_count in part.items():
+            reason_text = str(reason_key or "").strip()
+            if not reason_text:
+                continue
+            merged_reasons[reason_text] = int(merged_reasons.get(reason_text, 0) or 0) + int(reason_count or 0)
+
+    merged_stats["media_guard_reasons"] = merged_reasons
+    merged_stats["target_season"] = max(
+        int(fixed_stats.get("target_season", 0) or 0),
+        int(channel_stats.get("target_season", 0) or 0),
+    )
+    merged_stats["relaxed_score_mode"] = bool(
+        fixed_stats.get("relaxed_score_mode", False) or channel_stats.get("relaxed_score_mode", False)
+    )
+    merged_stats["best_score"] = max(
+        int(fixed_stats.get("best_score", 0) or 0),
+        int(channel_stats.get("best_score", 0) or 0),
+    )
+    merged_stats["fixed_candidate_count"] = len(fixed_candidates)
+    merged_stats["channel_candidate_count"] = len(channel_candidates)
+    merged_stats["channel_searched_sources"] = int(channel_stats.get("searched_sources", 0) or 0)
+    merged_stats["channel_matched_channels"] = int(channel_stats.get("matched_channels", 0) or 0)
+    merged_stats["channel_pages_scanned"] = int(channel_stats.get("pages_scanned", 0) or 0)
+    merged_stats["channel_raw_items"] = int(channel_stats.get("raw_items", 0) or 0)
+    merged_stats["channel_deduped_items"] = int(channel_stats.get("deduped_items", 0) or 0)
+    merged_stats["channel_supported_items"] = int(channel_stats.get("supported_items", 0) or 0)
+    merged_stats["channel_unsupported_items"] = int(channel_stats.get("unsupported_items", 0) or 0)
+
+    merged_errors = merge_errors(fixed_payload, channel_payload)
+    merged_stats["search_errors"] = len(merged_errors)
+
+    return {
+        "candidate": merged_candidates[0] if merged_candidates else {},
+        "candidates": merged_candidates[: min(20, len(merged_candidates))],
+        "keywords": merge_keywords(fixed_payload, channel_payload),
+        "errors": merged_errors,
+        "stats": merged_stats,
+    }
+
+
 async def run_subscription_task(task_name: str, trigger: str = "manual") -> None:
     cfg = get_config()
     task = _load_subscription_task(cfg, task_name)
@@ -3515,6 +3671,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
         task_share_link_receive_code = normalize_receive_code(task.get("share_link_receive_code", ""))
         task_share_link_type = resolve_resource_link_type("", task_share_link_url)
         use_fixed_share_link = bool(task_share_link_url) and task_share_link_type == "115share"
+        fixed_link_channel_search_enabled = use_fixed_share_link and bool(task.get("fixed_link_channel_search", False))
         if task_share_subdir_cid and (not use_fixed_share_link):
             # CID 仅对固定分享链接稳定有效，频道搜索模式下忽略。
             task_share_subdir_cid = ""
@@ -3530,6 +3687,11 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 "固定链接模式已启用：将直接使用配置的 115 分享链接，不再依赖频道搜索",
                 "info",
             )
+            if fixed_link_channel_search_enabled:
+                await write_subscription_log(
+                    "固定链接补搜已启用：固定链接候选后会再执行一次频道搜索作为兜底",
+                    "info",
+                )
         if task_share_scope_enabled:
             await write_subscription_log(
                 f"115 分享子目录已启用：{task_share_scope_label}（仅在该目录内扫描和转存）",
@@ -3593,7 +3755,11 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             task_name,
             status="running",
             progress=15,
-            detail="正在校验固定分享链接" if use_fixed_share_link else "正在主动搜索启用频道资源",
+            detail=(
+                "正在校验固定分享链接并准备频道补搜"
+                if (use_fixed_share_link and fixed_link_channel_search_enabled)
+                else ("正在校验固定分享链接" if use_fixed_share_link else "正在主动搜索启用频道资源")
+            ),
         )
         check_subscription_cancelled()
         search_result: Dict[str, Any] = {}
@@ -3650,6 +3816,16 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                     "best_score": 100,
                 },
             }
+            if fixed_link_channel_search_enabled:
+                await write_subscription_log(
+                    "固定链接候选已生成，正在执行频道补搜",
+                    "info",
+                )
+                channel_search_result = await find_subscription_task_match_candidate_by_search(
+                    task,
+                    last_episode=last_episode,
+                )
+                search_result = merge_subscription_search_results(search_result, channel_search_result)
         else:
             search_result = await find_subscription_task_match_candidate_by_search(task, last_episode=last_episode)
         search_stats = search_result.get("stats", {}) if isinstance(search_result.get("stats"), dict) else {}
@@ -3662,24 +3838,73 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             )
             if task_share_link_receive_code:
                 await write_subscription_log("固定链接提取码已生效", "info")
-        else:
+        if (not use_fixed_share_link) or fixed_link_channel_search_enabled:
+            search_label = "频道补搜" if (use_fixed_share_link and fixed_link_channel_search_enabled) else "主动搜索"
+            searched_sources = int(
+                (
+                    search_stats.get("channel_searched_sources", search_stats.get("searched_sources", 0))
+                    if (use_fixed_share_link and fixed_link_channel_search_enabled)
+                    else search_stats.get("searched_sources", 0)
+                )
+                or 0
+            )
+            matched_channels = int(
+                (
+                    search_stats.get("channel_matched_channels", search_stats.get("matched_channels", 0))
+                    if (use_fixed_share_link and fixed_link_channel_search_enabled)
+                    else search_stats.get("matched_channels", 0)
+                )
+                or 0
+            )
+            pages_scanned = int(
+                (
+                    search_stats.get("channel_pages_scanned", search_stats.get("pages_scanned", 0))
+                    if (use_fixed_share_link and fixed_link_channel_search_enabled)
+                    else search_stats.get("pages_scanned", 0)
+                )
+                or 0
+            )
+            deduped_items = int(
+                (
+                    search_stats.get("channel_deduped_items", search_stats.get("deduped_items", 0))
+                    if (use_fixed_share_link and fixed_link_channel_search_enabled)
+                    else search_stats.get("deduped_items", 0)
+                )
+                or 0
+            )
+            supported_items = int(
+                (
+                    search_stats.get("channel_supported_items", search_stats.get("supported_items", 0))
+                    if (use_fixed_share_link and fixed_link_channel_search_enabled)
+                    else search_stats.get("supported_items", 0)
+                )
+                or 0
+            )
+            unsupported_items = int(
+                (
+                    search_stats.get("channel_unsupported_items", search_stats.get("unsupported_items", 0))
+                    if (use_fixed_share_link and fixed_link_channel_search_enabled)
+                    else search_stats.get("unsupported_items", 0)
+                )
+                or 0
+            )
             await write_subscription_log(
-                "主动搜索关键词: " + " / ".join(search_keywords or [str(task.get("title", "")).strip() or "--"]),
+                f"{search_label}关键词: " + " / ".join(search_keywords or [str(task.get("title", "")).strip() or "--"]),
                 "info",
             )
             await write_subscription_log(
                 (
-                    f"主动搜索完成：频道检索 {int(search_stats.get('searched_sources', 0) or 0)} 次，"
-                    f"命中频道 {int(search_stats.get('matched_channels', 0) or 0)} 个，"
-                    f"扫描页面 {int(search_stats.get('pages_scanned', 0) or 0)} 页，"
-                    f"候选资源 {int(search_stats.get('deduped_items', 0) or 0)} 条，"
-                    f"可导入资源 {int(search_stats.get('supported_items', 0) or 0)} 条"
+                    f"{search_label}完成：频道检索 {searched_sources} 次，"
+                    f"命中频道 {matched_channels} 个，"
+                    f"扫描页面 {pages_scanned} 页，"
+                    f"候选资源 {deduped_items} 条，"
+                    f"可导入资源 {supported_items} 条"
                 ),
                 "info",
             )
-            if int(search_stats.get("unsupported_items", 0) or 0) > 0:
+            if unsupported_items > 0:
                 await write_subscription_log(
-                    f"已过滤 {int(search_stats.get('unsupported_items', 0) or 0)} 条不支持链接（仅支持 magnet / 115 分享）",
+                    f"已过滤 {unsupported_items} 条不支持链接（仅支持 magnet / 115 分享）",
                     "warn",
                 )
             if int(search_stats.get("media_guard_filtered", 0) or 0) > 0:
@@ -3718,7 +3943,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 )
             if search_errors:
                 await write_subscription_log(
-                    f"有 {len(search_errors)} 个频道搜索异常（不影响其余频道）："
+                    f"有 {len(search_errors)} 个频道搜索异常（不影响其余频道，{search_label}阶段）："
                     + "；".join(
                         [
                             (
@@ -3731,7 +3956,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                     "warn",
                 )
 
-        upsert_subscription_task_state(task_name, status="running", progress=25, detail="频道搜索完成，正在匹配评分")
+        upsert_subscription_task_state(task_name, status="running", progress=25, detail="候选准备完成，正在匹配评分")
         check_subscription_cancelled()
         ranked_candidates = search_result.get("candidates", []) if isinstance(search_result.get("candidates"), list) else []
         if not ranked_candidates:
@@ -3742,6 +3967,9 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             if completed_locked:
                 detail = f"已完结（{last_episode}/{known_total}），未发现可更新资源"
                 status = "completed"
+            elif use_fixed_share_link and fixed_link_channel_search_enabled:
+                detail = "固定分享链接当前不可用，且频道补搜也未命中可导入资源，请检查固定链接/提取码或频道配置后重试"
+                status = "waiting"
             elif use_fixed_share_link:
                 detail = "固定分享链接当前不可用，请检查链接/提取码或稍后重试"
                 status = "waiting"
@@ -3987,7 +4215,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
 
         invalid_link_cache = (
             {}
-            if use_fixed_share_link
+            if (use_fixed_share_link and (not fixed_link_channel_search_enabled))
             else _load_subscription_invalid_link_cache(
                 [
                     _normalize_subscription_candidate_link(
@@ -4155,7 +4383,12 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 continue
 
             cached_invalid_meta = invalid_link_cache.get(candidate_link_url) if candidate_link_url else None
-            if cached_invalid_meta:
+            fixed_share_seed_candidate = (
+                use_fixed_share_link
+                and resource_id <= 0
+                and candidate_link_type == "115share"
+            )
+            if cached_invalid_meta and (not fixed_share_seed_candidate):
                 skipped_invalid_candidates += 1
                 cache_reason = str(cached_invalid_meta.get("reason", "") or "").strip()
                 expires_at = str(cached_invalid_meta.get("expires_at", "") or "").strip()
@@ -5330,6 +5563,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                     "scanned_candidates": scanned_candidates,
                     "max_scan_candidates": max_scan_candidates,
                     "use_fixed_share_link": use_fixed_share_link,
+                    "fixed_link_channel_search": fixed_link_channel_search_enabled,
                     "share_link_url": task_share_link_url if use_fixed_share_link else "",
                     "share_subdir": task_share_subdir,
                     "share_subdir_cid": task_share_subdir_cid,
@@ -5471,6 +5705,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 "max_scan_candidates": max_scan_candidates,
                 "existing_episode_count": existing_episode_count,
                 "use_fixed_share_link": use_fixed_share_link,
+                "fixed_link_channel_search": fixed_link_channel_search_enabled,
                 "share_link_url": task_share_link_url if use_fixed_share_link else "",
                 "share_subdir": task_share_subdir,
                 "share_subdir_cid": task_share_subdir_cid,
