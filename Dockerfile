@@ -5,8 +5,7 @@ LABEL org.opencontainers.image.title="115-media-hub" \
       org.opencontainers.image.version="${APP_VERSION}" \
       org.opencontainers.image.description="FastAPI media automation hub for 115 and AList/OpenList" \
       org.opencontainers.image.source="https://github.com/xianer235/115-media-hub"
-ENV APP_VERSION=${APP_VERSION} \
-    UVICORN_ACCESS_LOG=0 \
+ENV UVICORN_ACCESS_LOG=0 \
     LOG_BRIEF_MODE=1
 
 WORKDIR /app

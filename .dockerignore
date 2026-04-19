@@ -23,5 +23,3 @@ preview-runtime/
 AGENTS.md
 doc/
 
-# AI-only test artifacts (not needed in image)
-tests/

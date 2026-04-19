@@ -17,7 +17,6 @@ config/
 
 .codex/
 .cursor/
-.codex-ui-check/
 .superpowers/
 
 # preview runtime (local validation only)
@@ -34,5 +33,4 @@ preview-runtime/
 AGENTS.md
 doc/
 
-# AI-only test artifacts (not project runtime)
-tests/
+
