@@ -22,3 +22,6 @@ preview-runtime/
 # local agent handoff context (not for image build context)
 AGENTS.md
 doc/
+
+# AI-only test artifacts (not needed in image)
+tests/

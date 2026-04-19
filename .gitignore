@@ -33,3 +33,6 @@ preview-runtime/
 # local agent handoff context (not for repo)
 AGENTS.md
 doc/
+
+# AI-only test artifacts (not project runtime)
+tests/
