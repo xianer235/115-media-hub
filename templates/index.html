@@ -675,7 +675,7 @@
                     <h3 id="monitor-modal-title" class="group-title mb-0">新增监控任务</h3>
                     <button onclick="closeMonitorModal()" class="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm">关闭</button>
                 </div>
-                <div class="monitor-modal-body space-y-4 mt-4">
+                <div class="monitor-modal-body space-y-4">
                     <label class="block">
                         <span class="text-xs text-slate-500 inline-flex items-center gap-2">
                             任务名 (用于 webhook 路径)
@@ -745,9 +745,9 @@
                         <input id="monitor_cron_minutes" type="number" min="0" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
                     </label>
                 </div>
-                <div id="monitor-modal-footer" class="monitor-modal-footer-shell grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
-                    <button onclick="saveMonitorTask()" class="task-modal-save-btn">保存任务</button>
-                    <button onclick="closeMonitorModal()" class="task-modal-cancel-btn">取消</button>
+                <div id="monitor-modal-footer" class="monitor-modal-footer-shell monitor-modal-footer-portrait grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                    <button onclick="saveMonitorTask()" class="monitor-modal-save-btn">保存任务</button>
+                    <button onclick="closeMonitorModal()" class="monitor-modal-cancel-btn">取消</button>
                 </div>
             </div>
         </div>
@@ -758,7 +758,7 @@
                     <h3 id="subscription-modal-title" class="group-title mb-0">新增订阅任务</h3>
                     <button onclick="closeSubscriptionModal()" class="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm">关闭</button>
                 </div>
-                <div class="subscription-modal-body space-y-4 mt-4">
+                <div class="subscription-modal-body space-y-4">
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <label class="block">
                             <span class="text-xs text-slate-500">订阅类型</span>
@@ -918,10 +918,10 @@
                     <div class="text-xs text-slate-500 leading-6">
                         匹配策略：若填写了固定 115 分享链接，会直接在该链接内扫描；未填写时，才会在已启用频道按标题/别名主动搜索并评分命中。
                     </div>
-                    <div class="subscription-modal-actions-inline grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
-                        <button onclick="saveSubscriptionTask()" class="task-modal-save-btn">保存任务</button>
-                        <button onclick="closeSubscriptionModal()" class="task-modal-cancel-btn">取消</button>
-                    </div>
+                </div>
+                <div class="subscription-modal-actions-inline subscription-modal-footer-shell grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                    <button onclick="saveSubscriptionTask()" class="subscription-modal-save-btn">保存任务</button>
+                    <button onclick="closeSubscriptionModal()" class="subscription-modal-cancel-btn">取消</button>
                 </div>
             </div>
         </div>
@@ -1339,8 +1339,8 @@
                     </div>
                     <div id="resource-import-feedback-card" class="resource-import-feedback hidden"></div>
                     <div id="resource-import-footer" class="resource-import-footer-shell grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
-                        <button id="resource-submit-btn" onclick="submitResourceJob()" class="bg-emerald-600 hover:bg-emerald-500 rounded-xl py-3 font-bold text-white">保存到 115</button>
-                        <button id="resource-close-btn" onclick="closeResourceJobModal()" class="bg-slate-700 hover:bg-slate-600 rounded-xl py-3 font-bold text-white">取消</button>
+                        <button id="resource-submit-btn" onclick="submitResourceJob()" class="resource-import-submit-btn">保存到 115</button>
+                        <button id="resource-close-btn" onclick="closeResourceJobModal()" class="resource-import-cancel-btn">取消</button>
                     </div>
                 </div>
             </div>

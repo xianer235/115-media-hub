@@ -7803,13 +7803,13 @@
             if (importMode) {
                 submitBtn.disabled = !canSubmit;
                 submitBtn.className = canSubmit
-                    ? 'bg-emerald-600 hover:bg-emerald-500 rounded-xl py-3 font-bold text-white'
-                    : 'bg-slate-700 rounded-xl py-3 font-bold text-slate-400 btn-disabled';
+                    ? 'resource-import-submit-btn'
+                    : 'resource-import-submit-btn resource-import-submit-btn-disabled';
             } else {
                 submitBtn.disabled = !canOpenImport;
                 submitBtn.className = canOpenImport
-                    ? 'bg-emerald-600 hover:bg-emerald-500 rounded-xl py-3 font-bold text-white'
-                    : 'bg-slate-700 rounded-xl py-3 font-bold text-slate-400 btn-disabled';
+                    ? 'resource-import-submit-btn'
+                    : 'resource-import-submit-btn resource-import-submit-btn-disabled';
             }
             if (importMode && resourceSubmitBusy) {
                 submitBtn.innerText = batchMode ? `批量提交中（${batchCount} 条）...` : '提交中...';

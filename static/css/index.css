@@ -1054,6 +1054,7 @@
             align-items: stretch;
         }
         .monitor-modal-shell {
+            --monitor-shell-inline-pad: 1.5rem;
             display: flex;
             flex-direction: column;
             overflow: hidden;
@@ -1076,6 +1077,7 @@
             background-clip: padding-box;
         }
         .subscription-modal-shell {
+            --subscription-shell-inline-pad: 1.5rem;
             display: flex;
             flex-direction: column;
             overflow: hidden;
@@ -1097,7 +1099,36 @@
             border: 2px solid transparent;
             background-clip: padding-box;
         }
-        .monitor-modal-footer-shell,
+        .monitor-modal-footer-shell {
+            margin-top: 1rem;
+            padding: 0.82rem;
+            border: 0;
+            border-radius: 1.4rem;
+            position: relative;
+            isolation: isolate;
+            overflow: hidden;
+            background: transparent;
+            box-shadow: none;
+        }
+        .monitor-modal-footer-shell::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            border: 1px solid var(--modal-footer-glass-stroke);
+            background:
+                radial-gradient(circle at 16% 18%, rgba(255, 255, 255, 0.18), transparent 34%),
+                linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
+                var(--modal-footer-glass-fill);
+            box-shadow: var(--modal-footer-glass-shadow), inset 0 1px 0 var(--modal-footer-glass-highlight);
+            backdrop-filter: blur(46px) saturate(220%);
+            -webkit-backdrop-filter: blur(46px) saturate(220%);
+            pointer-events: none;
+        }
+        .monitor-modal-footer-shell > * {
+            position: relative;
+            z-index: 1;
+        }
         .resource-import-footer-shell {
             margin-top: 1rem;
             padding: 0.82rem;
@@ -1109,7 +1140,6 @@
             background: transparent;
             box-shadow: none;
         }
-        .monitor-modal-footer-shell::before,
         .resource-import-footer-shell::before {
             content: "";
             position: absolute;
@@ -1125,13 +1155,42 @@
             -webkit-backdrop-filter: blur(46px) saturate(220%);
             pointer-events: none;
         }
-        .monitor-modal-footer-shell > *,
         .resource-import-footer-shell > * {
             position: relative;
             z-index: 1;
         }
-        .task-modal-save-btn,
-        .task-modal-cancel-btn {
+        .subscription-modal-footer-shell {
+            margin-top: 1rem;
+            padding: 0.82rem;
+            border: 0;
+            border-radius: 1.4rem;
+            position: relative;
+            isolation: isolate;
+            overflow: hidden;
+            background: transparent;
+            box-shadow: none;
+        }
+        .subscription-modal-footer-shell::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            border: 1px solid var(--modal-footer-glass-stroke);
+            background:
+                radial-gradient(circle at 16% 18%, rgba(255, 255, 255, 0.18), transparent 34%),
+                linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
+                var(--modal-footer-glass-fill);
+            box-shadow: var(--modal-footer-glass-shadow), inset 0 1px 0 var(--modal-footer-glass-highlight);
+            backdrop-filter: blur(46px) saturate(220%);
+            -webkit-backdrop-filter: blur(46px) saturate(220%);
+            pointer-events: none;
+        }
+        .subscription-modal-footer-shell > * {
+            position: relative;
+            z-index: 1;
+        }
+        .resource-import-submit-btn,
+        .resource-import-cancel-btn {
             width: 100%;
             min-width: 0;
             min-height: 44px;
@@ -1153,24 +1212,35 @@
                 box-shadow 0.16s ease,
                 color 0.16s ease;
         }
-        .task-modal-save-btn {
+        .resource-import-submit-btn {
             color: #eff8ff;
-            border-color: rgba(125, 211, 252, 0.66);
+            border-color: rgba(16, 185, 129, 0.45);
             background:
-                linear-gradient(180deg, rgba(56, 189, 248, 0.26), rgba(56, 189, 248, 0.12)),
-                linear-gradient(135deg, #0ea5e9 0%, #0284c7 48%, #2563eb 100%);
-            box-shadow: 0 8px 16px rgba(2, 132, 199, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+                linear-gradient(180deg, rgba(16, 185, 129, 0.28), rgba(16, 185, 129, 0.12)),
+                linear-gradient(135deg, #059669 0%, #10b981 52%, #34d399 100%);
+            box-shadow: 0 8px 16px rgba(5, 150, 105, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.22);
         }
-        .task-modal-save-btn:hover {
-            border-color: rgba(186, 230, 253, 0.84);
-            box-shadow: 0 10px 18px rgba(2, 132, 199, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+        .resource-import-submit-btn:hover {
+            border-color: rgba(110, 231, 183, 0.75);
+            box-shadow: 0 10px 18px rgba(5, 150, 105, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.28);
             transform: translateY(-1px);
         }
-        .task-modal-save-btn:active {
+        .resource-import-submit-btn:active {
             transform: translateY(0);
-            box-shadow: 0 4px 10px rgba(2, 132, 199, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+            box-shadow: 0 4px 10px rgba(5, 150, 105, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.16);
         }
-        .task-modal-cancel-btn {
+        .resource-import-submit-btn.resource-import-submit-btn-disabled,
+        .resource-import-submit-btn:disabled {
+            color: #94a3b8;
+            border-color: rgba(71, 85, 105, 0.66);
+            background:
+                linear-gradient(180deg, rgba(51, 65, 85, 0.94), rgba(30, 41, 59, 0.94)),
+                rgba(30, 41, 59, 0.88);
+            box-shadow: none;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .resource-import-cancel-btn {
             color: #e2e8f0;
             border-color: rgba(100, 116, 139, 0.72);
             background:
@@ -1178,7 +1248,7 @@
                 rgba(30, 41, 59, 0.88);
             box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
         }
-        .task-modal-cancel-btn:hover {
+        .resource-import-cancel-btn:hover {
             color: #f8fafc;
             border-color: rgba(148, 163, 184, 0.9);
             background:
@@ -1186,16 +1256,151 @@
                 rgba(51, 65, 85, 0.9);
             transform: translateY(-1px);
         }
-        .task-modal-cancel-btn:active {
+        .resource-import-cancel-btn:active {
             transform: translateY(0);
         }
-        .task-modal-save-btn:focus-visible,
-        .task-modal-cancel-btn:focus-visible {
+        .resource-import-submit-btn:focus-visible,
+        .resource-import-cancel-btn:focus-visible {
             outline: 2px solid rgba(56, 189, 248, 0.45);
             outline-offset: 2px;
         }
-        .task-modal-save-btn:disabled,
-        .task-modal-cancel-btn:disabled {
+        .monitor-modal-save-btn,
+        .monitor-modal-cancel-btn {
+            width: 100%;
+            min-width: 0;
+            min-height: 44px;
+            border-radius: 0.95rem;
+            border: 1px solid transparent;
+            padding: 0.62rem 0.82rem;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.9rem;
+            line-height: 1;
+            font-weight: 820;
+            letter-spacing: 0.01em;
+            text-align: center;
+            transition:
+                transform 0.16s ease,
+                border-color 0.16s ease,
+                background-color 0.16s ease,
+                box-shadow 0.16s ease,
+                color 0.16s ease;
+        }
+        .monitor-modal-save-btn {
+            color: #eff8ff;
+            border-color: rgba(125, 211, 252, 0.66);
+            background:
+                linear-gradient(180deg, rgba(56, 189, 248, 0.26), rgba(56, 189, 248, 0.12)),
+                linear-gradient(135deg, #0ea5e9 0%, #0284c7 48%, #2563eb 100%);
+            box-shadow: 0 8px 16px rgba(2, 132, 199, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+        }
+        .monitor-modal-save-btn:hover {
+            border-color: rgba(186, 230, 253, 0.84);
+            box-shadow: 0 10px 18px rgba(2, 132, 199, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+            transform: translateY(-1px);
+        }
+        .monitor-modal-save-btn:active {
+            transform: translateY(0);
+            box-shadow: 0 4px 10px rgba(2, 132, 199, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+        }
+        .monitor-modal-cancel-btn {
+            color: #e2e8f0;
+            border-color: rgba(100, 116, 139, 0.72);
+            background:
+                linear-gradient(180deg, rgba(71, 85, 105, 0.92), rgba(51, 65, 85, 0.92)),
+                rgba(30, 41, 59, 0.88);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+        }
+        .monitor-modal-cancel-btn:hover {
+            color: #f8fafc;
+            border-color: rgba(148, 163, 184, 0.9);
+            background:
+                linear-gradient(180deg, rgba(100, 116, 139, 0.94), rgba(71, 85, 105, 0.94)),
+                rgba(51, 65, 85, 0.9);
+            transform: translateY(-1px);
+        }
+        .monitor-modal-cancel-btn:active {
+            transform: translateY(0);
+        }
+        .monitor-modal-save-btn:focus-visible,
+        .monitor-modal-cancel-btn:focus-visible {
+            outline: 2px solid rgba(56, 189, 248, 0.45);
+            outline-offset: 2px;
+        }
+        .monitor-modal-save-btn:disabled,
+        .monitor-modal-cancel-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+        .subscription-modal-save-btn,
+        .subscription-modal-cancel-btn {
+            width: 100%;
+            min-width: 0;
+            min-height: 44px;
+            border-radius: 0.95rem;
+            border: 1px solid transparent;
+            padding: 0.62rem 0.82rem;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.9rem;
+            line-height: 1;
+            font-weight: 820;
+            letter-spacing: 0.01em;
+            text-align: center;
+            transition:
+                transform 0.16s ease,
+                border-color 0.16s ease,
+                background-color 0.16s ease,
+                box-shadow 0.16s ease,
+                color 0.16s ease;
+        }
+        .subscription-modal-save-btn {
+            color: #eff8ff;
+            border-color: rgba(16, 185, 129, 0.45);
+            background:
+                linear-gradient(180deg, rgba(16, 185, 129, 0.28), rgba(16, 185, 129, 0.12)),
+                linear-gradient(135deg, #059669 0%, #10b981 52%, #34d399 100%);
+            box-shadow: 0 8px 16px rgba(5, 150, 105, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+        }
+        .subscription-modal-save-btn:hover {
+            border-color: rgba(110, 231, 183, 0.75);
+            box-shadow: 0 10px 18px rgba(5, 150, 105, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+            transform: translateY(-1px);
+        }
+        .subscription-modal-save-btn:active {
+            transform: translateY(0);
+            box-shadow: 0 4px 10px rgba(5, 150, 105, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+        }
+        .subscription-modal-cancel-btn {
+            color: #e2e8f0;
+            border-color: rgba(100, 116, 139, 0.72);
+            background:
+                linear-gradient(180deg, rgba(71, 85, 105, 0.92), rgba(51, 65, 85, 0.92)),
+                rgba(30, 41, 59, 0.88);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+        }
+        .subscription-modal-cancel-btn:hover {
+            color: #f8fafc;
+            border-color: rgba(148, 163, 184, 0.9);
+            background:
+                linear-gradient(180deg, rgba(100, 116, 139, 0.94), rgba(71, 85, 105, 0.94)),
+                rgba(51, 65, 85, 0.9);
+            transform: translateY(-1px);
+        }
+        .subscription-modal-cancel-btn:active {
+            transform: translateY(0);
+        }
+        .subscription-modal-save-btn:focus-visible,
+        .subscription-modal-cancel-btn:focus-visible {
+            outline: 2px solid rgba(56, 189, 248, 0.45);
+            outline-offset: 2px;
+        }
+        .subscription-modal-save-btn:disabled,
+        .subscription-modal-cancel-btn:disabled {
             opacity: 0.6;
             cursor: not-allowed;
             transform: none;
@@ -3532,6 +3737,8 @@
             nav { padding: 0.9rem !important; }
             main { padding-left: 0.75rem !important; padding-right: 0.75rem !important; }
             .group-card { padding: 1rem; border-radius: 1rem; }
+            #monitor-modal .monitor-modal-shell { --monitor-shell-inline-pad: 1rem; }
+            #subscription-modal .subscription-modal-shell { --subscription-shell-inline-pad: 1rem; }
             #page-resource .resource-shell { padding: 0.98rem; }
             .group-title { font-size: 0.98rem; margin-bottom: 0.9rem; }
             .nav-title { font-size: 1.05rem !important; }
@@ -3846,7 +4053,20 @@
                 border-right: 0;
                 padding-bottom: calc(0.9rem + env(safe-area-inset-bottom));
             }
+            #resource-import-modal .modal-card {
+                width: 100%;
+                max-width: 100%;
+                overflow-x: hidden;
+                padding-bottom: 0;
+            }
+            #subscription-modal .subscription-modal-shell {
+                --subscription-shell-inline-pad: 0.9rem;
+                width: 100%;
+                max-width: 100%;
+                overflow-x: hidden;
+            }
             #monitor-modal .monitor-modal-shell {
+                --monitor-shell-inline-pad: 0.9rem;
                 width: 100vw;
                 max-width: 100vw;
                 height: 100dvh;
@@ -3861,8 +4081,8 @@
                 padding-bottom: calc(0.9rem + env(safe-area-inset-bottom));
             }
             #subscription-modal .subscription-modal-shell {
-                width: 100vw;
-                max-width: 100vw;
+                width: 100%;
+                max-width: 100%;
                 height: 100dvh;
                 max-height: 100dvh;
                 margin-top: 0 !important;
@@ -3872,19 +4092,11 @@
                 padding-bottom: 0;
             }
             .subscription-modal-body {
-                padding-bottom: calc(0.9rem + env(safe-area-inset-bottom));
+                padding-right: 0;
+                padding-bottom: 0;
+                overflow-x: hidden;
             }
             #monitor-modal-footer {
-                position: sticky;
-                bottom: 0;
-                z-index: 16;
-                margin-top: auto;
-                grid-template-columns: repeat(2, minmax(0, 1fr));
-                gap: 0.56rem;
-                padding-top: 0.68rem;
-                padding-bottom: max(1.42rem, calc(env(safe-area-inset-bottom) + 0.56rem));
-            }
-            #resource-import-footer {
                 position: sticky;
                 bottom: 0;
                 z-index: 16;
@@ -3893,10 +4105,65 @@
                 gap: 0.65rem;
                 padding-top: 0.72rem;
                 padding-bottom: max(0.78rem, env(safe-area-inset-bottom));
-                margin-left: -1rem;
-                margin-right: -1rem;
-                padding-left: 1rem;
-                padding-right: 1rem;
+                margin-left: calc(var(--monitor-shell-inline-pad, 0.9rem) * -1);
+                margin-right: calc(var(--monitor-shell-inline-pad, 0.9rem) * -1);
+                padding-left: var(--monitor-shell-inline-pad, 0.9rem);
+                padding-right: var(--monitor-shell-inline-pad, 0.9rem);
+                border-radius: 0;
+            }
+            #monitor-modal-footer::before {
+                border: 0;
+                border-top: 1px solid rgba(148, 163, 184, 0.22);
+                border-radius: 0;
+                background:
+                    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
+                    var(--modal-footer-glass-fill);
+                box-shadow: 0 -12px 24px rgba(2, 6, 23, 0.18);
+                backdrop-filter: blur(20px) saturate(170%);
+                -webkit-backdrop-filter: blur(20px) saturate(170%);
+            }
+            #subscription-modal .subscription-modal-footer-shell {
+                position: sticky;
+                bottom: 0;
+                z-index: 16;
+                margin-top: auto;
+                margin-bottom: 0;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 0.65rem;
+                padding-top: 0.72rem;
+                padding-bottom: calc(0.72rem + env(safe-area-inset-bottom));
+                margin-left: calc(var(--subscription-shell-inline-pad, 0.9rem) * -1);
+                margin-right: calc(var(--subscription-shell-inline-pad, 0.9rem) * -1);
+                padding-left: var(--subscription-shell-inline-pad, 0.9rem);
+                padding-right: var(--subscription-shell-inline-pad, 0.9rem);
+                border-radius: 0;
+            }
+            #subscription-modal .subscription-modal-footer-shell::before {
+                border: 0;
+                border-top: 1px solid rgba(148, 163, 184, 0.22);
+                border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+                border-radius: 0;
+                background:
+                    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
+                    var(--modal-footer-glass-fill);
+                box-shadow: 0 -12px 24px rgba(2, 6, 23, 0.18);
+                backdrop-filter: blur(20px) saturate(170%);
+                -webkit-backdrop-filter: blur(20px) saturate(170%);
+            }
+            #resource-import-footer {
+                position: sticky;
+                bottom: 0;
+                z-index: 16;
+                margin-top: auto;
+                margin-bottom: 0;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 0.65rem;
+                padding-top: 0.72rem;
+                padding-bottom: max(0.78rem, env(safe-area-inset-bottom));
+                margin-left: -0.9rem;
+                margin-right: -0.9rem;
+                padding-left: 0.9rem;
+                padding-right: 0.9rem;
                 border-radius: 0;
             }
             #resource-import-footer::before {
@@ -3914,7 +4181,13 @@
                 width: 100%;
                 min-width: 0;
                 min-height: 44px;
-                font-size: 0.88rem;
+                font-size: 0.86rem;
+            }
+            #subscription-modal .subscription-modal-footer-shell button {
+                width: 100%;
+                min-width: 0;
+                min-height: 44px;
+                font-size: 0.86rem;
             }
             #resource-import-footer button {
                 width: 100%;
@@ -4146,6 +4419,38 @@
             #resource-import-footer { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
         @media (orientation: portrait) {
+            #monitor-modal,
+            #subscription-modal {
+                padding: 0 !important;
+                overflow-x: hidden;
+            }
+            #monitor-modal .monitor-modal-shell,
+            #subscription-modal .subscription-modal-shell {
+                width: 100%;
+                max-width: 100%;
+                height: 100dvh;
+                max-height: 100dvh;
+                margin-top: 0 !important;
+                position: relative;
+                border-radius: 0;
+                border-left: 0;
+                border-right: 0;
+                padding-bottom: 0;
+                display: grid;
+                grid-template-rows: auto minmax(0, 1fr) auto;
+                overflow: hidden;
+            }
+            #monitor-modal .monitor-modal-body,
+            #subscription-modal .subscription-modal-body {
+                margin-top: 0 !important;
+                min-height: 0;
+                padding-top: 1rem;
+                padding-right: 0;
+                padding-bottom: 0;
+                overflow-y: auto;
+                overflow-x: hidden;
+                scrollbar-gutter: auto;
+            }
             #page-monitor .monitor-task-actions {
                 grid-template-columns: repeat(4, minmax(0, 1fr));
                 gap: 0.35rem;
@@ -4188,6 +4493,109 @@
             }
             #page-subscription .subscription-task-actions.subscription-task-actions-tv > button {
                 font-size: 0.7rem !important;
+            }
+            #monitor-modal-footer.monitor-modal-footer-portrait,
+            #subscription-modal .subscription-modal-footer-shell {
+                position: relative;
+                bottom: auto;
+                z-index: 16;
+                margin-top: 0;
+                margin-bottom: 0;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 0.65rem;
+                padding-top: 0.72rem;
+                border-radius: 0;
+            }
+            #monitor-modal-footer.monitor-modal-footer-portrait {
+                padding-bottom: calc(0.72rem + env(safe-area-inset-bottom));
+                margin-left: calc(var(--monitor-shell-inline-pad, 0.9rem) * -1);
+                margin-right: calc(var(--monitor-shell-inline-pad, 0.9rem) * -1);
+                padding-left: var(--monitor-shell-inline-pad, 0.9rem);
+                padding-right: var(--monitor-shell-inline-pad, 0.9rem);
+            }
+            #subscription-modal .subscription-modal-footer-shell {
+                padding-bottom: calc(0.72rem + env(safe-area-inset-bottom));
+                margin-left: calc(var(--subscription-shell-inline-pad, 0.9rem) * -1);
+                margin-right: calc(var(--subscription-shell-inline-pad, 0.9rem) * -1);
+                padding-left: var(--subscription-shell-inline-pad, 0.9rem);
+                padding-right: var(--subscription-shell-inline-pad, 0.9rem);
+            }
+            #monitor-modal-footer.monitor-modal-footer-portrait .monitor-modal-save-btn {
+                color: #eff8ff;
+                border-color: rgba(16, 185, 129, 0.45);
+                background:
+                    linear-gradient(180deg, rgba(16, 185, 129, 0.28), rgba(16, 185, 129, 0.12)),
+                    linear-gradient(135deg, #059669 0%, #10b981 52%, #34d399 100%);
+                box-shadow: 0 8px 16px rgba(5, 150, 105, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+            }
+            #monitor-modal-footer.monitor-modal-footer-portrait .monitor-modal-save-btn:hover {
+                border-color: rgba(110, 231, 183, 0.75);
+                box-shadow: 0 10px 18px rgba(5, 150, 105, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+            }
+            #monitor-modal-footer.monitor-modal-footer-portrait .monitor-modal-save-btn:active {
+                box-shadow: 0 4px 10px rgba(5, 150, 105, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+            }
+            #monitor-modal-footer.monitor-modal-footer-portrait .monitor-modal-cancel-btn {
+                color: #e2e8f0;
+                border-color: rgba(100, 116, 139, 0.72);
+                background:
+                    linear-gradient(180deg, rgba(71, 85, 105, 0.92), rgba(51, 65, 85, 0.92)),
+                    rgba(30, 41, 59, 0.88);
+                box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+            }
+            #monitor-modal-footer.monitor-modal-footer-portrait .monitor-modal-cancel-btn:hover {
+                color: #f8fafc;
+                border-color: rgba(148, 163, 184, 0.9);
+                background:
+                    linear-gradient(180deg, rgba(100, 116, 139, 0.94), rgba(71, 85, 105, 0.94)),
+                    rgba(51, 65, 85, 0.9);
+            }
+            #monitor-modal-footer.monitor-modal-footer-portrait::before,
+            #subscription-modal .subscription-modal-footer-shell::before {
+                border: 0;
+                border-top: 1px solid rgba(148, 163, 184, 0.22);
+                border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+                border-radius: 0;
+                background:
+                    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
+                    var(--modal-footer-glass-fill);
+                box-shadow: 0 -12px 24px rgba(2, 6, 23, 0.18);
+                backdrop-filter: blur(20px) saturate(170%);
+                -webkit-backdrop-filter: blur(20px) saturate(170%);
+            }
+            html.theme-day #monitor-modal-footer.monitor-modal-footer-portrait::before,
+            html.theme-day #subscription-modal .subscription-modal-footer-shell::before {
+                border-top-color: rgba(148, 163, 184, 0.2);
+                border-bottom-color: rgba(148, 163, 184, 0.2);
+                background:
+                    linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.02)),
+                    linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(226, 232, 240, 0.1));
+                box-shadow: 0 -8px 16px rgba(111, 135, 166, 0.08);
+            }
+            html.theme-day #monitor-modal-footer.monitor-modal-footer-portrait .monitor-modal-save-btn {
+                color: #f8fffc;
+                border-color: rgba(16, 185, 129, 0.5);
+                background:
+                    linear-gradient(180deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.12)),
+                    linear-gradient(135deg, #059669 0%, #10b981 52%, #34d399 100%);
+                box-shadow: 0 8px 16px rgba(5, 150, 105, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+            }
+            html.theme-day #monitor-modal-footer.monitor-modal-footer-portrait .monitor-modal-save-btn:hover {
+                border-color: rgba(110, 231, 183, 0.78);
+                box-shadow: 0 10px 18px rgba(5, 150, 105, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.36);
+            }
+            html.theme-day #monitor-modal-footer.monitor-modal-footer-portrait .monitor-modal-cancel-btn {
+                color: #f8fafc;
+                border-color: rgba(71, 85, 105, 0.68);
+                background:
+                    linear-gradient(180deg, rgba(100, 116, 139, 0.9), rgba(71, 85, 105, 0.94)),
+                    rgba(51, 65, 85, 0.9);
+            }
+            html.theme-day #monitor-modal-footer.monitor-modal-footer-portrait .monitor-modal-cancel-btn:hover {
+                border-color: rgba(148, 163, 184, 0.86);
+                background:
+                    linear-gradient(180deg, rgba(100, 116, 139, 0.98), rgba(51, 65, 85, 0.98)),
+                    rgba(51, 65, 85, 0.95);
             }
         }
         @media (max-width: 1279px) {
@@ -5645,7 +6053,7 @@
             background: #334155 !important;
             color: #ffffff !important;
         }
-        html.theme-day .task-modal-save-btn {
+        html.theme-day .monitor-modal-save-btn {
             color: #eff6ff;
             border-color: rgba(59, 130, 246, 0.64);
             background:
@@ -5653,18 +6061,77 @@
                 linear-gradient(135deg, #1d4ed8 0%, #2563eb 50%, #0ea5e9 100%);
             box-shadow: 0 8px 16px rgba(37, 99, 235, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.28);
         }
-        html.theme-day .task-modal-save-btn:hover {
+        html.theme-day .monitor-modal-save-btn:hover {
             border-color: rgba(147, 197, 253, 0.86);
             box-shadow: 0 10px 18px rgba(37, 99, 235, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.34);
         }
-        html.theme-day .task-modal-cancel-btn {
+        html.theme-day .monitor-modal-cancel-btn {
             color: #f8fafc;
             border-color: rgba(71, 85, 105, 0.68);
             background:
                 linear-gradient(180deg, rgba(100, 116, 139, 0.9), rgba(71, 85, 105, 0.94)),
                 rgba(51, 65, 85, 0.9);
         }
-        html.theme-day .task-modal-cancel-btn:hover {
+        html.theme-day .monitor-modal-cancel-btn:hover {
+            border-color: rgba(148, 163, 184, 0.86);
+            background:
+                linear-gradient(180deg, rgba(100, 116, 139, 0.98), rgba(51, 65, 85, 0.98)),
+                rgba(51, 65, 85, 0.95);
+        }
+        html.theme-day .subscription-modal-save-btn {
+            color: #f8fffc;
+            border-color: rgba(16, 185, 129, 0.5);
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.12)),
+                linear-gradient(135deg, #059669 0%, #10b981 52%, #34d399 100%);
+            box-shadow: 0 8px 16px rgba(5, 150, 105, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+        }
+        html.theme-day .subscription-modal-save-btn:hover {
+            border-color: rgba(110, 231, 183, 0.78);
+            box-shadow: 0 10px 18px rgba(5, 150, 105, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.36);
+        }
+        html.theme-day .subscription-modal-cancel-btn {
+            color: #f8fafc;
+            border-color: rgba(71, 85, 105, 0.68);
+            background:
+                linear-gradient(180deg, rgba(100, 116, 139, 0.9), rgba(71, 85, 105, 0.94)),
+                rgba(51, 65, 85, 0.9);
+        }
+        html.theme-day .subscription-modal-cancel-btn:hover {
+            border-color: rgba(148, 163, 184, 0.86);
+            background:
+                linear-gradient(180deg, rgba(100, 116, 139, 0.98), rgba(51, 65, 85, 0.98)),
+                rgba(51, 65, 85, 0.95);
+        }
+        html.theme-day .resource-import-submit-btn {
+            color: #f8fffc;
+            border-color: rgba(16, 185, 129, 0.5);
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.12)),
+                linear-gradient(135deg, #059669 0%, #10b981 52%, #34d399 100%);
+            box-shadow: 0 8px 16px rgba(5, 150, 105, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+        }
+        html.theme-day .resource-import-submit-btn:hover {
+            border-color: rgba(110, 231, 183, 0.78);
+            box-shadow: 0 10px 18px rgba(5, 150, 105, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.36);
+        }
+        html.theme-day .resource-import-submit-btn.resource-import-submit-btn-disabled,
+        html.theme-day .resource-import-submit-btn:disabled {
+            color: #94a3b8;
+            border-color: rgba(148, 163, 184, 0.5);
+            background:
+                linear-gradient(180deg, rgba(203, 213, 225, 0.82), rgba(226, 232, 240, 0.86)),
+                rgba(226, 232, 240, 0.9);
+            box-shadow: none;
+        }
+        html.theme-day .resource-import-cancel-btn {
+            color: #f8fafc;
+            border-color: rgba(71, 85, 105, 0.68);
+            background:
+                linear-gradient(180deg, rgba(100, 116, 139, 0.9), rgba(71, 85, 105, 0.94)),
+                rgba(51, 65, 85, 0.9);
+        }
+        html.theme-day .resource-import-cancel-btn:hover {
             border-color: rgba(148, 163, 184, 0.86);
             background:
                 linear-gradient(180deg, rgba(100, 116, 139, 0.98), rgba(51, 65, 85, 0.98)),
