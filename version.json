@@ -1,9 +1,9 @@
 {
-  "version": "0.1.17",
-  "buildDate": "2026-04-19T23:20:58+08:00",
+  "version": "0.1.18",
+  "buildDate": "2026-04-20T12:28:01+08:00",
   "notes": [
-    "日志默认精简为仅保留开始/结束、失败和汇总，降低排障噪声。",
-    "容器默认关闭 Uvicorn 访问日志，可通过环境变量按需开启。"
+    "恢复订阅、监控与目录树任务在网页端与 log 文件中的详细运行日志。",
+    "保留容器 Uvicorn 访问日志默认关闭，可用 UVICORN_ACCESS_LOG=1 按需开启。"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

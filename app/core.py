@@ -78,21 +78,6 @@ VERSION_SOURCE_URL = os.environ.get(
     "https://raw.githubusercontent.com/xianer235/115-media-hub/main/version.json",
 )
 VERSION_CACHE_TTL = int(os.environ.get("VERSION_CACHE_TTL", 6 * 3600))
-LOG_BRIEF_MODE = str(os.environ.get("LOG_BRIEF_MODE", "1")).strip().lower() not in (
-    "0",
-    "false",
-    "no",
-    "off",
-)
-BRIEF_LOG_ALWAYS_KEEP_LEVELS = {"error"}
-BRIEF_LOG_KEEP_KEYWORDS: Tuple[str, ...] = (
-    "任务开始",
-    "任务结束",
-    "订阅开始",
-    "订阅结束",
-    "汇总",
-    "失败",
-)
 UI_EVENT_RETRY_MS = 3000
 UI_HEARTBEAT_SECONDS = 15
 UI_PUSH_DEBOUNCE_SECONDS = 0.15
@@ -4423,25 +4408,6 @@ def infer_log_level_from_text(text: str) -> str:
     return "info"
 
 
-def should_keep_runtime_log(text: str, level: Optional[str] = None) -> bool:
-    if not LOG_BRIEF_MODE:
-        return True
-
-    normalized_text = str(text or "").strip()
-    if not normalized_text:
-        return False
-
-    normalized_level = str(level or "").strip().lower()
-    if not normalized_level:
-        normalized_level = infer_log_level_from_text(normalized_text)
-
-    if normalized_level in BRIEF_LOG_ALWAYS_KEEP_LEVELS:
-        return True
-    if any(keyword in normalized_text for keyword in BRIEF_LOG_KEEP_KEYWORDS):
-        return True
-    return False
-
-
 def restore_runtime_logs_from_files() -> None:
     main_lines = read_log_tail(MAIN_LOG_PATH, limit=500)
     if main_lines:
@@ -4968,9 +4934,6 @@ async def update_progress(step: str, percent: float, detail: str) -> None:
 
 async def write_log(msg: str, level: Optional[str] = None) -> None:
     resolved_level = str(level or infer_log_level_from_text(msg)).strip().lower() or "info"
-    if not should_keep_runtime_log(msg, resolved_level):
-        await asyncio.sleep(0)
-        return
     line = f"{format_log_time(True)} {msg}"
     task_status["logs"].append({"text": line, "level": resolved_level})
     if len(task_status["logs"]) > 500:
@@ -4982,9 +4945,6 @@ async def write_log(msg: str, level: Optional[str] = None) -> None:
 
 async def write_monitor_log(text: str, level: str = "info") -> None:
     resolved_level = str(level or infer_log_level_from_text(text)).strip().lower() or "info"
-    if not should_keep_runtime_log(text, resolved_level):
-        await asyncio.sleep(0)
-        return
     line = f"{format_log_time(True)} {text}"
     monitor_status["logs"].append({"text": line, "level": resolved_level})
     if len(monitor_status["logs"]) > 800:
@@ -4996,9 +4956,6 @@ async def write_monitor_log(text: str, level: str = "info") -> None:
 
 async def write_subscription_log(text: str, level: str = "info") -> None:
     resolved_level = str(level or infer_log_level_from_text(text)).strip().lower() or "info"
-    if not should_keep_runtime_log(text, resolved_level):
-        await asyncio.sleep(0)
-        return
     line = f"{format_log_time(True)} {text}"
     subscription_status["logs"].append({"text": line, "level": resolved_level})
     if len(subscription_status["logs"]) > 800:

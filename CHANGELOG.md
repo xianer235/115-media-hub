@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.18] - 2026-04-20
+- 恢复网页端日志详细输出：订阅任务、文件夹监控任务、目录树任务的运行细节重新写入页面与对应 `log` 文件。
+- 保留容器日志精简策略：继续通过 `UVICORN_ACCESS_LOG` 控制 Uvicorn 访问日志默认关闭，避免接口轮询刷屏。
+- 移除误导性的 `LOG_BRIEF_MODE` 说明与默认值，避免再次误伤网页端排障日志。
+
 ## [0.1.10] - 2026-04-16
 - 优化固定 115 分享订阅的目录读取链路：运行时缓存按执行批次复用，并优先走精确子目录定位，减少无效深扫带来的耗时。
 - 修复多季合一订阅在精细转存时全部落入 `Season 01` 的问题，跨季文件会按 `Season 01` / `Season 02` 等目标目录分别建任务转存。
