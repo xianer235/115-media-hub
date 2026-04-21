@@ -190,7 +190,7 @@
             </div>
 
             <div id="resource-cookie-hint" class="resource-blocking-hint rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-200">
-                当前还没配置 115 Cookie。请先到“参数配置”页填写后，再使用导入或转存功能。
+                当前还没配置可用网盘 Cookie。请先到“参数配置”页填写 115 或 Quark Cookie，再使用导入或转存功能。
             </div>
 
             <div id="resource-quick-link-strip" class="resource-quick-link-strip hidden" data-resource-quick-strip aria-label="常用网盘链接快捷入口"></div>
@@ -427,7 +427,7 @@
                 </div>
 
                 <div class="group-card settings-section-card">
-                    <h3 class="group-title">7. 115 资源导入配置</h3>
+                    <h3 class="group-title">7. 网盘导入配置（115 / Quark）</h3>
                     <div class="space-y-4">
                         <label class="block">
                             <span class="text-xs text-slate-500 inline-flex items-center gap-2">
@@ -436,8 +436,15 @@
                             </span>
                             <textarea id="cookie_115" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 min-h-[120px]" placeholder="把浏览器里的 115 Cookie 粘贴到这里，例如 UID=...; CID=...; SEID=...;"></textarea>
                         </label>
+                        <label class="block">
+                            <span class="text-xs text-slate-500 inline-flex items-center gap-2">
+                                Quark Cookie
+                                <button type="button" class="info-dot" onclick="showHelp('夸克仅支持 Cookie 登录。请把浏览器中的 pan.quark.cn Cookie 完整粘贴到这里。')">i</button>
+                            </span>
+                            <textarea id="cookie_quark" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 min-h-[120px]" placeholder="把浏览器里的 Quark Cookie 粘贴到这里，例如 __puus=...; _UP_A4A_11_=...;"></textarea>
+                        </label>
                         <div class="text-xs text-slate-500 leading-6">
-                            当前支持 magnet 离线下载与 115 分享链接转存；保存路径会自动映射到 OpenList 挂载目录，并按路径命中文件夹监控任务。
+                            当前支持 magnet 离线下载、115 分享链接转存与 Quark 分享转存；保存路径会自动映射到对应网盘目录。
                         </div>
 
                         <div class="rounded-2xl border border-slate-700/80 bg-slate-900/50 p-4 space-y-4">
@@ -759,12 +766,19 @@
                     <button onclick="closeSubscriptionModal()" class="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm">关闭</button>
                 </div>
                 <div class="subscription-modal-body space-y-4">
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                         <label class="block">
                             <span class="text-xs text-slate-500">订阅类型</span>
                             <select id="subscription_media_type" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" onchange="syncSubscriptionTypeUI()">
                                 <option value="tv">电视剧</option>
                                 <option value="movie">电影</option>
+                            </select>
+                        </label>
+                        <label class="block">
+                            <span class="text-xs text-slate-500">网盘提供方</span>
+                            <select id="subscription_provider" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" onchange="syncSubscriptionProviderUI()">
+                                <option value="115">115</option>
+                                <option value="quark">Quark</option>
                             </select>
                         </label>
                         <label class="block">
@@ -816,7 +830,7 @@
                         多季合一（跨季追更，关闭时按当前季订阅）
                     </label>
                     <div class="space-y-2">
-                        <div class="text-xs text-slate-500">115 保存目录</div>
+                        <div id="subscription-savepath-provider-label" class="text-xs text-slate-500">115 保存目录</div>
                         <div class="resource-save-path-grid">
                             <input id="subscription_savepath_display" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" value="请选择保存目录" readonly>
                             <button type="button" onclick="openSubscriptionFolderModal()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">浏览目录</button>
@@ -825,29 +839,34 @@
                         <input id="subscription_savepath" class="hidden" value="">
                         <div id="subscription-savepath-hint" class="text-[11px] text-slate-500 leading-5 px-1">电影会自动保存到“目标目录/影片名”子文件夹；电视剧保存到所选目录。</div>
                     </div>
-                    <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 space-y-3">
-                        <div class="text-xs text-slate-500">固定 115 分享链接（可选）</div>
-                        <div class="resource-save-path-grid">
-                            <input id="subscription_share_link_url" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" placeholder="例如：https://115.com/s/xxxxxxx?password=abcd">
-                            <button type="button" onclick="openSubscriptionShareFolderModal()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold whitespace-nowrap">浏览链接目录</button>
+                    <div id="subscription-115-fixed-link-block" class="space-y-3">
+                        <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 space-y-3">
+                            <div class="text-xs text-slate-500">固定 115 分享链接（可选）</div>
+                            <div class="resource-save-path-grid">
+                                <input id="subscription_share_link_url" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" placeholder="例如：https://115.com/s/xxxxxxx?password=abcd">
+                                <button type="button" onclick="openSubscriptionShareFolderModal()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold whitespace-nowrap">浏览链接目录</button>
+                            </div>
+                            <div class="resource-save-path-grid">
+                                <input id="subscription_share_receive_code" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm font-mono uppercase tracking-[0.08em]" placeholder="可选：提取码（1-16 位字母数字）">
+                                <button type="button" onclick="openSubscriptionShareFolderModal(true)" class="px-4 py-3 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold whitespace-nowrap">应用并浏览</button>
+                            </div>
+                            <div class="text-[11px] text-slate-500 leading-5">填写后将优先使用这个固定分享链接，不再依赖频道搜索；适合长期更新的合集链接。</div>
+                            <label class="flex items-center gap-3 cursor-pointer text-sm">
+                                <input type="checkbox" id="subscription_fixed_link_channel_search" class="ui-checkbox">
+                                固定链接后再补搜一次频道（兜底）
+                            </label>
+                            <div class="text-[11px] text-slate-500 leading-5">开启后会先尝试固定链接候选，再执行一次频道搜索并追加候选；固定链接候选仍保持优先。</div>
                         </div>
-                        <div class="resource-save-path-grid">
-                            <input id="subscription_share_receive_code" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm font-mono uppercase tracking-[0.08em]" placeholder="可选：提取码（1-16 位字母数字）">
-                            <button type="button" onclick="openSubscriptionShareFolderModal(true)" class="px-4 py-3 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold whitespace-nowrap">应用并浏览</button>
-                        </div>
-                        <div class="text-[11px] text-slate-500 leading-5">填写后将优先使用这个固定分享链接，不再依赖频道搜索；适合长期更新的合集链接。</div>
-                        <label class="flex items-center gap-3 cursor-pointer text-sm">
-                            <input type="checkbox" id="subscription_fixed_link_channel_search" class="ui-checkbox">
-                            固定链接后再补搜一次频道（兜底）
+                        <label class="block">
+                            <span class="text-xs text-slate-500">115 分享子目录（可选）</span>
+                            <input id="subscription_share_subdir" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：合集/剧名（留空表示从分享根目录）">
+                            <input id="subscription_share_subdir_cid" type="hidden" value="">
+                            <div class="text-[11px] text-slate-500 mt-2">可手动填写，也可先填上方固定分享链接后点击“浏览链接目录”选择。浏览选择时会自动记录 CID 锚点，优先按 CID 定位目录；配置后仅在该子目录内扫描和转存。</div>
                         </label>
-                        <div class="text-[11px] text-slate-500 leading-5">开启后会先尝试固定链接候选，再执行一次频道搜索并追加候选；固定链接候选仍保持优先。</div>
                     </div>
-                    <label class="block">
-                        <span class="text-xs text-slate-500">115 分享子目录（可选）</span>
-                        <input id="subscription_share_subdir" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：合集/剧名（留空表示从分享根目录）">
-                        <input id="subscription_share_subdir_cid" type="hidden" value="">
-                        <div class="text-[11px] text-slate-500 mt-2">可手动填写，也可先填上方固定分享链接后点击“浏览链接目录”选择。浏览选择时会自动记录 CID 锚点，优先按 CID 定位目录；配置后仅在该子目录内扫描和转存。</div>
-                    </label>
+                    <div id="subscription-quark-provider-hint" class="hidden text-[11px] text-cyan-300/90 leading-5 rounded-xl border border-cyan-400/20 bg-cyan-500/10 px-3 py-2">
+                        Quark 模式仅使用频道自动匹配，不支持固定分享链接模式；评分采用独立规则（强标题命中 + 集数匹配）。
+                    </div>
                     <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 space-y-3">
                         <div class="text-xs text-slate-500">自动查询时段</div>
                         <div class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2" id="subscription_schedule_weekdays">
@@ -896,7 +915,7 @@
                         </div>
                         <div class="text-[11px] text-slate-500 leading-5">仅在所选星期与时间段内按间隔自动查询。支持跨天时段（例如 22:00 到次日 02:00）。</div>
                     </div>
-                    <label class="block">
+                    <label id="subscription-min-score-wrap" class="block">
                         <span class="text-xs text-slate-500">匹配阈值（30-100）</span>
                         <input id="subscription_min_score" type="number" min="30" max="100" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="55">
                         <div class="text-[11px] text-slate-500 mt-2 leading-5">
@@ -920,7 +939,7 @@
                         <input type="checkbox" id="subscription_enabled" class="ui-checkbox" checked>
                         启用任务（关闭后不参与定时，但仍可手动运行）
                     </label>
-                    <div class="text-xs text-slate-500 leading-6">
+                    <div id="subscription-provider-strategy-hint" class="text-xs text-slate-500 leading-6">
                         匹配策略：若填写了固定 115 分享链接，默认只在该链接内扫描；可开启“固定链接后再补搜一次频道”作为兜底。未填写固定链接时，会在已启用频道按标题/别名主动搜索并评分命中。
                     </div>
                 </div>
@@ -1297,7 +1316,7 @@
                                 </div>
                                 <div class="resource-save-layout">
                                     <div class="resource-save-section">
-                                        <div class="resource-import-section-label">115 保存目录</div>
+                                        <div id="resource-savepath-provider-label" class="resource-import-section-label">115 保存目录</div>
                                         <div class="resource-save-path-grid">
                                             <input id="resource_job_folder_path" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" value="根目录" readonly>
                                             <button type="button" onclick="openResourceFolderModal()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">浏览目录</button>
@@ -1317,7 +1336,7 @@
                                         <input id="resource_job_monitor_task" class="hidden" value="">
                                     </div>
                                     <div id="resource-share-receive-code-section" class="resource-save-section hidden">
-                                        <div class="resource-import-section-label">115 提取码</div>
+                                        <div id="resource-share-receive-code-label" class="resource-import-section-label">115 提取码</div>
                                         <div class="resource-save-path-grid">
                                             <input id="resource_share_receive_code" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm font-mono uppercase tracking-[0.08em]" placeholder="可选：可后续补录提取码">
                                             <button id="resource-share-receive-code-apply" type="button" onclick="applyResourceShareReceiveCode()" class="px-4 py-3 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold whitespace-nowrap">应用并刷新</button>
@@ -1354,7 +1373,7 @@
         <div id="resource-folder-modal" class="hidden fixed inset-0 bg-black/60 z-[56] p-4">
             <div class="w-full max-w-2xl mx-auto mt-[8vh] max-h-[88vh] overflow-y-auto group-card modal-card">
                 <div class="flex items-center justify-between">
-                    <h3 class="group-title mb-0">选择 115 目录</h3>
+                    <h3 id="resource-folder-modal-title" class="group-title mb-0">选择 115 目录</h3>
                     <button onclick="closeResourceFolderModal()" class="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm">关闭</button>
                 </div>
                 <div class="space-y-4 mt-4">

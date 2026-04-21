@@ -94,7 +94,7 @@ async def retry_resource_job(job_id: int, reason: str = "manual") -> Dict[str, A
         payload.pop("extra", None)
     if not payload["savepath"]:
         raise RuntimeError("原任务保存路径为空，无法重试")
-    if link_type == "115share":
+    if link_type in ("115share", "quark"):
         payload["share_selection"] = normalize_share_selection_meta(job_extra)
         snapshot = job.get("_snapshot", {}) if isinstance(job.get("_snapshot"), dict) else {}
         receive_code = normalize_receive_code(
@@ -194,14 +194,25 @@ async def run_resource_job(job_id: int) -> None:
 
         ensure_not_cancelled("启动前")
 
-        cfg = get_config()
-        if not str(cfg.get("cookie_115", "")).strip():
-            raise RuntimeError("请先在参数配置中填写 115 Cookie")
         link_type = resolve_resource_link_type(job.get("link_type", ""), job.get("link_url", ""))
-        if link_type not in ("magnet", "115share"):
-            raise RuntimeError("当前仅支持 magnet 下载和 115 分享链接转存")
+        if link_type not in ("magnet", "115share", "quark"):
+            raise RuntimeError("当前仅支持 magnet 下载、115 分享转存和夸克分享转存")
+        cfg = get_config()
+        cookie_115 = str(cfg.get("cookie_115", "")).strip()
+        cookie_quark = str(cfg.get("cookie_quark", "")).strip()
+        if link_type in ("magnet", "115share"):
+            if not cookie_115:
+                raise RuntimeError("请先在参数配置中填写 115 Cookie")
+        elif not cookie_quark:
+            raise RuntimeError("请先在参数配置中填写 Quark Cookie")
 
-        update_resource_job(job_id, status="running", status_detail="正在提交到 115", started_at=now_text())
+        provider_label = "夸克" if link_type == "quark" else "115"
+        update_resource_job(
+            job_id,
+            status="running",
+            status_detail=f"正在提交到 {provider_label}",
+            started_at=now_text(),
+        )
         if resource_id > 0:
             conn = open_db()
             update_resource_item_status(conn, resource_id, "importing")
@@ -214,7 +225,7 @@ async def run_resource_job(job_id: int) -> None:
                 response = await asyncio.wait_for(
                     asyncio.to_thread(
                         submit_115_offline_task,
-                        str(cfg.get("cookie_115", "")).strip(),
+                        cookie_115,
                         str(job.get("link_url", "")).strip(),
                         str(job.get("folder_id", "")).strip(),
                     ),
@@ -225,7 +236,7 @@ async def run_resource_job(job_id: int) -> None:
             detail = str(response.get("error_msg", "")).strip() or "115 已接收离线任务"
             if int(response.get("errcode", 0) or 0) == 10008:
                 detail = "115 提示任务已存在，已继续走刷新流程"
-        else:
+        elif link_type == "115share":
             job_extra = safe_json_loads(job.get("extra_json"), {})
             job_selection = normalize_share_selection_meta(job_extra)
             share_url = apply_share_receive_code_to_url(
@@ -236,7 +247,7 @@ async def run_resource_job(job_id: int) -> None:
                 response_bundle = await asyncio.wait_for(
                     asyncio.to_thread(
                         submit_115_share_receive,
-                        str(cfg.get("cookie_115", "")).strip(),
+                        cookie_115,
                         share_url,
                         str(job.get("folder_id", "")).strip(),
                         "",
@@ -263,21 +274,74 @@ async def run_resource_job(job_id: int) -> None:
                 if job_snapshot:
                     merged_extra["snapshot"] = job_snapshot
                 job["extra_json"] = safe_json_dumps(merged_extra)
+        else:
+            job_extra = safe_json_loads(job.get("extra_json"), {})
+            job_selection = normalize_share_selection_meta(job_extra)
+            selected_ids = (
+                job_selection.get("selected_ids", [])
+                if isinstance(job_selection.get("selected_ids"), list)
+                else []
+            )
+            receive_code = normalize_receive_code(
+                str(job_snapshot.get("receive_code", "") or job_extra.get("receive_code", "")).strip()
+            )
+            try:
+                response_bundle = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        submit_quark_share_save,
+                        cookie_quark,
+                        str(job.get("link_url", "")).strip(),
+                        str(job.get("folder_id", "")).strip(),
+                        str((resource or {}).get("raw_text", "") or ""),
+                        selected_ids,
+                        receive_code,
+                        job_selection.get("selected_entries", []),
+                    ),
+                    timeout=import_timeout_seconds,
+                )
+            except asyncio.TimeoutError as exc:
+                raise RuntimeError(f"提交到夸克超时（>{import_timeout_seconds} 秒）") from exc
+            response = response_bundle.get("response", {}) if isinstance(response_bundle, dict) else {}
+            resolved_selection = merge_share_selection_meta(job_selection, response_bundle.get("selection", {}))
+            detail = (
+                str(response.get("message", "")).strip()
+                or str(response.get("msg", "")).strip()
+                or "夸克已接收转存任务"
+            )
+
+            resource_title_rel = normalize_relative_path(job.get("title", "") or resource.get("title", ""))
+            current_sharetitle = normalize_relative_path(job.get("sharetitle", ""))
+            auto_sharetitle = normalize_relative_path(resolved_selection.get("auto_sharetitle", ""))
+            if auto_sharetitle and (not current_sharetitle or current_sharetitle == resource_title_rel):
+                job["sharetitle"] = auto_sharetitle
+            if resolved_selection:
+                merged_extra = merge_json_object(job_extra, resolved_selection)
+                if job_snapshot:
+                    merged_extra["snapshot"] = job_snapshot
+                job["extra_json"] = safe_json_dumps(merged_extra)
         ensure_not_cancelled("提交后")
 
-        monitor_task_name = str(job.get("monitor_task_name", "") or "").strip()
-        auto_refresh_enabled = bool(job.get("auto_refresh"))
-        if monitor_task_name:
-            delay_seconds = max(0, int(job.get("refresh_delay_seconds", 0) or 0))
-            if auto_refresh_enabled:
-                refresh_text = f"等待 {delay_seconds} 秒后自动触发文件夹监控" if delay_seconds > 0 else "提交后自动触发文件夹监控"
-            else:
-                refresh_text = "已命中文件夹监控任务，等待手动触发生成 strm"
-            detail = f"{detail}；{refresh_text}（{monitor_task_name}）"
+        if link_type == "quark":
+            detail = f"{detail}；夸克链路不联动文件夹监控，导入成功后不会自动刷新"
+            next_status = "completed"
         else:
-            detail = f"{detail}；当前保存路径未纳入文件夹监控，导入成功后不会自动生成 strm"
+            monitor_task_name = str(job.get("monitor_task_name", "") or "").strip()
+            auto_refresh_enabled = bool(job.get("auto_refresh"))
+            if monitor_task_name:
+                delay_seconds = max(0, int(job.get("refresh_delay_seconds", 0) or 0))
+                if auto_refresh_enabled:
+                    refresh_text = (
+                        f"等待 {delay_seconds} 秒后自动触发文件夹监控"
+                        if delay_seconds > 0
+                        else "提交后自动触发文件夹监控"
+                    )
+                else:
+                    refresh_text = "已命中文件夹监控任务，等待手动触发生成 strm"
+                detail = f"{detail}；{refresh_text}（{monitor_task_name}）"
+            else:
+                detail = f"{detail}；当前保存路径未纳入文件夹监控，导入成功后不会自动生成 strm"
 
-        next_status = "submitted" if monitor_task_name else "completed"
+            next_status = "submitted" if monitor_task_name else "completed"
 
         update_fields = {
             "status": next_status,
@@ -286,7 +350,7 @@ async def run_resource_job(job_id: int) -> None:
         }
         if next_status == "completed":
             update_fields["finished_at"] = now_text()
-        if link_type == "115share":
+        if link_type in ("115share", "quark"):
             update_fields["extra_json"] = job.get("extra_json", safe_json_dumps({}))
             if str(job.get("sharetitle", "")).strip():
                 update_fields["sharetitle"] = str(job.get("sharetitle", "")).strip()
@@ -298,7 +362,11 @@ async def run_resource_job(job_id: int) -> None:
             conn.commit()
             conn.close()
 
-        if bool(job.get("auto_refresh")) and str(job.get("monitor_task_name", "")).strip():
+        if (
+            link_type != "quark"
+            and bool(job.get("auto_refresh"))
+            and str(job.get("monitor_task_name", "")).strip()
+        ):
             asyncio.create_task(schedule_resource_job_refresh(job_id))
     except ResourceJobCancelledError:
         pass

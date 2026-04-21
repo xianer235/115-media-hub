@@ -7,8 +7,6 @@
 ## AI 协作入口
 
 - 如果你是新会话 AI / 编码 Agent，优先阅读仓库根目录的 `AGENTS.md`
-- 项目唯一协作文档位于 `doc/PROJECT.md`
-- 若文档与代码冲突，以代码为准，并在结束前回写 `doc/PROJECT.md`
 
 ## 近期更新（以 `version.json` 为准）
 
@@ -234,7 +232,13 @@ POST /webhook/{任务名}
 - `POST /resource/jobs/create`
 - `POST /resource/jobs/refresh|cancel|retry|clear|clear_completed`
 - `GET /resource/115/folders`
+- `POST /resource/115/folders/create`
 - `GET /resource/115/share_entries`
+- `POST /resource/115/share_entries_preview`
+- `GET /resource/quark/folders`
+- `POST /resource/quark/folders/create`
+- `GET /resource/quark/share_entries`
+- `POST /resource/quark/share_entries_preview`
 
 订阅与监控：
 
@@ -243,6 +247,12 @@ POST /webhook/{任务名}
 - `GET /monitor/status`
 - `POST /monitor/save|start|stop|delete`
 - `POST /webhook/{task_name}`
+
+订阅任务字段说明（新增）：
+
+- `provider=115|quark`（单网盘模式，不混排候选）
+- `provider=115`：候选仅 `magnet/115share`
+- `provider=quark`：候选仅 `quark`，使用独立评分与导入链路（不联动监控刷新）
 
 ## 企业微信通知推送（0.1.6）
 

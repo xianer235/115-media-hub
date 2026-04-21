@@ -260,16 +260,19 @@ async def create_resource_job_endpoint(request: Request) -> Dict[str, Any]:
         if not str(resource.get("link_url", "")).strip():
             return JSONResponse(status_code=400, content={"ok": False, "msg": "当前资源没有可导入链接"})
     link_type = resolve_resource_link_type(resource.get("link_type", ""), resource.get("link_url", ""))
-    if link_type not in ("magnet", "115share"):
-        return JSONResponse(status_code=400, content={"ok": False, "msg": "当前仅支持 magnet 下载和 115 分享转存"})
+    if link_type not in ("magnet", "115share", "quark"):
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "当前仅支持 magnet 下载、115 分享转存和夸克分享转存"})
     receive_code_raw = str(data.get("receive_code", "") or "").strip()
     receive_code = normalize_receive_code(receive_code_raw)
-    if link_type == "115share" and receive_code_raw and not receive_code:
+    if link_type in ("115share", "quark") and receive_code_raw and not receive_code:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "提取码格式不正确，请输入 1-16 位字母或数字"})
 
     cfg = get_config()
-    if not str(cfg.get("cookie_115", "")).strip():
-        return JSONResponse(status_code=400, content={"ok": False, "msg": "请先在参数配置中填写 115 Cookie"})
+    if link_type in ("magnet", "115share"):
+        if not str(cfg.get("cookie_115", "")).strip():
+            return JSONResponse(status_code=400, content={"ok": False, "msg": "请先在参数配置中填写 115 Cookie"})
+    elif not str(cfg.get("cookie_quark", "")).strip():
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "请先在参数配置中填写 Quark Cookie"})
 
     savepath = normalize_relative_path(data.get("savepath", ""))
     if not savepath:
@@ -297,12 +300,26 @@ async def create_resource_job_endpoint(request: Request) -> Dict[str, Any]:
                 },
             )
 
-        matched_monitor = match_monitor_task_for_savepath(cfg, savepath)
-        monitor_task_name = matched_monitor.get("task_name", "")
+        matched_monitor: Dict[str, Any] = {}
+        monitor_task_name = ""
+        if link_type != "quark":
+            matched_monitor = match_monitor_task_for_savepath(cfg, savepath)
+            monitor_task_name = matched_monitor.get("task_name", "")
         folder_id = provided_folder_id
         if not folder_id or folder_id == "0":
             try:
-                folder_id = await asyncio.to_thread(resolve_115_folder_id_by_path, str(cfg.get("cookie_115", "")).strip(), savepath)
+                if link_type == "quark":
+                    folder_id = await asyncio.to_thread(
+                        resolve_quark_folder_id_by_path,
+                        str(cfg.get("cookie_quark", "")).strip(),
+                        savepath,
+                    )
+                else:
+                    folder_id = await asyncio.to_thread(
+                        resolve_115_folder_id_by_path,
+                        str(cfg.get("cookie_115", "")).strip(),
+                        savepath,
+                    )
             except Exception as exc:
                 return JSONResponse(status_code=400, content={"ok": False, "msg": f"保存路径无效：{exc}"})
 
@@ -312,12 +329,12 @@ async def create_resource_job_endpoint(request: Request) -> Dict[str, Any]:
             "sharetitle": str(data.get("sharetitle", "") or "").strip(),
             "monitor_task_name": monitor_task_name,
             "refresh_delay_seconds": max(0, int(data.get("refresh_delay_seconds", 0) or 0)),
-            "auto_refresh": auto_refresh_requested and bool(monitor_task_name),
+            "auto_refresh": (auto_refresh_requested and bool(monitor_task_name)) if link_type != "quark" else False,
             "extra": {
                 "job_source": "manual_import",
             },
         }
-        if link_type == "115share":
+        if link_type in ("115share", "quark"):
             payload["share_selection"] = data.get("share_selection", {})
             if receive_code:
                 payload["receive_code"] = receive_code
@@ -327,9 +344,9 @@ async def create_resource_job_endpoint(request: Request) -> Dict[str, Any]:
     return {
         "ok": True,
         "job_id": job_id,
-        "monitor_task_name": monitor_task_name,
+        "monitor_task_name": monitor_task_name if link_type != "quark" else "",
         "auto_refresh": payload["auto_refresh"],
-        "openlist_path": matched_monitor.get("full_path", ""),
+        "openlist_path": matched_monitor.get("full_path", "") if link_type != "quark" else "",
     }
 
 
@@ -493,6 +510,173 @@ async def preview_115_share_entries_endpoint(request: Request) -> Dict[str, Any]
             offset,
             limit,
             1 if paged else 0,
+            folders_only,
+        )
+        return {
+            "ok": True,
+            "cid": cid,
+            "entries": result.get("entries", []),
+            "summary": result.get("summary", {"folder_count": 0, "file_count": 0}),
+            "share": {
+                "title": result.get("share_title", ""),
+                "share_code": result.get("share_code", ""),
+                "receive_code": result.get("receive_code", ""),
+                "count": result.get("count", 0),
+            },
+            "paging": {
+                "offset": result.get("offset", offset),
+                "next_offset": result.get("next_offset", offset + len(result.get("entries", []))),
+                "has_more": bool(result.get("has_more", False)),
+                "paged": paged,
+                "folders_only": folders_only,
+            },
+        }
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
+
+
+@router.get("/resource/quark/folders")
+async def get_quark_folders_endpoint(request: Request) -> Dict[str, Any]:
+    cfg = get_config()
+    cookie = str(cfg.get("cookie_quark", "")).strip()
+    if not cookie:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "请先配置 Quark Cookie"})
+    cid = str(request.query_params.get("cid", "0") or "0").strip() or "0"
+    try:
+        entries = await asyncio.to_thread(list_quark_entries, cookie, cid)
+        folders = [{"id": str(entry.get("id", "")).strip(), "name": str(entry.get("name", "")).strip()} for entry in entries if entry.get("is_dir")]
+        files = [entry for entry in entries if not entry.get("is_dir")]
+        return {
+            "ok": True,
+            "cid": cid,
+            "folders": folders,
+            "files": files,
+            "entries": entries,
+            "summary": {
+                "folder_count": len(folders),
+                "file_count": len(files),
+            },
+        }
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
+
+
+@router.post("/resource/quark/folders/create")
+async def create_quark_folder_endpoint(request: Request) -> Dict[str, Any]:
+    cfg = get_config()
+    cookie = str(cfg.get("cookie_quark", "")).strip()
+    if not cookie:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "请先配置 Quark Cookie"})
+    data = await request.json()
+    cid = str(data.get("cid", "0") or "0").strip() or "0"
+    name = str(data.get("name", "") or "").strip()
+    if not name:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "文件夹名称不能为空"})
+    try:
+        folder = await asyncio.to_thread(create_quark_folder, cookie, cid, name)
+        return {"ok": True, "cid": cid, "folder": folder}
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
+
+
+@router.get("/resource/quark/share_entries")
+async def get_quark_share_entries_endpoint(request: Request) -> Dict[str, Any]:
+    cfg = get_config()
+    cookie = str(cfg.get("cookie_quark", "")).strip()
+    if not cookie:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "请先配置 Quark Cookie"})
+
+    resource_id = int(request.query_params.get("resource_id", 0) or 0)
+    if resource_id <= 0:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "资源 ID 无效"})
+    resource = get_resource_item(resource_id)
+    if not resource:
+        return JSONResponse(status_code=404, content={"ok": False, "msg": "资源不存在"})
+    if resolve_resource_link_type(resource.get("link_type", ""), resource.get("link_url", "")) != "quark":
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "当前资源不是夸克分享链接"})
+
+    cid = str(request.query_params.get("cid", "0") or "0").strip() or "0"
+    receive_code_raw = str(request.query_params.get("receive_code", "") or "").strip()
+    receive_code = normalize_receive_code(receive_code_raw)
+    if receive_code_raw and not receive_code:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "提取码格式不正确，请输入 1-16 位字母或数字"})
+    paged = request.query_params.get("paged") == "1"
+    folders_only = request.query_params.get("folders_only") == "1"
+    offset = max(0, parse_int(request.query_params.get("offset", 0), default=0))
+    limit = max(20, min(parse_int(request.query_params.get("limit", 200), default=200), 400))
+    max_pages = 1 if paged else 0
+    try:
+        result = await asyncio.to_thread(
+            list_quark_share_entries,
+            cookie,
+            str(resource.get("link_url", "")).strip(),
+            str(resource.get("raw_text", "") or ""),
+            cid,
+            receive_code,
+            False,
+            45,
+            offset,
+            limit,
+            max_pages,
+            folders_only,
+        )
+        return {
+            "ok": True,
+            "cid": cid,
+            "entries": result.get("entries", []),
+            "summary": result.get("summary", {"folder_count": 0, "file_count": 0}),
+            "share": {
+                "title": result.get("share_title", ""),
+                "share_code": result.get("share_code", ""),
+                "receive_code": result.get("receive_code", ""),
+                "count": result.get("count", 0),
+            },
+            "paging": {
+                "offset": result.get("offset", offset),
+                "next_offset": result.get("next_offset", offset + len(result.get("entries", []))),
+                "has_more": bool(result.get("has_more", False)),
+                "paged": paged,
+                "folders_only": folders_only,
+            },
+        }
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
+
+
+@router.post("/resource/quark/share_entries_preview")
+async def preview_quark_share_entries_endpoint(request: Request) -> Dict[str, Any]:
+    cfg = get_config()
+    cookie = str(cfg.get("cookie_quark", "")).strip()
+    if not cookie:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "请先配置 Quark Cookie"})
+    data = await request.json()
+    link_url = str(data.get("link_url", "") or "").strip()
+    raw_text = str(data.get("raw_text", "") or "").strip()
+    receive_code_raw = str(data.get("receive_code", "") or "").strip()
+    receive_code = normalize_receive_code(receive_code_raw)
+    if receive_code_raw and not receive_code:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "提取码格式不正确，请输入 1-16 位字母或数字"})
+    if not link_url:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "资源链接为空"})
+    cid = str(data.get("cid", "0") or "0").strip() or "0"
+    paged = bool(data.get("paged", False))
+    folders_only = bool(data.get("folders_only", False))
+    offset = max(0, parse_int(data.get("offset", 0), default=0))
+    limit = max(20, min(parse_int(data.get("limit", 200), default=200), 400))
+    max_pages = 1 if paged else 0
+    try:
+        result = await asyncio.to_thread(
+            list_quark_share_entries,
+            cookie,
+            link_url,
+            raw_text,
+            cid,
+            receive_code,
+            False,
+            45,
+            offset,
+            limit,
+            max_pages,
             folders_only,
         )
         return {

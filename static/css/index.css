@@ -7577,6 +7577,12 @@
             color: #fed7aa;
         }
 
+        .resource-card-type-badge-quark {
+            border-color: rgba(34, 211, 238, 0.46);
+            background: rgba(8, 145, 178, 0.26);
+            color: #cffafe;
+        }
+
         .resource-card-type-badge-default {
             border-color: rgba(148, 163, 184, 0.28);
             background: rgba(51, 65, 85, 0.7);
@@ -8142,6 +8148,12 @@
             border-color: rgba(249, 115, 22, 0.38);
             background: rgba(255, 237, 213, 0.98);
             color: #9a3412;
+        }
+
+        html.theme-day .resource-card-type-badge-quark {
+            border-color: rgba(8, 145, 178, 0.38);
+            background: rgba(236, 254, 255, 0.98);
+            color: #155e75;
         }
 
         html.theme-day .resource-card-type-badge-default {

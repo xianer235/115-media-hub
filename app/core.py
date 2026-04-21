@@ -40,6 +40,18 @@ DEFAULT_EXTENSIONS = "mp4,mkv,avi,mov,wmv,flv,webm,vob,mpg,mpeg,ts,m2ts,mts,rmvb
 LEGACY_DEFAULT_EXTENSIONS = "mp4,mkv,avi,mov,ts,iso,rmvb,wmv,m4v,mpg,flac,mp3,ass,srt"
 MAX_MONITOR_RETRIES = 5
 SUBSCRIPTION_MIN_SCORE = 55
+SUBSCRIPTION_QUARK_MIN_SCORE = max(
+    30,
+    min(100, int(os.environ.get("SUBSCRIPTION_QUARK_MIN_SCORE", 60) or 60)),
+)
+SUBSCRIPTION_115_SEARCH_CANDIDATE_LIMIT = max(
+    20,
+    min(200, int(os.environ.get("SUBSCRIPTION_115_SEARCH_CANDIDATE_LIMIT", 80) or 80)),
+)
+SUBSCRIPTION_QUARK_SEARCH_CANDIDATE_LIMIT = max(
+    20,
+    min(200, int(os.environ.get("SUBSCRIPTION_QUARK_SEARCH_CANDIDATE_LIMIT", 120) or 120)),
+)
 SUBSCRIPTION_MAX_CRON_MINUTES = 24 * 60
 SUBSCRIPTION_MAX_SCHEDULE_INTERVAL_MINUTES = SUBSCRIPTION_MAX_CRON_MINUTES
 SUBSCRIPTION_ATTEMPT_INTERVAL_SECONDS = max(
@@ -144,6 +156,10 @@ RESOURCE_115_SHARE_BARE_URL_REGEX = re.compile(
     r"(?:115cdn|115|anxia)\.com/s/[A-Za-z0-9]+(?:\?[^\s<>'\"]*)?",
     re.IGNORECASE,
 )
+RESOURCE_QUARK_SHARE_URL_REGEX = re.compile(
+    r"(?:https?://)?(?:pan|www)\.quark\.cn/s/[A-Za-z0-9]+(?:\?[^\s<>'\"]*)?",
+    re.IGNORECASE,
+)
 RESOURCE_YEAR_REGEX = re.compile(r"\b(19\d{2}|20\d{2})\b")
 RESOURCE_LINK_TYPE_PATTERNS: List[Tuple[str, re.Pattern[str]]] = [
     ("115share", re.compile(r"https?://(?:115cdn|115|anxia)\.com/s/[a-z0-9]+", re.IGNORECASE)),
@@ -170,10 +186,22 @@ TG_EXTRACT_CODE_REGEX = re.compile(
 )
 RESOURCE_SEASON_EPISODE_REGEX = re.compile(r"\bS(?:0|O)?(\d{1,2})\s*[-_. ]?\s*E(?:0|O)?(\d{1,3})\b", re.IGNORECASE)
 RESOURCE_EPISODE_ONLY_REGEX = re.compile(r"(?:第\s*)(\d{1,3})\s*(?:集|話|话)\b", re.IGNORECASE)
+RESOURCE_EPISODE_ONLY_CN_REGEX = re.compile(r"(?:第\s*)([零〇一二三四五六七八九十两兩]{1,4})\s*(?:集|話|话)\b", re.IGNORECASE)
 RESOURCE_EPISODE_CODE_REGEX = re.compile(r"\b(?:EP|E)\s*[-_. ]?\s*(\d{1,3})\b", re.IGNORECASE)
 RESOURCE_EPISODE_RANGE_REGEXES = [
-    re.compile(r"(?:第?\s*)(\d{1,3})\s*[-~～—–－至到]\s*(\d{1,3})\s*(?:集|話|话)\b", re.IGNORECASE),
+    re.compile(
+        r"(?:第?\s*)([零〇一二三四五六七八九十两兩\d]{1,4})\s*[-~～—–－至到]\s*([零〇一二三四五六七八九十两兩\d]{1,4})\s*(?:集|話|话)?\b",
+        re.IGNORECASE,
+    ),
     re.compile(r"(?:EP|E)?\s*(\d{1,3})\s*[-~～—–－至到]\s*(?:EP|E)?\s*(\d{1,3})\b", re.IGNORECASE),
+    re.compile(
+        r"(?:更新至|更至|更新到|更到)\s*([零〇一二三四五六七八九十两兩\d]{1,4})\s*[-~～—–－至到]\s*([零〇一二三四五六七八九十两兩\d]{1,4})\s*(?:集|話|话)?\b",
+        re.IGNORECASE,
+    ),
+]
+RESOURCE_EPISODE_PROGRESS_REGEXES = [
+    re.compile(r"(?:更新至|更至|更新到|更到|至|到)\s*([零〇一二三四五六七八九十两兩\d]{1,4})\s*(?:集|話|话)\b", re.IGNORECASE),
+    re.compile(r"\b(?:EP|E)\s*[-_. ]?(\d{1,3})\s*(?:END|FIN)\b", re.IGNORECASE),
 ]
 RESOURCE_SEASON_ONLY_REGEX = re.compile(r"(?:第\s*)(\d{1,2})\s*季\b", re.IGNORECASE)
 RESOURCE_SEASON_ONLY_CN_REGEX = re.compile(r"(?:第\s*)([零〇一二三四五六七八九十两兩\d]{1,4})\s*季\b", re.IGNORECASE)
@@ -243,6 +271,7 @@ def default_config() -> Dict[str, Any]:
         "alist_url": "",
         "alist_token": "",
         "cookie_115": "",
+        "cookie_quark": "",
         "sign115_enabled": False,
         "sign115_cron_time": "09:00",
         "tg_proxy_enabled": False,
@@ -326,6 +355,18 @@ def normalize_subscription_quality_priority(value: Any) -> str:
     if normalized not in SUBSCRIPTION_QUALITY_PRIORITY_ORDERS:
         return SUBSCRIPTION_QUALITY_PRIORITY_DEFAULT
     return normalized
+
+
+def normalize_subscription_provider(value: Any, fallback: str = "115") -> str:
+    normalized_fallback = str(fallback or "115").strip().lower()
+    normalized = str(value or "").strip().lower()
+    if normalized in ("115", "quark"):
+        return normalized
+    if normalized in ("115share", "magnet", "magnet115"):
+        return "115"
+    if normalized in ("pan.quark", "quarkshare", "quark_pan"):
+        return "quark"
+    return "quark" if normalized_fallback == "quark" else "115"
 
 
 def normalize_subscription_schedule_weekdays(value: Any) -> List[int]:
@@ -754,6 +795,10 @@ def normalize_subscription_task(task: Dict[str, Any]) -> Dict[str, Any]:
     media_type = str(task.get("media_type", "") or task.get("type", "movie")).strip().lower()
     if media_type not in ("movie", "tv"):
         media_type = "movie"
+    provider_raw = task.get("provider", task.get("disk_provider", "115"))
+    if (not provider_raw) and str(task.get("share_link_url", "") or "").strip():
+        provider_raw = "115"
+    provider = normalize_subscription_provider(provider_raw, fallback="115")
     title = str(task.get("title", "")).strip()
     name = title
     aliases_raw = task.get("aliases", "")
@@ -856,6 +901,10 @@ def normalize_subscription_task(task: Dict[str, Any]) -> Dict[str, Any]:
         )
         or ""
     ).strip()
+    share_link_type = resolve_resource_link_type("", share_link_url)
+    use_115_fixed_link = provider == "115" and share_link_type == "115share"
+    if provider != "115":
+        share_link_url = ""
     share_link_receive_code = normalize_receive_code(
         task.get(
             "share_link_receive_code",
@@ -881,10 +930,16 @@ def normalize_subscription_task(task: Dict[str, Any]) -> Dict[str, Any]:
         ),
         default=False,
     )
+    if provider != "115":
+        share_link_receive_code = ""
+        share_subdir = ""
+        share_subdir_cid = ""
+        fixed_link_channel_search = False
     if not share_subdir:
         share_subdir_cid = ""
     return {
         "name": name,
+        "provider": provider,
         "media_type": media_type,
         "title": title,
         "aliases": aliases,
@@ -892,11 +947,11 @@ def normalize_subscription_task(task: Dict[str, Any]) -> Dict[str, Any]:
         "season": max(1, season),
         "total_episodes": max(0, total_episodes),
         "savepath": savepath,
-        "share_link_url": share_link_url,
-        "share_link_receive_code": share_link_receive_code if share_link_url else "",
+        "share_link_url": share_link_url if use_115_fixed_link else "",
+        "share_link_receive_code": share_link_receive_code if use_115_fixed_link else "",
         "share_subdir": share_subdir,
         "share_subdir_cid": share_subdir_cid,
-        "fixed_link_channel_search": fixed_link_channel_search if share_link_url else False,
+        "fixed_link_channel_search": fixed_link_channel_search if use_115_fixed_link else False,
         "enabled": normalize_bool(task.get("enabled", True), default=True),
         # 兼容旧前端字段：cron_minutes 保留为“时段内查询间隔”镜像值。
         "cron_minutes": schedule_interval_minutes,
@@ -1064,6 +1119,8 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         merged["alist_token"] = ""
     if "cookie_115" not in merged:
         merged["cookie_115"] = ""
+    if "cookie_quark" not in merged:
+        merged["cookie_quark"] = ""
     if "sign115_enabled" not in merged:
         merged["sign115_enabled"] = False
     if "sign115_cron_time" not in merged:
@@ -1167,6 +1224,7 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     merged["alist_url"] = str(merged.get("alist_url", "")).strip().rstrip("/")
     merged["webhook_secret"] = str(merged.get("webhook_secret", "")).strip()
     merged["cookie_115"] = str(merged.get("cookie_115", "")).strip()
+    merged["cookie_quark"] = str(merged.get("cookie_quark", "")).strip()
     merged["sign115_enabled"] = normalize_bool(merged.get("sign115_enabled", False), default=False)
     merged["sign115_cron_time"] = normalize_sign115_cron_time(merged.get("sign115_cron_time", "09:00"))
     # 订阅批次收口刷新已固定为内置策略，不再保留配置项。
@@ -1921,6 +1979,8 @@ def pick_link_fallback_title(link_type: str, link_url: str, index: int = 0) -> s
         return pick_magnet_title(link_url, index=index)
     if normalized_type == "115share":
         return f"115分享任务 #{index}" if index > 0 else "115分享任务"
+    if normalized_type == "quark":
+        return f"夸克分享任务 #{index}" if index > 0 else "夸克分享任务"
     if normalized_type == "ed2k":
         return f"ED2K任务 #{index}" if index > 0 else "ED2K任务"
     if normalized_type == "link":
@@ -1983,6 +2043,11 @@ def extract_resource_candidates(
             normalized_link = str(parsed_payload.get("url", "") or normalized_link).strip() or normalized_link
             link_type = detect_resource_link_type(normalized_link)
             receive_code = normalize_receive_code(parsed_payload.get("receive_code", ""))
+        elif link_type == "quark":
+            parsed_payload = parse_quark_share_payload(normalized_link, raw)
+            normalized_link = str(parsed_payload.get("url", "") or normalized_link).strip() or normalized_link
+            link_type = detect_resource_link_type(normalized_link)
+            receive_code = normalize_receive_code(parsed_payload.get("receive_code", ""))
         if base_title_link_like:
             title = pick_link_fallback_title(link_type, normalized_link, idx if multi else 0)
         elif multi:
@@ -2013,19 +2078,24 @@ def extract_resource_candidates(
     return candidates
 
 
-def upsert_resource_item(conn: sqlite3.Connection, item: Dict[str, Any]) -> Tuple[int, bool]:
+def upsert_resource_item(
+    conn: sqlite3.Connection,
+    item: Dict[str, Any],
+    identity_mode: str = "message",
+) -> Tuple[int, bool]:
     cursor = conn.cursor()
     link_url = str(item.get("link_url", "")).strip()
     message_url = str(item.get("message_url", "")).strip()
+    normalized_identity_mode = normalize_resource_identity_mode(identity_mode, fallback="message")
     now = now_text()
     existing: Optional[sqlite3.Row] = None
     if link_url:
         cursor.execute("SELECT * FROM resource_items WHERE link_url = ?", (link_url,))
         existing = cursor.fetchone()
-    if not existing and message_url:
+    if not existing and message_url and normalized_identity_mode != "link":
         cursor.execute("SELECT * FROM resource_items WHERE message_url = ?", (message_url,))
         existing = cursor.fetchone()
-    if not existing:
+    if not existing and (normalized_identity_mode != "link" or not link_url):
         cursor.execute(
             """
             SELECT * FROM resource_items
@@ -2116,6 +2186,15 @@ def build_resource_job_snapshot(resource: Dict[str, Any], link_type: str = "", r
     resolved_link_type = resolve_resource_link_type(link_type or resource.get("link_type", ""), resource.get("link_url", ""))
     if resolved_link_type == "115share":
         payload = parse_115_share_payload(
+            str(resource.get("link_url", "") or "").strip(),
+            str(resource.get("raw_text", "") or ""),
+            manual_receive_code,
+        )
+        resolved_receive_code = normalize_receive_code(payload.get("receive_code", ""))
+        if resolved_receive_code:
+            snapshot["receive_code"] = resolved_receive_code
+    elif resolved_link_type == "quark":
+        payload = parse_quark_share_payload(
             str(resource.get("link_url", "") or "").strip(),
             str(resource.get("raw_text", "") or ""),
             manual_receive_code,
@@ -2302,11 +2381,29 @@ def build_resource_item_identity(item: Dict[str, Any]) -> str:
     return f"title:{title}|raw:{raw_text[:120]}"
 
 
-def dedupe_resource_item_dicts(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def normalize_resource_identity_mode(value: Any, fallback: str = "message") -> str:
+    normalized_fallback = str(fallback or "message").strip().lower()
+    normalized = str(value or "").strip().lower()
+    if normalized in ("message", "link"):
+        return normalized
+    return "link" if normalized_fallback == "link" else "message"
+
+
+def build_resource_item_identity_by_mode(item: Dict[str, Any], identity_mode: str = "message") -> str:
+    payload = item if isinstance(item, dict) else {}
+    normalized_identity_mode = normalize_resource_identity_mode(identity_mode, fallback="message")
+    if normalized_identity_mode == "link":
+        link_url = str(payload.get("link_url", "")).strip()
+        if link_url:
+            return f"link:{link_url}"
+    return build_resource_item_identity(payload)
+
+
+def dedupe_resource_item_dicts(items: List[Dict[str, Any]], identity_mode: str = "message") -> List[Dict[str, Any]]:
     result: List[Dict[str, Any]] = []
     seen: Set[str] = set()
     for item in items:
-        key = build_resource_item_identity(item)
+        key = build_resource_item_identity_by_mode(item, identity_mode=identity_mode)
         if not key or key in seen:
             continue
         seen.add(key)
@@ -2542,13 +2639,29 @@ def parse_resource_episode_meta(item: Dict[str, Any]) -> Dict[str, int]:
     range_start = 0
     range_end = 0
 
+    def _parse_episode_value(raw_value: Any) -> int:
+        token = str(raw_value or "").strip()
+        if not token:
+            return 0
+        if re.fullmatch(r"\d{1,4}", token):
+            return max(0, int(token or 0))
+        return max(0, parse_small_cjk_number(token, default=0, max_value=5000))
+
     for pattern in RESOURCE_EPISODE_RANGE_REGEXES:
         range_match = pattern.search(text)
         if not range_match:
             continue
-        start_episode = max(0, int(range_match.group(1) or 0))
-        end_episode = max(0, int(range_match.group(2) or 0))
+        start_episode = _parse_episode_value(range_match.group(1))
+        end_episode = _parse_episode_value(range_match.group(2))
         if start_episode <= 0 and end_episode <= 0:
+            continue
+        matched_fragment = str(range_match.group(0) or "")
+        has_episode_context = bool(
+            re.search(r"(第|集|話|话|ep|e\d|更新|更至|更到|合集|合輯|完结|完結|全)", matched_fragment, re.IGNORECASE)
+        )
+        if start_episode >= 1900 and end_episode >= 1900 and (not has_episode_context):
+            continue
+        if max(start_episode, end_episode) > 300 and (not has_episode_context):
             continue
         if end_episode < start_episode:
             start_episode, end_episode = end_episode, start_episode
@@ -2572,9 +2685,21 @@ def parse_resource_episode_meta(item: Dict[str, Any]) -> Dict[str, int]:
                 season_en_match = RESOURCE_SEASON_ENGLISH_REGEX.search(text)
                 if season_en_match:
                     season = max(0, int(season_en_match.group(1) or 0))
-        episode_match = RESOURCE_EPISODE_ONLY_REGEX.search(text) or RESOURCE_EPISODE_CODE_REGEX.search(text)
+        episode_match = (
+            RESOURCE_EPISODE_ONLY_REGEX.search(text)
+            or RESOURCE_EPISODE_ONLY_CN_REGEX.search(text)
+            or RESOURCE_EPISODE_CODE_REGEX.search(text)
+        )
         if episode_match:
-            episode = max(0, int(episode_match.group(1) or 0))
+            episode = _parse_episode_value(episode_match.group(1))
+        if episode <= 0:
+            for pattern in RESOURCE_EPISODE_PROGRESS_REGEXES:
+                progress_match = pattern.search(text)
+                if not progress_match:
+                    continue
+                episode = _parse_episode_value(progress_match.group(1))
+                if episode > 0:
+                    break
 
     if range_end > 0:
         episode = max(episode, range_end)
@@ -2584,7 +2709,7 @@ def parse_resource_episode_meta(item: Dict[str, Any]) -> Dict[str, int]:
     for pattern in RESOURCE_TOTAL_EPISODES_REGEXES:
         matched = pattern.search(text)
         if matched:
-            total = max(0, int(matched.group(1) or 0))
+            total = _parse_episode_value(matched.group(1))
             break
 
     has_collection_hint = bool(RESOURCE_COLLECTION_HINT_REGEX.search(text))
@@ -2647,6 +2772,52 @@ def detect_resource_year(item: Dict[str, Any]) -> str:
     return matched.group(1) if matched else ""
 
 
+def _collect_subscription_title_signals(task: Dict[str, Any]) -> List[Tuple[str, int, int, int]]:
+    title_signals: List[Tuple[str, int, int, int]] = [
+        (str(task.get("title", "") or "").strip(), 14, 12, 10),
+        (str(task.get("tmdb_title", "") or "").strip(), 13, 11, 9),
+        (str(task.get("tmdb_original_title", "") or "").strip(), 12, 10, 8),
+    ]
+    aliases = task.get("aliases", [])
+    if isinstance(aliases, list):
+        title_signals.extend([(str(alias or "").strip(), 10, 8, 6) for alias in aliases[:6]])
+    tmdb_aliases = task.get("tmdb_aliases", [])
+    if isinstance(tmdb_aliases, list):
+        title_signals.extend([(str(alias or "").strip(), 10, 8, 6) for alias in tmdb_aliases[:8]])
+    return title_signals
+
+
+def evaluate_subscription_candidate_title_match(task: Dict[str, Any], item: Dict[str, Any]) -> Dict[str, Any]:
+    text = build_subscription_candidate_text(item)
+    text_compact = compact_subscription_text(text)
+    matched_titles: List[str] = []
+    matched_score = 0
+    seen_title_tokens: Set[str] = set()
+    for title_value, exact_bonus, compact_bonus, cjk_bonus in _collect_subscription_title_signals(task):
+        normalized_title = str(title_value or "").strip()
+        normalized_key = compact_subscription_text(normalized_title)
+        if not normalized_title or not normalized_key or normalized_key in seen_title_tokens:
+            continue
+        seen_title_tokens.add(normalized_key)
+        signal_bonus = score_subscription_title_signal(
+            normalized_title,
+            text,
+            text_compact,
+            exact_bonus,
+            compact_bonus,
+            cjk_bonus,
+        )
+        if signal_bonus <= 0:
+            continue
+        matched_titles.append(normalized_title)
+        matched_score = max(matched_score, int(signal_bonus))
+    return {
+        "matched": bool(matched_titles),
+        "matched_score": int(matched_score),
+        "matched_titles": matched_titles[:8],
+    }
+
+
 def score_subscription_candidate(
     task: Dict[str, Any],
     item: Dict[str, Any],
@@ -2661,35 +2832,8 @@ def score_subscription_candidate(
     token_score = int((min(token_hits, token_denominator) / token_denominator) * 70)
     score = token_score
 
-    title_signals: List[Tuple[str, int, int, int]] = [
-        (str(task.get("title", "") or "").strip(), 14, 12, 10),
-        (str(task.get("tmdb_title", "") or "").strip(), 13, 11, 9),
-        (str(task.get("tmdb_original_title", "") or "").strip(), 12, 10, 8),
-    ]
-    aliases = task.get("aliases", [])
-    if isinstance(aliases, list):
-        title_signals.extend([(str(alias or "").strip(), 10, 8, 6) for alias in aliases[:6]])
-    tmdb_aliases = task.get("tmdb_aliases", [])
-    if isinstance(tmdb_aliases, list):
-        title_signals.extend([(str(alias or "").strip(), 10, 8, 6) for alias in tmdb_aliases[:8]])
-
-    seen_title_tokens: Set[str] = set()
-    title_bonus = 0
-    for title_value, exact_bonus, compact_bonus, cjk_bonus in title_signals:
-        normalized_title = str(title_value or "").strip()
-        normalized_key = compact_subscription_text(normalized_title)
-        if not normalized_title or not normalized_key or normalized_key in seen_title_tokens:
-            continue
-        seen_title_tokens.add(normalized_key)
-        signal_bonus = score_subscription_title_signal(
-            normalized_title,
-            text,
-            text_compact,
-            exact_bonus,
-            compact_bonus,
-            cjk_bonus,
-        )
-        title_bonus = max(title_bonus, signal_bonus)
+    title_eval = evaluate_subscription_candidate_title_match(task, item)
+    title_bonus = int(title_eval.get("matched_score", 0) or 0)
     score += int(title_bonus)
 
     quality_bonus, resolution, quality_priority = score_subscription_quality_preference(task, item)
@@ -2801,7 +2945,43 @@ def score_subscription_candidate(
         "resolution": int(resolution or 0),
         "quality_bonus": int(quality_bonus or 0),
         "quality_priority": quality_priority,
+        "title_match": bool(title_eval.get("matched", False)),
+        "title_match_score": int(title_eval.get("matched_score", 0) or 0),
+        "title_match_titles": title_eval.get("matched_titles", []) if isinstance(title_eval.get("matched_titles"), list) else [],
     }
+
+
+def score_subscription_candidate_quark(
+    task: Dict[str, Any],
+    item: Dict[str, Any],
+    query_tokens: List[str],
+    last_episode: int,
+) -> Dict[str, Any]:
+    scored = score_subscription_candidate(task, item, query_tokens, last_episode)
+    media_type = str(task.get("media_type", "movie") or "movie").strip().lower()
+    episode_hit = bool(
+        int(scored.get("episode", 0) or 0) > 0
+        or int(scored.get("range_end", 0) or 0) > 0
+    )
+    title_match = bool(scored.get("title_match", False))
+    score_value = int(scored.get("score", 0) or 0)
+
+    if not title_match:
+        # 夸克候选要求强标题命中，纯“集数命中”不允许放行。
+        score_value -= 80
+        if media_type == "tv" and episode_hit:
+            score_value -= 20
+        scored["title_blocked"] = True
+        scored["title_block_reason"] = "title_mismatch"
+    else:
+        score_value += 8 if int(scored.get("title_match_score", 0) or 0) >= 10 else 5
+        if media_type == "tv":
+            score_value += 6 if episode_hit else -8
+        scored["title_blocked"] = False
+        scored["title_block_reason"] = ""
+
+    scored["score"] = int(score_value)
+    return scored
 
 
 def has_subscription_match(task_name: str, resource_id: int) -> bool:
@@ -3309,19 +3489,34 @@ def find_subscription_task_match_candidate(task: Dict[str, Any], last_episode: i
     rows = cursor.fetchall()
     conn.close()
 
-    min_score = max(30, min(100, int(task.get("min_score", SUBSCRIPTION_MIN_SCORE) or SUBSCRIPTION_MIN_SCORE)))
+    provider = normalize_subscription_provider(task.get("provider", "115"), fallback="115")
+    min_score = (
+        int(SUBSCRIPTION_QUARK_MIN_SCORE)
+        if provider == "quark"
+        else max(30, min(100, int(task.get("min_score", SUBSCRIPTION_MIN_SCORE) or SUBSCRIPTION_MIN_SCORE)))
+    )
     media_type = str(task.get("media_type", "movie") or "movie").strip().lower()
+    supported_link_types = {"quark"} if provider == "quark" else {"magnet", "115share"}
     candidates: List[Dict[str, Any]] = []
     for row in rows:
         item = serialize_resource_item_row(row)
         item_id = int(item.get("id", 0) or 0)
         if item_id <= 0:
             continue
+        link_type = resolve_resource_link_type(item.get("link_type", ""), item.get("link_url", ""))
+        if link_type not in supported_link_types:
+            continue
         media_match, _ = match_subscription_media_type(task, item)
         if not media_match:
             continue
         matched_before = has_subscription_match(task.get("name", ""), item_id)
-        scored = score_subscription_candidate(task, item, query_tokens, last_episode)
+        scored = (
+            score_subscription_candidate_quark(task, item, query_tokens, last_episode)
+            if provider == "quark"
+            else score_subscription_candidate(task, item, query_tokens, last_episode)
+        )
+        if provider == "quark" and not bool(scored.get("title_match", False)):
+            continue
         if matched_before:
             if media_type != "tv":
                 continue
@@ -3984,12 +4179,14 @@ def search_telegram_channel_resource_items(
     max_pages: int = TG_SEARCH_MAX_PAGES,
     page_size: int = TG_SEARCH_PAGE_LIMIT,
     start_before: str = "",
+    identity_mode: str = "message",
 ) -> Dict[str, Any]:
     normalized_source = normalize_resource_source(source or {})
     channel_id = normalize_telegram_channel_id_from_input(normalized_source.get("channel_id", ""))
     if not channel_id:
         return {"channel_id": "", "items": [], "pages_scanned": 0, "next_before": "", "has_more": False}
 
+    normalized_identity_mode = normalize_resource_identity_mode(identity_mode, fallback="message")
     items: List[Dict[str, Any]] = []
     before = extract_telegram_post_cursor(start_before)
     pages_scanned = 0
@@ -4013,7 +4210,7 @@ def search_telegram_channel_resource_items(
         for post in page.get("posts", []) or []:
             if not resource_item_matches_search(post, keyword):
                 continue
-            identity = build_resource_item_identity(post)
+            identity = build_resource_item_identity_by_mode(post, identity_mode=normalized_identity_mode)
             if identity in seen_keys:
                 continue
             seen_keys.add(identity)
@@ -4047,8 +4244,9 @@ def search_telegram_channel_resource_items(
     }
 
 
-async def search_resource_sources(keyword: str) -> Dict[str, Any]:
+async def search_resource_sources(keyword: str, identity_mode: str = "message") -> Dict[str, Any]:
     query = str(keyword or "").strip()
+    normalized_identity_mode = normalize_resource_identity_mode(identity_mode, fallback="message")
     cfg = get_config()
     sources = [normalize_resource_source(source or {}) for source in cfg.get("resource_sources", []) if source.get("enabled")]
     tg_channel_threads = get_tg_channel_threads(cfg)
@@ -4078,6 +4276,7 @@ async def search_resource_sources(keyword: str) -> Dict[str, Any]:
                         TG_SEARCH_MAX_PAGES,
                         TG_SEARCH_PAGE_LIMIT,
                         "",
+                        normalized_identity_mode,
                     ),
                     timeout=TG_SEARCH_CHANNEL_TIMEOUT_SECONDS,
                 )
@@ -4125,7 +4324,7 @@ async def search_resource_sources(keyword: str) -> Dict[str, Any]:
                 }
             )
 
-    deduped_items = dedupe_resource_item_dicts(items)
+    deduped_items = dedupe_resource_item_dicts(items, identity_mode=normalized_identity_mode)
     deduped_items.sort(key=get_resource_item_sort_key, reverse=True)
     return {
         "items": deduped_items[: max(1, int(TG_SEARCH_TOTAL_LIMIT or 60))],
@@ -4146,7 +4345,7 @@ def create_resource_job(resource: Dict[str, Any], data: Dict[str, Any]) -> int:
     link_type = resolve_resource_link_type(resource.get("link_type", "unknown"), resource.get("link_url", ""))
     folder_id = str(data.get("folder_id", "")).strip()
     savepath = normalize_relative_path(data.get("savepath", ""))
-    extra = normalize_share_selection_meta(data.get("share_selection", {})) if link_type == "115share" else {}
+    extra = normalize_share_selection_meta(data.get("share_selection", {})) if link_type in ("115share", "quark") else {}
     custom_extra = data.get("extra", {})
     if isinstance(custom_extra, dict):
         extra = merge_json_object(extra, custom_extra)
@@ -4157,7 +4356,7 @@ def create_resource_job(resource: Dict[str, Any], data: Dict[str, Any]) -> int:
         # 默认归类为手动导入。自动化来源（订阅、Webhook 等）应在调用侧显式覆盖。
         extra["job_source"] = "manual_import"
     manual_receive_code = normalize_receive_code(data.get("receive_code", ""))
-    if link_type == "115share" and manual_receive_code:
+    if link_type in ("115share", "quark") and manual_receive_code:
         extra["receive_code"] = manual_receive_code
     extra["snapshot"] = build_resource_job_snapshot(resource, link_type, manual_receive_code)
     manual_sharetitle = normalize_relative_path(data.get("sharetitle", ""))
@@ -4168,11 +4367,14 @@ def create_resource_job(resource: Dict[str, Any], data: Dict[str, Any]) -> int:
     elif link_type == "magnet":
         # 磁力任务默认不绑定子目录提示，避免把原始链接文本误当目录。
         sharetitle = ""
+    elif link_type == "quark":
+        sharetitle = normalize_relative_path(extra.get("auto_sharetitle", ""))
     else:
         sharetitle = normalize_relative_path(resource.get("title", ""))
     monitor_task_name = str(data.get("monitor_task_name", "")).strip()
     refresh_delay_seconds = max(0, int(data.get("refresh_delay_seconds", 0) or 0))
     auto_refresh = bool(data.get("auto_refresh", True))
+    provider_label = "夸克" if link_type == "quark" else "115"
     cursor.execute(
         """
         INSERT INTO resource_jobs(
@@ -4180,7 +4382,7 @@ def create_resource_job(resource: Dict[str, Any], data: Dict[str, Any]) -> int:
             monitor_task_name, refresh_delay_seconds, auto_refresh, status, status_detail,
             created_at, updated_at, extra_json
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '等待提交到 115', ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
         """,
         (
             int(resource.get("id", 0) or 0),
@@ -4193,6 +4395,7 @@ def create_resource_job(resource: Dict[str, Any], data: Dict[str, Any]) -> int:
             monitor_task_name,
             refresh_delay_seconds,
             1 if auto_refresh else 0,
+            f"等待提交到 {provider_label}",
             now,
             now,
             safe_json_dumps(extra),
@@ -4459,7 +4662,11 @@ def validate_monitor_runtime_config(cfg: Dict[str, Any], task: Dict[str, Any]) -
 
 
 def validate_subscription_runtime_config(cfg: Dict[str, Any], task: Dict[str, Any]) -> Optional[str]:
-    if not str(cfg.get("cookie_115", "")).strip():
+    provider = normalize_subscription_provider(task.get("provider", "115"), fallback="115")
+    if provider == "quark":
+        if not str(cfg.get("cookie_quark", "")).strip():
+            return "请先在参数配置中填写 Quark Cookie"
+    elif not str(cfg.get("cookie_115", "")).strip():
         return "请先在参数配置中填写 115 Cookie"
     if not str(task.get("name", "")).strip():
         return "任务名未填写"
@@ -4470,6 +4677,8 @@ def validate_subscription_runtime_config(cfg: Dict[str, Any], task: Dict[str, An
     media_type = str(task.get("media_type", "movie") or "movie").strip().lower()
     if media_type not in ("movie", "tv"):
         return "订阅类型不支持"
+    if provider not in ("115", "quark"):
+        return "订阅网盘类型不支持"
     return None
 
 
@@ -4669,9 +4878,11 @@ async def build_resource_state_payload(search: str = "") -> Dict[str, Any]:
         "jobs": clone_jsonable(jobs),
         "monitor_tasks": clone_jsonable(cfg.get("monitor_tasks", [])),
         "cookie_configured": bool(str(cfg.get("cookie_115", "")).strip()),
+        "quark_cookie_configured": bool(str(cfg.get("cookie_quark", "")).strip()),
         "setup_status": {
             "alist_configured": bool(str(cfg.get("alist_url", "")).strip()),
             "cookie_configured": bool(str(cfg.get("cookie_115", "")).strip()),
+            "quark_cookie_configured": bool(str(cfg.get("cookie_quark", "")).strip()),
             "has_sources": bool(enabled_sources),
             "has_monitor": bool(cfg.get("monitor_tasks", [])),
             "has_resource_data": total_item_count > 0,
@@ -5863,6 +6074,816 @@ def parse_115_share_payload(url: str, raw_text: str = "", receive_code: str = ""
     }
 
 
+def http_request_json_payload(
+    url: str,
+    payload: Optional[Dict[str, Any]] = None,
+    timeout: int = 30,
+    extra_headers: Optional[Dict[str, str]] = None,
+    method: str = "POST",
+    proxy_url: str = "",
+) -> Dict[str, Any]:
+    url = normalize_http_url(url)
+    headers = {"Content-Type": "application/json"}
+    if extra_headers:
+        headers.update(extra_headers)
+    body_payload = payload if isinstance(payload, dict) else {}
+    body_bytes = json.dumps(body_payload, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=body_bytes,
+        headers=headers,
+        method=str(method or "POST").strip().upper() or "POST",
+    )
+    opener = urllib.request.build_opener()
+    if proxy_url:
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
+        )
+    with opener.open(request, timeout=timeout) as resp:
+        charset = resp.headers.get_content_charset() or "utf-8"
+        raw = resp.read().decode(charset, errors="ignore")
+    payload_json = safe_json_loads(raw, {})
+    return payload_json if isinstance(payload_json, dict) else {}
+
+
+def _build_quark_headers(cookie: str, referer: str = "https://pan.quark.cn/") -> Dict[str, str]:
+    return {
+        "Cookie": str(cookie or "").strip(),
+        "Accept": "application/json, text/plain, */*",
+        "Referer": str(referer or "https://pan.quark.cn/").strip() or "https://pan.quark.cn/",
+        "Origin": "https://pan.quark.cn",
+        "User-Agent": "Mozilla/5.0 115-media-hub",
+    }
+
+
+def _extract_quark_error(payload: Any, fallback: str = "夸克网盘请求失败") -> str:
+    data = payload if isinstance(payload, dict) else {}
+    parts = [
+        str(data.get("message", "")).strip(),
+        str(data.get("msg", "")).strip(),
+        str(data.get("error", "")).strip(),
+        str(data.get("error_msg", "")).strip(),
+    ]
+    nested = data.get("data")
+    if isinstance(nested, dict):
+        parts.extend(
+            [
+                str(nested.get("message", "")).strip(),
+                str(nested.get("msg", "")).strip(),
+                str(nested.get("error", "")).strip(),
+            ]
+        )
+    detail = next((part for part in parts if part), "")
+    return detail or str(fallback or "夸克网盘请求失败")
+
+
+def _raise_quark_http_error(exc: Exception, fallback: str = "夸克网盘请求失败") -> None:
+    status_code = 0
+    payload: Dict[str, Any] = {}
+    if isinstance(exc, urllib.error.HTTPError):
+        status_code = int(exc.code or 0)
+        try:
+            raw_body = exc.read().decode("utf-8", errors="ignore")
+        except Exception:
+            raw_body = ""
+        payload_obj = safe_json_loads(raw_body, {})
+        if isinstance(payload_obj, dict):
+            payload = payload_obj
+    detail = _extract_quark_error(payload, "")
+    if status_code > 0:
+        message = f"HTTP {status_code}"
+        if detail:
+            message = f"{message}: {detail}"
+        raise RuntimeError(message) from exc
+    if detail:
+        raise RuntimeError(detail) from exc
+    raise RuntimeError(str(fallback or "夸克网盘请求失败")) from exc
+
+
+def _request_quark_json(url: str, headers: Dict[str, str], timeout: int = 45, fallback: str = "夸克网盘请求失败") -> Dict[str, Any]:
+    try:
+        return http_request_json(url, extra_headers=headers, timeout=timeout)
+    except Exception as exc:
+        _raise_quark_http_error(exc, fallback=fallback)
+        return {}
+
+
+def _request_quark_json_payload(
+    url: str,
+    payload: Dict[str, Any],
+    headers: Dict[str, str],
+    timeout: int = 45,
+    method: str = "POST",
+    fallback: str = "夸克网盘请求失败",
+) -> Dict[str, Any]:
+    try:
+        return http_request_json_payload(
+            url,
+            payload,
+            timeout=timeout,
+            extra_headers=headers,
+            method=method,
+        )
+    except Exception as exc:
+        _raise_quark_http_error(exc, fallback=fallback)
+        return {}
+
+
+def _is_quark_success(payload: Any) -> bool:
+    data = payload if isinstance(payload, dict) else {}
+    code = parse_int(data.get("code"), default=0)
+    status = parse_int(data.get("status"), default=0)
+    success_hints = (
+        bool(data.get("success", False)),
+        bool(data.get("state", False)),
+        code == 0,
+        status in (0, 200),
+    )
+    return any(success_hints)
+
+
+def parse_quark_share_payload(url: str, raw_text: str = "", receive_code: str = "") -> Dict[str, str]:
+    source = str(url or "").strip()
+    match = RESOURCE_QUARK_SHARE_URL_REGEX.search(source)
+    candidate_url = match.group(0) if match else source
+    normalized = str(candidate_url or "").strip()
+    if normalized and not normalized.lower().startswith(("http://", "https://")):
+        normalized = f"https://{normalized.lstrip('/')}"
+
+    pwd_id = ""
+    receive_code_from_url = ""
+    parsed_url: Optional[urllib.parse.SplitResult] = None
+    if normalized:
+        parsed_url = urllib.parse.urlsplit(normalized)
+        path_match = re.search(r"/s/([A-Za-z0-9]+)", parsed_url.path, flags=re.IGNORECASE)
+        if path_match:
+            pwd_id = str(path_match.group(1) or "").strip()
+            query_map = {
+                str(key or "").lower(): values
+                for key, values in urllib.parse.parse_qs(parsed_url.query, keep_blank_values=False).items()
+            }
+            for key in ("password", "pwd", "receive_code", "passcode", "access_code", "code"):
+                values = query_map.get(key) or []
+                if not values:
+                    continue
+                receive_code_from_url = normalize_receive_code(values[0])
+                if receive_code_from_url:
+                    break
+            base_url = f"{parsed_url.scheme or 'https'}://{parsed_url.netloc}/s/{pwd_id}" if pwd_id else normalized
+            normalized = f"{base_url}?{parsed_url.query}" if parsed_url.query else base_url
+
+    resolved_receive_code = normalize_receive_code(receive_code) or receive_code_from_url
+    if not resolved_receive_code:
+        receive_match = TG_EXTRACT_CODE_REGEX.search(str(raw_text or ""))
+        if receive_match:
+            resolved_receive_code = normalize_receive_code(receive_match.group(1))
+
+    return {
+        "share_code": pwd_id,
+        "pwd_id": pwd_id,
+        "receive_code": resolved_receive_code,
+        "url": normalized,
+    }
+
+
+def resolve_quark_share_payload(cookie: str, share_url: str, raw_text: str = "", receive_code: str = "") -> Dict[str, str]:
+    parsed = parse_quark_share_payload(share_url, raw_text, receive_code)
+    if parsed.get("pwd_id"):
+        return parsed
+    headers = _build_quark_headers(cookie, referer="https://pan.quark.cn/")
+    resolved_url = http_resolve_url(
+        share_url,
+        timeout=30,
+        extra_headers=headers,
+    )
+    parsed = parse_quark_share_payload(resolved_url, raw_text, receive_code)
+    if not parsed.get("pwd_id"):
+        raise RuntimeError("未能识别夸克分享链接")
+    return parsed
+
+
+def _build_quark_api_url(path: str, query: Optional[Dict[str, Any]] = None, host: str = "https://drive-pc.quark.cn") -> str:
+    normalized_path = str(path or "").strip()
+    if not normalized_path.startswith("/"):
+        normalized_path = f"/{normalized_path}"
+    params = {"pr": "ucpro", "fr": "pc"}
+    if isinstance(query, dict):
+        for key, value in query.items():
+            if value is None:
+                continue
+            params[str(key)] = str(value)
+    query_string = urllib.parse.urlencode(params)
+    return f"{host.rstrip('/')}{normalized_path}?{query_string}"
+
+
+def _parse_quark_entry(item: Dict[str, Any], parent_id: str = "0") -> Dict[str, Any]:
+    payload = item if isinstance(item, dict) else {}
+    name = str(payload.get("file_name", "") or payload.get("name", "") or payload.get("title", "")).strip()
+    entry_id = str(payload.get("fid", "") or payload.get("id", "") or payload.get("file_id", "")).strip()
+    if not name or not entry_id:
+        return {}
+    is_dir = bool(payload.get("dir")) or str(payload.get("obj_category", "")).strip().lower() in ("dir", "folder")
+    file_type = parse_int(payload.get("file_type"), default=-1)
+    if file_type == 0:
+        is_dir = True
+    parent_fid = str(payload.get("pdir_fid", "") or parent_id or "0").strip() or "0"
+    fid_token = str(
+        payload.get("share_fid_token", "")
+        or payload.get("fid_token", "")
+        or payload.get("share_token", "")
+        or payload.get("file_token", "")
+        or ""
+    ).strip()
+    return {
+        "id": entry_id,
+        "cid": entry_id if is_dir else "",
+        "name": name,
+        "is_dir": bool(is_dir),
+        "size": parse_int(payload.get("size"), default=0),
+        "parent_id": parent_fid,
+        "fid": entry_id if not is_dir else "",
+        "fid_token": fid_token,
+        "modified_at": str(payload.get("updated_at", "") or payload.get("last_update_at", "") or payload.get("create_time", "")).strip(),
+    }
+
+
+def _list_quark_folder_page(cookie: str, pdir_fid: str = "0", page: int = 1, page_size: int = 200) -> Dict[str, Any]:
+    headers = _build_quark_headers(cookie, referer="https://pan.quark.cn/")
+    url = _build_quark_api_url(
+        "/1/clouddrive/file/sort",
+        {
+            "pdir_fid": str(pdir_fid or "0").strip() or "0",
+            "_page": max(1, int(page or 1)),
+            "_size": max(20, min(200, int(page_size or 200))),
+            "_fetch_total": 1,
+            "_fetch_sub_dirs": 1,
+            "_sort": "file_type:asc,file_name:asc",
+        },
+    )
+    result = _request_quark_json(url, headers, timeout=45, fallback="读取夸克目录失败")
+    if not _is_quark_success(result):
+        raise RuntimeError(_extract_quark_error(result, "读取夸克目录失败"))
+    data = result.get("data") if isinstance(result.get("data"), dict) else {}
+    raw_list = data.get("list") if isinstance(data.get("list"), list) else []
+    entries = []
+    parent_id = str(pdir_fid or "0").strip() or "0"
+    for raw_item in raw_list:
+        parsed_entry = _parse_quark_entry(raw_item if isinstance(raw_item, dict) else {}, parent_id=parent_id)
+        if parsed_entry:
+            entries.append(parsed_entry)
+    has_more = bool(data.get("has_more", False))
+    if not has_more:
+        next_page = parse_int(data.get("next_page"), default=0)
+        if next_page > max(1, int(page or 1)):
+            has_more = True
+    total = parse_int(data.get("total"), default=len(entries))
+    return {
+        "entries": entries,
+        "has_more": has_more,
+        "total": total,
+        "page": max(1, int(page or 1)),
+        "size": max(20, min(200, int(page_size or 200))),
+    }
+
+
+def list_quark_entries(cookie: str, cid: str = "0") -> List[Dict[str, Any]]:
+    normalized_cookie = str(cookie or "").strip()
+    if not normalized_cookie:
+        raise RuntimeError("Quark Cookie 未配置")
+    parent_id = str(cid or "0").strip() or "0"
+    page = 1
+    page_size = 200
+    entries: List[Dict[str, Any]] = []
+    while True:
+        page_payload = _list_quark_folder_page(normalized_cookie, pdir_fid=parent_id, page=page, page_size=page_size)
+        current_entries = page_payload.get("entries", []) if isinstance(page_payload.get("entries"), list) else []
+        entries.extend(current_entries)
+        if not bool(page_payload.get("has_more", False)):
+            break
+        if len(entries) >= 5000:
+            break
+        page += 1
+    entries.sort(key=lambda item: (0 if item.get("is_dir") else 1, str(item.get("name", "")).lower()))
+    return entries
+
+
+def create_quark_folder(cookie: str, cid: str = "0", folder_name: str = "") -> Dict[str, Any]:
+    normalized_cookie = str(cookie or "").strip()
+    if not normalized_cookie:
+        raise RuntimeError("Quark Cookie 未配置")
+    parent_id = str(cid or "0").strip() or "0"
+    normalized_name = sanitize_115_folder_name(folder_name, fallback="")
+    if not normalized_name:
+        raise RuntimeError("文件夹名称不能为空")
+
+    headers = _build_quark_headers(normalized_cookie, referer="https://pan.quark.cn/")
+    url = _build_quark_api_url("/1/clouddrive/file")
+    payload = {
+        "pdir_fid": parent_id,
+        "file_name": normalized_name,
+        "dir_path": "",
+        "dir_init_lock": False,
+    }
+    response = _request_quark_json_payload(
+        url,
+        payload,
+        headers,
+        timeout=45,
+        method="POST",
+        fallback="新建夸克目录失败",
+    )
+    data = response.get("data") if isinstance(response.get("data"), dict) else {}
+    folder_id = str(data.get("fid", "") or data.get("id", "") or "").strip()
+    success = _is_quark_success(response)
+    if (not success) or (not folder_id):
+        entries = list_quark_entries(normalized_cookie, parent_id)
+        matched = next(
+            (
+                entry
+                for entry in entries
+                if entry.get("is_dir") and str(entry.get("name", "")).strip() == normalized_name
+            ),
+            None,
+        )
+        folder_id = str((matched or {}).get("id", "") or "").strip()
+    if not folder_id:
+        raise RuntimeError(_extract_quark_error(response, "新建夸克目录失败"))
+    return {
+        "id": folder_id,
+        "name": normalized_name,
+        "cid": parent_id,
+        "created": success,
+    }
+
+
+def ensure_quark_folder_id_by_path(cookie: str, relative_path: str) -> str:
+    normalized_path = normalize_relative_path(relative_path)
+    if not normalized_path:
+        return "0"
+    current_id = "0"
+    for raw_part in [segment for segment in normalized_path.split("/") if segment]:
+        part = sanitize_115_folder_name(raw_part, fallback="未命名")
+        entries = list_quark_entries(cookie, current_id)
+        matched = next(
+            (
+                entry
+                for entry in entries
+                if entry.get("is_dir") and str(entry.get("name", "")).strip() == part
+            ),
+            None,
+        )
+        if matched:
+            current_id = str(matched.get("id", "") or "").strip() or current_id
+            continue
+        created = create_quark_folder(cookie, current_id, part)
+        current_id = str(created.get("id", "")).strip() or current_id
+    return current_id
+
+
+def resolve_quark_folder_id_by_path(cookie: str, relative_path: str) -> str:
+    normalized_path = normalize_relative_path(relative_path)
+    if not normalized_path:
+        return "0"
+    current_id = "0"
+    walked_parts: List[str] = []
+    for part in [segment for segment in normalized_path.split("/") if segment]:
+        walked_parts.append(part)
+        entries = list_quark_entries(cookie, current_id)
+        matched = next(
+            (
+                entry
+                for entry in entries
+                if entry.get("is_dir") and str(entry.get("name", "")).strip() == part
+            ),
+            None,
+        )
+        if not matched:
+            raise RuntimeError(f"夸克网盘目录不存在：{join_relative_path(*walked_parts)}")
+        current_id = str(matched.get("id", "")).strip() or "0"
+    return current_id
+
+
+def _request_quark_share_token(cookie: str, pwd_id: str, passcode: str = "") -> str:
+    headers = _build_quark_headers(cookie, referer=f"https://pan.quark.cn/s/{pwd_id}")
+    url = _build_quark_api_url("/1/clouddrive/share/sharepage/token", host="https://drive-h.quark.cn")
+    payload = {
+        "pwd_id": str(pwd_id or "").strip(),
+        "passcode": normalize_receive_code(passcode),
+    }
+    response = _request_quark_json_payload(
+        url,
+        payload,
+        headers,
+        timeout=45,
+        method="POST",
+        fallback="夸克分享访问失败",
+    )
+    if not _is_quark_success(response):
+        raise RuntimeError(_extract_quark_error(response, "夸克分享访问失败"))
+    data = response.get("data") if isinstance(response.get("data"), dict) else {}
+    stoken = str(data.get("stoken", "") or data.get("token", "")).strip()
+    if not stoken:
+        raise RuntimeError("夸克分享令牌获取失败")
+    return stoken
+
+
+def _list_quark_share_page(
+    cookie: str,
+    pwd_id: str,
+    stoken: str,
+    pdir_fid: str = "0",
+    page: int = 1,
+    page_size: int = 200,
+) -> Dict[str, Any]:
+    headers = _build_quark_headers(cookie, referer=f"https://pan.quark.cn/s/{pwd_id}")
+    # Quark share detail 接口对 stoken 的解析存在双重 decode 行为；
+    # 这里先手动 quote，再交给 urlencode，等价于双编码，避免返回“非法token”。
+    stoken_query_value = urllib.parse.quote(str(stoken or "").strip(), safe="")
+    url = _build_quark_api_url(
+        "/1/clouddrive/share/sharepage/detail",
+        {
+            "pwd_id": str(pwd_id or "").strip(),
+            "stoken": stoken_query_value,
+            "pdir_fid": str(pdir_fid or "0").strip() or "0",
+            "_page": max(1, int(page or 1)),
+            "_size": max(20, min(200, int(page_size or 200))),
+            "_fetch_total": 1,
+            "_sort": "file_type:asc,file_name:asc",
+        },
+        host="https://drive-h.quark.cn",
+    )
+    result = _request_quark_json(url, headers, timeout=45, fallback="读取夸克分享目录失败")
+    if not _is_quark_success(result):
+        raise RuntimeError(_extract_quark_error(result, "读取夸克分享目录失败"))
+    data = result.get("data") if isinstance(result.get("data"), dict) else {}
+    raw_list = data.get("list") if isinstance(data.get("list"), list) else []
+    entries = []
+    parent_id = str(pdir_fid or "0").strip() or "0"
+    for raw_item in raw_list:
+        parsed_entry = _parse_quark_entry(raw_item if isinstance(raw_item, dict) else {}, parent_id=parent_id)
+        if parsed_entry:
+            entries.append(parsed_entry)
+    share_info = data.get("share") if isinstance(data.get("share"), dict) else {}
+    if not share_info:
+        share_info = data.get("share_info") if isinstance(data.get("share_info"), dict) else {}
+    has_more = bool(data.get("has_more", False))
+    next_page = parse_int(data.get("next_page"), default=0)
+    if not has_more and next_page > max(1, int(page or 1)):
+        has_more = True
+    total = parse_int(data.get("total"), default=len(entries))
+    return {
+        "entries": entries,
+        "share": share_info,
+        "has_more": has_more,
+        "total": total,
+        "next_page": next_page,
+        "page": max(1, int(page or 1)),
+        "size": max(20, min(200, int(page_size or 200))),
+    }
+
+
+def _collect_quark_share_entries_with_stoken(
+    cookie: str,
+    pwd_id: str,
+    stoken: str,
+    cid: str = "0",
+    page_size: int = 200,
+    max_pages: int = 20,
+    folders_only: bool = False,
+) -> Dict[str, Any]:
+    current_cid = str(cid or "0").strip() or "0"
+    page_limit = max(20, min(200, int(page_size or 200)))
+    max_pages_limit = max(1, int(max_pages or 20))
+    folder_only_mode = bool(folders_only)
+    entries: List[Dict[str, Any]] = []
+    pages_scanned = 0
+    total_count = 0
+    share_title = ""
+
+    page_no = 1
+    while True:
+        page_payload = _list_quark_share_page(
+            cookie,
+            pwd_id,
+            stoken,
+            current_cid,
+            page=page_no,
+            page_size=page_limit,
+        )
+        page_entries = page_payload.get("entries", []) if isinstance(page_payload.get("entries"), list) else []
+        if folder_only_mode:
+            page_entries = [entry for entry in page_entries if entry.get("is_dir")]
+        entries.extend(page_entries)
+        total_count = max(total_count, int(page_payload.get("total", 0) or 0))
+        pages_scanned += 1
+        share_info = page_payload.get("share", {}) if isinstance(page_payload.get("share"), dict) else {}
+        if share_info and not share_title:
+            share_title = str(share_info.get("title", "") or share_info.get("share_name", "") or "").strip()
+        if not bool(page_payload.get("has_more", False)):
+            break
+        if pages_scanned >= max_pages_limit:
+            break
+        page_no += 1
+
+    entries.sort(key=lambda item: (0 if item.get("is_dir") else 1, str(item.get("name", "")).lower()))
+    return {
+        "entries": entries,
+        "share_title": share_title,
+        "count": total_count or len(entries),
+        "pages_scanned": pages_scanned,
+    }
+
+
+def list_quark_share_entries(
+    cookie: str,
+    share_url: str,
+    raw_text: str = "",
+    cid: str = "0",
+    receive_code: str = "",
+    force_refresh: bool = False,
+    request_timeout: int = 45,
+    offset: int = 0,
+    limit: int = 200,
+    max_pages: int = 0,
+    folders_only: bool = False,
+) -> Dict[str, Any]:
+    del force_refresh
+    del request_timeout
+    normalized_cookie = str(cookie or "").strip()
+    if not normalized_cookie:
+        raise RuntimeError("Quark Cookie 未配置")
+    parsed = resolve_quark_share_payload(normalized_cookie, share_url, raw_text, receive_code)
+    pwd_id = str(parsed.get("pwd_id", "") or parsed.get("share_code", "")).strip()
+    if not pwd_id:
+        raise RuntimeError("未能识别夸克分享链接")
+    receive_code_value = normalize_receive_code(parsed.get("receive_code", ""))
+    current_cid = str(cid or "0").strip() or "0"
+    page_limit = max(20, min(200, int(limit or 200)))
+    start_offset = max(0, int(offset or 0))
+    max_pages_limit = max(0, int(max_pages or 0))
+    folder_only_mode = bool(folders_only)
+
+    stoken = _request_quark_share_token(normalized_cookie, pwd_id, receive_code_value)
+    entries: List[Dict[str, Any]] = []
+    total_count = 0
+    pages_scanned = 0
+    share_title = ""
+
+    if start_offset <= 0 and max_pages_limit <= 0 and (not folder_only_mode):
+        page_no = 1
+        while True:
+            page_payload = _list_quark_share_page(
+                normalized_cookie,
+                pwd_id,
+                stoken,
+                current_cid,
+                page=page_no,
+                page_size=page_limit,
+            )
+            page_entries = page_payload.get("entries", []) if isinstance(page_payload.get("entries"), list) else []
+            if folder_only_mode:
+                page_entries = [entry for entry in page_entries if entry.get("is_dir")]
+            entries.extend(page_entries)
+            total_count = max(total_count, int(page_payload.get("total", 0) or 0))
+            pages_scanned += 1
+            share_info = page_payload.get("share", {}) if isinstance(page_payload.get("share"), dict) else {}
+            if share_info and not share_title:
+                share_title = str(share_info.get("title", "") or share_info.get("share_name", "") or "").strip()
+            if not bool(page_payload.get("has_more", False)):
+                break
+            if pages_scanned >= 20:
+                break
+            page_no += 1
+        has_more = False
+        next_offset = len(entries)
+    else:
+        page_no = max(1, (start_offset // page_limit) + 1)
+        skip_in_page = start_offset % page_limit
+        page_payload = _list_quark_share_page(
+            normalized_cookie,
+            pwd_id,
+            stoken,
+            current_cid,
+            page=page_no,
+            page_size=page_limit,
+        )
+        page_entries = page_payload.get("entries", []) if isinstance(page_payload.get("entries"), list) else []
+        if skip_in_page > 0:
+            page_entries = page_entries[skip_in_page:]
+        if folder_only_mode:
+            page_entries = [entry for entry in page_entries if entry.get("is_dir")]
+        entries = page_entries
+        total_count = max(0, int(page_payload.get("total", 0) or 0))
+        pages_scanned = 1
+        has_more = bool(page_payload.get("has_more", False))
+        next_offset = start_offset + len(entries)
+        share_info = page_payload.get("share", {}) if isinstance(page_payload.get("share"), dict) else {}
+        share_title = str(share_info.get("title", "") or share_info.get("share_name", "") or "").strip()
+        if max_pages_limit > 0 and max_pages_limit <= pages_scanned:
+            has_more = False
+
+    entries.sort(key=lambda item: (0 if item.get("is_dir") else 1, str(item.get("name", "")).lower()))
+    return {
+        "entries": entries,
+        "summary": {
+            "folder_count": sum(1 for item in entries if item.get("is_dir")),
+            "file_count": sum(1 for item in entries if not item.get("is_dir")),
+        },
+        "share_code": pwd_id,
+        "receive_code": receive_code_value,
+        "share_title": share_title,
+        "current_cid": current_cid,
+        "count": total_count or len(entries),
+        "offset": start_offset,
+        "next_offset": next_offset,
+        "has_more": bool(has_more),
+        "pages_scanned": pages_scanned,
+        "stoken": stoken,
+    }
+
+
+def prepare_quark_share_save(
+    cookie: str,
+    share_url: str,
+    raw_text: str = "",
+    selected_ids: Optional[List[str]] = None,
+    receive_code: str = "",
+    selected_entries: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    parsed = resolve_quark_share_payload(cookie, share_url, raw_text, receive_code)
+    pwd_id = str(parsed.get("pwd_id", "") or parsed.get("share_code", "")).strip()
+    receive_code_value = normalize_receive_code(parsed.get("receive_code", ""))
+    stoken = _request_quark_share_token(cookie, pwd_id, receive_code_value)
+
+    normalized_ids: List[str] = []
+    seen_ids: Set[str] = set()
+    selected_entry_token_map: Dict[str, str] = {}
+    for entry in selected_entries or []:
+        normalized_entry = normalize_share_selection_entry(entry)
+        entry_id = str(normalized_entry.get("id", "")).strip()
+        if not entry_id:
+            continue
+        token = str(normalized_entry.get("fid_token", "") or "").strip()
+        if token:
+            selected_entry_token_map[entry_id] = token
+
+    for raw_id in selected_ids or []:
+        entry_id = str(raw_id or "").strip()
+        if not entry_id or entry_id in seen_ids:
+            continue
+        seen_ids.add(entry_id)
+        normalized_ids.append(entry_id)
+
+    selection: Dict[str, Any] = {}
+    fid_token_list: List[str] = []
+    if not normalized_ids:
+        snapshot = _collect_quark_share_entries_with_stoken(
+            cookie,
+            pwd_id,
+            stoken,
+            cid="0",
+            page_size=200,
+            max_pages=20,
+        )
+        snapshot_entries = snapshot.get("entries", []) if isinstance(snapshot.get("entries"), list) else []
+        normalized_ids = [str(entry.get("id", "")).strip() for entry in snapshot_entries if str(entry.get("id", "")).strip()]
+        fid_token_list = [str(entry.get("fid_token", "") or "").strip() for entry in snapshot_entries if str(entry.get("id", "")).strip()]
+        selection = normalize_share_selection_meta(
+            {
+                "selected_ids": normalized_ids,
+                "selected_entries": snapshot_entries,
+                "share_root_title": snapshot.get("share_title", ""),
+            }
+        )
+    else:
+        snapshot_token_map: Dict[str, str] = {}
+        scan_cids: List[str] = ["0"]
+        seen_scan_cids: Set[str] = {"0"}
+        for entry in selected_entries or []:
+            normalized_entry = normalize_share_selection_entry(entry)
+            parent_id = str(normalized_entry.get("parent_id", "") or "").strip()
+            if parent_id and parent_id not in seen_scan_cids:
+                seen_scan_cids.add(parent_id)
+                scan_cids.append(parent_id)
+            if bool(normalized_entry.get("is_dir")):
+                child_cid = str(normalized_entry.get("cid", "") or normalized_entry.get("id", "") or "").strip()
+                if child_cid and child_cid not in seen_scan_cids:
+                    seen_scan_cids.add(child_cid)
+                    scan_cids.append(child_cid)
+
+        for scan_cid in scan_cids:
+            try:
+                snapshot = _collect_quark_share_entries_with_stoken(
+                    cookie,
+                    pwd_id,
+                    stoken,
+                    cid=scan_cid,
+                    page_size=200,
+                    max_pages=20,
+                )
+            except Exception:
+                continue
+            snapshot_entries = snapshot.get("entries", []) if isinstance(snapshot.get("entries"), list) else []
+            for entry in snapshot_entries:
+                entry_id = str(entry.get("id", "")).strip()
+                if not entry_id or entry_id in snapshot_token_map:
+                    continue
+                fid_token = str(entry.get("fid_token", "") or "").strip()
+                if fid_token:
+                    snapshot_token_map[entry_id] = fid_token
+
+        fid_token_list = [str(snapshot_token_map.get(entry_id, "") or "").strip() for entry_id in normalized_ids]
+        missing_token_ids = [entry_id for index, entry_id in enumerate(normalized_ids) if not fid_token_list[index]]
+        if missing_token_ids:
+            raise RuntimeError(
+                f"夸克分享条目 token 刷新失败，缺失 {len(missing_token_ids)} 项（示例: {missing_token_ids[0]}）"
+            )
+
+    if len(fid_token_list) != len(normalized_ids):
+        fid_token_list = []
+    elif normalized_ids and not any(token for token in fid_token_list):
+        fid_token_list = []
+
+    if not normalized_ids:
+        raise RuntimeError("分享内容为空，无法转存")
+    return {
+        "pwd_id": pwd_id,
+        "stoken": stoken,
+        "receive_code": receive_code_value,
+        "fid_list": normalized_ids,
+        "fid_token_list": fid_token_list,
+        "selection": selection,
+        "pdir_fid": "0",
+    }
+
+
+def submit_quark_share_save(
+    cookie: str,
+    share_url: str,
+    folder_id: str,
+    raw_text: str = "",
+    selected_ids: Optional[List[str]] = None,
+    receive_code: str = "",
+    selected_entries: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    normalized_cookie = str(cookie or "").strip()
+    if not normalized_cookie:
+        raise RuntimeError("Quark Cookie 未配置")
+    prepared = prepare_quark_share_save(
+        normalized_cookie,
+        share_url,
+        raw_text,
+        selected_ids,
+        receive_code,
+        selected_entries=selected_entries,
+    )
+
+    headers = _build_quark_headers(
+        normalized_cookie,
+        referer=f"https://pan.quark.cn/s/{str(prepared.get('pwd_id', '')).strip()}",
+    )
+    payload = {
+        "pwd_id": str(prepared.get("pwd_id", "")).strip(),
+        "stoken": str(prepared.get("stoken", "")).strip(),
+        "pdir_fid": str(prepared.get("pdir_fid", "0")).strip() or "0",
+        "to_pdir_fid": str(folder_id or "0").strip() or "0",
+        "fid_list": prepared.get("fid_list", []),
+        "fid_token_list": prepared.get("fid_token_list", []),
+        "scene": "link",
+    }
+
+    hosts = ("https://drive-h.quark.cn", "https://drive-pc.quark.cn")
+    last_error = ""
+    response: Dict[str, Any] = {}
+    for host in hosts:
+        url = _build_quark_api_url("/1/clouddrive/share/sharepage/save", host=host)
+        try:
+            response = _request_quark_json_payload(
+                url,
+                payload,
+                headers,
+                timeout=45,
+                method="POST",
+                fallback="夸克网盘转存失败",
+            )
+        except RuntimeError as exc:
+            last_error = str(exc or "夸克网盘转存失败").strip() or "夸克网盘转存失败"
+            continue
+
+        if _is_quark_success(response):
+            last_error = ""
+            break
+        last_error = _extract_quark_error(response, "夸克网盘转存失败")
+
+    if last_error:
+        raise RuntimeError(last_error)
+
+    return {
+        "response": response,
+        "selection": prepared.get("selection", {}),
+    }
+
+
 def normalize_share_selection_entry(item: Any) -> Dict[str, Any]:
     if not isinstance(item, dict):
         return {}
@@ -5879,6 +6900,7 @@ def normalize_share_selection_entry(item: Any) -> Dict[str, Any]:
         "parent_id": parent_id,
         "cid": str(item.get("cid", "") or "").strip() if is_dir else "",
         "fid": str(item.get("fid", "") or "").strip() if not is_dir else "",
+        "fid_token": str(item.get("fid_token", "") or item.get("share_fid_token", "") or "").strip(),
     }
 
 
@@ -6412,7 +7434,8 @@ def parse_telegram_posts_page(html: str, source: Dict[str, Any], limit: int = 10
             url for url in RESOURCE_URL_REGEX.findall(raw_text)
             if "t.me/" not in url and "telegram.me/" not in url
         ]
-        link_url = choose_resource_link(external_links + inline_links)
+        all_links = unique_preserve_order(external_links + inline_links)
+        link_url = choose_resource_link(all_links)
         if not raw_text and not link_url:
             continue
         image_match = TG_IMAGE_STYLE_REGEX.search(chunk)
@@ -6434,6 +7457,7 @@ def parse_telegram_posts_page(html: str, source: Dict[str, Any], limit: int = 10
                 "cover_url": unescape(image_match.group(1)) if image_match else "",
                 "source_post_id": match.group(1),
                 "source_url": build_telegram_channel_url(channel_id),
+                "all_links": all_links[:40],
             },
         }
         posts.append(item)

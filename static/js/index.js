@@ -15,7 +15,7 @@
             last_sign_at: '',
             last_trigger: ''
         };
-        let resourceState = { sources: [], quick_links: [], items: [], jobs: [], channel_sections: [], channel_profiles: {}, search_sections: [], last_syncs: {}, monitor_tasks: [], stats: { source_count: 0, item_count: 0, filtered_item_count: 0, completed_job_count: 0 }, cookie_configured: false, setup_status: null, search: '', search_meta: {} };
+        let resourceState = { sources: [], quick_links: [], items: [], jobs: [], channel_sections: [], channel_profiles: {}, search_sections: [], last_syncs: {}, monitor_tasks: [], stats: { source_count: 0, item_count: 0, filtered_item_count: 0, completed_job_count: 0 }, cookie_configured: false, quark_cookie_configured: false, setup_status: null, search: '', search_meta: {} };
         let editingMonitorName = null;
         let editingSubscriptionName = null;
         let editingResourceSourceIndex = null;
@@ -1596,6 +1596,7 @@
                 'alist_url',
                 'alist_token',
                 'cookie_115',
+                'cookie_quark',
                 'sign115_cron_time',
                 'tg_proxy_protocol',
                 'tg_proxy_host',
@@ -1654,6 +1655,7 @@
             });
 
             if (res.ok) {
+                await refreshResourceState({ allowSearch: false });
                 alert('✅ 配置已保存');
                 refreshSign115Status(false);
             } else {
@@ -2053,6 +2055,8 @@
             const statusText = queued ? '已排队' : getSubscriptionStatusLabel(status);
             const enabledText = task?.enabled === false ? '已停用' : '已启用';
             const mediaText = isTv ? '电视剧' : '电影';
+            const provider = normalizeSubscriptionProvider(task?.provider || '115', '115');
+            const providerText = provider === 'quark' ? '夸克' : '115';
             const titleText = String(task?.title || task?.name || '').trim() || '未命名影视';
             const savepath = String(task?.savepath || '').trim() || '--';
             const fixedShareLink = String(task?.share_link_url || '').trim();
@@ -2079,13 +2083,14 @@
             const latestMatched = String(task?.matched_resource_title || '').trim();
             const latestText = latestMatched ? `最近命中：${latestMatched}` : '最近尚未命中资源';
             const modeText = isTv ? (multiSeasonMode ? '多季合一追更' : '单季追更') : '命中资源后即执行';
-            const fixedShareText = fixedShareLink
+            const fixedShareText = provider === '115' && fixedShareLink
                 ? `，固定分享链接模式${fixedLinkChannelSearch ? '（频道补搜兜底）' : ''}`
                 : '';
-            const shareScopeText = shareSubdir
+            const shareScopeText = provider === '115' && shareSubdir
                 ? `，分享子目录 ${shareSubdir}${shareSubdirCid ? `（CID ${shareSubdirCid}）` : ''}`
-                : (shareSubdirCid ? `，分享子目录 CID ${shareSubdirCid}` : '');
-            return `状态：${statusText}（${enabledText}）。${mediaText}《${titleText}》保存到 ${savepath}${fixedShareText}${shareScopeText}，${modeText}，${episodeText}；${scheduleText}；${latestText}。`;
+                : (provider === '115' && shareSubdirCid ? `，分享子目录 CID ${shareSubdirCid}` : '');
+            const providerRuleText = provider === 'quark' ? '，仅频道自动匹配（不使用固定分享链接）' : '';
+            return `状态：${statusText}（${enabledText}）。${providerText} · ${mediaText}《${titleText}》保存到 ${savepath}${fixedShareText}${shareScopeText}${providerRuleText}，${modeText}，${episodeText}；${scheduleText}；${latestText}。`;
         }
 
         function buildSubscriptionTaskProgressBar({ progress = 0, detail = '' } = {}) {
@@ -2126,6 +2131,21 @@
         function normalizeSubscriptionMediaType(value) {
             const normalized = String(value || 'movie').trim().toLowerCase();
             return normalized === 'tv' ? 'tv' : 'movie';
+        }
+
+        function normalizeSubscriptionProvider(value, fallback = '115') {
+            const normalized = String(value || '').trim().toLowerCase();
+            if (normalized === '115' || normalized === 'quark') return normalized;
+            const fallbackNormalized = String(fallback || '115').trim().toLowerCase();
+            return fallbackNormalized === 'quark' ? 'quark' : '115';
+        }
+
+        function getSubscriptionProviderLabel(provider) {
+            return normalizeSubscriptionProvider(provider, '115') === 'quark' ? 'Quark' : '115';
+        }
+
+        function getCurrentSubscriptionProvider() {
+            return normalizeSubscriptionProvider(document.getElementById('subscription_provider')?.value || '115', '115');
         }
 
         function normalizeSubscriptionQualityPriority(value) {
@@ -2357,8 +2377,13 @@
             const movieHint = /(电影|movie|film|剧场版|電影)/i.test(text);
             const animeMode = /(番剧|动漫|新番|动画|動畫|anime)/i.test(text);
             const mediaType = (hasEpisodeMeta || tvHint) && !movieHint ? 'tv' : 'movie';
+            const provider = normalizeSubscriptionProvider(
+                getEffectiveResourceLinkType(payload) === 'quark' ? 'quark' : '115',
+                '115'
+            );
 
             return {
+                provider,
                 media_type: mediaType,
                 title: buildSubscriptionTitleFromResource(payload),
                 year: extractYearFromResourceText(payload),
@@ -2372,6 +2397,9 @@
         function applySubscriptionPrefill(prefill = {}) {
             const payload = prefill && typeof prefill === 'object' ? prefill : {};
             const mediaType = normalizeSubscriptionMediaType(payload.media_type || 'movie');
+            const provider = normalizeSubscriptionProvider(payload.provider || '115', '115');
+            const providerInput = document.getElementById('subscription_provider');
+            if (providerInput) providerInput.value = provider;
             document.getElementById('subscription_media_type').value = mediaType;
             document.getElementById('subscription_title').value = String(payload.title || '').trim();
             document.getElementById('subscription_year').value = normalizeTmdbYear(payload.year || '');
@@ -2382,6 +2410,7 @@
                 : false;
             const tmdbKeywordInput = document.getElementById('subscription_tmdb_search_keyword');
             if (tmdbKeywordInput) tmdbKeywordInput.value = String(payload.title || '').trim();
+            syncSubscriptionProviderUI();
             syncSubscriptionTypeUI();
         }
 
@@ -2601,16 +2630,8 @@
                     aliasesInput.value = defaultAliases.join(', ');
                 }
                 if (mediaType === 'tv') {
-                    const totalInput = document.getElementById('subscription_total_episodes');
-                    const currentTotal = parseInt(totalInput?.value || '0', 10) || 0;
-                    const selectedSeason = Math.max(1, parseInt(document.getElementById('subscription_season')?.value || '1', 10) || 1);
-                    const seasonTotal = getTmdbSeasonEpisodeTotal(binding.tmdb_season_episode_map || {}, selectedSeason);
-                    const multiSeasonMode = !!document.getElementById('subscription_anime_mode')?.checked;
-                    const tmdbTotal = Math.max(0, parseInt(binding.tmdb_total_episodes || '0', 10) || 0);
-                    const suggestedTotal = multiSeasonMode
-                        ? (tmdbTotal > 0 ? tmdbTotal : seasonTotal)
-                        : (seasonTotal > 0 ? seasonTotal : 0);
-                    if (totalInput && currentTotal <= 0 && suggestedTotal > 0) totalInput.value = String(suggestedTotal);
+                    // 绑定 TMDB 后应以 TMDB 详情刷新总集数，避免旧值残留。
+                    suggestSubscriptionTotalEpisodesFromTmdb({ force: true });
                 }
                 closeSubscriptionTmdbSearchModal();
                 showToast(`已绑定 TMDB：${binding.tmdb_title || target.title || '--'}`, { tone: 'success', duration: 2600, placement: 'top-center' });
@@ -2654,6 +2675,40 @@
             if (suggestedTotal > 0 && (force || currentTotal <= 0)) totalInput.value = String(suggestedTotal);
         }
 
+        function syncSubscriptionProviderUI() {
+            const provider = getCurrentSubscriptionProvider();
+            const isQuark = provider === 'quark';
+            const providerLabel = getSubscriptionProviderLabel(provider);
+            const savepathProviderLabelEl = document.getElementById('subscription-savepath-provider-label');
+            const fixedLinkBlockEl = document.getElementById('subscription-115-fixed-link-block');
+            const quarkHintEl = document.getElementById('subscription-quark-provider-hint');
+            const minScoreWrapEl = document.getElementById('subscription-min-score-wrap');
+            const minScoreInputEl = document.getElementById('subscription_min_score');
+            const strategyHintEl = document.getElementById('subscription-provider-strategy-hint');
+
+            if (savepathProviderLabelEl) savepathProviderLabelEl.textContent = `${providerLabel} 保存目录`;
+            if (fixedLinkBlockEl) fixedLinkBlockEl.classList.toggle('hidden', isQuark);
+            if (quarkHintEl) quarkHintEl.classList.toggle('hidden', !isQuark);
+            if (minScoreWrapEl) minScoreWrapEl.classList.toggle('hidden', isQuark);
+            if (minScoreInputEl) minScoreInputEl.disabled = isQuark;
+            if (strategyHintEl) {
+                strategyHintEl.textContent = isQuark
+                    ? '匹配策略：Quark 仅使用频道自动匹配，采用独立评分（强标题命中 + 集数命中）；仅集数命中会被拦截。'
+                    : '匹配策略：若填写了固定 115 分享链接，默认只在该链接内扫描；可开启“固定链接后再补搜一次频道”作为兜底。未填写固定链接时，会在已启用频道按标题/别名主动搜索并评分命中。';
+            }
+
+            if (isQuark) {
+                const shareLinkInput = document.getElementById('subscription_share_link_url');
+                const shareReceiveInput = document.getElementById('subscription_share_receive_code');
+                const fixedLinkSearchInput = document.getElementById('subscription_fixed_link_channel_search');
+                if (shareLinkInput) shareLinkInput.value = '';
+                if (shareReceiveInput) shareReceiveInput.value = '';
+                if (fixedLinkSearchInput) fixedLinkSearchInput.checked = false;
+                setSubscriptionShareSubdirSelection('', '');
+                resetSubscriptionShareFolderBrowser();
+            }
+        }
+
         function syncSubscriptionTypeUI({ forceSuggestTotal = false } = {}) {
             const mediaType = normalizeSubscriptionMediaType(document.getElementById('subscription_media_type')?.value || 'movie');
             const tvFields = document.getElementById('subscription-tv-fields');
@@ -2674,6 +2729,7 @@
                     ? '电影会自动保存到“目标目录/影片名”子文件夹；电视剧保存到所选目录。'
                     : '电视剧会直接保存到所选目录；请把目录设在剧集父文件夹下。';
             }
+            syncSubscriptionProviderUI();
             suggestSubscriptionTotalEpisodesFromTmdb({ force: !!forceSuggestTotal });
             renderSubscriptionTmdbBinding();
         }
@@ -2694,6 +2750,7 @@
 
         function currentSubscriptionFormData() {
             const title = document.getElementById('subscription_title').value.trim();
+            const provider = getCurrentSubscriptionProvider();
             const tmdbBinding = getSubscriptionTmdbBindingFromForm();
             const multiSeasonMode = !!document.getElementById('subscription_anime_mode').checked;
             const scheduleWeekdays = getSubscriptionWeekdaysFromForm();
@@ -2711,16 +2768,17 @@
             );
             const shareLinkRaw = String(document.getElementById('subscription_share_link_url')?.value || '').trim();
             const shareLinkType = detectResourceLinkTypeByUrl(shareLinkRaw);
-            const normalizedShareLink = shareLinkType === '115share' ? shareLinkRaw : '';
+            const normalizedShareLink = provider === '115' && shareLinkType === '115share' ? shareLinkRaw : '';
             const receiveCodeRaw = String(document.getElementById('subscription_share_receive_code')?.value || '').trim();
             const normalizedReceiveCode = normalizeReceiveCodeInput(receiveCodeRaw);
             const shareSubdir = normalizeRelativePathInput(document.getElementById('subscription_share_subdir')?.value || '');
             const shareSubdirCid = shareSubdir
                 ? normalizeShareCidInput(document.getElementById('subscription_share_subdir_cid')?.value || '')
                 : '';
-            const fixedLinkChannelSearch = !!document.getElementById('subscription_fixed_link_channel_search')?.checked;
+            const fixedLinkChannelSearch = provider === '115' && !!document.getElementById('subscription_fixed_link_channel_search')?.checked;
             return {
                 name: title,
+                provider,
                 media_type: normalizeSubscriptionMediaType(document.getElementById('subscription_media_type').value),
                 title,
                 aliases: document.getElementById('subscription_aliases').value.trim(),
@@ -2760,6 +2818,8 @@
             const titleEl = document.getElementById('subscription-modal-title');
             if (titleEl) titleEl.innerText = '新增订阅任务';
             document.getElementById('subscription_media_type').value = 'tv';
+            const providerInput = document.getElementById('subscription_provider');
+            if (providerInput) providerInput.value = '115';
             document.getElementById('subscription_title').value = '';
             document.getElementById('subscription_aliases').value = '';
             document.getElementById('subscription_year').value = '';
@@ -2843,17 +2903,26 @@
             applySubscriptionState({ ...subscriptionState, tasks: data.tasks || [] }, { forceRender: true });
         }
 
+        function buildSubscriptionProviderTaskName(title, provider) {
+            const normalizedTitle = String(title || '').trim();
+            if (!normalizedTitle) return '';
+            const suffix = normalizeSubscriptionProvider(provider, '115') === 'quark' ? 'quark' : '115';
+            return `${normalizedTitle} (${suffix})`;
+        }
+
         async function saveSubscriptionTask() {
             const task = currentSubscriptionFormData();
+            task.provider = normalizeSubscriptionProvider(task.provider, '115');
             if (!task.title) return alert('订阅影视名称不能为空');
             if (!task.savepath) return alert('请先从网盘选择保存目录');
             const rawShareLink = String(document.getElementById('subscription_share_link_url')?.value || '').trim();
-            if (rawShareLink && !task.share_link_url) return alert('固定分享链接仅支持 115 分享链接格式');
+            if (task.provider === '115' && rawShareLink && !task.share_link_url) return alert('固定分享链接仅支持 115 分享链接格式');
             const rawReceiveCode = String(document.getElementById('subscription_share_receive_code')?.value || '').trim();
-            if (rawReceiveCode && !task.share_link_receive_code) return alert('提取码格式不正确，请输入 1-16 位字母或数字');
-            if (!task.share_link_url) {
+            if (task.provider === '115' && rawReceiveCode && !task.share_link_receive_code) return alert('提取码格式不正确，请输入 1-16 位字母或数字');
+            if (task.provider !== '115' || !task.share_link_url) {
+                task.share_link_url = '';
                 task.share_link_receive_code = '';
-                task.share_subdir = normalizeRelativePathInput(task.share_subdir || '');
+                task.share_subdir = '';
                 task.share_subdir_cid = '';
                 task.fixed_link_channel_search = false;
             }
@@ -2864,7 +2933,8 @@
             if (task.enabled && (!Array.isArray(task.schedule_weekdays) || task.schedule_weekdays.length <= 0)) {
                 return alert('请至少选择一个查询星期，或先关闭任务启用状态');
             }
-            if (task.min_score < 30 || task.min_score > 100) return alert('匹配阈值需在 30-100 之间');
+            if (task.provider === '115' && (task.min_score < 30 || task.min_score > 100)) return alert('匹配阈值需在 30-100 之间');
+            if (task.provider !== '115') task.min_score = 55;
             if (!['balanced', 'ultra', 'fhd', 'hd', 'sd'].includes(task.quality_priority)) return alert('清晰度优先级配置无效');
             if (task.tmdb_id > 0 && task.tmdb_media_type && task.tmdb_media_type !== task.media_type) {
                 return alert('TMDB 绑定类型与订阅类型不一致，请重新绑定');
@@ -2906,8 +2976,25 @@
                 ...item,
                 aliases: Array.isArray(item.aliases) ? item.aliases.join(', ') : (item.aliases || '')
             }));
+            const normalizedTitle = String(task.title || '').trim();
+            const editingTask = tasks.find((item) => String(item?.name || '').trim() === String(editingSubscriptionName || '').trim()) || null;
+            const editingName = String(editingSubscriptionName || '').trim();
+            const keepsProviderSuffix = /\s\((?:115|quark)\)$/i.test(editingName);
+            if (editingTask && keepsProviderSuffix && String(task.name || '').trim() === normalizedTitle) {
+                task.name = buildSubscriptionProviderTaskName(normalizedTitle, task.provider);
+            }
+            const hasSameTitleOtherProvider = tasks.some((item) => {
+                if (String(item?.name || '').trim() === String(editingSubscriptionName || '').trim()) return false;
+                const itemTitle = String(item?.title || '').trim();
+                if (!itemTitle || itemTitle !== normalizedTitle) return false;
+                const itemProvider = normalizeSubscriptionProvider(item?.provider || '115', '115');
+                return itemProvider !== task.provider;
+            });
+            if (hasSameTitleOtherProvider && String(task.name || '').trim() === normalizedTitle) {
+                task.name = buildSubscriptionProviderTaskName(normalizedTitle, task.provider);
+            }
             const dup = tasks.find(item => item.name === task.name && item.name !== editingSubscriptionName);
-            if (dup) return alert('影视名称重复，请修改标题或年份后再保存');
+            if (dup) return alert(`任务名称重复（${task.name}），请修改标题或网盘提供方后再保存`);
             const idx = tasks.findIndex(item => item.name === editingSubscriptionName);
             if (idx >= 0) tasks[idx] = task;
             else tasks.push(task);
@@ -2928,6 +3015,8 @@
             editingSubscriptionName = task.name;
             const titleEl = document.getElementById('subscription-modal-title');
             if (titleEl) titleEl.innerText = `编辑订阅任务：${task.name}`;
+            const providerInput = document.getElementById('subscription_provider');
+            if (providerInput) providerInput.value = normalizeSubscriptionProvider(task.provider || '115', '115');
             document.getElementById('subscription_media_type').value = normalizeSubscriptionMediaType(task.media_type || 'movie');
             document.getElementById('subscription_title').value = task.title || '';
             document.getElementById('subscription_aliases').value = Array.isArray(task.aliases) ? task.aliases.join(', ') : (task.aliases || '');
@@ -3656,10 +3745,54 @@
             return map[normalized] || normalized || '待识别';
         }
 
+        function getResourceProviderByLinkType(linkType) {
+            const normalized = String(linkType || '').trim().toLowerCase();
+            if (normalized === 'quark') return 'quark';
+            return '115';
+        }
+
+        function getResourceProviderLabel(provider) {
+            return normalizeSubscriptionProvider(provider, '115') === 'quark' ? '夸克' : '115';
+        }
+
+        function getResourceFolderApiPrefix(provider) {
+            return normalizeSubscriptionProvider(provider, '115') === 'quark' ? '/resource/quark' : '/resource/115';
+        }
+
+        function getResourceShareApiPrefix(linkType) {
+            const normalized = String(linkType || '').trim().toLowerCase();
+            if (normalized === 'quark') return '/resource/quark';
+            return '/resource/115';
+        }
+
+        function isProviderCookieConfigured(provider) {
+            const normalized = normalizeSubscriptionProvider(provider, '115');
+            if (normalized === 'quark') return !!resourceState?.quark_cookie_configured;
+            return !!resourceState?.cookie_configured;
+        }
+
+        function isLinkTypeCookieConfigured(linkType) {
+            return isProviderCookieConfigured(getResourceProviderByLinkType(linkType));
+        }
+
+        function hasAnyResourceCookieConfigured() {
+            return !!resourceState?.cookie_configured || !!resourceState?.quark_cookie_configured;
+        }
+
+        function isResourceShareLinkType(linkType) {
+            const normalized = String(linkType || '').trim().toLowerCase();
+            return normalized === '115share' || normalized === 'quark';
+        }
+
+        function getCurrentResourceProvider() {
+            return getResourceProviderByLinkType(resourceModalLinkType);
+        }
+
         function getResourceLinkTypeBadgeClass(linkType) {
             const normalized = String(linkType || 'unknown').trim().toLowerCase();
             if (normalized === 'magnet') return 'resource-card-type-badge resource-card-type-badge-magnet';
             if (normalized === '115share') return 'resource-card-type-badge resource-card-type-badge-115share';
+            if (normalized === 'quark') return 'resource-card-type-badge resource-card-type-badge-quark';
             return 'resource-card-type-badge resource-card-type-badge-default';
         }
 
@@ -4211,17 +4344,19 @@
 
         function canOpenResourceImport(item) {
             const linkType = getEffectiveResourceLinkType(item);
-            return !!String(item?.link_url || '').trim() && ['magnet', '115share'].includes(linkType);
+            return !!String(item?.link_url || '').trim() && ['magnet', '115share', 'quark'].includes(linkType);
         }
 
         function canImportResource(item) {
-            return canOpenResourceImport(item) && !!resourceState.cookie_configured;
+            const linkType = getEffectiveResourceLinkType(item);
+            return canOpenResourceImport(item) && isLinkTypeCookieConfigured(linkType);
         }
 
         function getResourceImportLabel(item) {
             const linkType = getEffectiveResourceLinkType(item);
             if (!String(item?.link_url || '').trim()) return '暂无可导入链接';
             if (linkType === '115share') return '转存到 115';
+            if (linkType === 'quark') return '转存到夸克';
             if (linkType === 'magnet') return '下载到 115';
             return '当前不可导入';
         }
@@ -4671,12 +4806,15 @@
         }
 
         function getResourceImportSelectionHint() {
+            const linkType = String(resourceModalLinkType || '').trim().toLowerCase();
+            const provider = getResourceProviderByLinkType(linkType);
+            const providerLabel = getResourceProviderLabel(provider);
             if (isResourceBatchImportMode()) {
                 const batchCount = getResourceBatchMagnetItems().length;
                 return `当前为批量模式，将按同一保存目录依次导入 ${batchCount} 条磁力链接。`;
             }
             if (!isCurrentResource115Share()) return '当前资源会按完整内容导入。';
-            if (!resourceState.cookie_configured) return '配置 115 Cookie 后可浏览分享目录并选择具体内容。';
+            if (!isLinkTypeCookieConfigured(linkType)) return `配置 ${providerLabel} Cookie 后可浏览分享目录并选择具体内容。`;
             if (!resourceShareRootLoaded) return '分享目录载入后可选择需要保存的目录或文件。';
 
             const selectionState = getResourceShareSelectionState();
@@ -4691,14 +4829,20 @@
         function renderResourceImportBehaviorHint(savepath = '') {
             const hintEl = document.getElementById('resource_job_monitor_task_hint');
             if (!hintEl) return;
+            const provider = getCurrentResourceProvider();
+            const providerLabel = getResourceProviderLabel(provider);
 
             const match = resolveResourceMonitorTaskMatch(savepath || document.getElementById('resource_job_savepath')?.value || '');
             if (!match.savepath) {
-                hintEl.innerText = '请选择一个非根目录的 115 保存目录。';
+                hintEl.innerText = `请选择一个非根目录的${providerLabel}保存目录。`;
                 return;
             }
 
             const selectionHint = getResourceImportSelectionHint();
+            if (provider === 'quark') {
+                hintEl.innerText = `${selectionHint} 当前为夸克独立链路，提交后不会联动文件夹监控刷新。`.trim();
+                return;
+            }
             const monitorHint = match.taskName
                 ? `当前保存路径会映射到 OpenList 的 ${match.fullPath}，命中文件夹监控任务“${match.taskName}”，保存完成后会自动触发生成 strm。`
                 : `当前保存路径会映射到 OpenList 的 ${match.fullPath}，未命中文件夹监控任务，保存后不会自动生成 strm。`;
@@ -4710,6 +4854,7 @@
             const displayInput = document.getElementById('resource_job_monitor_task_display');
             const delayInput = document.getElementById('resource_job_refresh_delay_seconds');
             if (!hiddenInput || !displayInput || !delayInput) return;
+            const provider = getCurrentResourceProvider();
 
             const match = resolveResourceMonitorTaskMatch(savepath);
             syncResourceSavepathPreview(match.savepath);
@@ -4719,6 +4864,17 @@
                 displayInput.textContent = '请先选择保存目录';
                 delayInput.disabled = false;
                 renderResourceImportBehaviorHint('');
+                return;
+            }
+
+            if (provider === 'quark') {
+                hiddenInput.value = '';
+                displayInput.textContent = '夸克链路不绑定监控';
+                delayInput.value = '0';
+                delayInput.disabled = true;
+                renderResourceImportBehaviorHint(match.savepath);
+                renderResourceImportSummary();
+                renderResourceImportFeedback();
                 return;
             }
 
@@ -4734,6 +4890,17 @@
             renderResourceImportBehaviorHint(match.savepath);
             renderResourceImportSummary();
             renderResourceImportFeedback();
+        }
+
+        function syncResourceProviderUI() {
+            const provider = getCurrentResourceProvider();
+            const providerLabel = getResourceProviderLabel(provider);
+            const savepathLabelEl = document.getElementById('resource-savepath-provider-label');
+            const folderModalTitleEl = document.getElementById('resource-folder-modal-title');
+            const receiveCodeLabelEl = document.getElementById('resource-share-receive-code-label');
+            if (savepathLabelEl) savepathLabelEl.textContent = `${providerLabel} 保存目录`;
+            if (folderModalTitleEl) folderModalTitleEl.textContent = `选择${providerLabel}目录`;
+            if (receiveCodeLabelEl) receiveCodeLabelEl.textContent = `${providerLabel} 提取码`;
         }
 
         function renderResourceImportSummary() {
@@ -5004,14 +5171,16 @@
                 return;
             }
 
-            const hasCookie = !!setupStatus.cookie_configured;
+            const hasCookie115 = !!setupStatus.cookie_configured;
+            const hasCookieQuark = !!setupStatus.quark_cookie_configured;
+            const hasCookie = hasCookie115 || hasCookieQuark;
             const hasSources = !!setupStatus.has_sources;
             const hasMonitor = !!setupStatus.has_monitor;
             const hasResourceData = !!setupStatus.has_resource_data;
             const hasJobs = !!setupStatus.has_jobs;
             const steps = [
                 { label: '配置 AList/OpenList', done: !!setupStatus.alist_configured, tab: 'settings', meta: '播放链接基础配置' },
-                { label: '配置 115 Cookie', done: hasCookie, tab: 'settings', meta: '启用导入/转存能力' },
+                { label: '配置网盘 Cookie', done: hasCookie, tab: 'settings', meta: '启用导入/转存能力' },
                 { label: '同步频道资源', done: hasSources && hasResourceData, tab: 'resource', meta: '先同步再搜索导入' },
                 { label: '创建监控任务', done: hasMonitor, tab: 'monitor', meta: '用于自动生成 strm' },
                 { label: '提交首个导入任务', done: hasJobs, tab: 'resource', meta: '验证全链路可用' },
@@ -5093,6 +5262,16 @@
                 search_sections: hydrateResourceSections(Array.isArray(data.search_sections) ? data.search_sections : (resourceState.search_sections || [])),
                 last_syncs: data.last_syncs || resourceState.last_syncs || {},
                 monitor_tasks: Array.isArray(data.monitor_tasks) ? data.monitor_tasks : (resourceState.monitor_tasks || monitorState.tasks || []),
+                cookie_configured: !!(
+                    typeof data.cookie_configured === 'boolean'
+                        ? data.cookie_configured
+                        : resourceState.cookie_configured
+                ),
+                quark_cookie_configured: !!(
+                    typeof data.quark_cookie_configured === 'boolean'
+                        ? data.quark_cookie_configured
+                        : resourceState.quark_cookie_configured
+                ),
                 setup_status: data.setup_status && typeof data.setup_status === 'object'
                     ? data.setup_status
                     : (resourceState.setup_status || null),
@@ -5117,7 +5296,7 @@
             const completedCountEl = document.getElementById('resource-completed-job-count');
             if (completedCountEl) completedCountEl.innerText = String(completedCount);
             syncResourceJobClearMenuState();
-            document.getElementById('resource-cookie-hint').classList.toggle('hidden', !!resourceState.cookie_configured);
+            document.getElementById('resource-cookie-hint').classList.toggle('hidden', hasAnyResourceCookieConfigured());
             syncResourceSourceSelect();
             syncResourceMonitorTaskOptions(document.getElementById('resource_job_savepath')?.value || '');
             renderResourceOnboardingCard();
@@ -5277,10 +5456,10 @@
             const importableItems = items
                 .filter(item => canOpenResourceImport(item))
                 .map(item => createTransientResourceItem(item));
-            if (!importableItems.length) throw new Error('未在文本中识别到可导入的 magnet 或 115 分享链接');
+            if (!importableItems.length) throw new Error('未在文本中识别到可导入的 magnet / 115 / quark 分享链接');
 
             const magnetItems = importableItems.filter(item => getEffectiveResourceLinkType(item) === 'magnet');
-            const hasShareItems = importableItems.some(item => getEffectiveResourceLinkType(item) === '115share');
+            const hasShareItems = importableItems.some(item => isResourceShareLinkType(getEffectiveResourceLinkType(item)));
             if (magnetItems.length > 1 && !hasShareItems) {
                 setResourceBatchImportItems(magnetItems);
                 const batchMagnetItems = getResourceBatchMagnetItems();
@@ -6991,8 +7170,9 @@
             syncResourceJobModalTrigger();
         }
 
-        async function fetchResourceFolderData(cid = '0') {
-            const res = await fetch(`/resource/115/folders?cid=${encodeURIComponent(String(cid || '0'))}`);
+        async function fetchResourceFolderData(cid = '0', { provider = '115' } = {}) {
+            const apiPrefix = getResourceFolderApiPrefix(provider);
+            const res = await fetch(`${apiPrefix}/folders?cid=${encodeURIComponent(String(cid || '0'))}`);
             const data = await res.json();
             if (!res.ok || !data.ok) throw new Error(data.msg || '读取目录失败');
             return {
@@ -7004,8 +7184,9 @@
             };
         }
 
-        async function createResourceFolder(cid = '0', name = '') {
-            const res = await fetch('/resource/115/folders/create', {
+        async function createResourceFolder(cid = '0', name = '', { provider = '115' } = {}) {
+            const apiPrefix = getResourceFolderApiPrefix(provider);
+            const res = await fetch(`${apiPrefix}/folders/create`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
@@ -7048,17 +7229,20 @@
         }
 
         function isCurrentResource115Share() {
-            return String(resourceModalLinkType || '').trim().toLowerCase() === '115share';
+            return isResourceShareLinkType(resourceModalLinkType);
         }
 
         function syncResourceShareReceiveCodeSection() {
             const sectionEl = document.getElementById('resource-share-receive-code-section');
             const inputEl = document.getElementById('resource_share_receive_code');
             const applyBtnEl = document.getElementById('resource-share-receive-code-apply');
+            const labelEl = document.getElementById('resource-share-receive-code-label');
             const shouldShow = resourceModalMode === 'import' && isCurrentResource115Share();
+            const providerLabel = getResourceProviderLabel(getCurrentResourceProvider());
 
             if (sectionEl) sectionEl.classList.toggle('hidden', !shouldShow);
             if (!shouldShow) return;
+            if (labelEl) labelEl.textContent = `${providerLabel} 提取码`;
 
             if (inputEl) {
                 inputEl.value = resourceShareReceiveCode || '';
@@ -7082,7 +7266,7 @@
             }
             resourceShareReceiveCode = normalizedCode;
             syncResourceShareReceiveCodeSection();
-            if (!resourceState.cookie_configured || !selectedResourceItem) return;
+            if (!isLinkTypeCookieConfigured(resourceModalLinkType) || !selectedResourceItem) return;
             await loadResourceShareBranch(selectedResourceId, '0', { resetSelection: true });
         }
 
@@ -7098,6 +7282,7 @@
             const receiveCode = normalizeReceiveCodeInput(resourceShareReceiveCode);
             const normalizedOffset = Math.max(0, Number(offset || 0));
             const normalizedLimit = Math.max(20, Math.min(Number(limit || RESOURCE_SHARE_BROWSE_PAGE_LIMIT), 400));
+            const shareApiPrefix = getResourceShareApiPrefix(resourceModalLinkType);
             let res;
             if (Number(resourceId || 0) > 0) {
                 const params = new URLSearchParams({
@@ -7108,9 +7293,9 @@
                 if (paged) params.set('paged', '1');
                 params.set('offset', String(normalizedOffset));
                 params.set('limit', String(normalizedLimit));
-                res = await fetch(`/resource/115/share_entries?${params.toString()}`);
+                res = await fetch(`${shareApiPrefix}/share_entries?${params.toString()}`);
             } else {
-                res = await fetch('/resource/115/share_entries_preview', {
+                res = await fetch(`${shareApiPrefix}/share_entries_preview`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
@@ -7307,7 +7492,7 @@
         }
 
         async function loadResourceShareBranch(resourceId, cid = '0', { resetSelection = false, append = false } = {}) {
-            if (!resourceState.cookie_configured || !isCurrentResource115Share()) {
+            if (!isLinkTypeCookieConfigured(resourceModalLinkType) || !isCurrentResource115Share()) {
                 renderResourceShareBrowser();
                 return;
             }
@@ -7533,6 +7718,7 @@
 
             const importMode = resourceModalMode === 'import';
             const isShare = isCurrentResource115Share();
+            const providerLabel = getResourceProviderLabel(getCurrentResourceProvider());
             card.classList.toggle('hidden', !importMode);
             syncResourceShareReceiveCodeSection();
             if (!importMode) {
@@ -7576,9 +7762,9 @@
             rootTitleEl.innerHTML = breadcrumbHtml;
 
             if (resourceShareLoading || currentFolderLoading) {
-                treeEl.innerHTML = '<div class="resource-browser-empty">正在读取 115 分享目录，请稍候...</div>';
-            } else if (!resourceState.cookie_configured) {
-                treeEl.innerHTML = '<div class="resource-browser-empty">当前未配置 115 Cookie，暂时无法读取分享目录。</div>';
+                treeEl.innerHTML = `<div class="resource-browser-empty">正在读取${escapeHtml(providerLabel)}分享目录，请稍候...</div>`;
+            } else if (!isLinkTypeCookieConfigured(resourceModalLinkType)) {
+                treeEl.innerHTML = `<div class="resource-browser-empty">当前未配置${escapeHtml(providerLabel)} Cookie，暂时无法读取分享目录。</div>`;
             } else if (resourceShareError) {
                 treeEl.innerHTML = `<div class="resource-browser-empty text-red-300">${escapeHtml(resourceShareError)}</div>`;
             } else if (!resourceShareRootLoaded) {
@@ -7603,7 +7789,7 @@
 
             const selectedInCurrentCount = currentEntries.filter(entry => isResourceShareEntryEffectivelySelected(entry)).length;
             if (currentCheckAllEl) {
-                currentCheckAllEl.disabled = !currentEntries.length || !resourceState.cookie_configured || !!resourceShareError || resourceShareLoading || currentFolderLoading || currentFolderLoadingMore;
+                currentCheckAllEl.disabled = !currentEntries.length || !isLinkTypeCookieConfigured(resourceModalLinkType) || !!resourceShareError || resourceShareLoading || currentFolderLoading || currentFolderLoadingMore;
                 currentCheckAllEl.checked = !!currentEntries.length && selectedInCurrentCount === currentEntries.length;
                 currentCheckAllEl.indeterminate = selectedInCurrentCount > 0 && selectedInCurrentCount < currentEntries.length;
             }
@@ -7728,7 +7914,7 @@
                 const expected = normalizedTrail[i] || {};
                 const expectedId = String(expected.id || '').trim();
                 if (!expectedId || expectedId === '0') break;
-                const result = await fetchResourceFolderData(parentCid);
+                const result = await fetchResourceFolderData(parentCid, { provider: getCurrentResourceProvider() });
                 const entries = Array.isArray(result.entries) ? result.entries : [];
                 const matched = entries.find(entry => {
                     if (!entry?.is_dir) return false;
@@ -7756,7 +7942,7 @@
             let parentCid = '0';
             const parts = normalizedPath.split('/').filter(Boolean);
             for (const part of parts) {
-                const result = await fetchResourceFolderData(parentCid);
+                const result = await fetchResourceFolderData(parentCid, { provider: getCurrentResourceProvider() });
                 const entries = Array.isArray(result.entries) ? result.entries : [];
                 const matched = entries.find(entry => !!entry?.is_dir && String(entry?.name || '').trim() === part);
                 if (!matched) {
@@ -7774,7 +7960,9 @@
         }
 
         async function ensureResourceFolderSelectionValid({ phase = 'submit' } = {}) {
-            if (!resourceState.cookie_configured) return true;
+            const provider = getCurrentResourceProvider();
+            const providerLabel = getResourceProviderLabel(provider);
+            if (!isProviderCookieConfigured(provider)) return true;
             if (resourceFolderValidationPromise) return resourceFolderValidationPromise;
 
             resourceFolderValidationPromise = (async () => {
@@ -7789,7 +7977,7 @@
                         resolved = await resolveResourceFolderTrailByPath(currentPath);
                     }
                 } catch (e) {
-                    const detail = e?.message || '读取 115 目录失败';
+                    const detail = e?.message || `读取${providerLabel}目录失败`;
                     showToast(`目录合法性检查失败：${detail}`, { tone: 'error', duration: 3200, placement: 'top-center' });
                     return phase !== 'submit';
                 }
@@ -7832,11 +8020,13 @@
             const summaryEl = document.getElementById('resource-target-preview-summary');
             const listEl = document.getElementById('resource-target-preview-list');
             if (!pathEl || !summaryEl || !listEl) return;
+            const provider = getCurrentResourceProvider();
+            const providerLabel = getResourceProviderLabel(provider);
 
             pathEl.innerText = document.getElementById('resource_job_folder_path')?.value?.trim() || '根目录';
-            if (!resourceState.cookie_configured) {
-                summaryEl.innerText = '配置 115 Cookie 后可预览目标目录下的文件夹和文件内容。';
-                listEl.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">当前未配置 115 Cookie，暂时无法读取目标目录内容。</div>';
+            if (!isProviderCookieConfigured(provider)) {
+                summaryEl.innerText = `配置${providerLabel} Cookie 后可预览目标目录下的文件夹和文件内容。`;
+                listEl.innerHTML = `<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">当前未配置${escapeHtml(providerLabel)} Cookie，暂时无法读取目标目录内容。</div>`;
                 return;
             }
             if (resourceTargetPreviewLoading) {
@@ -7860,7 +8050,7 @@
         }
 
         async function loadResourceTargetPreview(folderId = '0', { force = false } = {}) {
-            if (!resourceState.cookie_configured) {
+            if (!isProviderCookieConfigured(getCurrentResourceProvider())) {
                 resourceTargetPreviewEntries = [];
                 resourceTargetPreviewSummary = { folder_count: 0, file_count: 0 };
                 resourceTargetPreviewLoading = false;
@@ -7873,7 +8063,7 @@
             resourceTargetPreviewError = '';
             renderResourceTargetPreview();
             try {
-                const result = await fetchResourceFolderData(folderId);
+                const result = await fetchResourceFolderData(folderId, { provider: getCurrentResourceProvider() });
                 resourceTargetPreviewEntries = result.entries;
                 resourceTargetPreviewSummary = result.summary;
             } catch (e) {
@@ -7921,6 +8111,7 @@
             const batchMode = importMode && isResourceBatchImportMode();
             const batchCount = batchMode ? getResourceBatchMagnetItems().length : 0;
             if (!titleEl || !detailGrid || !rawCard || !savePanel || !saveHintEl || !footer || !submitBtn || !closeBtn) return;
+            syncResourceProviderUI();
 
             titleEl.innerText = importMode ? (batchMode ? '批量导入资源' : '导入资源') : '资源详情';
             detailGrid.className = importMode ? 'resource-import-layout' : 'grid grid-cols-1 gap-4';
@@ -7966,20 +8157,27 @@
             }
 
             const hints = [];
+            const currentLinkType = getEffectiveResourceLinkType(item);
+            const currentProvider = getResourceProviderByLinkType(currentLinkType);
+            const currentProviderLabel = getResourceProviderLabel(currentProvider);
             if (!canOpenResourceImport(item)) {
-                hints.push('当前资源没有可直接导入的 magnet 或 115 分享链接。');
+                hints.push('当前资源没有可直接导入的 magnet / 115 / quark 分享链接。');
             } else {
                 if (batchMode) {
                     hints.push(`已识别 ${batchCount} 条磁力链接，将按同一保存目录和延时设置依次导入。`);
                 }
-                if (!resourceState.cookie_configured) {
-                    hints.push('还没有配置 115 Cookie。你可以先查看并填写保存资源和保存目录，但真正提交前需要先补上 Cookie。');
+                if (!isLinkTypeCookieConfigured(currentLinkType)) {
+                    hints.push(`还没有配置${currentProviderLabel} Cookie。你可以先查看并填写保存资源和保存目录，但真正提交前需要先补上 Cookie。`);
                 }
-                const taskCount = Array.isArray(resourceState.monitor_tasks) && resourceState.monitor_tasks.length
-                    ? resourceState.monitor_tasks.length
-                    : ((monitorState.tasks || []).length || 0);
-                if (!taskCount) {
-                    hints.push('当前还没有配置文件夹监控任务。保存到 115 仍然可用，但不会自动生成 strm。');
+                if (currentProvider === 'quark') {
+                    hints.push('夸克链路不会联动监控任务，也不会自动触发 strm 刷新。');
+                } else {
+                    const taskCount = Array.isArray(resourceState.monitor_tasks) && resourceState.monitor_tasks.length
+                        ? resourceState.monitor_tasks.length
+                        : ((monitorState.tasks || []).length || 0);
+                    if (!taskCount) {
+                        hints.push('当前还没有配置文件夹监控任务。保存到 115 仍然可用，但不会自动生成 strm。');
+                    }
                 }
             }
             if (hints.length) {
@@ -8039,10 +8237,10 @@
             renderResourceShareBrowser();
             renderResourceImportSummary();
             showLockedModal('resource-import-modal');
-            if (resourceModalMode === 'import' && resourceState.cookie_configured) {
+            if (resourceModalMode === 'import' && isProviderCookieConfigured(getCurrentResourceProvider())) {
                 void ensureResourceFolderSelectionValid({ phase: 'open' });
             }
-            if (resourceModalMode === 'import' && resourceModalLinkType === '115share' && resourceState.cookie_configured) {
+            if (resourceModalMode === 'import' && isCurrentResource115Share() && isLinkTypeCookieConfigured(resourceModalLinkType)) {
                 loadResourceShareBranch(selectedResourceId, '0', { resetSelection: true });
             }
         }
@@ -8085,6 +8283,8 @@
             try {
                 const batchMode = isResourceBatchImportMode();
                 const batchItems = batchMode ? getResourceBatchMagnetItems() : [];
+                const currentProvider = getCurrentResourceProvider();
+                const currentProviderLabel = getResourceProviderLabel(currentProvider);
                 const selectionState = getResourceShareSelectionState();
                 const hasLoadedShareSelectableOption = Object.keys(resourceShareEntryIndex || {}).length > 0;
                 if (!batchMode && isCurrentResource115Share() && resourceShareRootLoaded && !selectionState.selected_ids.length && hasLoadedShareSelectableOption) {
@@ -8103,7 +8303,7 @@
                 if (!folderSelectionValid) return;
                 const savepath = normalizeRelativePathInput(document.getElementById('resource_job_savepath').value.trim());
                 if (!savepath) {
-                    return alert('请先选择一个非根目录的 115 保存目录');
+                    return alert(`请先选择一个非根目录的${currentProviderLabel}保存目录`);
                 }
                 const folderId = String(document.getElementById('resource_job_folder_id')?.value || '').trim();
                 const refreshDelaySeconds = normalizeResourceRefreshDelaySeconds(
@@ -8231,7 +8431,7 @@
                 const payload = {
                     savepath,
                     refresh_delay_seconds: refreshDelaySeconds,
-                    auto_refresh: true
+                    auto_refresh: currentProvider !== 'quark'
                 };
                 if (folderId && folderId !== '0') payload.folder_id = folderId;
                 if (Number(selectedResourceId || 0) > 0) payload.resource_id = selectedResourceId;
@@ -8261,13 +8461,19 @@
                 closeResourceJobModal();
                 await refreshResourceState();
                 const matchedTaskName = String(data.monitor_task_name || '').trim();
-                const tail = matchedTaskName
-                    ? (data.auto_refresh ? `，保存完成后会自动触发“${matchedTaskName}”` : `，已匹配“${matchedTaskName}”，可稍后手动触发刷新`)
-                    : '，当前目录不会自动生成 strm';
+                const tail = currentProvider === 'quark'
+                    ? '，夸克链路不联动文件夹监控'
+                    : (
+                        matchedTaskName
+                            ? (data.auto_refresh ? `，保存完成后会自动触发“${matchedTaskName}”` : `，已匹配“${matchedTaskName}”，可稍后手动触发刷新`)
+                            : '，当前目录不会自动生成 strm'
+                    );
                 updateResourceImportFeedback({
                     stage: '已完成',
                     jobText: `#${data.job_id}`,
-                    note: `${matchedTaskName ? `命中监控任务 ${matchedTaskName}` : '未命中监控任务'}，可在任务中心继续追踪进度`
+                    note: currentProvider === 'quark'
+                        ? '夸克导入任务已创建，可在任务中心继续追踪进度'
+                        : `${matchedTaskName ? `命中监控任务 ${matchedTaskName}` : '未命中监控任务'}，可在任务中心继续追踪进度`
                 });
                 showToast(`已创建导入任务 #${data.job_id}${tail}`, { tone: 'success', duration: 3000, placement: 'top-center' });
             } finally {
@@ -8296,11 +8502,12 @@
             const container = document.getElementById('resource-folder-list');
             const summary = document.getElementById('resource-folder-summary');
             if (!container) return;
+            const providerLabel = getResourceProviderLabel(getCurrentResourceProvider());
             if (summary) {
                 summary.innerText = `当前目录下共有 ${Number(resourceFolderSummary?.folder_count || 0)} 个文件夹 / ${Number(resourceFolderSummary?.file_count || 0)} 个文件。`;
             }
             if (resourceFolderLoading) {
-                container.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">正在读取 115 目录...</div>';
+                container.innerHTML = `<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">正在读取${escapeHtml(providerLabel)}目录...</div>`;
                 return;
             }
             if (!resourceFolderEntries.length) {
@@ -8345,7 +8552,7 @@
             renderResourceFolderBreadcrumbs();
             renderResourceFolderList();
             try {
-                const result = await fetchResourceFolderData(cid);
+                const result = await fetchResourceFolderData(cid, { provider: getCurrentResourceProvider() });
                 resourceFolderEntries = result.entries;
                 resourceFolderSummary = result.summary;
             } catch (e) {
@@ -8372,7 +8579,7 @@
             const currentCid = String(current.id || '0').trim() || '0';
             try {
                 setResourceFolderCreateBusy(true);
-                const result = await createResourceFolder(currentCid, folderName);
+                const result = await createResourceFolder(currentCid, folderName, { provider: getCurrentResourceProvider() });
                 const folder = result.folder || {};
                 const createdFolderId = String(folder.id || '').trim();
                 const createdFolderName = String(folder.name || folderName).trim() || folderName;
@@ -8399,6 +8606,13 @@
         }
 
         async function openResourceFolderModal() {
+            syncResourceProviderUI();
+            const provider = getCurrentResourceProvider();
+            const providerLabel = getResourceProviderLabel(provider);
+            if (!isProviderCookieConfigured(provider)) {
+                showToast(`请先在参数配置中填写${providerLabel} Cookie`, { tone: 'warn', duration: 2800, placement: 'top-center' });
+                return;
+            }
             showLockedModal('resource-folder-modal');
             const createInput = document.getElementById('resource-folder-create-name');
             if (createInput) createInput.value = '';
@@ -8470,11 +8684,12 @@
             const container = document.getElementById('subscription-folder-list');
             const summary = document.getElementById('subscription-folder-summary');
             if (!container) return;
+            const providerLabel = getResourceProviderLabel(getCurrentSubscriptionProvider());
             if (summary) {
                 summary.innerText = `当前目录下共有 ${Number(subscriptionFolderSummary?.folder_count || 0)} 个文件夹 / ${Number(subscriptionFolderSummary?.file_count || 0)} 个文件。`;
             }
             if (subscriptionFolderLoading) {
-                container.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">正在读取 115 目录...</div>';
+                container.innerHTML = `<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">正在读取${escapeHtml(providerLabel)}目录...</div>`;
                 return;
             }
             const folders = (subscriptionFolderEntries || []).filter(entry => !!entry?.is_dir);
@@ -8493,7 +8708,7 @@
             renderSubscriptionFolderBreadcrumbs();
             renderSubscriptionFolderList();
             try {
-                const result = await fetchResourceFolderData(cid);
+                const result = await fetchResourceFolderData(cid, { provider: getCurrentSubscriptionProvider() });
                 subscriptionFolderEntries = result.entries;
                 subscriptionFolderSummary = result.summary;
             } catch (e) {
@@ -8508,6 +8723,12 @@
         }
 
         async function openSubscriptionFolderModal() {
+            const provider = getCurrentSubscriptionProvider();
+            const providerLabel = getResourceProviderLabel(provider);
+            if (!isProviderCookieConfigured(provider)) {
+                showToast(`请先在参数配置中填写${providerLabel} Cookie`, { tone: 'warn', duration: 2800, placement: 'top-center' });
+                return;
+            }
             showLockedModal('subscription-folder-modal');
             const createInput = document.getElementById('subscription-folder-create-name');
             if (createInput) createInput.value = '';
@@ -8551,7 +8772,7 @@
             const currentCid = String(current.id || '0').trim() || '0';
             try {
                 setSubscriptionFolderCreateBusy(true);
-                const result = await createResourceFolder(currentCid, folderName);
+                const result = await createResourceFolder(currentCid, folderName, { provider: getCurrentSubscriptionProvider() });
                 const folder = result.folder || {};
                 const createdFolderId = String(folder.id || '').trim();
                 const createdFolderName = String(folder.name || folderName).trim() || folderName;
@@ -8609,6 +8830,9 @@
         }
 
         function getSubscriptionShareLinkPayload() {
+            if (getCurrentSubscriptionProvider() !== '115') {
+                throw new Error('当前网盘提供方不是 115，固定分享链接模式不可用');
+            }
             const linkInput = document.getElementById('subscription_share_link_url');
             const receiveInput = document.getElementById('subscription_share_receive_code');
             const linkUrl = String(linkInput?.value || '').trim();
@@ -8836,6 +9060,10 @@
         }
 
         async function openSubscriptionShareFolderModal() {
+            if (getCurrentSubscriptionProvider() !== '115') {
+                showToast('Quark 模式不支持固定分享链接目录浏览', { tone: 'warn', duration: 2600, placement: 'top-center' });
+                return;
+            }
             let payload;
             try {
                 payload = getSubscriptionShareLinkPayload();
@@ -9082,7 +9310,8 @@
                     sources: cfg.resource_sources || [],
                     quick_links: cfg.resource_quick_links || [],
                     monitor_tasks: cfg.monitor_tasks || [],
-                    cookie_configured: !!String(cfg.cookie_115 || '').trim()
+                    cookie_configured: !!String(cfg.cookie_115 || '').trim(),
+                    quark_cookie_configured: !!String(cfg.cookie_quark || '').trim()
                 });
                 applySign115State({
                     ...sign115State,
