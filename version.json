@@ -1,9 +1,9 @@
 {
-  "version": "0.1.18",
-  "buildDate": "2026-04-20T12:28:01+08:00",
+  "version": "0.2.1",
+  "buildDate": "2026-04-22T02:39:02+08:00",
   "notes": [
-    "恢复订阅、监控与目录树任务在网页端与 log 文件中的详细运行日志。",
-    "保留容器 Uvicorn 访问日志默认关闭，可用 UVICORN_ACCESS_LOG=1 按需开启。"
+    "目录树任务日志新增生成/清理明细（新增更新、保持不变、删除文件、删除失败等）与阶段耗时统计。",
+    "统一主日志、监控日志、订阅日志面板基础配色，并补齐汇总指标高亮样式。"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.1] - 2026-04-22
+- 目录树任务日志新增生成与清理明细：`新增/更新`、`保持不变`、`过期记录`、`删除文件`、`删除失败`、`索引清理`。
+- 目录树任务新增阶段耗时输出，覆盖前置处理、生成写入、清理落库与总耗时，统一以秒展示。
+- 统一三类日志面板基础文字配色，并补齐 `生成汇总/清理汇总` 指标的颜色映射。
+
 ## [0.1.18] - 2026-04-20
 - 恢复网页端日志详细输出：订阅任务、文件夹监控任务、目录树任务的运行细节重新写入页面与对应 `log` 文件。
 - 保留容器日志精简策略：继续通过 `UVICORN_ACCESS_LOG` 控制 Uvicorn 访问日志默认关闭，避免接口轮询刷屏。
