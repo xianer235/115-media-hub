@@ -1,6 +1,7 @@
 import asyncio
 import contextvars
 import os
+import time
 import unicodedata
 
 from ..core import *  # noqa: F401,F403
@@ -436,6 +437,143 @@ def _build_subscription_run_id(task_name: str) -> str:
     if not normalized_name:
         normalized_name = "task"
     return f"sub-{normalized_name[:36]}-{int(time.time() * 1000)}"
+
+
+def _format_elapsed_seconds(seconds: float) -> str:
+    normalized = max(0.0, float(seconds or 0.0))
+    return f"{normalized:.2f}秒"
+
+
+SUBSCRIPTION_STAGE_TIMING_ORDER: Tuple[Tuple[str, str], ...] = (
+    ("prepare", "准备"),
+    ("search", "搜索"),
+    ("calibrate", "目录校准"),
+    ("import", "候选导入"),
+    ("finalize", "收口"),
+)
+
+
+SUBSCRIPTION_REASON_CODE_LABELS: Dict[str, str] = {
+    "ok": "正常",
+    "unknown": "未知原因",
+    "no_precise_episode_match": "未匹配到缺失剧集文件",
+    "manifest_no_precise_episode_match": "清单回退后仍未匹配到缺失剧集",
+    "manifest_no_missing": "清单中未发现缺失剧集",
+    "manifest_empty": "分享清单为空",
+    "manifest_fallback": "按清单回退匹配",
+    "no_episode_files": "未识别到剧集文件",
+    "missing_episodes_empty": "缺失集为空",
+    "cookie_missing": "未配置网盘 Cookie",
+    "share_url_missing": "分享链接为空",
+    "subdir_not_found": "未命中订阅子目录",
+    "subdir_ambiguous": "订阅子目录匹配不唯一",
+    "subdir_selection_empty": "子目录筛选结果为空",
+    "target_is_share_root": "目标子目录等于分享根目录",
+    "share_root_unreachable": "分享根目录不可访问",
+    "share_anchor_unreachable": "锚点目录不可访问",
+    "share_root_wrapper_unreachable": "分享根目录包装层不可访问",
+    "subdir_entry_invalid": "子目录条目无效",
+    "subdir_cid_missing": "子目录 CID 缺失",
+    "subdir_branch_unreachable": "子目录分支不可访问",
+    "subdir_target_invalid": "子目录目标无效",
+    "not_found": "未找到匹配目录",
+    "ambiguous": "匹配结果不唯一",
+    "weak_match": "匹配度不足",
+    "refine_selection_empty": "目录收敛后为空",
+}
+
+
+def _format_subscription_reason_code(reason_code: Any) -> str:
+    normalized = str(reason_code or "").strip()
+    if not normalized:
+        return "未知原因"
+    share_subdir_prefix = "share_subdir_"
+    if normalized.startswith(share_subdir_prefix) and len(normalized) > len(share_subdir_prefix):
+        nested = _format_subscription_reason_code(normalized[len(share_subdir_prefix):])
+        return f"子目录解析：{nested}"
+    return SUBSCRIPTION_REASON_CODE_LABELS.get(normalized, normalized)
+
+
+def _format_subscription_reason_chain(reason_chain: Any) -> str:
+    raw = str(reason_chain or "").strip()
+    if not raw:
+        return "未知原因"
+    parts = [segment.strip() for segment in raw.split("->") if segment and segment.strip()]
+    if not parts:
+        return "未知原因"
+    return " -> ".join([_format_subscription_reason_code(part) for part in parts])
+
+
+def _create_subscription_stage_timer(initial_stage: str = "prepare") -> Dict[str, Any]:
+    now = time.perf_counter()
+    stage_name = str(initial_stage or "").strip().lower()
+    return {
+        "run_started_at": now,
+        "current_stage": stage_name,
+        "stage_started_at": now if stage_name else 0.0,
+        "stages": {},
+    }
+
+
+def _subscription_stage_timer_enter(timer: Optional[Dict[str, Any]], stage_name: str) -> None:
+    if not isinstance(timer, dict):
+        return
+    now = time.perf_counter()
+    active_stage = str(timer.get("current_stage", "") or "").strip().lower()
+    stage_started_at = float(timer.get("stage_started_at", 0.0) or 0.0)
+    stage_durations = timer.get("stages")
+    if not isinstance(stage_durations, dict):
+        stage_durations = {}
+        timer["stages"] = stage_durations
+    if active_stage and stage_started_at > 0:
+        stage_durations[active_stage] = float(stage_durations.get(active_stage, 0.0) or 0.0) + max(0.0, now - stage_started_at)
+    next_stage = str(stage_name or "").strip().lower()
+    timer["current_stage"] = next_stage
+    timer["stage_started_at"] = now if next_stage else 0.0
+
+
+def _subscription_stage_timer_snapshot(timer: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    now = time.perf_counter()
+    if not isinstance(timer, dict):
+        return {
+            "total_seconds": 0.0,
+            "stages": {},
+        }
+    run_started_at = float(timer.get("run_started_at", 0.0) or 0.0)
+    if run_started_at <= 0:
+        run_started_at = now
+    stage_durations = timer.get("stages")
+    normalized_stage_durations: Dict[str, float] = {}
+    if isinstance(stage_durations, dict):
+        normalized_stage_durations = {
+            str(key or "").strip().lower(): max(0.0, float(value or 0.0))
+            for key, value in stage_durations.items()
+            if str(key or "").strip()
+        }
+    active_stage = str(timer.get("current_stage", "") or "").strip().lower()
+    stage_started_at = float(timer.get("stage_started_at", 0.0) or 0.0)
+    if active_stage and stage_started_at > 0:
+        normalized_stage_durations[active_stage] = float(normalized_stage_durations.get(active_stage, 0.0) or 0.0) + max(
+            0.0,
+            now - stage_started_at,
+        )
+    return {
+        "total_seconds": max(0.0, now - run_started_at),
+        "stages": normalized_stage_durations,
+    }
+
+
+def _build_subscription_stage_timing_log_lines(timer: Optional[Dict[str, Any]]) -> Tuple[str, str]:
+    snapshot = _subscription_stage_timer_snapshot(timer)
+    stage_durations = snapshot.get("stages", {}) if isinstance(snapshot.get("stages"), dict) else {}
+    parts = [
+        f"{label} {_format_elapsed_seconds(float(stage_durations.get(stage_key, 0.0) or 0.0))}"
+        for stage_key, label in SUBSCRIPTION_STAGE_TIMING_ORDER
+    ]
+    return (
+        f"步骤耗时：{'｜'.join(parts)}",
+        f"总用时：{_format_elapsed_seconds(float(snapshot.get('total_seconds', 0.0) or 0.0))}",
+    )
 
 
 def _collect_subscription_batch_success_jobs(created_job_ids: Set[int]) -> List[Dict[str, Any]]:
@@ -3597,10 +3735,29 @@ def _split_tv_share_selection_by_season(
 
 
 async def find_subscription_task_match_candidate_by_search(
-    task: Dict[str, Any], last_episode: int = 0
+    task: Dict[str, Any],
+    last_episode: int = 0,
+    trigger: str = "",
 ) -> Dict[str, Any]:
     provider = normalize_subscription_provider(task.get("provider", "115"), fallback="115")
     search_identity_mode = "link" if provider == "quark" else "message"
+    trigger_mode = str(trigger or "").strip().lower()
+    incremental_search_enabled = trigger_mode == "cron"
+    task_name = str(task.get("name", "") or task.get("title", "") or "").strip()
+    baseline_channel_watermarks = (
+        load_subscription_channel_search_watermarks(task_name)
+        if (incremental_search_enabled and task_name)
+        else {}
+    )
+    incremental_since_cursor_by_channel: Dict[str, int] = {
+        normalize_telegram_channel_id_from_input(channel_id): max(0, int((payload or {}).get("last_post_cursor", 0) or 0))
+        for channel_id, payload in (baseline_channel_watermarks.items() if isinstance(baseline_channel_watermarks, dict) else [])
+        if normalize_telegram_channel_id_from_input(channel_id)
+    }
+    observed_channel_watermarks: Dict[str, Dict[str, Any]] = {}
+    incremental_error_channels: Set[str] = set()
+    incremental_stop_channels = 0
+    channel_support_stats_deltas: Dict[str, Dict[str, Any]] = {}
     query_tokens = build_subscription_query_tokens(task)
     if not query_tokens:
         return {"candidate": {}, "keywords": [], "stats": {}, "errors": []}
@@ -3614,12 +3771,92 @@ async def find_subscription_task_match_candidate_by_search(
 
     for keyword in keywords:
         check_subscription_cancelled()
-        search_meta = await search_resource_sources(keyword, identity_mode=search_identity_mode)
+        search_meta = await search_resource_sources(
+            keyword,
+            identity_mode=search_identity_mode,
+            incremental_since_cursor_by_channel=(
+                incremental_since_cursor_by_channel if incremental_search_enabled else None
+            ),
+        )
         all_items.extend(search_meta.get("items", []) if isinstance(search_meta.get("items"), list) else [])
         all_errors.extend(search_meta.get("errors", []) if isinstance(search_meta.get("errors"), list) else [])
         searched_sources += max(0, int(search_meta.get("searched_sources", 0) or 0))
         matched_channels += max(0, int(search_meta.get("matched_channels", 0) or 0))
         pages_scanned += max(0, int(search_meta.get("pages_scanned", 0) or 0))
+        channel_stats = search_meta.get("channel_stats", []) if isinstance(search_meta.get("channel_stats"), list) else []
+        for raw_row in channel_stats:
+            if not isinstance(raw_row, dict):
+                continue
+            channel_id = normalize_telegram_channel_id_from_input(raw_row.get("channel_id", ""))
+            if not channel_id:
+                continue
+            row = channel_support_stats_deltas.setdefault(
+                channel_id,
+                {
+                    "channel_id": channel_id,
+                    "channel_name": str(raw_row.get("name", "") or channel_id).strip() or channel_id,
+                    "searched_runs": 0,
+                    "matched_runs": 0,
+                    "matched_items": 0,
+                    "error_runs": 0,
+                    "incremental_stop_hits": 0,
+                    "pages_scanned": 0,
+                    "last_error": "",
+                },
+            )
+            row["searched_runs"] = int(row.get("searched_runs", 0) or 0) + 1
+            matched = bool(raw_row.get("matched", False))
+            item_count = max(0, int(raw_row.get("item_count", 0) or 0))
+            row["matched_runs"] = int(row.get("matched_runs", 0) or 0) + (1 if matched else 0)
+            row["matched_items"] = int(row.get("matched_items", 0) or 0) + item_count
+            row["pages_scanned"] = int(row.get("pages_scanned", 0) or 0) + max(
+                0,
+                int(raw_row.get("pages_scanned", 0) or 0),
+            )
+            if bool(raw_row.get("incremental_stop_hit", False)):
+                row["incremental_stop_hits"] = int(row.get("incremental_stop_hits", 0) or 0) + 1
+            error_text = str(raw_row.get("error", "") or "").strip()
+            if error_text:
+                row["error_runs"] = int(row.get("error_runs", 0) or 0) + 1
+                row["last_error"] = error_text[:300]
+        if incremental_search_enabled:
+            incremental_stop_channels += max(0, int(search_meta.get("incremental_stop_channels", 0) or 0))
+            channel_watermarks = (
+                search_meta.get("channel_watermarks", {})
+                if isinstance(search_meta.get("channel_watermarks"), dict)
+                else {}
+            )
+            for raw_channel_id, raw_payload in channel_watermarks.items():
+                channel_id = normalize_telegram_channel_id_from_input(raw_channel_id)
+                if not channel_id or not isinstance(raw_payload, dict):
+                    continue
+                candidate_cursor = max(0, int(raw_payload.get("last_post_cursor", 0) or 0))
+                candidate_published_at = str(raw_payload.get("last_published_at", "") or "").strip()
+                existing_payload = observed_channel_watermarks.get(channel_id, {})
+                existing_cursor = max(0, int(existing_payload.get("last_post_cursor", 0) or 0))
+                existing_published_at = str(existing_payload.get("last_published_at", "") or "").strip()
+                existing_published_ts = parse_resource_datetime_to_timestamp(existing_published_at)
+                candidate_published_ts = parse_resource_datetime_to_timestamp(candidate_published_at)
+                if candidate_cursor > existing_cursor:
+                    observed_channel_watermarks[channel_id] = {
+                        "channel_id": channel_id,
+                        "last_post_cursor": candidate_cursor,
+                        "last_published_at": candidate_published_at,
+                    }
+                    continue
+                if candidate_cursor == existing_cursor and candidate_published_ts > existing_published_ts:
+                    observed_channel_watermarks[channel_id] = {
+                        "channel_id": channel_id,
+                        "last_post_cursor": candidate_cursor,
+                        "last_published_at": candidate_published_at,
+                    }
+            channel_errors = search_meta.get("errors", []) if isinstance(search_meta.get("errors"), list) else []
+            for err in channel_errors:
+                if not isinstance(err, dict):
+                    continue
+                channel_id = normalize_telegram_channel_id_from_input(err.get("channel_id", ""))
+                if channel_id:
+                    incremental_error_channels.add(channel_id)
 
     deduped_items = dedupe_resource_item_dicts(all_items, identity_mode=search_identity_mode)
     deduped_items.sort(key=get_resource_item_sort_key, reverse=True)
@@ -3630,6 +3867,44 @@ async def find_subscription_task_match_candidate_by_search(
         deduped_items = dedupe_resource_item_dicts(expanded_quark_items, identity_mode="link")
         deduped_items.sort(key=get_resource_item_sort_key, reverse=True)
     merged_errors = _merge_subscription_search_errors(all_errors)
+    incremental_channels_advanced = 0
+    channel_support_rows_updated = 0
+    if incremental_search_enabled and task_name and observed_channel_watermarks:
+        writable_channel_watermarks: Dict[str, Dict[str, Any]] = {}
+        for channel_id, payload in observed_channel_watermarks.items():
+            normalized_channel_id = normalize_telegram_channel_id_from_input(channel_id)
+            if not normalized_channel_id or normalized_channel_id in incremental_error_channels:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            writable_channel_watermarks[normalized_channel_id] = {
+                "last_post_cursor": max(0, int(payload.get("last_post_cursor", 0) or 0)),
+                "last_published_at": str(payload.get("last_published_at", "") or "").strip(),
+                "last_run_at": now_text(),
+            }
+        incremental_channels_advanced = upsert_subscription_channel_search_watermarks(
+            task_name,
+            writable_channel_watermarks,
+            only_increase=True,
+        )
+    if task_name and channel_support_stats_deltas:
+        now_iso = now_text()
+        writable_support_stats: Dict[str, Dict[str, Any]] = {}
+        for channel_id, payload in channel_support_stats_deltas.items():
+            normalized_channel_id = normalize_telegram_channel_id_from_input(channel_id)
+            if not normalized_channel_id or not isinstance(payload, dict):
+                continue
+            writable_support_stats[normalized_channel_id] = {
+                **payload,
+                "last_searched_at": now_iso,
+                "last_matched_at": now_iso if int(payload.get("matched_runs", 0) or 0) > 0 else "",
+            }
+        channel_support_rows_updated = upsert_subscription_channel_support_stats(
+            writable_support_stats,
+            task_name=task_name,
+            provider=provider,
+            trigger=trigger_mode,
+        )
     min_score = (
         max(30, min(100, int(SUBSCRIPTION_QUARK_MIN_SCORE or 60)))
         if provider == "quark"
@@ -3839,6 +4114,13 @@ async def find_subscription_task_match_candidate_by_search(
             "title_blocked_candidates": title_blocked_candidates,
             "quark_low_score_kept": quark_low_score_kept,
             "quark_media_relaxed_pass": quark_media_relaxed_pass,
+            "incremental_search_enabled": incremental_search_enabled,
+            "incremental_stop_channels": incremental_stop_channels,
+            "incremental_channel_watermarks_loaded": len(incremental_since_cursor_by_channel),
+            "incremental_channel_watermarks_observed": len(observed_channel_watermarks),
+            "incremental_channel_watermarks_error_channels": len(incremental_error_channels),
+            "incremental_channel_watermarks_advanced": int(incremental_channels_advanced or 0),
+            "channel_support_rows_updated": int(channel_support_rows_updated or 0),
         },
     }
 
@@ -3950,6 +4232,12 @@ def merge_subscription_search_results(
         "scored_candidates",
         "relaxed_candidates",
         "search_errors",
+        "incremental_stop_channels",
+        "incremental_channel_watermarks_loaded",
+        "incremental_channel_watermarks_observed",
+        "incremental_channel_watermarks_error_channels",
+        "incremental_channel_watermarks_advanced",
+        "channel_support_rows_updated",
     )
     merged_stats: Dict[str, Any] = {}
     for key in sum_stat_keys:
@@ -3972,6 +4260,9 @@ def merge_subscription_search_results(
     )
     merged_stats["relaxed_score_mode"] = bool(
         fixed_stats.get("relaxed_score_mode", False) or channel_stats.get("relaxed_score_mode", False)
+    )
+    merged_stats["incremental_search_enabled"] = bool(
+        fixed_stats.get("incremental_search_enabled", False) or channel_stats.get("incremental_search_enabled", False)
     )
     merged_stats["best_score"] = max(
         int(fixed_stats.get("best_score", 0) or 0),
@@ -4017,6 +4308,7 @@ async def _run_subscription_task_quark(
     trigger: str,
     subscription_run_id: str,
     batch_refresh_enabled: bool,
+    stage_timer: Optional[Dict[str, Any]] = None,
 ) -> None:
     await write_subscription_log("网盘提供方：夸克（独立评分与导入链路）", "info")
     await write_subscription_log(
@@ -4078,7 +4370,14 @@ async def _run_subscription_task_quark(
 
     upsert_subscription_task_state(task_name, status="running", progress=15, detail="正在主动搜索夸克资源")
     check_subscription_cancelled()
-    search_result = await find_subscription_task_match_candidate_by_search(task, last_episode=last_episode)
+    _subscription_stage_timer_enter(stage_timer, "search")
+    search_started_at = time.perf_counter()
+    search_result = await find_subscription_task_match_candidate_by_search(
+        task,
+        last_episode=last_episode,
+        trigger=trigger,
+    )
+    search_duration_seconds = max(0.0, time.perf_counter() - search_started_at)
     search_stats = search_result.get("stats", {}) if isinstance(search_result.get("stats"), dict) else {}
     search_errors = search_result.get("errors", []) if isinstance(search_result.get("errors"), list) else []
     search_keywords = search_result.get("keywords", []) if isinstance(search_result.get("keywords"), list) else []
@@ -4099,6 +4398,7 @@ async def _run_subscription_task_quark(
         ),
         "info",
     )
+    await write_subscription_log(f"夸克搜索阶段耗时：{_format_elapsed_seconds(search_duration_seconds)}", "info")
     if unsupported_items > 0:
         await write_subscription_log(
             f"已过滤 {unsupported_items} 条非夸克链接（当前 provider=quark，仅支持夸克分享）",
@@ -4117,6 +4417,21 @@ async def _run_subscription_task_quark(
     if int(search_stats.get("quark_low_score_kept", 0) or 0) > 0:
         await write_subscription_log(
             f"已保留 {int(search_stats.get('quark_low_score_kept', 0) or 0)} 条低于阈值但标题命中的电视剧候选（召回优先）",
+            "info",
+        )
+    if bool(search_stats.get("incremental_search_enabled", False)):
+        await write_subscription_log(
+            (
+                f"频道增量搜索已启用：加载水位 {int(search_stats.get('incremental_channel_watermarks_loaded', 0) or 0)} 个，"
+                f"命中增量边界 {int(search_stats.get('incremental_stop_channels', 0) or 0)} 个频道，"
+                f"推进水位 {int(search_stats.get('incremental_channel_watermarks_advanced', 0) or 0)} 个频道，"
+                f"异常未推进 {int(search_stats.get('incremental_channel_watermarks_error_channels', 0) or 0)} 个频道"
+            ),
+            "info",
+        )
+    if int(search_stats.get("channel_support_rows_updated", 0) or 0) > 0:
+        await write_subscription_log(
+            f"频道支持度统计已更新 {int(search_stats.get('channel_support_rows_updated', 0) or 0)} 个频道",
             "info",
         )
     if search_errors:
@@ -4142,6 +4457,7 @@ async def _run_subscription_task_quark(
         if legacy_candidate:
             ranked_candidates = [legacy_candidate]
     if not ranked_candidates:
+        _subscription_stage_timer_enter(stage_timer, "finalize")
         if completed_locked:
             detail = f"已完结（{last_episode}/{known_total}），未发现可更新资源"
             status = "completed"
@@ -4196,6 +4512,7 @@ async def _run_subscription_task_quark(
         effective_savepath = resolve_subscription_tv_base_savepath(task, base_savepath) or base_savepath
     check_subscription_cancelled()
 
+    _subscription_stage_timer_enter(stage_timer, "calibrate")
     upsert_subscription_task_state(task_name, status="running", progress=45, detail="正在准备夸克目标目录")
     cookie_quark = str(cfg.get("cookie_quark", "")).strip()
     folder_id = await asyncio.to_thread(
@@ -4358,6 +4675,7 @@ async def _run_subscription_task_quark(
         except Exception:
             pass
 
+    _subscription_stage_timer_enter(stage_timer, "import")
     candidate_queue = list(attempt_candidates)
     queue_index = 0
     while queue_index < len(candidate_queue):
@@ -4583,10 +4901,11 @@ async def _run_subscription_task_quark(
                             reason = f"{reason}->{manifest_reason}"
                 if not precise_ids:
                     skipped_precise_mismatch_candidates += 1
+                    reason_label = _format_subscription_reason_chain(reason)
                     await write_subscription_log(
                         (
                             f"候选资源 #{index} 精细筛选未命中缺失集（目标 {_format_episode_preview(precise_missing_episode_values)}，"
-                            f"原因 {reason}，扫描目录 {scanned_dirs} 个，条目 {scanned_entries} 条），已跳过整包导入"
+                            f"原因 {reason_label}，扫描目录 {scanned_dirs} 个，条目 {scanned_entries} 条），已跳过整包导入"
                         ),
                         "warn",
                     )
@@ -4869,6 +5188,7 @@ async def _run_subscription_task_quark(
         if task["media_type"] != "tv":
             break
 
+    _subscription_stage_timer_enter(stage_timer, "finalize")
     if not selected_candidate:
         if attempted_candidates <= 0:
             skip_reasons: List[str] = []
@@ -5098,6 +5418,16 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
     )
     share_runtime_cache_token = _subscription_share_entry_runtime_cache_var.set({})
     share_refreshed_keys_token = _subscription_share_entry_refreshed_keys_var.set(set())
+    subscription_log_context_token = set_subscription_log_context(
+        {
+            "run_id": subscription_run_id,
+            "task_name": task_name,
+            "provider": provider,
+            "media_type": str(task.get("media_type", "movie") or "movie"),
+            "trigger": str(trigger or "").strip().lower() or "manual",
+        }
+    )
+    stage_timer = _create_subscription_stage_timer("prepare")
 
     try:
         await write_subscription_log(
@@ -5116,8 +5446,13 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 trigger=trigger,
                 subscription_run_id=subscription_run_id,
                 batch_refresh_enabled=batch_refresh_enabled,
+                stage_timer=stage_timer,
             )
             return
+        await write_subscription_log(
+            f"网盘提供方：115（频道搜索与导入链路） | 类型: {'电影' if task['media_type'] == 'movie' else '电视剧'}",
+            "info",
+        )
         task_share_subdir = normalize_relative_path(str(task.get("share_subdir", "") or "").strip())
         task_share_subdir_cid = _normalize_subscription_share_subdir_cid(task.get("share_subdir_cid", ""))
         task_share_link_url = str(task.get("share_link_url", "") or "").strip()
@@ -5215,6 +5550,8 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             ),
         )
         check_subscription_cancelled()
+        _subscription_stage_timer_enter(stage_timer, "search")
+        search_started_at = time.perf_counter()
         search_result: Dict[str, Any] = {}
         if use_fixed_share_link:
             fixed_link_url = apply_share_receive_code_to_url(task_share_link_url, task_share_link_receive_code)
@@ -5277,10 +5614,16 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 channel_search_result = await find_subscription_task_match_candidate_by_search(
                     task,
                     last_episode=last_episode,
+                    trigger=trigger,
                 )
                 search_result = merge_subscription_search_results(search_result, channel_search_result)
         else:
-            search_result = await find_subscription_task_match_candidate_by_search(task, last_episode=last_episode)
+            search_result = await find_subscription_task_match_candidate_by_search(
+                task,
+                last_episode=last_episode,
+                trigger=trigger,
+            )
+        search_duration_seconds = max(0.0, time.perf_counter() - search_started_at)
         search_stats = search_result.get("stats", {}) if isinstance(search_result.get("stats"), dict) else {}
         search_errors = search_result.get("errors", []) if isinstance(search_result.get("errors"), list) else []
         search_keywords = search_result.get("keywords", []) if isinstance(search_result.get("keywords"), list) else []
@@ -5355,6 +5698,10 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 ),
                 "info",
             )
+            await write_subscription_log(
+                f"{search_label}阶段耗时：{_format_elapsed_seconds(search_duration_seconds)}",
+                "info",
+            )
             if unsupported_items > 0:
                 await write_subscription_log(
                     f"已过滤 {unsupported_items} 条不支持链接（仅支持 magnet / 115 分享）",
@@ -5394,6 +5741,21 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                     ),
                     "warn",
                 )
+            if bool(search_stats.get("incremental_search_enabled", False)):
+                await write_subscription_log(
+                    (
+                        f"频道增量搜索已启用：加载水位 {int(search_stats.get('incremental_channel_watermarks_loaded', 0) or 0)} 个，"
+                        f"命中增量边界 {int(search_stats.get('incremental_stop_channels', 0) or 0)} 个频道，"
+                        f"推进水位 {int(search_stats.get('incremental_channel_watermarks_advanced', 0) or 0)} 个频道，"
+                        f"异常未推进 {int(search_stats.get('incremental_channel_watermarks_error_channels', 0) or 0)} 个频道"
+                    ),
+                    "info",
+                )
+            if int(search_stats.get("channel_support_rows_updated", 0) or 0) > 0:
+                await write_subscription_log(
+                    f"频道支持度统计已更新 {int(search_stats.get('channel_support_rows_updated', 0) or 0)} 个频道",
+                    "info",
+                )
             if search_errors:
                 await write_subscription_log(
                     f"有 {len(search_errors)} 个频道搜索异常（不影响其余频道，{search_label}阶段）："
@@ -5417,6 +5779,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             if legacy_candidate:
                 ranked_candidates = [legacy_candidate]
         if not ranked_candidates:
+            _subscription_stage_timer_enter(stage_timer, "finalize")
             if completed_locked:
                 detail = f"已完结（{last_episode}/{known_total}），未发现可更新资源"
                 status = "completed"
@@ -5479,6 +5842,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
         elif task["media_type"] == "tv":
             effective_savepath = resolve_subscription_tv_base_savepath(task, base_savepath) or base_savepath
         check_subscription_cancelled()
+        _subscription_stage_timer_enter(stage_timer, "calibrate")
         upsert_subscription_task_state(task_name, status="running", progress=45, detail="正在准备目标目录")
         cookie_115 = str(cfg.get("cookie_115", "")).strip()
         folder_id = await asyncio.to_thread(
@@ -5779,6 +6143,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             except Exception:
                 pass
 
+        _subscription_stage_timer_enter(stage_timer, "import")
         for index, candidate in enumerate(attempt_candidates, start=1):
             if attempted_candidates >= max_attempts:
                 break
@@ -5940,7 +6305,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                     force_refresh=True,
                     allow_fallback=False,
                 )
-                runtime_subdir_elapsed_ms = int(max(0.0, time.perf_counter() - runtime_subdir_started_at) * 1000)
+                runtime_subdir_elapsed_seconds = max(0.0, time.perf_counter() - runtime_subdir_started_at)
                 fixed_share_runtime_selection = normalize_share_selection_meta(fixed_share_runtime_selection)
                 fixed_share_runtime_subdir_stats = dict(fixed_share_runtime_subdir_stats or {})
                 runtime_selected_ids = (
@@ -5957,17 +6322,23 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                         fixed_share_runtime_selection,
                         force_refresh=True,
                     )
-                    runtime_manifest_elapsed_ms = int(max(0.0, time.perf_counter() - runtime_manifest_started_at) * 1000)
+                    runtime_manifest_elapsed_seconds = max(0.0, time.perf_counter() - runtime_manifest_started_at)
                 else:
-                    runtime_manifest_elapsed_ms = 0
+                    runtime_manifest_elapsed_seconds = 0.0
+                runtime_subdir_reason_code = str((fixed_share_runtime_subdir_stats or {}).get("reason", "--") or "--").strip()
+                runtime_subdir_reason_label = (
+                    _format_subscription_reason_chain(runtime_subdir_reason_code)
+                    if runtime_subdir_reason_code and runtime_subdir_reason_code != "--"
+                    else "--"
+                )
                 await write_subscription_log(
                     (
-                        f"固定链接运行期缓存已刷新：定位子目录 {runtime_subdir_elapsed_ms}ms，"
-                        f"识别目录 {str((fixed_share_runtime_subdir_stats or {}).get('reason', '--') or '--')}，"
+                        f"固定链接运行期缓存已刷新：定位子目录 {_format_elapsed_seconds(runtime_subdir_elapsed_seconds)}，"
+                        f"识别目录 {runtime_subdir_reason_label}，"
                         f"扫描目录 {int(fixed_share_runtime_manifest.get('scanned_dirs', 0) or 0)} 个，"
                         f"条目 {int(fixed_share_runtime_manifest.get('scanned_entries', 0) or 0)} 条，"
                         f"可识别剧集文件 {int(fixed_share_runtime_manifest.get('file_count', 0) or 0)} 个，"
-                        f"扫描耗时 {runtime_manifest_elapsed_ms}ms，"
+                        f"扫描耗时 {_format_elapsed_seconds(runtime_manifest_elapsed_seconds)}，"
                         f"并发 {SUBSCRIPTION_SHARE_SCAN_CONCURRENCY}，"
                         f"限速 {SUBSCRIPTION_SHARE_SCAN_RATE_LIMIT_SECONDS:g}s"
                     ),
@@ -6022,7 +6393,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                         root_retry_attempts = int((subdir_stats or {}).get("root_retry_attempts", 0) or 0)
                         anchor_error = str((subdir_stats or {}).get("anchor_error", "") or "").strip()
                         anchor_retry_attempts = int((subdir_stats or {}).get("anchor_retry_attempts", 0) or 0)
-                        reason_tail = f"（{subdir_reason}）" if subdir_reason else ""
+                        reason_tail = f"（{_format_subscription_reason_chain(subdir_reason)}）" if subdir_reason else ""
                         segment_tail = f"，未命中片段：{failed_segment}" if failed_segment else ""
                         sample_text = " / ".join(
                             [str(name or "").strip()[:80] for name in sibling_samples[:3] if str(name or "").strip()]
@@ -6033,7 +6404,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                         )
                         fallback_tail = ""
                         if fallback_reason:
-                            fallback_tail = f"，回溯匹配：{fallback_reason}"
+                            fallback_tail = f"，回溯匹配：{_format_subscription_reason_chain(fallback_reason)}"
                         if fallback_sample_text:
                             fallback_tail += f"，候选示例：{fallback_sample_text}"
                         root_tail = ""
@@ -6105,7 +6476,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                             await write_subscription_log(
                                 (
                                     f"候选资源 #{index} 子目录疑似合集目录，且未能安全收敛到剧集目录，"
-                                    f"已跳过避免整包导入（{refine_reason or 'unknown'}，"
+                                    f"已跳过避免整包导入（{_format_subscription_reason_chain(refine_reason or 'unknown')}，"
                                     f"当前分 {current_score}，最佳候选分 {best_score}）{sample_tail}"
                                 ),
                                 "warn",
@@ -6325,13 +6696,14 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                         else:
                             skipped_subdir_candidates += 1
                             selection_reason = str((precise_stats or {}).get("reason", "") or "").strip() or "unknown"
+                            selection_reason_label = _format_subscription_reason_chain(selection_reason)
                             scanned_dirs = int((precise_stats or {}).get("scanned_dirs", 0) or 0)
                             scanned_entries = int((precise_stats or {}).get("scanned_entries", 0) or 0)
                             covered_preview = _format_episode_preview(precise_missing_episode_values)
                             await write_subscription_log(
                                 (
                                     f"候选资源 #{index} 固定链接模式未能在订阅子目录中识别目标剧集文件，"
-                                    f"已跳过避免整包导入（目标 {covered_preview}，原因 {selection_reason}，"
+                                    f"已跳过避免整包导入（目标 {covered_preview}，原因 {selection_reason_label}，"
                                     f"扫描目录 {scanned_dirs} 个，条目 {scanned_entries} 条）"
                                 ),
                                 "warn",
@@ -6990,6 +7362,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 break
             await maybe_wait_between_attempts()
 
+        _subscription_stage_timer_enter(stage_timer, "finalize")
         if batch_refresh_enabled:
             batch_refresh_result = _finalize_subscription_batch_refresh(
                 task_name=task_name,
@@ -7306,11 +7679,18 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
         subscription_status["current_task"] = ""
         subscription_control["cancel"] = False
         schedule_ui_state_push(0)
+        _subscription_stage_timer_enter(stage_timer, "finalize")
         tail_status_label = {
             'completed': '执行成功',
             'cancelled': '已中断',
             'failed': '执行失败',
         }.get(tail_status, "已结束")
+        try:
+            stage_timing_line, total_timing_line = _build_subscription_stage_timing_log_lines(stage_timer)
+            await write_subscription_log(stage_timing_line, "info")
+            await write_subscription_log(total_timing_line, "info")
+        except Exception:
+            pass
         try:
             await write_subscription_log(
                 f"━━━━━━━━━━【订阅结束 | {task_name} | {tail_status_label or '已结束'}】━━━━━━━━━━",
@@ -7318,6 +7698,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             )
         except Exception:
             pass
+        reset_subscription_log_context(subscription_log_context_token)
         try:
             await start_next_subscription_job()
         except Exception:

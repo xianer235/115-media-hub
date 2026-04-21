@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import hashlib
 import json
 import os
@@ -36,6 +37,12 @@ LOG_DIR = "/app/logs"
 MAIN_LOG_PATH = os.path.join(LOG_DIR, "task.log")
 MONITOR_LOG_PATH = os.path.join(LOG_DIR, "monitor.log")
 SUBSCRIPTION_LOG_PATH = os.path.join(LOG_DIR, "subscription.log")
+SUBSCRIPTION_EVENT_LOG_PATH = os.path.join(LOG_DIR, "subscription.events.jsonl")
+LOG_ROTATE_MAX_BYTES = max(
+    1024 * 1024,
+    int(os.environ.get("LOG_ROTATE_MAX_BYTES", 5 * 1024 * 1024) or (5 * 1024 * 1024)),
+)
+LOG_ROTATE_BACKUPS = max(1, min(10, int(os.environ.get("LOG_ROTATE_BACKUPS", 2) or 2)))
 DEFAULT_EXTENSIONS = "mp4,mkv,avi,mov,wmv,flv,webm,vob,mpg,mpeg,ts,m2ts,mts,rmvb,rm,asf,3gp,m4v,f4v,iso"
 LEGACY_DEFAULT_EXTENSIONS = "mp4,mkv,avi,mov,ts,iso,rmvb,wmv,m4v,mpg,flac,mp3,ass,srt"
 MAX_MONITOR_RETRIES = 5
@@ -1435,6 +1442,40 @@ def ensure_db() -> None:
     )
     cursor.execute(
         """
+        CREATE TABLE IF NOT EXISTS subscription_channel_search_watermarks (
+            task_name TEXT NOT NULL,
+            channel_id TEXT NOT NULL,
+            last_post_cursor INTEGER NOT NULL DEFAULT 0,
+            last_published_at TEXT NOT NULL DEFAULT '',
+            last_run_at TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (task_name, channel_id)
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS subscription_channel_support_stats (
+            channel_id TEXT PRIMARY KEY,
+            channel_name TEXT NOT NULL DEFAULT '',
+            searched_runs INTEGER NOT NULL DEFAULT 0,
+            matched_runs INTEGER NOT NULL DEFAULT 0,
+            matched_items INTEGER NOT NULL DEFAULT 0,
+            error_runs INTEGER NOT NULL DEFAULT 0,
+            incremental_stop_hits INTEGER NOT NULL DEFAULT 0,
+            pages_scanned INTEGER NOT NULL DEFAULT 0,
+            last_task_name TEXT NOT NULL DEFAULT '',
+            last_provider TEXT NOT NULL DEFAULT '',
+            last_trigger TEXT NOT NULL DEFAULT '',
+            last_error TEXT NOT NULL DEFAULT '',
+            last_searched_at TEXT NOT NULL DEFAULT '',
+            last_matched_at TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT ''
+        )
+        """
+    )
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS subscription_matches (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             task_name TEXT NOT NULL,
@@ -1513,6 +1554,14 @@ def ensure_db() -> None:
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_resource_jobs_created_at ON resource_jobs(created_at DESC)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_resource_jobs_status ON resource_jobs(status)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_subscription_state_status ON subscription_task_state(status)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_subscription_channel_watermarks_updated_at "
+        "ON subscription_channel_search_watermarks(updated_at DESC)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_subscription_channel_support_updated_at "
+        "ON subscription_channel_support_stats(updated_at DESC)"
+    )
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_subscription_matches_task ON subscription_matches(task_name, matched_at DESC)")
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_subscription_episode_ledger_task_status ON subscription_episode_ledger(task_name, status)"
@@ -3290,6 +3339,7 @@ def prune_subscription_state_for_missing_tasks(task_names: List[str]) -> None:
         cursor.execute("DELETE FROM subscription_task_state")
         cursor.execute("DELETE FROM subscription_matches")
         cursor.execute("DELETE FROM subscription_episode_ledger")
+        cursor.execute("DELETE FROM subscription_channel_search_watermarks")
         conn.commit()
         conn.close()
         return
@@ -3298,8 +3348,344 @@ def prune_subscription_state_for_missing_tasks(task_names: List[str]) -> None:
     cursor.execute(f"DELETE FROM subscription_task_state WHERE task_name NOT IN ({placeholders})", params)
     cursor.execute(f"DELETE FROM subscription_matches WHERE task_name NOT IN ({placeholders})", params)
     cursor.execute(f"DELETE FROM subscription_episode_ledger WHERE task_name NOT IN ({placeholders})", params)
+    cursor.execute(f"DELETE FROM subscription_channel_search_watermarks WHERE task_name NOT IN ({placeholders})", params)
     conn.commit()
     conn.close()
+
+
+def load_subscription_channel_search_watermarks(
+    task_name: str,
+    channel_ids: Optional[List[str]] = None,
+) -> Dict[str, Dict[str, Any]]:
+    normalized_task_name = str(task_name or "").strip()
+    if not normalized_task_name:
+        return {}
+    normalized_channels = [
+        normalize_telegram_channel_id_from_input(channel_id)
+        for channel_id in (channel_ids or [])
+    ]
+    normalized_channels = [channel_id for channel_id in normalized_channels if channel_id]
+
+    ensure_db()
+    conn = open_db()
+    cursor = conn.cursor()
+    if normalized_channels:
+        placeholders = ",".join("?" for _ in normalized_channels)
+        cursor.execute(
+            f"""
+            SELECT task_name, channel_id, last_post_cursor, last_published_at, last_run_at, updated_at
+            FROM subscription_channel_search_watermarks
+            WHERE task_name = ? AND channel_id IN ({placeholders})
+            """,
+            [normalized_task_name] + normalized_channels,
+        )
+    else:
+        cursor.execute(
+            """
+            SELECT task_name, channel_id, last_post_cursor, last_published_at, last_run_at, updated_at
+            FROM subscription_channel_search_watermarks
+            WHERE task_name = ?
+            """,
+            (normalized_task_name,),
+        )
+    rows = cursor.fetchall()
+    conn.close()
+
+    result: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        if isinstance(row, sqlite3.Row):
+            channel_id = normalize_telegram_channel_id_from_input(row["channel_id"])
+            if not channel_id:
+                continue
+            result[channel_id] = {
+                "task_name": str(row["task_name"] or "").strip(),
+                "channel_id": channel_id,
+                "last_post_cursor": max(0, int(row["last_post_cursor"] or 0)),
+                "last_published_at": str(row["last_published_at"] or "").strip(),
+                "last_run_at": str(row["last_run_at"] or "").strip(),
+                "updated_at": str(row["updated_at"] or "").strip(),
+            }
+            continue
+        values = list(row or [])
+        if len(values) < 6:
+            continue
+        channel_id = normalize_telegram_channel_id_from_input(values[1])
+        if not channel_id:
+            continue
+        result[channel_id] = {
+            "task_name": str(values[0] or "").strip(),
+            "channel_id": channel_id,
+            "last_post_cursor": max(0, int(values[2] or 0)),
+            "last_published_at": str(values[3] or "").strip(),
+            "last_run_at": str(values[4] or "").strip(),
+            "updated_at": str(values[5] or "").strip(),
+        }
+    return result
+
+
+def upsert_subscription_channel_search_watermarks(
+    task_name: str,
+    channel_watermarks: Dict[str, Dict[str, Any]],
+    only_increase: bool = True,
+) -> int:
+    normalized_task_name = str(task_name or "").strip()
+    if not normalized_task_name:
+        return 0
+    if not isinstance(channel_watermarks, dict) or not channel_watermarks:
+        return 0
+
+    normalized_payload: Dict[str, Dict[str, Any]] = {}
+    for raw_channel_id, raw_meta in channel_watermarks.items():
+        channel_id = normalize_telegram_channel_id_from_input(raw_channel_id)
+        if not channel_id or not isinstance(raw_meta, dict):
+            continue
+        last_post_cursor = max(
+            0,
+            int(raw_meta.get("last_post_cursor", raw_meta.get("cursor", 0)) or 0),
+        )
+        last_published_at = str(raw_meta.get("last_published_at", raw_meta.get("published_at", "")) or "").strip()
+        last_run_at = str(raw_meta.get("last_run_at", "") or "").strip()
+        normalized_payload[channel_id] = {
+            "last_post_cursor": last_post_cursor,
+            "last_published_at": last_published_at,
+            "last_run_at": last_run_at,
+        }
+    if not normalized_payload:
+        return 0
+
+    existing_rows = load_subscription_channel_search_watermarks(
+        normalized_task_name,
+        list(normalized_payload.keys()),
+    )
+    now_iso = now_text()
+
+    ensure_db()
+    conn = open_db()
+    cursor = conn.cursor()
+    written = 0
+    for channel_id, payload in normalized_payload.items():
+        target_cursor = max(0, int(payload.get("last_post_cursor", 0) or 0))
+        target_published_at = str(payload.get("last_published_at", "") or "").strip()
+        target_run_at = str(payload.get("last_run_at", "") or "").strip() or now_iso
+
+        if only_increase:
+            existing = existing_rows.get(channel_id, {})
+            existing_cursor = max(0, int(existing.get("last_post_cursor", 0) or 0))
+            existing_published_at = str(existing.get("last_published_at", "") or "").strip()
+            existing_published_ts = parse_resource_datetime_to_timestamp(existing_published_at)
+            target_published_ts = parse_resource_datetime_to_timestamp(target_published_at)
+            if target_cursor < existing_cursor:
+                continue
+            if target_cursor == existing_cursor:
+                if target_published_ts > 0 and existing_published_ts > 0 and target_published_ts <= existing_published_ts:
+                    continue
+                if target_published_ts <= 0 and not target_published_at and not target_run_at:
+                    continue
+
+        cursor.execute(
+            """
+            INSERT INTO subscription_channel_search_watermarks(
+                task_name, channel_id, last_post_cursor, last_published_at, last_run_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(task_name, channel_id)
+            DO UPDATE SET
+                last_post_cursor = excluded.last_post_cursor,
+                last_published_at = excluded.last_published_at,
+                last_run_at = excluded.last_run_at,
+                updated_at = excluded.updated_at
+            """,
+            (
+                normalized_task_name,
+                channel_id,
+                target_cursor,
+                target_published_at,
+                target_run_at,
+                now_iso,
+            ),
+        )
+        written += 1
+    conn.commit()
+    conn.close()
+    return written
+
+
+def load_subscription_channel_support_stats(
+    channel_ids: Optional[List[str]] = None,
+) -> Dict[str, Dict[str, Any]]:
+    normalized_channels = [
+        normalize_telegram_channel_id_from_input(channel_id)
+        for channel_id in (channel_ids or [])
+    ]
+    normalized_channels = [channel_id for channel_id in normalized_channels if channel_id]
+
+    ensure_db()
+    conn = open_db()
+    cursor = conn.cursor()
+    if normalized_channels:
+        placeholders = ",".join("?" for _ in normalized_channels)
+        cursor.execute(
+            f"""
+            SELECT
+                channel_id, channel_name, searched_runs, matched_runs, matched_items,
+                error_runs, incremental_stop_hits, pages_scanned, last_task_name,
+                last_provider, last_trigger, last_error, last_searched_at,
+                last_matched_at, updated_at
+            FROM subscription_channel_support_stats
+            WHERE channel_id IN ({placeholders})
+            """,
+            normalized_channels,
+        )
+    else:
+        cursor.execute(
+            """
+            SELECT
+                channel_id, channel_name, searched_runs, matched_runs, matched_items,
+                error_runs, incremental_stop_hits, pages_scanned, last_task_name,
+                last_provider, last_trigger, last_error, last_searched_at,
+                last_matched_at, updated_at
+            FROM subscription_channel_support_stats
+            """
+        )
+    rows = cursor.fetchall()
+    conn.close()
+
+    result: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        data = sqlite_row_to_dict(row)
+        channel_id = normalize_telegram_channel_id_from_input(data.get("channel_id", ""))
+        if not channel_id:
+            continue
+        result[channel_id] = {
+            "channel_id": channel_id,
+            "channel_name": str(data.get("channel_name", "") or "").strip(),
+            "searched_runs": max(0, int(data.get("searched_runs", 0) or 0)),
+            "matched_runs": max(0, int(data.get("matched_runs", 0) or 0)),
+            "matched_items": max(0, int(data.get("matched_items", 0) or 0)),
+            "error_runs": max(0, int(data.get("error_runs", 0) or 0)),
+            "incremental_stop_hits": max(0, int(data.get("incremental_stop_hits", 0) or 0)),
+            "pages_scanned": max(0, int(data.get("pages_scanned", 0) or 0)),
+            "last_task_name": str(data.get("last_task_name", "") or "").strip(),
+            "last_provider": str(data.get("last_provider", "") or "").strip(),
+            "last_trigger": str(data.get("last_trigger", "") or "").strip(),
+            "last_error": str(data.get("last_error", "") or "").strip(),
+            "last_searched_at": str(data.get("last_searched_at", "") or "").strip(),
+            "last_matched_at": str(data.get("last_matched_at", "") or "").strip(),
+            "updated_at": str(data.get("updated_at", "") or "").strip(),
+        }
+    return result
+
+
+def upsert_subscription_channel_support_stats(
+    channel_stats: Dict[str, Dict[str, Any]],
+    task_name: str = "",
+    provider: str = "",
+    trigger: str = "",
+) -> int:
+    if not isinstance(channel_stats, dict) or not channel_stats:
+        return 0
+    normalized_task_name = str(task_name or "").strip()
+    normalized_provider = normalize_subscription_provider(provider, fallback=str(provider or "").strip() or "unknown")
+    normalized_trigger = str(trigger or "").strip().lower() or "manual"
+    now_iso = now_text()
+
+    normalized_payload: Dict[str, Dict[str, Any]] = {}
+    for raw_channel_id, raw_payload in channel_stats.items():
+        channel_id = normalize_telegram_channel_id_from_input(raw_channel_id)
+        if not channel_id or not isinstance(raw_payload, dict):
+            continue
+        normalized_payload[channel_id] = {
+            "channel_name": str(raw_payload.get("channel_name", raw_payload.get("name", "")) or "").strip(),
+            "searched_runs": max(0, int(raw_payload.get("searched_runs", raw_payload.get("searched_count", 0)) or 0)),
+            "matched_runs": max(0, int(raw_payload.get("matched_runs", raw_payload.get("matched_count", 0)) or 0)),
+            "matched_items": max(0, int(raw_payload.get("matched_items", raw_payload.get("item_count", 0)) or 0)),
+            "error_runs": max(0, int(raw_payload.get("error_runs", raw_payload.get("error_count", 0)) or 0)),
+            "incremental_stop_hits": max(
+                0,
+                int(raw_payload.get("incremental_stop_hits", raw_payload.get("incremental_stop_count", 0)) or 0),
+            ),
+            "pages_scanned": max(0, int(raw_payload.get("pages_scanned", 0) or 0)),
+            "last_error": str(raw_payload.get("last_error", raw_payload.get("error", "")) or "").strip(),
+            "last_searched_at": str(raw_payload.get("last_searched_at", "") or "").strip(),
+            "last_matched_at": str(raw_payload.get("last_matched_at", "") or "").strip(),
+        }
+    if not normalized_payload:
+        return 0
+
+    existing_rows = load_subscription_channel_support_stats(list(normalized_payload.keys()))
+    ensure_db()
+    conn = open_db()
+    cursor = conn.cursor()
+    written = 0
+    for channel_id, payload in normalized_payload.items():
+        existing = existing_rows.get(channel_id, {})
+        searched_runs = max(0, int(existing.get("searched_runs", 0) or 0)) + max(0, int(payload.get("searched_runs", 0) or 0))
+        matched_runs = max(0, int(existing.get("matched_runs", 0) or 0)) + max(0, int(payload.get("matched_runs", 0) or 0))
+        matched_items = max(0, int(existing.get("matched_items", 0) or 0)) + max(0, int(payload.get("matched_items", 0) or 0))
+        error_runs = max(0, int(existing.get("error_runs", 0) or 0)) + max(0, int(payload.get("error_runs", 0) or 0))
+        incremental_stop_hits = max(0, int(existing.get("incremental_stop_hits", 0) or 0)) + max(
+            0,
+            int(payload.get("incremental_stop_hits", 0) or 0),
+        )
+        pages_scanned = max(0, int(existing.get("pages_scanned", 0) or 0)) + max(0, int(payload.get("pages_scanned", 0) or 0))
+        channel_name = str(payload.get("channel_name", "") or "").strip() or str(existing.get("channel_name", "") or "").strip() or channel_id
+        last_error = str(payload.get("last_error", "") or "").strip() or str(existing.get("last_error", "") or "").strip()
+        last_searched_at = (
+            str(payload.get("last_searched_at", "") or "").strip()
+            or now_iso
+        )
+        last_matched_at = (
+            str(payload.get("last_matched_at", "") or "").strip()
+            or (now_iso if int(payload.get("matched_runs", 0) or 0) > 0 else str(existing.get("last_matched_at", "") or "").strip())
+        )
+        cursor.execute(
+            """
+            INSERT INTO subscription_channel_support_stats(
+                channel_id, channel_name, searched_runs, matched_runs, matched_items,
+                error_runs, incremental_stop_hits, pages_scanned, last_task_name,
+                last_provider, last_trigger, last_error, last_searched_at,
+                last_matched_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(channel_id)
+            DO UPDATE SET
+                channel_name = excluded.channel_name,
+                searched_runs = excluded.searched_runs,
+                matched_runs = excluded.matched_runs,
+                matched_items = excluded.matched_items,
+                error_runs = excluded.error_runs,
+                incremental_stop_hits = excluded.incremental_stop_hits,
+                pages_scanned = excluded.pages_scanned,
+                last_task_name = excluded.last_task_name,
+                last_provider = excluded.last_provider,
+                last_trigger = excluded.last_trigger,
+                last_error = excluded.last_error,
+                last_searched_at = excluded.last_searched_at,
+                last_matched_at = excluded.last_matched_at,
+                updated_at = excluded.updated_at
+            """,
+            (
+                channel_id,
+                channel_name,
+                searched_runs,
+                matched_runs,
+                matched_items,
+                error_runs,
+                incremental_stop_hits,
+                pages_scanned,
+                normalized_task_name,
+                normalized_provider,
+                normalized_trigger,
+                last_error,
+                last_searched_at,
+                last_matched_at,
+                now_iso,
+            ),
+        )
+        written += 1
+    conn.commit()
+    conn.close()
+    return written
 
 
 def load_subscription_task_state(task_name: str, media_type: str = "movie") -> Dict[str, Any]:
@@ -4180,6 +4566,7 @@ def search_telegram_channel_resource_items(
     page_size: int = TG_SEARCH_PAGE_LIMIT,
     start_before: str = "",
     identity_mode: str = "message",
+    stop_cursor: int = 0,
 ) -> Dict[str, Any]:
     normalized_source = normalize_resource_source(source or {})
     channel_id = normalize_telegram_channel_id_from_input(normalized_source.get("channel_id", ""))
@@ -4193,6 +4580,11 @@ def search_telegram_channel_resource_items(
     seen_keys: Set[str] = set()
     next_before = ""
     has_more = False
+    incremental_stop_hit = False
+    latest_scanned_cursor = 0
+    latest_scanned_published_at = ""
+    latest_scanned_published_ts = 0.0
+    normalized_stop_cursor = max(0, int(stop_cursor or 0))
     target_limit = max(1, int(limit_per_channel or TG_SEARCH_MATCH_LIMIT_PER_CHANNEL))
     fetch_limit = max(target_limit, max(1, int(page_size or TG_SEARCH_PAGE_LIMIT)))
 
@@ -4207,7 +4599,21 @@ def search_telegram_channel_resource_items(
         )
         pages_scanned += 1
         page_matches: List[Dict[str, Any]] = []
-        for post in page.get("posts", []) or []:
+        page_posts = page.get("posts", []) if isinstance(page.get("posts"), list) else []
+        page_posts.sort(key=get_resource_item_sort_key, reverse=True)
+        for post in page_posts:
+            post_cursor = parse_int(get_resource_item_post_cursor(post), default=0)
+            if post_cursor > latest_scanned_cursor:
+                latest_scanned_cursor = post_cursor
+            published_at = resolve_resource_item_published_at(post)
+            published_ts = parse_resource_datetime_to_timestamp(published_at)
+            if published_ts > latest_scanned_published_ts and published_at:
+                latest_scanned_published_ts = published_ts
+                latest_scanned_published_at = published_at
+
+            if normalized_stop_cursor > 0 and post_cursor > 0 and post_cursor <= normalized_stop_cursor:
+                incremental_stop_hit = True
+                break
             if not resource_item_matches_search(post, keyword):
                 continue
             identity = build_resource_item_identity_by_mode(post, identity_mode=normalized_identity_mode)
@@ -4219,6 +4625,11 @@ def search_telegram_channel_resource_items(
         remaining = max(0, target_limit - len(items))
         if page_matches and remaining > 0:
             items.extend(page_matches[:remaining])
+
+        if incremental_stop_hit:
+            next_before = ""
+            has_more = False
+            break
 
         page_before = str(page.get("next_before", "") or "").strip()
         more_in_current_page = len(page_matches) > remaining if remaining > 0 else bool(page_matches)
@@ -4241,12 +4652,26 @@ def search_telegram_channel_resource_items(
         "pages_scanned": pages_scanned,
         "next_before": next_before,
         "has_more": bool(next_before and has_more),
+        "latest_scanned_cursor": latest_scanned_cursor,
+        "latest_scanned_published_at": latest_scanned_published_at,
+        "incremental_stop_hit": incremental_stop_hit,
     }
 
 
-async def search_resource_sources(keyword: str, identity_mode: str = "message") -> Dict[str, Any]:
+async def search_resource_sources(
+    keyword: str,
+    identity_mode: str = "message",
+    incremental_since_cursor_by_channel: Optional[Dict[str, int]] = None,
+) -> Dict[str, Any]:
     query = str(keyword or "").strip()
     normalized_identity_mode = normalize_resource_identity_mode(identity_mode, fallback="message")
+    normalized_incremental_cursors: Dict[str, int] = {}
+    if isinstance(incremental_since_cursor_by_channel, dict):
+        for raw_channel_id, raw_cursor in incremental_since_cursor_by_channel.items():
+            channel_id = normalize_telegram_channel_id_from_input(raw_channel_id)
+            if not channel_id:
+                continue
+            normalized_incremental_cursors[channel_id] = max(0, int(raw_cursor or 0))
     cfg = get_config()
     sources = [normalize_resource_source(source or {}) for source in cfg.get("resource_sources", []) if source.get("enabled")]
     tg_channel_threads = get_tg_channel_threads(cfg)
@@ -4259,11 +4684,16 @@ async def search_resource_sources(keyword: str, identity_mode: str = "message") 
             "matched_channels": 0,
             "pages_scanned": 0,
             "thread_limit": tg_channel_threads,
+            "incremental_stop_channels": 0,
+            "channel_watermarks": {},
+            "channel_stats": [],
         }
 
     semaphore = asyncio.Semaphore(tg_channel_threads)
 
     async def search_one_source(source: Dict[str, Any]) -> Dict[str, Any]:
+        channel_id = normalize_telegram_channel_id_from_input(source.get("channel_id", ""))
+        stop_cursor = max(0, int(normalized_incremental_cursors.get(channel_id, 0) or 0))
         try:
             async with semaphore:
                 return await asyncio.wait_for(
@@ -4277,6 +4707,7 @@ async def search_resource_sources(keyword: str, identity_mode: str = "message") 
                         TG_SEARCH_PAGE_LIMIT,
                         "",
                         normalized_identity_mode,
+                        stop_cursor,
                     ),
                     timeout=TG_SEARCH_CHANNEL_TIMEOUT_SECONDS,
                 )
@@ -4290,13 +4721,29 @@ async def search_resource_sources(keyword: str, identity_mode: str = "message") 
     items: List[Dict[str, Any]] = []
     sections: List[Dict[str, Any]] = []
     errors: List[Dict[str, str]] = []
+    channel_stats: List[Dict[str, Any]] = []
     matched_channels = 0
     pages_scanned = 0
+    incremental_stop_channels = 0
+    channel_watermarks: Dict[str, Dict[str, Any]] = {}
 
     for source, result in zip(sources, results):
         channel_id = normalize_telegram_channel_id_from_input(source.get("channel_id", ""))
         source_name = str(source.get("name", "") or channel_id).strip()
         if isinstance(result, Exception):
+            channel_stats.append(
+                {
+                    "channel_id": channel_id,
+                    "name": source_name,
+                    "matched": False,
+                    "item_count": 0,
+                    "pages_scanned": 0,
+                    "incremental_stop_hit": False,
+                    "latest_scanned_cursor": 0,
+                    "latest_scanned_published_at": "",
+                    "error": str(result),
+                }
+            )
             errors.append(
                 {
                     "channel_id": channel_id,
@@ -4307,6 +4754,29 @@ async def search_resource_sources(keyword: str, identity_mode: str = "message") 
             continue
         channel_items = result.get("items", []) if isinstance(result, dict) else []
         pages_scanned += int(result.get("pages_scanned", 0) or 0) if isinstance(result, dict) else 0
+        latest_scanned_cursor = max(0, int(result.get("latest_scanned_cursor", 0) or 0)) if isinstance(result, dict) else 0
+        latest_scanned_published_at = str(result.get("latest_scanned_published_at", "") or "").strip() if isinstance(result, dict) else ""
+        channel_stats.append(
+            {
+                "channel_id": channel_id,
+                "name": source_name,
+                "matched": bool(channel_items),
+                "item_count": len(channel_items),
+                "pages_scanned": int(result.get("pages_scanned", 0) or 0) if isinstance(result, dict) else 0,
+                "incremental_stop_hit": bool(result.get("incremental_stop_hit", False)) if isinstance(result, dict) else False,
+                "latest_scanned_cursor": latest_scanned_cursor,
+                "latest_scanned_published_at": latest_scanned_published_at,
+                "error": "",
+            }
+        )
+        if latest_scanned_cursor > 0 or latest_scanned_published_at:
+            channel_watermarks[channel_id] = {
+                "channel_id": channel_id,
+                "last_post_cursor": latest_scanned_cursor,
+                "last_published_at": latest_scanned_published_at,
+            }
+        if bool(result.get("incremental_stop_hit", False)) if isinstance(result, dict) else False:
+            incremental_stop_channels += 1
         if channel_items:
             matched_channels += 1
             items.extend(channel_items)
@@ -4334,6 +4804,9 @@ async def search_resource_sources(keyword: str, identity_mode: str = "message") 
         "matched_channels": matched_channels,
         "pages_scanned": pages_scanned,
         "thread_limit": tg_channel_threads,
+        "incremental_stop_channels": incremental_stop_channels,
+        "channel_watermarks": channel_watermarks,
+        "channel_stats": channel_stats,
     }
 
 
@@ -4566,8 +5039,32 @@ def format_log_time(with_year: bool = False) -> str:
     return datetime.now().strftime("%m-%d %H:%M:%S" if with_year else "%H:%M:%S")
 
 
+def rotate_log_file_if_needed(path: str, max_bytes: int = LOG_ROTATE_MAX_BYTES, backups: int = LOG_ROTATE_BACKUPS) -> None:
+    if not path or max_bytes <= 0 or backups <= 0:
+        return
+    try:
+        if (not os.path.exists(path)) or os.path.getsize(path) < max_bytes:
+            return
+    except Exception:
+        return
+    try:
+        oldest = f"{path}.{backups}"
+        if os.path.exists(oldest):
+            os.remove(oldest)
+        for index in range(backups - 1, 0, -1):
+            src = f"{path}.{index}"
+            dst = f"{path}.{index + 1}"
+            if os.path.exists(src):
+                os.replace(src, dst)
+        os.replace(path, f"{path}.1")
+    except Exception:
+        # 日志轮转失败不应中断主流程，直接继续写当前文件。
+        return
+
+
 def append_log_file(path: str, line: str) -> None:
     os.makedirs(LOG_DIR, exist_ok=True)
+    rotate_log_file_if_needed(path)
     with open(path, "a", encoding="utf-8") as f:
         f.write(line + "\n")
 
@@ -4720,6 +5217,10 @@ subscription_control = {"cancel": False}
 subscription_queue: List[Dict[str, Any]] = []
 subscription_last_run: Dict[str, float] = {}
 subscription_next_run: Dict[str, str] = {}
+subscription_log_context_var: contextvars.ContextVar[Optional[Dict[str, Any]]] = contextvars.ContextVar(
+    "subscription_log_context",
+    default=None,
+)
 sign115_status = {
     "state": "idle",
     "message": "尚未检查签到状态",
@@ -4864,6 +5365,13 @@ async def build_resource_state_payload(search: str = "") -> Dict[str, Any]:
     completed_job_count = count_resource_jobs(status="completed")
     failed_job_count = count_resource_jobs(status="failed")
     sources = cfg.get("resource_sources", [])
+    channel_ids = [
+        normalize_telegram_channel_id_from_input((source or {}).get("channel_id", ""))
+        for source in (sources if isinstance(sources, list) else [])
+        if isinstance(source, dict)
+    ]
+    channel_ids = [channel_id for channel_id in channel_ids if channel_id]
+    subscription_channel_support = load_subscription_channel_support_stats(channel_ids)
     enabled_sources = [source for source in sources if source.get("enabled")]
     channel_sections = build_resource_channel_sections(sources, per_channel=10)
     channel_profiles = {
@@ -4891,6 +5399,7 @@ async def build_resource_state_payload(search: str = "") -> Dict[str, Any]:
         "search": keyword,
         "channel_sections": clone_jsonable(channel_sections),
         "channel_profiles": clone_jsonable(channel_profiles),
+        "subscription_channel_support": clone_jsonable(subscription_channel_support),
         "search_sections": clone_jsonable(search_sections),
         "last_syncs": clone_jsonable(resource_channel_last_sync),
         "search_meta": clone_jsonable(
@@ -5165,15 +5674,113 @@ async def write_monitor_log(text: str, level: str = "info") -> None:
     await asyncio.sleep(0)
 
 
+def set_subscription_log_context(context: Optional[Dict[str, Any]]) -> contextvars.Token:
+    normalized = clone_jsonable(context if isinstance(context, dict) else {})
+    return subscription_log_context_var.set(normalized)
+
+
+def reset_subscription_log_context(token: contextvars.Token) -> None:
+    try:
+        subscription_log_context_var.reset(token)
+    except Exception:
+        pass
+
+
+def _infer_subscription_log_event(text: str) -> str:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return ""
+    if "订阅开始" in normalized:
+        return "subscription.run.start"
+    if "订阅结束" in normalized:
+        return "subscription.run.finish"
+    if "搜索完成" in normalized:
+        return "subscription.search.summary"
+    if "增量搜索已启用" in normalized:
+        return "subscription.search.incremental"
+    if "导入成功" in normalized:
+        return "subscription.import.success"
+    if "导入失败" in normalized:
+        return "subscription.import.failed"
+    if "导入超时" in normalized:
+        return "subscription.import.timeout"
+    if "批次收口汇总" in normalized:
+        return "subscription.batch.refresh.summary"
+    if "失败原因" in normalized:
+        return "subscription.run.failed"
+    return "subscription.log"
+
+
+def _infer_subscription_log_stage(text: str) -> str:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return ""
+    if "搜索" in normalized or "频道" in normalized:
+        return "search"
+    if "候选资源" in normalized:
+        return "candidate"
+    if "导入" in normalized or "转存" in normalized:
+        return "import"
+    if "批次收口" in normalized:
+        return "batch_refresh"
+    if "订阅开始" in normalized or "订阅结束" in normalized:
+        return "lifecycle"
+    return "runtime"
+
+
+def _infer_subscription_log_reason_code(text: str) -> str:
+    normalized = str(text or "")
+    if "no_precise_episode_match" in normalized:
+        return "no_precise_episode_match"
+    if "manifest_no_missing" in normalized:
+        return "manifest_no_missing"
+    if "subdir_not_found" in normalized or "未命中订阅子目录" in normalized:
+        return "subdir_not_found"
+    if "命中失效缓存" in normalized or "链接已标记为失效" in normalized:
+        return "invalid_link_cached"
+    if "导入超时" in normalized:
+        return "import_timeout"
+    if "导入失败" in normalized:
+        return "import_failed"
+    if "导入成功" in normalized:
+        return "import_success"
+    if "搜索异常" in normalized or "频道搜索超时" in normalized:
+        return "search_error"
+    if "目标目录已存在" in normalized:
+        return "already_exists"
+    if "等待新集发布" in normalized or "等待新资源发布" in normalized:
+        return "waiting_new_resource"
+    return ""
+
+
 async def write_subscription_log(text: str, level: str = "info") -> None:
     resolved_level = str(level or infer_log_level_from_text(text)).strip().lower() or "info"
-    line = f"{format_log_time(True)} {text}"
-    subscription_status["logs"].append({"text": line, "level": resolved_level})
+    timestamp = format_log_time(True)
+    line = f"{timestamp} {text}"
+    context = subscription_log_context_var.get() or {}
+    event = _infer_subscription_log_event(text)
+    stage = _infer_subscription_log_stage(text)
+    reason_code = _infer_subscription_log_reason_code(text)
+    event_payload = {
+        "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "level": resolved_level,
+        "event": event,
+        "stage": stage,
+        "reason_code": reason_code,
+        "text": str(text or ""),
+        "run_id": str(context.get("run_id", "") or "").strip(),
+        "task_name": str(context.get("task_name", "") or "").strip(),
+        "provider": str(context.get("provider", "") or "").strip(),
+        "media_type": str(context.get("media_type", "") or "").strip(),
+        "trigger": str(context.get("trigger", "") or "").strip(),
+    }
+    subscription_status["logs"].append({"text": line, "level": resolved_level, "event": event_payload})
     if len(subscription_status["logs"]) > 800:
         subscription_status["logs"].pop(0)
     schedule_ui_state_push()
     try:
         await asyncio.to_thread(append_log_file, SUBSCRIPTION_LOG_PATH, line)
+        await asyncio.to_thread(append_log_file, SUBSCRIPTION_EVENT_LOG_PATH, safe_json_dumps(event_payload))
     except Exception as exc:
         # 日志写盘失败不应中断主流程，保留内存日志并继续执行任务。
         fallback_line = f"{format_log_time(True)} [WARN] 订阅日志写盘失败：{str(exc)[:180]}"

@@ -85,6 +85,7 @@
         #log-box { height: min(48vh, 420px) !important; }
         #monitor-log-box { height: min(46vh, 390px) !important; }
         #subscription-log-box { height: min(42vh, 340px) !important; }
+        #log-box, #monitor-log-box, #subscription-log-box { color: #cbd5e1; }
         .btn-disabled { opacity: 0.5; cursor: not-allowed; pointer-events: none; filter: grayscale(1); }
         .group-card { background: linear-gradient(180deg, rgba(30,41,59,0.96), rgba(15,23,42,0.96)); border: 1px solid #334155; border-radius: 1.5rem; padding: 1.5rem; box-shadow: 0 10px 28px rgba(2, 6, 23, 0.35); }
         .group-title { color: #38bdf8; font-weight: 800; font-size: 0.875rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 1.25rem; border-left: 4px solid #38bdf8; padding-left: 0.75rem; }
@@ -177,6 +178,7 @@
         .summary-metric { font-weight: 700; }
         .summary-positive { color: #4ade80; }
         .summary-skip { color: #fbbf24; }
+        .summary-info { color: #93c5fd; }
         .summary-fail { color: #f87171; }
         .summary-delete { color: #38bdf8; }
         .summary-zero { opacity: 0.6; }
@@ -6730,7 +6732,7 @@
             --shell-frame-width: min(1640px, calc(100vw - 24px));
             --shell-shell-gap: 18px;
             --shell-rail-collapsed: 92px;
-            --shell-rail-expanded: 320px;
+            --shell-rail-expanded: 296px;
             --shell-rail-width: var(--shell-rail-collapsed);
             --shell-glass-fill: linear-gradient(180deg, rgba(18, 24, 35, 0.9), rgba(10, 16, 26, 0.84));
             --shell-glass-stroke: rgba(233, 242, 255, 0.12);

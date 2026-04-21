@@ -15,7 +15,7 @@
             last_sign_at: '',
             last_trigger: ''
         };
-        let resourceState = { sources: [], quick_links: [], items: [], jobs: [], channel_sections: [], channel_profiles: {}, search_sections: [], last_syncs: {}, monitor_tasks: [], stats: { source_count: 0, item_count: 0, filtered_item_count: 0, completed_job_count: 0 }, cookie_configured: false, quark_cookie_configured: false, setup_status: null, search: '', search_meta: {} };
+        let resourceState = { sources: [], quick_links: [], items: [], jobs: [], channel_sections: [], channel_profiles: {}, subscription_channel_support: {}, search_sections: [], last_syncs: {}, monitor_tasks: [], stats: { source_count: 0, item_count: 0, filtered_item_count: 0, completed_job_count: 0 }, cookie_configured: false, quark_cookie_configured: false, setup_status: null, search: '', search_meta: {} };
         let editingMonitorName = null;
         let editingSubscriptionName = null;
         let editingResourceSourceIndex = null;
@@ -546,11 +546,16 @@
             const value = Number(match[2]);
             const classMap = {
                 '新增/更新': 'summary-positive',
+                '保持不变': 'summary-skip',
                 '跳过文件': 'summary-skip',
                 '跳过目录': 'summary-skip',
+                '总扫描': 'summary-info',
+                '过期记录': 'summary-skip',
                 '失败目录': 'summary-fail',
                 '删除文件': 'summary-delete',
-                '删除目录': 'summary-delete'
+                '删除目录': 'summary-delete',
+                '删除失败': 'summary-fail',
+                '索引清理': 'summary-delete'
             };
             const colorClass = classMap[label];
             if (!colorClass) return escapeHtml(raw);
@@ -5259,6 +5264,9 @@
                 channel_profiles: data.channel_profiles && typeof data.channel_profiles === 'object'
                     ? data.channel_profiles
                     : (resourceState.channel_profiles || {}),
+                subscription_channel_support: data.subscription_channel_support && typeof data.subscription_channel_support === 'object'
+                    ? data.subscription_channel_support
+                    : (resourceState.subscription_channel_support || {}),
                 search_sections: hydrateResourceSections(Array.isArray(data.search_sections) ? data.search_sections : (resourceState.search_sections || [])),
                 last_syncs: data.last_syncs || resourceState.last_syncs || {},
                 monitor_tasks: Array.isArray(data.monitor_tasks) ? data.monitor_tasks : (resourceState.monitor_tasks || monitorState.tasks || []),
@@ -5847,6 +5855,9 @@
             return (Array.isArray(sources) ? sources : []).map((source, index) => {
                 const channelId = getResourceSourceChannelId(source);
                 const profile = getResourceSourceProfileFromIndex(source, sectionIndex);
+                const support = resourceState?.subscription_channel_support && typeof resourceState.subscription_channel_support === 'object'
+                    ? (resourceState.subscription_channel_support[channelId] || {})
+                    : {};
                 const activity = getResourceSourceActivityMeta(profile);
                 const primaryType = getResourceSourcePrimaryLinkType(profile);
                 const activityBucket = getResourceSourceActivityBucket(profile);
@@ -5858,6 +5869,7 @@
                     source,
                     index,
                     channelId,
+                    support,
                     channelUrl: String(source?.url || (channelId ? `https://t.me/s/${channelId}` : '')).trim(),
                     profile,
                     activity,
@@ -6067,6 +6079,19 @@
                     const bd = (b?.activityBucket === 'week' ? 4 : b?.activityBucket === 'month' ? 3 : b?.activityBucket === 'half_year' ? 2 : b?.activityBucket === 'older' ? 1 : 0);
                     if (bd !== ad) return bd - ad;
                 }
+                if (mode === 'support') {
+                    const aSearched = Math.max(0, Number(a?.support?.searched_runs || 0));
+                    const bSearched = Math.max(0, Number(b?.support?.searched_runs || 0));
+                    const aMatched = Math.max(0, Number(a?.support?.matched_runs || 0));
+                    const bMatched = Math.max(0, Number(b?.support?.matched_runs || 0));
+                    const aItems = Math.max(0, Number(a?.support?.matched_items || 0));
+                    const bItems = Math.max(0, Number(b?.support?.matched_items || 0));
+                    const aRate = aSearched > 0 ? (aMatched / aSearched) : -1;
+                    const bRate = bSearched > 0 ? (bMatched / bSearched) : -1;
+                    if (bRate !== aRate) return bRate - aRate;
+                    if (bItems !== aItems) return bItems - aItems;
+                    if (bSearched !== aSearched) return bSearched - aSearched;
+                }
                 const aMs = Number(a?.latestPublishedMs || 0);
                 const bMs = Number(b?.latestPublishedMs || 0);
                 if (bMs !== aMs) return bMs - aMs;
@@ -6273,6 +6298,14 @@
                     .slice(0, 3)
                     .map(type => getResourceLinkTypeLabel(type))
                     .join(' / ');
+                const supportSearched = Math.max(0, Number(view?.support?.searched_runs || 0));
+                const supportMatched = Math.max(0, Number(view?.support?.matched_runs || 0));
+                const supportItems = Math.max(0, Number(view?.support?.matched_items || 0));
+                const supportErrors = Math.max(0, Number(view?.support?.error_runs || 0));
+                const supportHitRate = supportSearched > 0 ? Math.round((supportMatched / supportSearched) * 100) : 0;
+                const supportText = supportSearched > 0
+                    ? `订阅支持：${supportMatched}/${supportSearched}（命中率 ${supportHitRate}%） · 产出 ${supportItems} 条 · 异常 ${supportErrors} 次`
+                    : '订阅支持：暂无订阅任务统计';
                 return `
                     <div class="resource-source-manager-row">
                         <label class="ui-checkbox">
@@ -6286,7 +6319,7 @@
                                 <span class="text-[10px] px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-200 border border-sky-500/20">${escapeHtml(getResourceLinkTypeLabel(view.primaryType))}</span>
                                 <span class="text-[10px] px-2 py-0.5 rounded-full ${enabled ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20' : 'bg-slate-700 text-slate-300 border border-slate-600'}">${enabled ? '已启用' : '已停用'}</span>
                             </div>
-                            <div class="resource-source-manager-row-meta">类型：${escapeHtml(typeText || getResourceLinkTypeLabel(view.primaryType || 'unknown'))} · 活跃度：${escapeHtml(getResourceSourceActivityBucketLabel(view.activityBucket))} · 最近：${escapeHtml(latestAge)}${latest ? `（${escapeHtml(formatTimeText(latest))}）` : ''}</div>
+                            <div class="resource-source-manager-row-meta">类型：${escapeHtml(typeText || getResourceLinkTypeLabel(view.primaryType || 'unknown'))} · 活跃度：${escapeHtml(getResourceSourceActivityBucketLabel(view.activityBucket))} · 最近：${escapeHtml(latestAge)}${latest ? `（${escapeHtml(formatTimeText(latest))}）` : ''} · ${escapeHtml(supportText)}</div>
                         </div>
                         <div class="resource-source-manager-row-actions">
                             <button type="button" data-resource-source-manager-action="toggle" data-source-index="${view.index}" data-enabled="${enabled ? '1' : '0'}" class="resource-source-compact-btn">${enabled ? '停用' : '启用'}</button>
