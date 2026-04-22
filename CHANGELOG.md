@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.2] - 2026-04-22
+- 主界面导航支持 URL Hash 同步（`#tab=...`），刷新、前进后退与分享链接可直达对应页面。
+- 修复资源中心切换页面后的滚动位置恢复，返回资源页时保持原浏览位置。
+- 修复订阅日志分隔线“`订阅结束 | ... | 已结束`”颜色，恢复为成功态绿色。
+
 ## [0.2.1] - 2026-04-22
 - 目录树任务日志新增生成与清理明细：`新增/更新`、`保持不变`、`过期记录`、`删除文件`、`删除失败`、`索引清理`。
 - 目录树任务新增阶段耗时输出，覆盖前置处理、生成写入、清理落库与总耗时，统一以秒展示。
