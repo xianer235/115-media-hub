@@ -114,7 +114,6 @@ async def run_monitor_task(
 
         task_root = resolve_task_root(task)
         task_scan_path = normalize_remote_path(task["scan_path"])
-        alist_base = cfg["alist_url"].rstrip("/")
         extensions = get_user_extensions(cfg)
         min_bytes = int(task["min_file_size_mb"] * 1024 * 1024)
         start_remote_path = task_scan_path
@@ -130,7 +129,7 @@ async def run_monitor_task(
                 await write_monitor_log(f"{source_label} 未识别到有效子目录，回退全任务路径刷新", "warn")
 
         if refresh_source_label and start_remote_path != task_scan_path:
-            # OpenList 对“刚创建目录”的直查偶发不可见，先刷新父目录再进入目标目录更稳妥。
+            # 115 目录在新建后偶发短暂不可见，先刷新父目录再进入目标目录更稳妥。
             parent_remote_path = normalize_remote_path(os.path.dirname(start_remote_path))
             if parent_remote_path != start_remote_path and is_subpath(parent_remote_path, task_scan_path):
                 try:
@@ -253,8 +252,7 @@ async def run_monitor_task(
                     continue
 
                 target_file = os.path.join(STRM_ROOT, item_local_rel + ".strm")
-                encoded_path = urllib.parse.quote(item_remote_path)
-                strm_url = f"{alist_base}/d{encoded_path}"
+                strm_url = build_strm_play_url(cfg, item_remote_path)
                 changed = await asyncio.to_thread(write_strm_file, target_file, strm_url)
                 if changed:
                     stats["generated"] += 1

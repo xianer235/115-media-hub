@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+- STRM 播放链路统一为容器内 `302` 代理（`/strm/proxy`），播放器直接跟随到 115 真实下载地址。
+- 移除 OpenList 运行依赖：目录树任务改为容器内直接读取 115 官方目录树 TXT，文件夹监控任务继续负责目录扫描。
+- 修复目录树 TXT 下载链路：115 返回的签名下载 URL 按原样请求，不再二次编码破坏签名导致 `403 Forbidden`。
+- 修复目录树 TXT 下载链路的 Cookie 丢失问题：解析 `files/download` 响应中的临时 `Set-Cookie` 并回传至 OSS 下载请求，避免 `{"message":"no cookie","status":403}`。
+- 恢复目录树任务的 MD5/缓存跳过语义：沿用 0.2.2 逻辑，在增量模式下目录树内容不变时直接复用缓存并跳过同步写入。
+- 修复 `/strm/proxy` 外链 302 在播放器侧丢失临时下载 Cookie 导致无法播放的问题：改为 `302 -> /strm/relay` 容器内中继拉流，兼容 VLC/Emby/Jellyfin 的直链打开。
+- 设置页新增 115 风控相关调优参数：`115 API 最小间隔`、`目录缓存 TTL`、`下载链接缓存 TTL`。
+- 设置页挂载配置升级为“网盘路径前缀映射”（`provider -> prefix`），用于区分不同网盘路径前缀。
+
 ## [0.2.2] - 2026-04-22
 - 主界面导航支持 URL Hash 同步（`#tab=...`），刷新、前进后退与分享链接可直达对应页面。
 - 修复资源中心切换页面后的滚动位置恢复，返回资源页时保持原浏览位置。

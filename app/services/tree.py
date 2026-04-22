@@ -1,8 +1,283 @@
 from ..core import *  # noqa: F401,F403
+from http.cookies import SimpleCookie
 
 
 def _format_tree_elapsed_seconds(seconds: float) -> str:
     return f"{max(0.0, float(seconds or 0.0)):.2f}秒"
+
+
+def _normalize_tree_source_relative_path(raw_source: Any, cfg: Dict[str, Any]) -> str:
+    source = str(raw_source or "").strip()
+    if not source:
+        return ""
+    if "://" in source:
+        parsed = urllib.parse.urlsplit(source)
+        marker_idx = (parsed.path or "").lower().find("/d")
+        if marker_idx >= 0:
+            encoded = (parsed.path or "")[marker_idx + 2 :].lstrip("/")
+            source = urllib.parse.unquote(encoded) if encoded else ""
+        else:
+            source = parsed.path or ""
+    normalized_remote = normalize_remote_path(source)
+    matched = match_mount_point_by_remote_path(cfg, normalized_remote)
+    if matched and normalize_mount_provider(matched.get("provider", "")) == "115":
+        return normalize_relative_path(matched.get("relative_path", ""))
+    return normalize_relative_path(source)
+
+
+def _resolve_115_file_entry_by_relative_path(cookie: str, relative_path: str) -> Dict[str, Any]:
+    normalized = normalize_relative_path(relative_path)
+    if not normalized:
+        raise RuntimeError("目录树文件路径不能为空")
+    parent_rel = normalize_relative_path(os.path.dirname(normalized))
+    file_name = str(os.path.basename(normalized) or "").strip()
+    if not file_name:
+        raise RuntimeError("目录树文件路径不合法")
+    parent_cid = resolve_115_folder_id_by_path(cookie, parent_rel) if parent_rel else "0"
+    entries = list_115_entries(cookie, parent_cid)
+    matched = next(
+        (
+            item
+            for item in entries
+            if (not bool(item.get("is_dir"))) and str(item.get("name", "")).strip() == file_name
+        ),
+        None,
+    )
+    if not matched:
+        raise RuntimeError(f"115 网盘文件不存在：{normalized}")
+    return dict(matched)
+
+
+def _collect_115_download_urls(payload: Any) -> List[str]:
+    urls: List[str] = []
+    seen: Set[str] = set()
+
+    def push(url_value: Any) -> None:
+        token = str(url_value or "").strip()
+        if (not token) or (not token.lower().startswith(("http://", "https://"))) or token in seen:
+            return
+        seen.add(token)
+        urls.append(token)
+
+    def walk(node: Any) -> None:
+        if isinstance(node, str):
+            push(node)
+            return
+        if isinstance(node, list):
+            for item in node:
+                walk(item)
+            return
+        if not isinstance(node, dict):
+            return
+        for key in ("url", "download_url", "file_url", "download_url_web", "download_url_web2"):
+            walk(node.get(key))
+        for key in ("data", "urls", "result", "info"):
+            walk(node.get(key))
+
+    walk(payload)
+    return urls
+
+
+def _resolve_115_download_payload(cookie: str, pick_code: str) -> Tuple[List[str], str]:
+    throttle_115_api_requests()
+    request_headers = {
+        "Cookie": cookie,
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://115.com/",
+        "Origin": "https://115.com",
+        "User-Agent": "Mozilla/5.0 115-media-hub",
+    }
+    url = "https://webapi.115.com/files/download?pickcode=" + urllib.parse.quote(pick_code)
+    request = urllib.request.Request(url, headers=request_headers, method="GET")
+    with urllib.request.urlopen(request, timeout=45) as resp:
+        charset = resp.headers.get_content_charset() or "utf-8"
+        body = resp.read().decode(charset, errors="ignore")
+        result = safe_json_loads(body, {})
+        response_set_cookies = resp.headers.get_all("Set-Cookie") or []
+    if not isinstance(result, dict):
+        raise RuntimeError("115 下载地址解析返回异常")
+    if not bool(result.get("state", False)):
+        detail = (
+            str(result.get("error", "")).strip()
+            or str(result.get("msg", "")).strip()
+            or str(result.get("message", "")).strip()
+            or "115 下载地址解析失败"
+        )
+        raise RuntimeError(detail)
+    download_urls = _collect_115_download_urls(result)
+    if not download_urls:
+        raise RuntimeError("115 返回成功，但未解析到下载链接")
+    extra_cookie_pairs: List[str] = []
+    for raw_cookie in response_set_cookies:
+        jar = SimpleCookie()
+        try:
+            jar.load(str(raw_cookie or ""))
+        except Exception:
+            continue
+        for key, morsel in jar.items():
+            token = f"{str(key or '').strip()}={str(morsel.value or '').strip()}"
+            if token and token not in extra_cookie_pairs:
+                extra_cookie_pairs.append(token)
+    return download_urls, "; ".join(extra_cookie_pairs)
+
+
+def _download_tree_file_bytes(download_urls: List[str], cookie: str, download_cookie: str = "") -> bytes:
+    def _build_download_url_candidates(raw_url: str) -> List[str]:
+        source = str(raw_url or "").strip()
+        if not source:
+            return []
+        candidates: List[str] = []
+        seen: Set[str] = set()
+
+        def push(url_value: str) -> None:
+            token = str(url_value or "").strip()
+            if (not token) or token in seen:
+                return
+            seen.add(token)
+            candidates.append(token)
+
+        push(source)
+        try:
+            parts = urllib.parse.urlsplit(source)
+            if parts.scheme.lower() in ("http", "https") and parts.netloc:
+                # 仅规范 path，保留 query 原样，避免破坏签名参数。
+                encoded_path = urllib.parse.quote(urllib.parse.unquote(parts.path), safe="/%:@+")
+                path_only = urllib.parse.urlunsplit((parts.scheme, parts.netloc, encoded_path, parts.query, parts.fragment))
+                push(path_only)
+                normalized = normalize_http_url(source)
+                push(normalized)
+        except Exception:
+            pass
+        return candidates
+
+    def _request_binary_raw_url(url: str, headers: Optional[Dict[str, str]]) -> bytes:
+        target_url = str(url or "").strip()
+        if not target_url.lower().startswith(("http://", "https://")):
+            raise RuntimeError("目录树下载链接不合法")
+        request = urllib.request.Request(target_url, headers=dict(headers or {}), method="GET")
+        with urllib.request.urlopen(request, timeout=60) as resp:
+            return resp.read()
+
+    merged_cookie = "; ".join([part for part in [str(cookie or "").strip(), str(download_cookie or "").strip()] if part])
+    header_candidates: List[Optional[Dict[str, str]]] = [
+        {
+            "Cookie": merged_cookie,
+            "Referer": "https://115.com/",
+            "Origin": "https://115.com",
+            "User-Agent": "Mozilla/5.0 115-media-hub",
+            "Accept": "*/*",
+        },
+        {
+            "Cookie": str(download_cookie or "").strip(),
+            "Referer": "https://115.com/",
+            "Origin": "https://115.com",
+            "User-Agent": "Mozilla/5.0 115-media-hub",
+            "Accept": "*/*",
+        },
+        {
+            "Referer": "https://115.com/",
+            "Origin": "https://115.com",
+            "User-Agent": "Mozilla/5.0 115-media-hub",
+            "Accept": "*/*",
+        },
+        {
+            "User-Agent": "Mozilla/5.0 115-media-hub",
+            "Accept": "*/*",
+        },
+        None,
+    ]
+    last_error: Optional[Exception] = None
+    expanded_urls: List[str] = []
+    for download_url in download_urls:
+        expanded_urls.extend(_build_download_url_candidates(download_url))
+    for expanded_url in expanded_urls:
+        for headers in header_candidates:
+            try:
+                data = _request_binary_raw_url(expanded_url, headers)
+                if data is not None:
+                    return data
+            except Exception as exc:
+                last_error = exc
+                continue
+    if last_error is not None:
+        raise RuntimeError(f"目录树文件下载失败: {last_error}") from last_error
+    raise RuntimeError("目录树文件下载失败")
+
+
+def _fetch_115_tree_file_bytes(cookie: str, source_rel: str) -> bytes:
+    entry = _resolve_115_file_entry_by_relative_path(cookie, source_rel)
+    pick_code = str(entry.get("pick_code", "")).strip()
+    if not pick_code:
+        raise RuntimeError(f"目录树文件缺少 pickcode：{source_rel}")
+    download_urls, download_cookie = _resolve_115_download_payload(cookie, pick_code)
+    return _download_tree_file_bytes(download_urls, cookie, download_cookie)
+
+
+def _decode_tree_file_text(raw_bytes: bytes) -> str:
+    payload = raw_bytes or b""
+    if not payload:
+        return ""
+    for encoding in ("utf-8-sig", "utf-16", "utf-16le", "gb18030", "utf-8"):
+        try:
+            text = payload.decode(encoding)
+            if text:
+                return text
+        except Exception:
+            continue
+    return payload.decode("utf-8", errors="ignore")
+
+
+def _parse_tree_text_to_rel_paths(
+    content: str,
+    user_exts: Set[str],
+    prefix: str,
+    exclude: int,
+) -> Tuple[List[str], int, int]:
+    path_stack: Dict[int, str] = {}
+    lines_total = 0
+    nodes_total = 0
+    tree_scan_results: List[str] = []
+    for raw_line in str(content or "").splitlines():
+        line = str(raw_line or "").replace("\ufeff", "")
+        if not line.strip():
+            continue
+        lines_total += 1
+        level = line.count("|")
+        clean_name = re.sub(r"^[|\s—-]+", "", line).strip()
+        if not clean_name:
+            continue
+        nodes_total += 1
+        for stale_level in [key for key in path_stack.keys() if key > level]:
+            path_stack.pop(stale_level, None)
+        path_stack[level] = clean_name
+        if not is_video_file(clean_name, user_exts):
+            continue
+        # 对齐 0.2.2：不强制要求 0..level 每层都存在，按已有层级拼接即可。
+        full_parts = [path_stack[depth] for depth in range(level + 1) if depth in path_stack]
+        if not full_parts:
+            continue
+        rel_parts = full_parts[max(0, int(exclude or 0)) :]
+        final_rel_path = join_relative_path(prefix, "/".join(rel_parts))
+        if final_rel_path:
+            tree_scan_results.append(final_rel_path)
+    return tree_scan_results, lines_total, nodes_total
+
+
+async def _scan_115_tree_file_source(
+    cfg: Dict[str, Any],
+    source_rel: str,
+    user_exts: Set[str],
+    prefix: str,
+    exclude: int,
+) -> Tuple[List[str], int, int]:
+    cookie = str(cfg.get("cookie_115", "")).strip()
+    if not cookie:
+        raise RuntimeError("请先在参数配置中填写 115 Cookie")
+    raw_bytes = await asyncio.to_thread(_fetch_115_tree_file_bytes, cookie, source_rel)
+    content = await asyncio.to_thread(_decode_tree_file_text, raw_bytes)
+    if not str(content or "").strip():
+        raise RuntimeError(f"目录树文件为空：{source_rel}")
+    return await asyncio.to_thread(_parse_tree_text_to_rel_paths, content, user_exts, prefix, exclude)
 
 
 async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
@@ -29,9 +304,13 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
         if config_error:
             raise RuntimeError(config_error)
 
-        trees = [t for t in cfg.get("trees", []) if t.get("url")]
-        downloaded_tree_count = 0
+        if use_local:
+            await write_log("ℹ 目录树本地调试模式已弃用：当前统一使用容器内 115 源")
 
+        trees = [t for t in cfg.get("trees", []) if str((t or {}).get("path", "")).strip()]
+        fetched_tree_count = 0
+        parsed_tree_count = 0
+        skipped_tree_count = 0
         scan_results: List[str] = []
         user_exts = get_user_extensions(cfg)
         check_hash_enabled = bool(cfg.get("check_hash", False))
@@ -41,88 +320,80 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
         last_tree_keys = last_hash_state.get("tree_keys", []) if isinstance(last_hash_state.get("tree_keys", []), list) else []
         current_tree_hashes: Dict[str, Dict[str, str]] = {}
         current_tree_keys: List[str] = []
-        skipped_tree_count = 0
-        parsed_tree_count = 0
-        if check_hash_enabled and not can_skip_by_hash:
-            await write_log("ℹ 已开启 MD5 校验，但当前为全量模式，跳过策略不生效")
+        if check_hash_enabled:
+            if can_skip_by_hash:
+                await write_log("ℹ 已开启 MD5 校验：目录树内容无变化时将复用缓存并跳过同步")
+            else:
+                await write_log("ℹ 已开启 MD5 校验，但当前为全量模式，跳过策略不生效")
+
         await write_log(
-            f"━━━━━━━━━━【任务开始 | 目录树 | 源 {len(trees)} 个 | 模式 {cfg.get('sync_mode', 'incremental')} | MD5校验 {'开' if check_hash_enabled else '关'}】━━━━━━━━━━",
+            f"━━━━━━━━━━【任务开始 | 目录树文件 | 源 {len(trees)} 个 | 模式 {cfg.get('sync_mode', 'incremental')}】━━━━━━━━━━",
             "task-divider",
         )
 
+        scanned_tree_line_total = 0
+        scanned_tree_node_total = 0
         for idx, tree in enumerate(trees):
-            raw_path = f"{TREE_DIR}/tree_{idx}.raw"
-            txt_path = f"{TREE_DIR}/tree_{idx}.txt"
-            tree_key = build_tree_cache_key(tree)
+            raw_source = tree.get("path", "")
+            source_rel = _normalize_tree_source_relative_path(raw_source, cfg)
+            prefix = normalize_relative_path(tree.get("prefix", ""))
+            exclude = max(0, int(tree.get("exclude", 1) or 1))
+            source_label = "/" + source_rel if source_rel else "/"
+            tree_key = build_tree_cache_key(
+                {
+                    "source_type": "tree_file",
+                    "path": str(raw_source or "").strip(),
+                    "prefix": prefix,
+                    "exclude": exclude,
+                }
+            )
             current_tree_keys.append(tree_key)
             tree_cache_path = os.path.join(TREE_DIR, f"cache_{tree_key}.json")
-            tree_scan_results: List[str] = []
-            parse_signature = ""
 
-            if not use_local:
-                await refresh_tree_file(tree["url"], cfg)
-                await update_progress("正在下载", (idx / max(len(trees), 1) * 15), f"获取第 {idx + 1} 个目录树...")
-                await download_tree(tree["url"], raw_path, cfg)
-                downloaded_tree_count += 1
+            await update_progress(
+                "读取目录树文件",
+                (idx / max(len(trees), 1) * 35),
+                f"源 {idx + 1}/{len(trees)}：{source_label}",
+            )
+            await write_log(f"读取目录树文件源: {source_label}")
 
-            if os.path.exists(raw_path):
-                file_hash = await asyncio.to_thread(calculate_file_md5, raw_path)
-                parse_signature = build_tree_parse_signature(file_hash, user_exts)
-                if can_skip_by_hash:
-                    old_state = last_tree_hashes.get(tree_key, {})
-                    old_signature = old_state.get("parse_signature", "") if isinstance(old_state, dict) else ""
-                    if old_signature and old_signature == parse_signature:
-                        cached_paths = await asyncio.to_thread(load_tree_cache, tree_cache_path)
-                        if cached_paths is not None:
-                            skipped_tree_count += 1
-                            scan_results.extend(cached_paths)
-                            current_tree_hashes[tree_key] = {"parse_signature": parse_signature}
-                            await write_log(f"第 {idx + 1} 个目录树 MD5 无变化，复用缓存 {len(cached_paths)} 条")
-                            continue
+            cookie = str(cfg.get("cookie_115", "")).strip()
+            raw_bytes = await asyncio.to_thread(_fetch_115_tree_file_bytes, cookie, source_rel)
+            fetched_tree_count += 1
+            file_hash = hashlib.md5(raw_bytes).hexdigest()
+            parse_signature = build_tree_parse_signature(file_hash, user_exts)
 
-            if os.path.exists(raw_path):
-                await update_progress("正在转码", 15 + (idx / max(len(trees), 1) * 5), f"转码目录树 {idx + 1}...")
-                proc = await asyncio.create_subprocess_exec(
-                    "iconv",
-                    "-f",
-                    "UTF-16LE",
-                    "-t",
-                    "UTF-8//IGNORE",
-                    raw_path,
-                    "-o",
-                    txt_path,
-                )
-                code = await proc.wait()
-                if code != 0:
-                    raise RuntimeError(f"目录树 {idx + 1} 转码失败，退出码: {code}")
+            if can_skip_by_hash:
+                old_state = last_tree_hashes.get(tree_key, {})
+                old_signature = old_state.get("parse_signature", "") if isinstance(old_state, dict) else ""
+                if old_signature and old_signature == parse_signature:
+                    cached_paths = await asyncio.to_thread(load_tree_cache, tree_cache_path)
+                    if cached_paths is not None:
+                        skipped_tree_count += 1
+                        scan_results.extend(cached_paths)
+                        current_tree_hashes[tree_key] = {"parse_signature": parse_signature}
+                        await write_log(f"源 {idx + 1} MD5 无变化，复用缓存 {len(cached_paths)} 条")
+                        continue
 
-            parsed_this_tree = False
-            if os.path.exists(txt_path):
-                await update_progress("解析中", 20 + (idx / max(len(trees), 1) * 20), f"处理第 {idx + 1} 个结构...")
-                path_stack: Dict[int, str] = {}
-                prefix = normalize_relative_path(tree.get("prefix", ""))
-                exclude = int(tree.get("exclude", 1) or 1)
-                parsed_this_tree = True
-                with open(txt_path, "r", encoding="utf-8", errors="ignore") as f:
-                    for line in f:
-                        level = line.count("|")
-                        clean_name = re.sub(r"^[|\s—-]+", "", line).strip()
-                        if not clean_name:
-                            continue
-                        path_stack[level] = clean_name
-                        if is_video_file(clean_name, user_exts):
-                            full_parts = [path_stack[l] for l in range(level + 1) if l in path_stack]
-                            rel_parts = full_parts[exclude:]
-                            final_rel_path = join_relative_path(prefix, "/".join(rel_parts))
-                            if final_rel_path:
-                                tree_scan_results.append(final_rel_path)
-                                scan_results.append(final_rel_path)
-
-            if parse_signature:
-                current_tree_hashes[tree_key] = {"parse_signature": parse_signature}
-            if parsed_this_tree:
-                parsed_tree_count += 1
-                await asyncio.to_thread(save_tree_cache, tree_cache_path, tree_scan_results)
+            content = await asyncio.to_thread(_decode_tree_file_text, raw_bytes)
+            if not str(content or "").strip():
+                raise RuntimeError(f"目录树文件为空：{source_rel}")
+            tree_scan_results, scanned_lines, scanned_nodes = await asyncio.to_thread(
+                _parse_tree_text_to_rel_paths,
+                content,
+                user_exts,
+                prefix,
+                exclude,
+            )
+            parsed_tree_count += 1
+            scanned_tree_line_total += scanned_lines
+            scanned_tree_node_total += scanned_nodes
+            await write_log(
+                f"源 {idx + 1} 解析完成: 行 {scanned_lines} | 节点 {scanned_nodes} | 命中 {len(tree_scan_results)}"
+            )
+            scan_results.extend(tree_scan_results)
+            current_tree_hashes[tree_key] = {"parse_signature": parse_signature}
+            await asyncio.to_thread(save_tree_cache, tree_cache_path, tree_scan_results)
 
         if check_hash_enabled:
             cfg["last_hash"] = json.dumps(
@@ -137,38 +408,46 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
             await write_log("ℹ 目录树源配置有变更，继续执行同步以校正结果")
         if can_skip_by_hash and trees and skipped_tree_count == len(trees) and not tree_layout_changed:
             prefetch_elapsed_seconds = max(0.0, time.perf_counter() - run_started_at)
-            await write_log(f"本轮概况：下载 {downloaded_tree_count} 个，缓存复用 {skipped_tree_count} 个，解析 {parsed_tree_count} 个")
+            await write_log(
+                f"本轮概况：读取 {fetched_tree_count} 个，缓存复用 {skipped_tree_count} 个，解析 {parsed_tree_count} 个"
+            )
             await write_log("✅ MD5 校验命中：全部目录树无变动，跳过解析与同步")
             await write_log(
                 f"任务耗时：前置处理 {_format_tree_elapsed_seconds(prefetch_elapsed_seconds)} | 总 {_format_tree_elapsed_seconds(prefetch_elapsed_seconds)}"
             )
-            await write_log("━━━━━━━━━━【任务结束 | 目录树 | MD5 校验命中】━━━━━━━━━━", "task-divider")
+            await write_log("━━━━━━━━━━【任务结束 | 目录树文件 | MD5 校验命中】━━━━━━━━━━", "task-divider")
             await update_progress("任务完成", 100, "MD5 校验命中：无变动")
             return
 
         total_files = len(scan_results)
         prefetch_elapsed_seconds = max(0.0, time.perf_counter() - run_started_at)
-        await write_log(f"本轮概况：下载 {downloaded_tree_count} 个，缓存复用 {skipped_tree_count} 个，解析 {parsed_tree_count} 个")
+        await write_log(
+            (
+                f"本轮概况：读取 {fetched_tree_count} 个 | 缓存复用 {skipped_tree_count} 个 | 解析 {parsed_tree_count} 个 | "
+                f"目录树行 {scanned_tree_line_total} | 目录树节点 {scanned_tree_node_total} | 命中 {total_files}"
+            )
+        )
         await write_log(f"解析完成，共发现 {total_files} 个有效文件")
         if total_files == 0:
-            if downloaded_tree_count > 0 or use_local:
-                await write_log("⚠ 目录树下载成功，但未匹配到可生成文件；本次按成功结束并跳过清理")
+            if fetched_tree_count > 0 or use_local:
+                await write_log("⚠ 目录树读取成功，但未匹配到可生成文件；本次按成功结束并跳过清理")
                 total_elapsed_seconds = max(0.0, time.perf_counter() - run_started_at)
                 await write_log(
                     f"任务耗时：前置处理 {_format_tree_elapsed_seconds(prefetch_elapsed_seconds)} | 总 {_format_tree_elapsed_seconds(total_elapsed_seconds)}"
                 )
-                await write_log("━━━━━━━━━━【任务结束 | 目录树 | 执行成功】━━━━━━━━━━", "task-divider")
-                await update_progress("任务完成", 100, "目录树下载成功，但未匹配可生成文件")
+                await write_log("━━━━━━━━━━【任务结束 | 目录树文件 | 执行成功】━━━━━━━━━━", "task-divider")
+                await update_progress("任务完成", 100, "目录树读取成功，但未匹配可生成文件")
                 return
-            raise RuntimeError("扫描结果为空，且未成功下载目录树")
+            raise RuntimeError("扫描结果为空，且未成功读取目录树文件")
 
         conn = sqlite3.connect(DB_PATH)
         try:
             cursor = conn.cursor()
             cursor.execute("CREATE TEMP TABLE current_scan (path_hash TEXT PRIMARY KEY, relative_path TEXT)")
 
-            alist_base = cfg["alist_url"].rstrip("/")
-            mount_path = cfg["mount_path"].strip("/")
+            mount_prefix_115 = get_mount_prefix(cfg, "115")
+            if not mount_prefix_115:
+                raise RuntimeError("请先在参数配置中填写 115 网盘路径前缀")
             generate_started_at = time.perf_counter()
 
             for i, rel_path in enumerate(scan_results):
@@ -176,9 +455,10 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
                 needs_regenerate = (not os.path.exists(target)) or cfg["sync_mode"] == "full" or force_full
                 if needs_regenerate:
                     os.makedirs(os.path.dirname(target), exist_ok=True)
-                    encoded_path = urllib.parse.quote(f"/{mount_path}/{rel_path}")
+                    remote_path = build_provider_remote_path(cfg, "115", rel_path)
+                    strm_url = build_strm_play_url(cfg, remote_path)
                     with open(target, "w", encoding="utf-8") as sf:
-                        sf.write(f"{alist_base}/d{encoded_path}")
+                        sf.write(strm_url)
                     generated_file_count += 1
                 else:
                     unchanged_file_count += 1
@@ -207,7 +487,6 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
                     except Exception:
                         delete_failed_file_count += 1
 
-            # 无论是否启用物理清理，数据库都应只保留本轮扫描结果，避免陈旧数据长期累积
             stale_index_count = stale_file_candidates
             cursor.execute("DELETE FROM local_files WHERE path_hash NOT IN (SELECT path_hash FROM current_scan)")
             cursor.execute("INSERT OR REPLACE INTO local_files SELECT * FROM current_scan")
@@ -236,12 +515,12 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
                 f"总 {_format_tree_elapsed_seconds(total_elapsed_seconds)}"
             )
         )
-        await write_log("━━━━━━━━━━【任务结束 | 目录树 | 执行成功】━━━━━━━━━━", "task-divider")
+        await write_log("━━━━━━━━━━【任务结束 | 目录树文件 | 执行成功】━━━━━━━━━━", "task-divider")
     except Exception as exc:
         await write_log(f"❌ 运行故障: {exc}")
         failed_elapsed_seconds = max(0.0, time.perf_counter() - run_started_at)
         await write_log(f"任务耗时: 总 {_format_tree_elapsed_seconds(failed_elapsed_seconds)}", "warn")
-        await write_log("━━━━━━━━━━【任务结束 | 目录树 | 执行失败】━━━━━━━━━━", "task-divider")
+        await write_log("━━━━━━━━━━【任务结束 | 目录树文件 | 执行失败】━━━━━━━━━━", "task-divider")
         await update_progress("任务中止", 0, str(exc))
     finally:
         task_status["running"] = False

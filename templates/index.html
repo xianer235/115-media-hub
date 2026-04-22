@@ -246,18 +246,40 @@
 
         <div id="page-settings" class="page-panel module-page hidden space-y-6">
             <div class="grid grid-cols-1 gap-6 settings-grid">
-                <div class="group-card settings-section-card">
-                    <h3 class="group-title">1. AList/OpenList 播放链接基础配置</h3>
+                <div id="settings-strm-core" class="group-card settings-section-card" style="order: 2;">
+                    <h3 class="group-title">2. 115 STRM 播放基础配置</h3>
                     <div class="space-y-4">
-                        <label class="block"><span class="text-xs text-slate-500">AList/OpenList 访问链接前缀 (如 http://192.168.1.5:5244)</span><input id="alist_url" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none focus:border-sky-500 transition-colors"></label>
-                        <label class="block">
+                        <label id="strm-proxy-base-url-wrap" class="block">
                             <span class="text-xs text-slate-500 inline-flex items-center gap-2">
-                                AList/OpenList Token (目录树下载与 API 统一使用)
-                                <button type="button" class="info-dot" onclick="showHelp('AList/OpenList Token：在 OpenList 或 AList 后台创建的令牌。目录树下载、文件夹监控 API、Webhook 触发后的刷新都依赖它，建议使用最小权限。')">i</button>
+                                STRM 对外访问地址 (必填)
+                                <button type="button" class="info-dot" onclick="showHelp('填写媒体服务器能访问到本容器的地址，例如 http://192.168.1.20:18080。系统会生成 http://.../strm/proxy?path=... 的 302 播放链接。')">i</button>
                             </span>
-                            <input id="alist_token" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none focus:border-sky-500 transition-colors" placeholder="AList/OpenList 后台生成的令牌">
+                            <input id="strm_proxy_base_url" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none focus:border-sky-500 transition-colors" placeholder="例如 http://192.168.1.20:18080">
+                            <div class="text-[11px] text-slate-500 mt-2 leading-5">说明：容器会先解析 115 下载链接，再返回 302 给播放器跟随播放。</div>
                         </label>
-                        <label class="block"><span class="text-xs text-slate-500">115 在 AList/OpenList 中的挂载根路径 (如 /115)</span><input id="mount_path" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1"></label>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <label class="block">
+                                <span class="text-xs text-slate-500 inline-flex items-center gap-2">
+                                    115 API 最小间隔 (秒)
+                                    <button type="button" class="info-dot" onclick="showHelp('全局限频。值越大越稳，值越小越快。建议 0.25~0.6。')">i</button>
+                                </span>
+                                <input id="api_115_rate_limit_seconds" type="number" min="0.05" max="2" step="0.05" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1">
+                            </label>
+                            <label class="block">
+                                <span class="text-xs text-slate-500 inline-flex items-center gap-2">
+                                    目录缓存 TTL (秒)
+                                    <button type="button" class="info-dot" onclick="showHelp('115 目录列表缓存时长。设为 0 表示每次都直连 115。')">i</button>
+                                </span>
+                                <input id="api_115_list_cache_ttl_seconds" type="number" min="0" max="3600" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1">
+                            </label>
+                            <label class="block">
+                                <span class="text-xs text-slate-500 inline-flex items-center gap-2">
+                                    下载链接缓存 TTL (秒)
+                                    <button type="button" class="info-dot" onclick="showHelp('同一 pickcode 的 115 下载地址缓存时长。设为 0 表示每次重新解析。')">i</button>
+                                </span>
+                                <input id="api_115_download_url_cache_ttl_seconds" type="number" min="0" max="600" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1">
+                            </label>
+                        </div>
                         <label class="block">
                             <div class="flex justify-between items-center mb-1">
                                 <span class="text-xs text-slate-500">扫描后缀名 (逗号分隔)</span>
@@ -268,20 +290,24 @@
                     </div>
                 </div>
 
-                <div class="group-card settings-section-card">
+                <div id="settings-tree-sources" class="group-card settings-section-card" style="order: 3;">
                     <div class="flex flex-wrap justify-between items-center gap-3 mb-4">
-                        <h3 class="group-title">2. 目录树多源配置 (分块解析增强版)</h3>
-                        <button onclick="addTreeRow()" class="text-xs bg-sky-500/20 text-sky-400 hover:bg-sky-500 hover:text-white px-3 py-1 rounded-lg border border-sky-500/40 transition-all font-bold">+ 添加目录树链接</button>
+                        <h3 class="group-title">3. 目录树源配置（115 目录树 TXT）</h3>
+                        <button onclick="addTreeRow()" class="text-xs bg-sky-500/20 text-sky-400 hover:bg-sky-500 hover:text-white px-3 py-1 rounded-lg border border-sky-500/40 transition-all font-bold">+ 添加目录树文件</button>
                     </div>
                     <div id="trees-container" class="space-y-3"></div>
                     <div class="mt-6 pt-4 border-t border-slate-700/50 text-xs text-slate-400 leading-6">
-                        原有目录树模式完整保留，只有认证方式改为 Token。目录树下载 URL 仍然支持多源拆分解析。<br>
-                        由于 115 网盘目录树规则，排除层级建议最小为 1；如果路径需要补全，请优先填写“父文件夹路径前缀”。
+                        这里只支持 115 官方目录树 TXT 文件。<br>
+                        根目录文件：路径填 `目录树.txt`。<br>
+                        子目录文件：路径填 `子目录/目录树.txt`（按 115 实际目录层级写）。<br>
+                        父文件夹路径前缀：当目录树文件来自子目录时，内容通常不含上级目录；不补前缀会导致生成的 `.strm` 路径少层级、映射错误。可在这里补上缺失父目录（如 `影视库`）。<br>
+                        排除层级：从目录树路径开头裁掉 N 层；默认 `1`（通常用于去掉目录树首层容器目录）。<br>
+                        兼容：`/目录树.txt`、`/115/目录树.txt`、完整 URL（自动提取路径）。
                     </div>
                 </div>
 
-                <div class="group-card settings-section-card">
-                    <h3 class="group-title">3. 目录树任务同步策略与任务模式</h3>
+                <div id="settings-tree-sync" class="group-card settings-section-card" style="order: 4;">
+                    <h3 class="group-title">4. 目录树任务同步策略与任务模式</h3>
                     <div class="space-y-4">
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <label class="block"><span class="text-xs text-slate-500">写入模式</span>
@@ -294,7 +320,7 @@
                         </div>
                         <div class="space-y-3 pt-1">
                             <label class="flex items-center gap-3 cursor-pointer text-sm hover:text-white transition-colors">
-                                <input type="checkbox" id="check_hash" class="ui-checkbox"> 开启 MD5 校验 (无变动跳过解析)
+                                <input type="checkbox" id="check_hash" class="ui-checkbox"> 开启 MD5 校验（目录树无变动时复用缓存并跳过同步）
                             </label>
                             <label class="flex items-center gap-3 cursor-pointer text-sm hover:text-white transition-colors">
                                 <input type="checkbox" id="sync_clean" class="ui-checkbox"> 自动清理模式 (本地同步删除)
@@ -303,8 +329,8 @@
                     </div>
                 </div>
 
-                <div class="group-card settings-section-card">
-                    <h3 class="group-title">4. 网络代理（TG / TMDB）</h3>
+                <div id="settings-network-proxy" class="group-card settings-section-card" style="order: 6;">
+                    <h3 class="group-title">6. 网络代理（TG / TMDB）</h3>
                     <div class="space-y-4">
                         <label class="flex items-center gap-3 cursor-pointer text-sm">
                             <input type="checkbox" id="tg_proxy_enabled" class="ui-checkbox">
@@ -342,8 +368,8 @@
                     </div>
                 </div>
 
-                <div class="group-card settings-section-card">
-                    <h3 class="group-title">5. TMDB 元数据增强（可选）</h3>
+                <div id="settings-tmdb" class="group-card settings-section-card" style="order: 7;">
+                    <h3 class="group-title">7. TMDB 元数据增强（可选）</h3>
                     <div class="space-y-4">
                         <label class="flex items-center gap-3 cursor-pointer text-sm">
                             <input type="checkbox" id="tmdb_enabled" class="ui-checkbox">
@@ -375,12 +401,12 @@
                     </div>
                 </div>
 
-                <div class="group-card settings-section-card">
+                <div id="settings-tg-sources" class="group-card settings-section-card" style="order: 5;">
                     <div class="resource-source-panel">
                         <div class="resource-source-panel-head">
                             <div class="min-w-0">
                                 <div class="settings-hero-eyebrow">Telegram Sources</div>
-                                <h3 class="group-title mb-0">6. TG 订阅源管理</h3>
+                                <h3 class="group-title mb-0">5. TG 订阅源管理</h3>
                                 <div class="resource-source-panel-copy">只需要填写公开频道 ID，例如 `QukanMovie`。支持直接粘贴 `@QukanMovie` 或完整的 `https://t.me/s/QukanMovie` 链接，保存时会自动规范化。</div>
                                 <div class="mt-3 max-w-xs">
                                     <label class="block">
@@ -426,8 +452,8 @@
                     </div>
                 </div>
 
-                <div class="group-card settings-section-card">
-                    <h3 class="group-title">7. 网盘导入配置（115 / Quark）</h3>
+                <div id="settings-auth" class="group-card settings-section-card" style="order: 1;">
+                    <h3 class="group-title">1. 网盘认证与签到（115 / Quark）</h3>
                     <div class="space-y-4">
                         <label class="block">
                             <span class="text-xs text-slate-500 inline-flex items-center gap-2">
@@ -472,7 +498,7 @@
                     </div>
                 </div>
 
-                <div class="group-card settings-section-card">
+                <div id="settings-notify" class="group-card settings-section-card" style="order: 8;">
                     <h3 class="group-title">8. 通知推送（企业微信）</h3>
                     <div class="space-y-4">
                         <label class="flex items-center gap-3 cursor-pointer text-sm">
@@ -529,7 +555,7 @@
                     </div>
                 </div>
 
-                <div class="group-card settings-section-card">
+                <div id="settings-security" class="group-card settings-section-card" style="order: 9;">
                     <h3 class="group-title">9. 后台安全管理</h3>
                     <div class="space-y-4">
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -652,11 +678,11 @@
             <div class="group-card">
                 <h3 class="group-title">导入与 STRM 生成流程</h3>
                 <div class="about-workflow-card">
-                    <div class="about-workflow-title">115 导入链路与 OpenList 生成链路映射图</div>
-                    <div class="about-workflow-copy">资源导入阶段依赖 115 Cookie，STRM 生成阶段依赖 OpenList API，中间通过 savepath 与挂载路径映射桥关联。流程图采用按需加载，避免影响页面首屏速度。</div>
+                    <div class="about-workflow-title">115 导入与容器内 STRM 生成链路图</div>
+                    <div class="about-workflow-copy">资源导入与 STRM 播放都在容器内完成：先用 115 Cookie 解析目录，再由 `/strm/proxy` 返回 302 到真实下载地址。流程图采用按需加载，避免影响页面首屏速度。</div>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mt-4">
                         <button type="button" onclick="openAboutWorkflowModal()" class="about-action about-action-primary">查看流程图</button>
-                        <a href="/static/images/about-workflow-cookie-openlist.png" target="_blank" rel="noopener noreferrer" class="about-action about-action-secondary">新窗口打开</a>
+                        <a href="/static/images/about-workflow-115-container.png" target="_blank" rel="noopener noreferrer" class="about-action about-action-secondary">新窗口打开</a>
                     </div>
                 </div>
             </div>
@@ -665,13 +691,13 @@
         <div id="about-workflow-modal" class="hidden fixed inset-0 bg-black/70 z-[61] p-4">
             <div class="w-full max-w-7xl mx-auto mt-[3vh] max-h-[94vh] overflow-hidden group-card modal-card">
                 <div class="flex items-center justify-between gap-3">
-                    <h3 class="group-title mb-0">导入与 STRM 生成流程图 · Cookie / OpenList 覆盖范围</h3>
+                    <h3 class="group-title mb-0">导入与 STRM 生成流程图 · Cookie / 容器代理覆盖范围</h3>
                     <button type="button" onclick="closeAboutWorkflowModal()" class="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm">关闭</button>
                 </div>
                 <div class="about-workflow-modal-body">
                     <div id="about-workflow-modal-loading" class="about-workflow-modal-loading">首次打开时加载流程图，请稍候...</div>
                     <div id="about-workflow-modal-error" class="about-workflow-modal-error hidden">流程图加载失败，请稍后重试或使用“新窗口打开”。</div>
-                    <img id="about-workflow-modal-image" data-src="/static/images/about-workflow-cookie-openlist.png" alt="115 Cookie 与 OpenList 覆盖范围流程图大图" class="hidden">
+                    <img id="about-workflow-modal-image" data-src="/static/images/about-workflow-115-container.png" alt="115 Cookie 与容器代理覆盖范围流程图大图" class="hidden">
                 </div>
             </div>
         </div>
@@ -704,7 +730,7 @@
                     </div>
                     <label class="block">
                         <span class="text-xs text-slate-500 inline-flex items-center gap-2">
-                            扫描路径 (AList/OpenList 中监控的源路径)
+                            扫描路径 (115 网盘内监控的源路径)
                             <button type="button" class="info-dot" onclick="showHelp('手动运行会从该路径开始递归。Webhook 触发时会根据 savepath/path 自动定位这个路径下的变动子目录，优先局部刷新。')">i</button>
                         </span>
                         <input id="monitor_scan_path" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="/115/自存影视/115自存电视剧">

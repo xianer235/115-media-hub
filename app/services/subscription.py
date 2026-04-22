@@ -5850,7 +5850,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             cookie_115,
             effective_savepath,
         )
-        matched_monitor = match_monitor_task_for_savepath(cfg, effective_savepath)
+        matched_monitor = match_monitor_task_for_savepath(cfg, effective_savepath, provider=provider)
         monitor_task_name = str(matched_monitor.get("task_name", "") or "").strip()
 
         existing_folder_episodes: Set[int] = set()
@@ -6181,7 +6181,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                     season=candidate_season,
                     episode=episode,
                 ) or effective_savepath
-            candidate_matched_monitor = match_monitor_task_for_savepath(cfg, candidate_savepath)
+            candidate_matched_monitor = match_monitor_task_for_savepath(cfg, candidate_savepath, provider=provider)
             candidate_monitor_task_name = str(candidate_matched_monitor.get("task_name", "") or "").strip()
 
             if (
@@ -6838,7 +6838,11 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                                     group_savepath,
                                 )
                                 savepath_folder_id_cache[group_savepath] = str(group_folder_id or "").strip()
-                            group_matched_monitor = match_monitor_task_for_savepath(cfg, group_savepath)
+                            group_matched_monitor = match_monitor_task_for_savepath(
+                                cfg,
+                                group_savepath,
+                                provider=provider,
+                            )
                             group_monitor_task_name = str(group_matched_monitor.get("task_name", "") or "").strip()
 
                             group_payload = dict(job_payload)

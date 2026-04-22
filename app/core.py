@@ -4,7 +4,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import sqlite3
 import ssl
 import threading
@@ -121,8 +120,38 @@ SHARE_SNAP_CACHE_MAX_ROWS = max(
     200,
     int(os.environ.get("SHARE_SNAP_CACHE_MAX_ROWS", 3000) or 3000),
 )
+API_115_RATE_LIMIT_SECONDS = max(
+    0.05,
+    min(2.0, float(os.environ.get("API_115_RATE_LIMIT_SECONDS", 0.35) or 0.35)),
+)
+API_115_LIST_CACHE_TTL_SECONDS = max(
+    0,
+    min(3600, int(os.environ.get("API_115_LIST_CACHE_TTL_SECONDS", 8) or 8)),
+)
+API_115_DOWNLOAD_URL_CACHE_TTL_SECONDS = max(
+    0,
+    min(600, int(os.environ.get("API_115_DOWNLOAD_URL_CACHE_TTL_SECONDS", 20) or 20)),
+)
+API_115_LIST_CACHE_MAX_ROWS = max(
+    200,
+    int(os.environ.get("API_115_LIST_CACHE_MAX_ROWS", 2000) or 2000),
+)
 _share_snap_rate_limit_lock = threading.Lock()
 _share_snap_last_request_monotonic = 0.0
+_api_115_rate_limit_lock = threading.Lock()
+_api_115_last_request_monotonic = 0.0
+_api_115_list_cache_lock = threading.Lock()
+_api_115_list_cache: Dict[str, Dict[str, Any]] = {}
+_api_115_runtime_tuning_lock = threading.Lock()
+_api_115_runtime_tuning: Dict[str, Any] = {
+    "rate_limit_seconds": API_115_RATE_LIMIT_SECONDS,
+    "list_cache_ttl_seconds": API_115_LIST_CACHE_TTL_SECONDS,
+    "download_url_cache_ttl_seconds": API_115_DOWNLOAD_URL_CACHE_TTL_SECONDS,
+}
+DEFAULT_MOUNT_POINTS: List[Dict[str, str]] = [
+    {"provider": "115", "prefix": "/115"},
+    {"provider": "quark", "prefix": "/quark"},
+]
 RESOURCE_CHANNEL_CACHE_ACTIVE_MIN_KEEP = max(
     0,
     min(RESOURCE_CHANNEL_CACHE_LIMIT, int(os.environ.get("RESOURCE_CHANNEL_CACHE_ACTIVE_MIN_KEEP", 10) or 10)),
@@ -270,13 +299,67 @@ def ensure_parent(path: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
 
+def _clamp_api_115_rate_limit_seconds(value: Any, fallback: float = API_115_RATE_LIMIT_SECONDS) -> float:
+    try:
+        raw = float(value if value is not None else fallback)
+    except Exception:
+        raw = float(fallback)
+    return max(0.05, min(2.0, raw))
+
+
+def _clamp_api_115_list_cache_ttl_seconds(value: Any, fallback: int = API_115_LIST_CACHE_TTL_SECONDS) -> int:
+    try:
+        raw = int(float(value if value is not None else fallback))
+    except Exception:
+        raw = int(fallback)
+    return max(0, min(3600, raw))
+
+
+def _clamp_api_115_download_url_cache_ttl_seconds(
+    value: Any,
+    fallback: int = API_115_DOWNLOAD_URL_CACHE_TTL_SECONDS,
+) -> int:
+    try:
+        raw = int(float(value if value is not None else fallback))
+    except Exception:
+        raw = int(fallback)
+    return max(0, min(600, raw))
+
+
+def apply_api_115_runtime_tuning(cfg: Optional[Dict[str, Any]] = None) -> None:
+    payload = cfg or {}
+    rate_limit_seconds = _clamp_api_115_rate_limit_seconds(
+        payload.get("api_115_rate_limit_seconds", API_115_RATE_LIMIT_SECONDS),
+        fallback=API_115_RATE_LIMIT_SECONDS,
+    )
+    list_cache_ttl_seconds = _clamp_api_115_list_cache_ttl_seconds(
+        payload.get("api_115_list_cache_ttl_seconds", API_115_LIST_CACHE_TTL_SECONDS),
+        fallback=API_115_LIST_CACHE_TTL_SECONDS,
+    )
+    download_url_cache_ttl_seconds = _clamp_api_115_download_url_cache_ttl_seconds(
+        payload.get("api_115_download_url_cache_ttl_seconds", API_115_DOWNLOAD_URL_CACHE_TTL_SECONDS),
+        fallback=API_115_DOWNLOAD_URL_CACHE_TTL_SECONDS,
+    )
+    with _api_115_runtime_tuning_lock:
+        _api_115_runtime_tuning["rate_limit_seconds"] = rate_limit_seconds
+        _api_115_runtime_tuning["list_cache_ttl_seconds"] = list_cache_ttl_seconds
+        _api_115_runtime_tuning["download_url_cache_ttl_seconds"] = download_url_cache_ttl_seconds
+
+
+def get_api_115_runtime_tuning() -> Dict[str, Any]:
+    with _api_115_runtime_tuning_lock:
+        return dict(_api_115_runtime_tuning)
+
+
 def default_config() -> Dict[str, Any]:
     return {
         "username": "admin",
         "password": "admin123",
         "webhook_secret": "",
-        "alist_url": "",
-        "alist_token": "",
+        "strm_proxy_base_url": "",
+        "api_115_rate_limit_seconds": API_115_RATE_LIMIT_SECONDS,
+        "api_115_list_cache_ttl_seconds": API_115_LIST_CACHE_TTL_SECONDS,
+        "api_115_download_url_cache_ttl_seconds": API_115_DOWNLOAD_URL_CACHE_TTL_SECONDS,
         "cookie_115": "",
         "cookie_quark": "",
         "sign115_enabled": False,
@@ -299,9 +382,9 @@ def default_config() -> Dict[str, Any]:
         "tmdb_language": "zh-CN",
         "tmdb_region": "CN",
         "tmdb_cache_ttl_hours": 24,
-        "mount_path": "/115",
+        "mount_points": [dict(item) for item in DEFAULT_MOUNT_POINTS],
         "extensions": DEFAULT_EXTENSIONS,
-        "trees": [{"url": "", "prefix": "", "exclude": 1}],
+        "trees": [{"source_type": "tree_file", "path": "", "prefix": "", "exclude": 1}],
         "sync_mode": "incremental",
         "sync_clean": True,
         "check_hash": True,
@@ -1116,14 +1199,138 @@ def normalize_sign115_cron_time(value: Any, fallback: str = "09:00") -> str:
     return f"{hour:02d}:{minute:02d}"
 
 
+def normalize_http_base_url(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    parsed = urllib.parse.urlsplit(raw)
+    if parsed.scheme.lower() not in ("http", "https") or not parsed.netloc:
+        return ""
+    path = parsed.path.rstrip("/")
+    return urllib.parse.urlunsplit((parsed.scheme.lower(), parsed.netloc, path, "", ""))
+
+
+def normalize_mount_provider(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if not token:
+        return ""
+    aliases = {
+        "115share": "115",
+        "magnet115": "115",
+        "pan.quark": "quark",
+        "quarkshare": "quark",
+        "quark_pan": "quark",
+    }
+    normalized = aliases.get(token, token)
+    normalized = re.sub(r"[^a-z0-9_.-]+", "", normalized)
+    if not normalized:
+        return ""
+    return normalized
+
+
+def normalize_tree_source_type(value: Any, fallback: str = "tree_file") -> str:
+    aliases = {
+        "": "",
+        "tree_file": "tree_file",
+        "tree_txt": "tree_file",
+        "tree": "tree_file",
+        "txt": "tree_file",
+        "file": "tree_file",
+        "directory_tree": "tree_file",
+    }
+    raw = str(value or "").strip().lower()
+    normalized = aliases.get(raw, "")
+    if normalized:
+        return normalized
+    fallback_raw = str(fallback or "tree_file").strip().lower()
+    return aliases.get(fallback_raw, "tree_file") or "tree_file"
+
+
+def normalize_mount_points(value: Any) -> List[Dict[str, str]]:
+    normalized: List[Dict[str, str]] = []
+    for item in DEFAULT_MOUNT_POINTS:
+        provider = normalize_mount_provider(item.get("provider", ""))
+        prefix = normalize_remote_path(item.get("prefix", ""))
+        if (not provider) or (not prefix) or prefix == "/":
+            continue
+        normalized.append({"provider": provider, "prefix": prefix})
+    return normalized
+
+
+def get_mount_prefix(cfg: Dict[str, Any], provider: str) -> str:
+    provider_key = normalize_mount_provider(provider)
+    if not provider_key:
+        return ""
+    mount_points = normalize_mount_points(cfg.get("mount_points", []))
+    for item in mount_points:
+        if normalize_mount_provider(item.get("provider", "")) == provider_key:
+            return normalize_remote_path(item.get("prefix", ""))
+    return ""
+
+
+def build_provider_remote_path(cfg: Dict[str, Any], provider: str, relative_path: str) -> str:
+    prefix = get_mount_prefix(cfg, provider)
+    if not prefix:
+        provider_key = normalize_mount_provider(provider) or str(provider or "").strip() or "unknown"
+        raise RuntimeError(f"未配置网盘前缀: {provider_key}")
+    rel = normalize_relative_path(relative_path)
+    return join_remote_path(prefix, rel)
+
+
+def match_mount_point_by_remote_path(cfg: Dict[str, Any], remote_path: str) -> Dict[str, str]:
+    normalized_remote = normalize_remote_path(remote_path)
+    mount_points = normalize_mount_points(cfg.get("mount_points", []))
+    ordered = sorted(
+        mount_points,
+        key=lambda item: len(normalize_remote_path(item.get("prefix", ""))),
+        reverse=True,
+    )
+    for item in ordered:
+        provider = normalize_mount_provider(item.get("provider", ""))
+        prefix = normalize_remote_path(item.get("prefix", ""))
+        if (not provider) or (not prefix) or prefix == "/":
+            continue
+        if normalized_remote == prefix or normalized_remote.startswith(prefix + "/"):
+            relative_part = normalize_relative_path(normalized_remote[len(prefix) :])
+            return {
+                "provider": provider,
+                "prefix": prefix,
+                "remote_path": normalized_remote,
+                "relative_path": relative_part,
+            }
+    return {}
+
+
+def resolve_provider_relative_path(
+    cfg: Dict[str, Any],
+    remote_path: str,
+    expected_provider: str = "",
+) -> Tuple[str, str]:
+    matched = match_mount_point_by_remote_path(cfg, remote_path)
+    if not matched:
+        raise RuntimeError("路径未命中任何网盘前缀，请检查网盘路径前缀映射配置")
+    provider = normalize_mount_provider(matched.get("provider", ""))
+    relative_path = normalize_relative_path(matched.get("relative_path", ""))
+    expected_key = normalize_mount_provider(expected_provider)
+    if expected_key and provider != expected_key:
+        raise RuntimeError(f"路径前缀匹配到 {provider}，当前仅支持 {expected_key}")
+    return provider, relative_path
+
+
 def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     merged = default_config()
     merged.update(cfg or {})
 
     if "webhook_secret" not in merged:
         merged["webhook_secret"] = ""
-    if "alist_token" not in merged:
-        merged["alist_token"] = ""
+    if "strm_proxy_base_url" not in merged:
+        merged["strm_proxy_base_url"] = ""
+    if "api_115_rate_limit_seconds" not in merged:
+        merged["api_115_rate_limit_seconds"] = API_115_RATE_LIMIT_SECONDS
+    if "api_115_list_cache_ttl_seconds" not in merged:
+        merged["api_115_list_cache_ttl_seconds"] = API_115_LIST_CACHE_TTL_SECONDS
+    if "api_115_download_url_cache_ttl_seconds" not in merged:
+        merged["api_115_download_url_cache_ttl_seconds"] = API_115_DOWNLOAD_URL_CACHE_TTL_SECONDS
     if "cookie_115" not in merged:
         merged["cookie_115"] = ""
     if "cookie_quark" not in merged:
@@ -1168,6 +1375,8 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         merged["tmdb_region"] = "CN"
     if "tmdb_cache_ttl_hours" not in merged:
         merged["tmdb_cache_ttl_hours"] = 24
+    if "mount_points" not in merged or not isinstance(merged["mount_points"], list):
+        merged["mount_points"] = [dict(item) for item in DEFAULT_MOUNT_POINTS]
     if "monitor_tasks" not in merged or not isinstance(merged["monitor_tasks"], list):
         merged["monitor_tasks"] = []
     if "subscription_tasks" not in merged or not isinstance(merged["subscription_tasks"], list):
@@ -1177,19 +1386,22 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     if "resource_quick_links" not in merged or not isinstance(merged["resource_quick_links"], list):
         merged["resource_quick_links"] = []
 
-    merged["trees"] = merged.get("trees") or [{"url": "", "prefix": "", "exclude": 1}]
+    merged["trees"] = merged.get("trees") or [{"source_type": "tree_file", "path": "", "prefix": "", "exclude": 1}]
     if not str(merged.get("extensions", "")).strip() or merged.get("extensions") == LEGACY_DEFAULT_EXTENSIONS:
         merged["extensions"] = DEFAULT_EXTENSIONS
     normalized_trees = []
     for raw_tree in merged["trees"]:
         tree = raw_tree or {}
+        source_type = normalize_tree_source_type(tree.get("source_type", "tree_file"), fallback="tree_file")
+        tree_path = str(tree.get("path", "")).strip()
         try:
             exclude_val = int(tree.get("exclude", 1) or 1)
         except (TypeError, ValueError):
             exclude_val = 1
         normalized_trees.append(
             {
-                "url": str(tree.get("url", "")).strip(),
+                "source_type": source_type,
+                "path": tree_path,
                 "prefix": str(tree.get("prefix", "")).strip(),
                 "exclude": max(1, exclude_val),
             }
@@ -1227,8 +1439,20 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         normalized_sources.append(source)
     merged["resource_sources"] = normalized_sources
     merged["resource_quick_links"] = normalize_resource_quick_links(merged.get("resource_quick_links", []))
-    merged["mount_path"] = normalize_remote_path(merged.get("mount_path", "/115"))
-    merged["alist_url"] = str(merged.get("alist_url", "")).strip().rstrip("/")
+    merged["mount_points"] = normalize_mount_points(merged.get("mount_points", []))
+    merged["strm_proxy_base_url"] = normalize_http_base_url(merged.get("strm_proxy_base_url", ""))
+    merged["api_115_rate_limit_seconds"] = _clamp_api_115_rate_limit_seconds(
+        merged.get("api_115_rate_limit_seconds", API_115_RATE_LIMIT_SECONDS),
+        fallback=API_115_RATE_LIMIT_SECONDS,
+    )
+    merged["api_115_list_cache_ttl_seconds"] = _clamp_api_115_list_cache_ttl_seconds(
+        merged.get("api_115_list_cache_ttl_seconds", API_115_LIST_CACHE_TTL_SECONDS),
+        fallback=API_115_LIST_CACHE_TTL_SECONDS,
+    )
+    merged["api_115_download_url_cache_ttl_seconds"] = _clamp_api_115_download_url_cache_ttl_seconds(
+        merged.get("api_115_download_url_cache_ttl_seconds", API_115_DOWNLOAD_URL_CACHE_TTL_SECONDS),
+        fallback=API_115_DOWNLOAD_URL_CACHE_TTL_SECONDS,
+    )
     merged["webhook_secret"] = str(merged.get("webhook_secret", "")).strip()
     merged["cookie_115"] = str(merged.get("cookie_115", "")).strip()
     merged["cookie_quark"] = str(merged.get("cookie_quark", "")).strip()
@@ -1236,6 +1460,9 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     merged["sign115_cron_time"] = normalize_sign115_cron_time(merged.get("sign115_cron_time", "09:00"))
     # 订阅批次收口刷新已固定为内置策略，不再保留配置项。
     merged.pop("subscription_batch_refresh_enabled", None)
+    merged.pop("alist_url", None)
+    merged.pop("alist_token", None)
+    merged.pop("mount_path", None)
     merged["tg_proxy_enabled"] = normalize_bool(merged.get("tg_proxy_enabled", False), default=False)
     merged["tg_proxy_protocol"] = str(merged.get("tg_proxy_protocol", "http") or "http").strip().lower()
     if merged["tg_proxy_protocol"] not in ("http", "https"):
@@ -1329,6 +1556,7 @@ def get_config() -> Dict[str, Any]:
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         raw_cfg = json.load(f)
     cfg = normalize_config(raw_cfg)
+    apply_api_115_runtime_tuning(cfg)
     if cfg != raw_cfg:
         save_config(cfg)
     return cfg
@@ -1336,8 +1564,10 @@ def get_config() -> Dict[str, Any]:
 
 def save_config(cfg: Dict[str, Any]) -> None:
     ensure_parent(CONFIG_PATH)
+    normalized_cfg = normalize_config(cfg)
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(normalize_config(cfg), f, ensure_ascii=False, indent=2)
+        json.dump(normalized_cfg, f, ensure_ascii=False, indent=2)
+    apply_api_115_runtime_tuning(normalized_cfg)
 
 
 def ensure_db() -> None:
@@ -4942,10 +5172,16 @@ def resolve_task_root(task: Dict[str, Any]) -> str:
     return join_relative_path(target_path, root_name)
 
 
-def match_monitor_task_for_savepath(cfg: Dict[str, Any], savepath: str) -> Dict[str, str]:
+def match_monitor_task_for_savepath(cfg: Dict[str, Any], savepath: str, provider: str = "115") -> Dict[str, str]:
     savepath_rel = normalize_relative_path(savepath)
-    mount_path = normalize_remote_path(cfg.get("mount_path", "/115"))
-    full_path = join_remote_path(mount_path, savepath_rel)
+    mount_prefix = get_mount_prefix(cfg, provider)
+    if not mount_prefix:
+        return {
+            "task_name": "",
+            "scan_path": "",
+            "full_path": "",
+        }
+    full_path = join_remote_path(mount_prefix, savepath_rel)
     best_task: Optional[Dict[str, Any]] = None
     best_depth = -1
 
@@ -5134,27 +5370,47 @@ def restore_runtime_logs_from_files() -> None:
 def validate_tree_runtime_config(cfg: Dict[str, Any], use_local: bool) -> Optional[str]:
     if use_local:
         return None
-    if not str(cfg.get("alist_url", "")).strip():
-        return "AList/OpenList 访问链接未填写"
-    if not str(cfg.get("alist_token", "")).strip():
-        return "AList/OpenList Token 未填写"
-    if not str(cfg.get("mount_path", "")).strip():
-        return "挂载根路径未填写"
-    trees = [t for t in cfg.get("trees", []) if str((t or {}).get("url", "")).strip()]
+    if not str(cfg.get("cookie_115", "")).strip():
+        return "请先在参数配置中填写 115 Cookie"
+    if not str(get_mount_prefix(cfg, "115")).strip():
+        return "请先在参数配置中填写 115 网盘路径前缀"
+    trees = [
+        t
+        for t in cfg.get("trees", [])
+        if str((t or {}).get("path", "")).strip()
+    ]
     if not trees:
-        return "未配置任何有效的目录树 URL"
+        return "未配置任何有效的目录树文件路径"
+    strm_play_error = validate_strm_play_runtime_config(cfg)
+    if strm_play_error:
+        return strm_play_error
     return None
 
 
 def validate_monitor_runtime_config(cfg: Dict[str, Any], task: Dict[str, Any]) -> Optional[str]:
-    if not str(cfg.get("alist_url", "")).strip():
-        return "AList/OpenList 访问链接未填写"
-    if not str(cfg.get("alist_token", "")).strip():
-        return "AList/OpenList Token 未填写"
+    if not str(cfg.get("cookie_115", "")).strip():
+        return "请先在参数配置中填写 115 Cookie"
+    mount_prefix_115 = get_mount_prefix(cfg, "115")
+    if not mount_prefix_115:
+        return "请先在参数配置中填写 115 网盘路径前缀"
     if not str(task.get("scan_path", "")).strip():
         return "扫描路径未填写"
+    scan_path = normalize_remote_path(task.get("scan_path", ""))
+    if scan_path != mount_prefix_115 and not scan_path.startswith(mount_prefix_115 + "/"):
+        return f"扫描路径必须位于 115 前缀 {mount_prefix_115} 下"
     if not str(task.get("target_path", "")).strip():
         return "目标路径未填写"
+    strm_play_error = validate_strm_play_runtime_config(cfg)
+    if strm_play_error:
+        return strm_play_error
+    return None
+
+
+def validate_strm_play_runtime_config(cfg: Dict[str, Any]) -> Optional[str]:
+    if not str(cfg.get("cookie_115", "")).strip():
+        return "STRM 代理模式已启用，但 115 Cookie 未填写"
+    if not str(cfg.get("strm_proxy_base_url", "")).strip():
+        return "STRM 代理模式已启用，但 STRM 对外访问地址未填写"
     return None
 
 
@@ -5388,7 +5644,9 @@ async def build_resource_state_payload(search: str = "") -> Dict[str, Any]:
         "cookie_configured": bool(str(cfg.get("cookie_115", "")).strip()),
         "quark_cookie_configured": bool(str(cfg.get("cookie_quark", "")).strip()),
         "setup_status": {
-            "alist_configured": bool(str(cfg.get("alist_url", "")).strip()),
+            "strm_ready": bool(
+                str(cfg.get("cookie_115", "")).strip() and str(cfg.get("strm_proxy_base_url", "")).strip()
+            ),
             "cookie_configured": bool(str(cfg.get("cookie_115", "")).strip()),
             "quark_cookie_configured": bool(str(cfg.get("cookie_quark", "")).strip()),
             "has_sources": bool(enabled_sources),
@@ -5605,7 +5863,9 @@ def is_subpath(path: str, root: str) -> bool:
 
 def extract_webhook_refresh_path(task: Dict[str, Any], payload: Dict[str, Any], cfg: Dict[str, Any]) -> Optional[str]:
     scan_path = normalize_remote_path(task.get("scan_path", ""))
-    mount_path = normalize_remote_path(cfg.get("mount_path", "/115"))
+    mount_prefix = get_mount_prefix(cfg, "115")
+    if not mount_prefix:
+        return None
     candidates: List[str] = []
     savepath_raw = str(payload.get("savepath", "") or "").strip()
     savepath_rel = normalize_relative_path(savepath_raw)
@@ -5620,14 +5880,12 @@ def extract_webhook_refresh_path(task: Dict[str, Any], payload: Dict[str, Any], 
         # 优先定位本次转存子目录：savepath/sharetitle
         detailed_rel = join_relative_path(savepath_rel, sharetitle_rel)
         detailed_norm = normalize_remote_path("/" + detailed_rel)
-        candidates.append(detailed_norm)
-        candidates.append(join_remote_path(mount_path, detailed_norm))
+        candidates.append(join_remote_path(mount_prefix, detailed_norm))
 
     if savepath_rel:
         # savepath 支持 "连载中/xxx" 和 "/连载中/xxx" 两种写法
         save_norm = normalize_remote_path("/" + savepath_rel)
-        candidates.append(save_norm)
-        candidates.append(join_remote_path(mount_path, save_norm))
+        candidates.append(join_remote_path(mount_prefix, save_norm))
 
     seen = set()
     for candidate in candidates:
@@ -5637,9 +5895,12 @@ def extract_webhook_refresh_path(task: Dict[str, Any], payload: Dict[str, Any], 
         if is_subpath(candidate, scan_path):
             return candidate
 
-    # 兼容常见格式：savepath 通常是去掉挂载根后的路径
     if savepath_rel:
-        scan_tail = normalize_relative_path(scan_path[len(mount_path) :]) if scan_path.startswith(mount_path) else normalize_relative_path(scan_path)
+        scan_tail = (
+            normalize_relative_path(scan_path[len(mount_prefix) :])
+            if scan_path.startswith(mount_prefix)
+            else normalize_relative_path(scan_path)
+        )
         save_tail = savepath_rel
         if scan_tail and (scan_tail == save_tail or scan_tail.endswith("/" + save_tail) or save_tail.endswith("/" + scan_tail)):
             return scan_path
@@ -6430,6 +6691,56 @@ def submit_115_offline_task(cookie: str, resource_url: str, folder_id: str) -> D
     return response
 
 
+def throttle_115_api_requests(rate_limit_seconds: float = 0.0) -> None:
+    global _api_115_last_request_monotonic
+    min_interval = float(rate_limit_seconds or 0.0)
+    if min_interval <= 0:
+        min_interval = float(get_api_115_runtime_tuning().get("rate_limit_seconds", API_115_RATE_LIMIT_SECONDS) or 0.0)
+    if min_interval <= 0:
+        return
+    with _api_115_rate_limit_lock:
+        now_mono = time.monotonic()
+        wait_seconds = min_interval - (now_mono - _api_115_last_request_monotonic)
+        if wait_seconds > 0:
+            time.sleep(wait_seconds)
+        _api_115_last_request_monotonic = time.monotonic()
+
+
+def _clone_115_entries(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [dict(item or {}) for item in (entries or [])]
+
+
+def _prune_115_list_cache_locked(now_ts: float) -> None:
+    if not _api_115_list_cache:
+        return
+    expired_keys = [
+        key
+        for key, payload in _api_115_list_cache.items()
+        if now_ts >= float(payload.get("expires_at", 0.0) or 0.0)
+    ]
+    for key in expired_keys:
+        _api_115_list_cache.pop(key, None)
+    max_rows = max(200, int(API_115_LIST_CACHE_MAX_ROWS or 2000))
+    if len(_api_115_list_cache) <= max_rows:
+        return
+    ordered = sorted(
+        _api_115_list_cache.items(),
+        key=lambda item: float((item[1] or {}).get("updated_at", 0.0) or 0.0),
+    )
+    overflow = len(_api_115_list_cache) - max_rows
+    for key, _ in ordered[:overflow]:
+        _api_115_list_cache.pop(key, None)
+
+
+def invalidate_115_entries_cache(cid: str = "") -> None:
+    target_cid = str(cid or "").strip()
+    with _api_115_list_cache_lock:
+        if not target_cid:
+            _api_115_list_cache.clear()
+            return
+        _api_115_list_cache.pop(target_cid, None)
+
+
 def parse_int(value: Any, default: int = 0) -> int:
     try:
         return int(float(str(value or default).strip()))
@@ -6437,10 +6748,22 @@ def parse_int(value: Any, default: int = 0) -> int:
         return default
 
 
-def list_115_entries(cookie: str, cid: str = "0") -> List[Dict[str, Any]]:
+def list_115_entries(cookie: str, cid: str = "0", force_refresh: bool = False) -> List[Dict[str, Any]]:
     cookie = str(cookie or "").strip()
     if not cookie:
         raise RuntimeError("115 Cookie 未配置")
+    target_cid = str(cid or "0").strip() or "0"
+    runtime_tuning = get_api_115_runtime_tuning()
+    cache_ttl_seconds = max(0, int(runtime_tuning.get("list_cache_ttl_seconds", API_115_LIST_CACHE_TTL_SECONDS) or 0))
+
+    if (not force_refresh) and cache_ttl_seconds > 0:
+        now_ts = time.time()
+        with _api_115_list_cache_lock:
+            cached = _api_115_list_cache.get(target_cid)
+            if cached and now_ts < float(cached.get("expires_at", 0.0) or 0.0):
+                return _clone_115_entries(cached.get("entries", []))
+
+    throttle_115_api_requests()
     headers = {
         "Cookie": cookie,
         "Accept": "application/json, text/plain, */*",
@@ -6449,7 +6772,7 @@ def list_115_entries(cookie: str, cid: str = "0") -> List[Dict[str, Any]]:
     }
     url = (
         "https://aps.115.com/natsort/files.php"
-        f"?aid=1&cid={urllib.parse.quote(str(cid or '0'))}&offset=0&limit=300&show_dir=1&natsort=1&format=json"
+        f"?aid=1&cid={urllib.parse.quote(target_cid)}&offset=0&limit=300&show_dir=1&natsort=1&format=json"
     )
     result = http_request_json(url, extra_headers=headers, timeout=45)
     if not result.get("state", False):
@@ -6479,6 +6802,15 @@ def list_115_entries(cookie: str, cid: str = "0") -> List[Dict[str, Any]]:
             }
         )
     entries.sort(key=lambda item: (0 if item["is_dir"] else 1, str(item["name"]).lower()))
+    if cache_ttl_seconds > 0:
+        now_ts = time.time()
+        with _api_115_list_cache_lock:
+            _api_115_list_cache[target_cid] = {
+                "entries": _clone_115_entries(entries),
+                "updated_at": now_ts,
+                "expires_at": now_ts + cache_ttl_seconds,
+            }
+            _prune_115_list_cache_locked(now_ts)
     return entries
 
 
@@ -6523,7 +6855,7 @@ def create_115_folder(cookie: str, cid: str = "0", folder_name: str = "") -> Dic
         return next((item for item in candidates if item and item != "0"), "")
 
     def find_existing_folder_id() -> str:
-        entries = list_115_entries(cookie, parent_cid)
+        entries = list_115_entries(cookie, parent_cid, True)
         matched = next(
             (
                 entry
@@ -6552,6 +6884,7 @@ def create_115_folder(cookie: str, cid: str = "0", folder_name: str = "") -> Dic
         folder_id = find_existing_folder_id()
     if not folder_id:
         raise RuntimeError("文件夹已创建，但未获取到目录 ID")
+    invalidate_115_entries_cache(parent_cid)
 
     return {
         "id": folder_id,
@@ -8183,78 +8516,13 @@ def fetch_telegram_channel_post_samples(
     }
 
 
-def http_download(url: str, target_path: str, token: str = "", timeout: int = 60) -> None:
-    url = normalize_http_url(url)
-    headers = {"Authorization": token} if token else {}
-    req = urllib.request.Request(url, headers=headers, method="GET")
-    with urllib.request.urlopen(req, timeout=timeout) as resp, open(target_path, "wb") as f:
-        shutil.copyfileobj(resp, f)
-
-
-def extract_tree_remote_path(tree_url: str, base_url: str) -> Optional[str]:
-    cleaned_url = str(tree_url or "").strip()
-    base_url = str(base_url or "").strip().rstrip("/")
-    if not cleaned_url or not base_url:
-        return None
-
-    if "://" not in cleaned_url:
-        prefix = "" if cleaned_url.startswith("/") else "/"
-        cleaned_url = f"{base_url}{prefix}{cleaned_url}"
-
-    try:
-        base_parts = urllib.parse.urlsplit(base_url)
-        tree_parts = urllib.parse.urlsplit(cleaned_url)
-    except Exception:
-        return None
-
-    if base_parts.netloc and tree_parts.netloc:
-        if tree_parts.netloc.lower() != base_parts.netloc.lower():
-            return None
-    elif not cleaned_url.startswith(base_url):
-        return None
-
-    path = tree_parts.path or ""
-    marker_idx = path.lower().find("/d")
-    if marker_idx == -1:
-        return None
-    encoded = path[marker_idx + 2 :].lstrip("/")
-    if not encoded:
-        return None
-    remote_path = urllib.parse.unquote(encoded)
-    if not remote_path.startswith("/"):
-        remote_path = "/" + remote_path.lstrip("/")
-    return remote_path
-
-
-async def refresh_tree_file(tree_url: str, cfg: Dict[str, Any]) -> None:
-    remote_path = extract_tree_remote_path(tree_url, cfg.get("alist_url", ""))
-    if not remote_path:
-        return
-    parent_dir = os.path.dirname(remote_path) or "/"
-    try:
-        await api_post(
-            cfg,
-            "/api/fs/list",
-            {
-                "path": parent_dir,
-                "password": "",
-                "page": 1,
-                "per_page": 0,
-                "refresh": True,
-            },
-        )
-        await write_log(f"已刷新目录树所在目录: {parent_dir}")
-    except Exception as exc:
-        await write_log(f"⚠ 目录树刷新失败（{parent_dir}）: {exc}")
-
-
-async def api_post(cfg: Dict[str, Any], path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    url = cfg["alist_url"].rstrip("/") + path
-    token = str(cfg.get("alist_token", "")).strip()
-    result = await asyncio.to_thread(http_request_json, url, "POST", payload, token, 45)
-    if result.get("code") not in (200, None):
-        raise RuntimeError(result.get("message") or result.get("msg") or "AList API 请求失败")
-    return result
+def build_strm_play_url(cfg: Dict[str, Any], remote_path: str) -> str:
+    normalized_remote_path = normalize_remote_path(remote_path)
+    query = urllib.parse.urlencode({"path": normalized_remote_path})
+    proxy_base_url = str(cfg.get("strm_proxy_base_url", "")).strip().rstrip("/")
+    if proxy_base_url:
+        return f"{proxy_base_url}/strm/proxy?{query}"
+    return f"/strm/proxy?{query}"
 
 
 async def list_remote_dir(
@@ -8263,24 +8531,34 @@ async def list_remote_dir(
     refresh: bool,
     task: Dict[str, Any],
 ) -> Tuple[str, List[Dict[str, Any]]]:
+    cookie = str(cfg.get("cookie_115", "")).strip()
+    if not cookie:
+        raise RuntimeError("请先在参数配置中填写 115 Cookie")
+    _, normalized_rel = resolve_provider_relative_path(cfg, remote_path, expected_provider="115")
     retries = task["retries"]
     last_error = None
     for attempt in range(1, retries + 1):
         try:
-            result = await api_post(
-                cfg,
-                "/api/fs/list",
-                {
-                    "path": remote_path,
-                    "password": "",
-                    "page": 1,
-                    "per_page": 0,
-                    "refresh": refresh,
-                },
-            )
-            content = result.get("data") or {}
-            items = content.get("content") or []
-            modified = str(content.get("modified") or "")
+            cid = resolve_115_folder_id_by_path(cookie, normalized_rel) if normalized_rel else "0"
+            entries = await asyncio.to_thread(list_115_entries, cookie, cid, bool(refresh))
+            items: List[Dict[str, Any]] = []
+            modified = ""
+            for entry in entries:
+                name = str(entry.get("name", "")).strip()
+                if not name:
+                    continue
+                modified_at = str(entry.get("modified_at", "")).strip()
+                if modified_at and (not modified or modified_at > modified):
+                    modified = modified_at
+                items.append(
+                    {
+                        "name": name,
+                        "is_dir": bool(entry.get("is_dir")),
+                        "modified": modified_at,
+                        "size": int(entry.get("size", 0) or 0),
+                        "pick_code": str(entry.get("pick_code", "")).strip(),
+                    }
+                )
             return modified, items
         except Exception as exc:
             last_error = exc
@@ -8292,11 +8570,6 @@ async def list_remote_dir(
             )
             await asyncio.sleep(min(2, attempt))
     raise RuntimeError(str(last_error) if last_error else "目录读取失败")
-
-
-async def download_tree(url: str, raw_path: str, cfg: Dict[str, Any]) -> None:
-    token = str(cfg.get("alist_token", "")).strip()
-    await asyncio.to_thread(http_download, url, raw_path, token, 120)
 
 
 def parse_last_hash_state(raw: Any) -> Dict[str, Any]:
@@ -8320,8 +8593,10 @@ def build_tree_cache_key(tree: Dict[str, Any]) -> str:
         exclude_val = max(1, int(tree.get("exclude", 1) or 1))
     except (TypeError, ValueError):
         exclude_val = 1
+    tree_source = str(tree.get("path", "")).strip()
     payload = {
-        "url": str(tree.get("url", "")).strip(),
+        "source_type": normalize_tree_source_type(tree.get("source_type", "tree_file"), fallback="tree_file"),
+        "path": tree_source,
         "prefix": normalize_relative_path(tree.get("prefix", "")),
         "exclude": exclude_val,
     }

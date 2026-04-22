@@ -175,7 +175,7 @@
         const SIGN115_REFRESH_INTERVAL = 1000 * 60;
         const VERSION_FALLBACK_PROJECT_URL = 'https://github.com/xianer235/115-media-hub';
         const VERSION_FALLBACK_CHANGELOG_URL = 'https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md';
-        const ABOUT_WORKFLOW_IMAGE_URL = '/static/images/about-workflow-cookie-openlist.png';
+        const ABOUT_WORKFLOW_IMAGE_URL = '/static/images/about-workflow-115-container.png';
         const RESOURCE_FOLDER_MEMORY_KEY = 'resource-folder-selection-v1';
         const RESOURCE_IMPORT_DELAY_MEMORY_KEY = 'resource-import-delay-seconds-v1';
         const RESOURCE_QUICK_LINKS_MEMORY_KEY = 'resource-quick-links-v1';
@@ -1220,20 +1220,47 @@
             hideLockedModal('about-workflow-modal');
         }
 
-        function addTreeRow(data = {url: '', prefix: '', exclude: 1}) {
+        function normalizeMountProviderInput(value) {
+            const raw = String(value || '').trim().toLowerCase();
+            if (!raw) return '';
+            if (['115share', 'magnet115'].includes(raw)) return '115';
+            if (['pan.quark', 'quarkshare', 'quark_pan'].includes(raw)) return 'quark';
+            return raw.replace(/[^a-z0-9_.-]/g, '');
+        }
+
+        const BUILTIN_MOUNT_POINTS = Object.freeze([
+            Object.freeze({ provider: '115', prefix: '/115' }),
+            Object.freeze({ provider: 'quark', prefix: '/quark' }),
+        ]);
+
+        function getBuiltinMountPoints() {
+            return BUILTIN_MOUNT_POINTS.map(item => ({ provider: item.provider, prefix: item.prefix }));
+        }
+
+        function getMountPrefixByProvider(provider) {
+            const providerKey = normalizeMountProviderInput(provider);
+            if (!providerKey) return '';
+            const points = getBuiltinMountPoints();
+            const matched = points.find(item => normalizeMountProviderInput(item.provider) === providerKey);
+            return matched ? normalizeRemotePathInput(matched.prefix || '') : '';
+        }
+
+        function addTreeRow(data = { path: '', prefix: '', exclude: 1 }) {
             const container = document.getElementById('trees-container');
             const row = document.createElement('div');
             row.className = "tree-row grid grid-cols-12 gap-3 items-end bg-slate-900/50 p-4 rounded-2xl border border-slate-800 hover:border-slate-700 transition-colors";
+            const sourcePath = String(data.path || '').trim();
             row.innerHTML = `
-                <div class="col-span-12 md:col-span-5">
-                    <span class="text-[10px] text-slate-500 ml-1 font-bold uppercase">目录树下载 URL</span>
-                    <input class="t-url w-full bg-slate-950 border-slate-700 rounded-lg p-2.5 text-sm mt-1 outline-none focus:border-sky-500" value="${escapeHtml(data.url)}" placeholder="AList/OpenList 中的 tree.txt 下载链接">
+                <div class="col-span-12 md:col-span-6">
+                    <span class="text-[10px] text-slate-500 ml-1 font-bold uppercase">115 目录树文件路径（相对 115 根目录）</span>
+                    <input class="t-url w-full bg-slate-950 border-slate-700 rounded-lg p-2.5 text-sm mt-1 outline-none focus:border-sky-500" value="${escapeHtml(sourcePath)}" placeholder="例如 目录树.txt 或 子目录/目录树.txt">
+                    <div class="text-[10px] text-slate-500 leading-4 mt-1">根目录填 目录树.txt；子目录填 子目录/目录树.txt。兼容 /目录树.txt、/115/目录树.txt、完整 URL。</div>
                 </div>
-                <div class="col-span-7 md:col-span-4">
+                <div class="col-span-6 md:col-span-4">
                     <span class="text-[10px] text-slate-500 ml-1 font-bold uppercase">父文件夹路径前缀 (选填)</span>
                     <input class="t-prefix w-full bg-slate-950 border-slate-700 rounded-lg p-2.5 text-sm mt-1 outline-none focus:border-sky-500" value="${escapeHtml(data.prefix)}" placeholder="补全丢失的路径，如: 电影/漫威">
                 </div>
-                <div class="col-span-3 md:col-span-2">
+                <div class="col-span-4 md:col-span-1">
                     <span class="text-[10px] text-slate-500 ml-1 font-bold uppercase">排除层级</span>
                     <input type="number" min="1" class="t-exclude w-full bg-slate-950 border-slate-700 rounded-lg p-2.5 text-sm mt-1 outline-none focus:border-sky-500" value="${Number(data.exclude || 1)}">
                 </div>
@@ -1705,8 +1732,10 @@
         async function saveSettings() {
             const cfg = {};
             const standardIds = [
-                'alist_url',
-                'alist_token',
+                'strm_proxy_base_url',
+                'api_115_rate_limit_seconds',
+                'api_115_list_cache_ttl_seconds',
+                'api_115_download_url_cache_ttl_seconds',
                 'cookie_115',
                 'cookie_quark',
                 'sign115_cron_time',
@@ -1722,7 +1751,6 @@
                 'tmdb_api_key',
                 'tmdb_language',
                 'tmdb_region',
-                'mount_path',
                 'cron_hour',
                 'sync_mode',
                 'extensions',
@@ -1750,10 +1778,11 @@
             cfg.trees = [];
 
             document.querySelectorAll('.tree-row').forEach(row => {
-                const url = row.querySelector('.t-url').value.trim();
-                if (url) {
+                const path = row.querySelector('.t-url').value.trim();
+                if (path) {
                     cfg.trees.push({
-                        url,
+                        source_type: 'tree_file',
+                        path,
                         prefix: row.querySelector('.t-prefix').value.trim(),
                         exclude: parseInt(row.querySelector('.t-exclude').value || '1', 10) || 1
                     });
@@ -4882,7 +4911,7 @@
             const tasks = Array.isArray(resourceState.monitor_tasks) && resourceState.monitor_tasks.length
                 ? resourceState.monitor_tasks
                 : (monitorState.tasks || []);
-            const mountPath = normalizeRemotePathInput(document.getElementById('mount_path')?.value || '/115');
+            const mountPath = normalizeRemotePathInput(getMountPrefixByProvider('115') || '/115');
             const fullPath = normalizeRemotePathInput(joinRelativePathInput(mountPath, normalizedSavepath));
             let matchedTask = null;
             let bestDepth = -1;
@@ -4956,8 +4985,8 @@
                 return;
             }
             const monitorHint = match.taskName
-                ? `当前保存路径会映射到 OpenList 的 ${match.fullPath}，命中文件夹监控任务“${match.taskName}”，保存完成后会自动触发生成 strm。`
-                : `当前保存路径会映射到 OpenList 的 ${match.fullPath}，未命中文件夹监控任务，保存后不会自动生成 strm。`;
+                ? `当前保存路径会映射到 115 路径 ${match.fullPath}，命中文件夹监控任务“${match.taskName}”，保存完成后会自动触发生成 strm。`
+                : `当前保存路径会映射到 115 路径 ${match.fullPath}，未命中文件夹监控任务，保存后不会自动生成 strm。`;
             hintEl.innerText = `${selectionHint} ${monitorHint}`.trim();
         }
 
@@ -5290,8 +5319,9 @@
             const hasMonitor = !!setupStatus.has_monitor;
             const hasResourceData = !!setupStatus.has_resource_data;
             const hasJobs = !!setupStatus.has_jobs;
+            const strmReady = !!setupStatus.strm_ready;
             const steps = [
-                { label: '配置 AList/OpenList', done: !!setupStatus.alist_configured, tab: 'settings', meta: '播放链接基础配置' },
+                { label: '配置 115 与播放', done: strmReady, tab: 'settings', meta: '播放链接基础配置' },
                 { label: '配置网盘 Cookie', done: hasCookie, tab: 'settings', meta: '启用导入/转存能力' },
                 { label: '同步频道资源', done: hasSources && hasResourceData, tab: 'resource', meta: '先同步再搜索导入' },
                 { label: '创建监控任务', done: hasMonitor, tab: 'monitor', meta: '用于自动生成 strm' },

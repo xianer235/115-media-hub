@@ -303,7 +303,7 @@ async def create_resource_job_endpoint(request: Request) -> Dict[str, Any]:
         matched_monitor: Dict[str, Any] = {}
         monitor_task_name = ""
         if link_type != "quark":
-            matched_monitor = match_monitor_task_for_savepath(cfg, savepath)
+            matched_monitor = match_monitor_task_for_savepath(cfg, savepath, provider="115")
             monitor_task_name = matched_monitor.get("task_name", "")
         folder_id = provided_folder_id
         if not folder_id or folder_id == "0":
@@ -346,7 +346,7 @@ async def create_resource_job_endpoint(request: Request) -> Dict[str, Any]:
         "job_id": job_id,
         "monitor_task_name": monitor_task_name if link_type != "quark" else "",
         "auto_refresh": payload["auto_refresh"],
-        "openlist_path": matched_monitor.get("full_path", "") if link_type != "quark" else "",
+        "monitor_scan_path": matched_monitor.get("full_path", "") if link_type != "quark" else "",
     }
 
 
