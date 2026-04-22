@@ -131,6 +131,7 @@
         let versionInfo = { local: null, latest: null, has_update: false, checked_at: 0, error: '', source: '' };
         let versionBannerDismissed = false;
         let currentTab = 'resource';
+        let resourceStateHydrated = false;
         const moduleScrollTopState = {
             resource: 0,
             subscription: 0,
@@ -139,6 +140,10 @@
             settings: 0,
             about: 0
         };
+        const tabModuleCache = {};
+        let tabSwitchTicket = 0;
+        let suppressHashTabSync = false;
+        let shellTabRouterPromise = null;
         let shellMoreMenuOpen = false;
         let shellRailExpanded = false;
         let aboutWorkflowImageLoaded = false;
@@ -191,6 +196,97 @@
             7: '周日'
         };
         const SUBSCRIPTION_DEFAULT_WEEKDAYS = [1, 2, 3, 4, 5, 6, 7];
+        const SHELL_TAB_IDS = Object.freeze(['task', 'resource', 'subscription', 'settings', 'monitor', 'about']);
+        const TAB_MODULE_IMPORT_PATHS = Object.freeze({
+            resource: '/static/js/modules/tabs/resource.js',
+            subscription: '/static/js/modules/tabs/subscription.js',
+            monitor: '/static/js/modules/tabs/monitor.js',
+            task: '/static/js/modules/tabs/task.js',
+            settings: '/static/js/modules/tabs/settings.js',
+            about: '/static/js/modules/tabs/about.js',
+        });
+        const TAB_HASH_SYNC_IMPORT_PATH = '/static/js/modules/tabs/url-sync.js';
+
+        function getWindowScrollTop() {
+            if (document.body.classList.contains('body-scroll-lock')) {
+                return Math.max(0, Number(modalScrollLockY || 0));
+            }
+            return Math.max(0, window.scrollY || window.pageYOffset || 0);
+        }
+
+        function restoreWindowScrollTop(value = 0) {
+            const target = Math.max(0, Number(value || 0));
+            if (document.body.classList.contains('body-scroll-lock')) {
+                modalScrollLockY = target;
+                document.body.style.top = `-${target}px`;
+                return;
+            }
+            window.scrollTo(0, target);
+        }
+
+        function restoreTabScrollPosition(tab) {
+            const targetScrollTop = Math.max(0, Number(moduleScrollTopState[tab] || 0));
+            restoreWindowScrollTop(targetScrollTop);
+            window.requestAnimationFrame(() => {
+                restoreWindowScrollTop(Math.max(0, Number(moduleScrollTopState[tab] || 0)));
+                syncResourceBackTopButton();
+                syncSettingsSaveDock();
+            });
+        }
+
+        function createTabModuleContext() {
+            return {
+                moduleVisitState,
+                refreshResourceState,
+                refreshSubscriptionState,
+                refreshMonitorState,
+                refreshMainLogs,
+                refreshVersionInfo,
+                versionInfo,
+                isResourceStateHydrated: () => resourceStateHydrated,
+            };
+        }
+
+        async function loadTabModule(tab) {
+            const normalized = String(tab || '').trim().toLowerCase();
+            if (!normalized || !TAB_MODULE_IMPORT_PATHS[normalized]) return null;
+            if (tabModuleCache[normalized]) return tabModuleCache[normalized];
+            try {
+                const mod = await import(TAB_MODULE_IMPORT_PATHS[normalized]);
+                tabModuleCache[normalized] = mod;
+                return mod;
+            } catch (e) {
+                return null;
+            }
+        }
+
+        async function loadShellTabRouterModule() {
+            if (shellTabRouterPromise) return shellTabRouterPromise;
+            shellTabRouterPromise = import(TAB_HASH_SYNC_IMPORT_PATH).catch(() => null);
+            return shellTabRouterPromise;
+        }
+
+        async function readTabFromLocationHash() {
+            const router = await loadShellTabRouterModule();
+            if (!router?.readTabFromHash) return '';
+            return router.readTabFromHash(SHELL_TAB_META, window.location.hash);
+        }
+
+        async function syncLocationHashWithTab(tab, { replace = false } = {}) {
+            const router = await loadShellTabRouterModule();
+            if (!router?.buildHashWithTab) return;
+            const nextHash = router.buildHashWithTab(tab, window.location.hash);
+            if (!nextHash || nextHash === window.location.hash) return;
+            if (replace) {
+                history.replaceState(null, '', `${window.location.pathname}${window.location.search}${nextHash}`);
+                return;
+            }
+            suppressHashTabSync = true;
+            window.location.hash = nextHash;
+            window.setTimeout(() => {
+                suppressHashTabSync = false;
+            }, 0);
+        }
 
         function lockPageScroll() {
             if (modalScrollLockCount === 0) {
@@ -225,7 +321,7 @@
             if (!btn || !resourcePage) return;
             const isResourceVisible = !resourcePage.classList.contains('hidden');
             const isModalLocked = document.body.classList.contains('body-scroll-lock');
-            const scrollTop = Math.max(0, window.scrollY || window.pageYOffset || 0);
+            const scrollTop = getWindowScrollTop();
             const shouldShow = isResourceVisible && !isModalLocked && scrollTop > 360;
             btn.classList.toggle('hidden', !shouldShow);
         }
@@ -243,7 +339,7 @@
             }
 
             const viewportHeight = Math.max(0, window.innerHeight || document.documentElement.clientHeight || 0);
-            const scrollTop = Math.max(0, window.scrollY || window.pageYOffset || 0);
+            const scrollTop = getWindowScrollTop();
             const docHeight = Math.max(document.body.scrollHeight || 0, document.documentElement.scrollHeight || 0);
             const footer = document.querySelector('footer.footer-text');
             const nearDocumentEnd = scrollTop + viewportHeight >= docHeight - 4;
@@ -377,9 +473,14 @@
         }
 
         async function ensureTabData(tab) {
+            const tabModule = await loadTabModule(tab);
+            if (tabModule && typeof tabModule.ensureTabData === 'function') {
+                await tabModule.ensureTabData(createTabModuleContext());
+                return;
+            }
             if (tab === 'resource') {
                 moduleVisitState.resource = true;
-                await refreshResourceState();
+                if (!resourceStateHydrated) await refreshResourceState();
                 return;
             }
             if (tab === 'subscription' && !moduleVisitState.subscription) {
@@ -407,23 +508,29 @@
             }
         }
 
-        async function switchTab(tab) {
+        async function switchTab(tab, { syncHash = true, replaceHash = false } = {}) {
             const nextTab = SHELL_TAB_META[tab] ? tab : 'resource';
             const prevTab = currentTab;
-            moduleScrollTopState[prevTab] = Math.max(0, window.scrollY || window.pageYOffset || 0);
+            if (nextTab === prevTab) {
+                if (syncHash) await syncLocationHashWithTab(nextTab, { replace: replaceHash });
+                syncMainTabRowState();
+                focusMainTab(nextTab);
+                return;
+            }
+            moduleScrollTopState[prevTab] = getWindowScrollTop();
             currentTab = nextTab;
-            ['task', 'resource', 'subscription', 'settings', 'monitor', 'about'].forEach(name => {
+            const switchTicket = ++tabSwitchTicket;
+            SHELL_TAB_IDS.forEach(name => {
                 const page = document.getElementById(`page-${name}`);
                 if (page) page.classList.toggle('hidden', nextTab !== name);
             });
             if (nextTab !== 'resource') toggleResourceJobModal(false);
             closeShellMoreMenu();
             syncMainTabRowState();
+            if (syncHash) await syncLocationHashWithTab(nextTab, { replace: replaceHash });
             await ensureTabData(nextTab);
-            const targetScrollTop = Math.max(0, Number(moduleScrollTopState[nextTab] || 0));
-            window.scrollTo(0, targetScrollTop);
-            syncResourceBackTopButton();
-            syncSettingsSaveDock();
+            if (switchTicket !== tabSwitchTicket || currentTab !== nextTab) return;
+            restoreTabScrollPosition(nextTab);
             focusMainTab(nextTab);
         }
 
@@ -593,7 +700,7 @@
             const raw = String(label || '').trim();
             if (!raw) return '';
             if (/(任务开始|订阅开始)/.test(raw)) return 'start';
-            if (/(执行成功|订阅成功|已完成|完成)/.test(raw)) return 'success';
+            if (/(执行成功|订阅成功|已完成|完成|已结束)/.test(raw)) return 'success';
             if (/(已中断|中断|取消)/.test(raw)) return 'warn';
             if (/(执行失败|失败|异常|错误)/.test(raw)) return 'error';
             return '';
@@ -5403,6 +5510,7 @@
                 if (!res.ok) return null;
                 const data = await res.json();
                 applyResourceState(data);
+                resourceStateHydrated = true;
                 return data;
             } catch (e) {
                 return null;
@@ -5429,6 +5537,7 @@
                         filtered_item_count: keptFilteredCount,
                     },
                 });
+                resourceStateHydrated = true;
                 return data;
             } catch (e) {
                 return null;
@@ -9953,6 +10062,14 @@
                 updateThemeToggleButton(isDay);
             } catch (e) {}
         }
+        window.addEventListener('hashchange', () => {
+            if (suppressHashTabSync) return;
+            Promise.resolve().then(async () => {
+                const targetTab = await readTabFromLocationHash();
+                if (!targetTab || targetTab === currentTab) return;
+                await switchTab(targetTab, { syncHash: false });
+            });
+        });
         syncViewportMetrics();
         applyThemeFromStorage();
         loadResourceQuickLinksFromStorage();
@@ -9962,6 +10079,14 @@
         syncSettingsSaveDock();
         syncMainTabRowState();
         refreshResourceState();
+        Promise.resolve().then(async () => {
+            const initialTab = await readTabFromLocationHash();
+            if (initialTab && initialTab !== currentTab) {
+                await switchTab(initialTab, { syncHash: false });
+                return;
+            }
+            await syncLocationHashWithTab(currentTab, { replace: true });
+        });
         initPromise.finally(() => {
             moduleVisitState.settings = true;
             connectStatusStream();
