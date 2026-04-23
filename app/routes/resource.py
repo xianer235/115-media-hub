@@ -8,6 +8,9 @@ from ..services.resource import cancel_resource_job, retry_resource_job, run_res
 
 router = APIRouter()
 resource_job_create_lock = asyncio.Lock()
+RESOURCE_SHARE_BROWSE_TIMEOUT_SECONDS = 30
+RESOURCE_SHARE_BROWSE_RATE_LIMIT_SECONDS = 0.25
+RESOURCE_SHARE_BROWSE_MAX_RETRIES = 1
 
 
 def _build_resource_jobs_state_snapshot(limit: int = 40) -> Dict[str, Any]:
@@ -389,15 +392,21 @@ async def get_115_folders_endpoint(request: Request) -> Dict[str, Any]:
     if not cookie:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "请先配置 115 Cookie"})
     cid = str(request.query_params.get("cid", "0") or "0").strip() or "0"
+    folders_only = request.query_params.get("folders_only") == "1"
     try:
-        entries = await asyncio.to_thread(list_115_entries, cookie, cid)
-        folders = [{"id": str(entry.get("id", "")).strip(), "name": str(entry.get("name", "")).strip()} for entry in entries if entry.get("is_dir")]
-        files = [entry for entry in entries if not entry.get("is_dir")]
+        entries_all = await asyncio.to_thread(list_115_entries, cookie, cid)
+        folder_entries = [entry for entry in entries_all if entry.get("is_dir")]
+        files = [entry for entry in entries_all if not entry.get("is_dir")]
+        entries = folder_entries if folders_only else entries_all
+        folders = [
+            {"id": str(entry.get("id", "")).strip(), "name": str(entry.get("name", "")).strip()}
+            for entry in folder_entries
+        ]
         return {
             "ok": True,
             "cid": cid,
             "folders": folders,
-            "files": files,
+            "files": [] if folders_only else files,
             "entries": entries,
             "summary": {
                 "folder_count": len(folders),
@@ -460,9 +469,9 @@ async def get_115_share_entries_endpoint(request: Request) -> Dict[str, Any]:
             cid,
             receive_code,
             False,
-            45,
-            0.0,
-            2,
+            RESOURCE_SHARE_BROWSE_TIMEOUT_SECONDS,
+            RESOURCE_SHARE_BROWSE_RATE_LIMIT_SECONDS,
+            RESOURCE_SHARE_BROWSE_MAX_RETRIES,
             offset,
             limit,
             1 if paged else 0,
@@ -520,9 +529,9 @@ async def preview_115_share_entries_endpoint(request: Request) -> Dict[str, Any]
             cid,
             receive_code,
             False,
-            45,
-            0.0,
-            2,
+            RESOURCE_SHARE_BROWSE_TIMEOUT_SECONDS,
+            RESOURCE_SHARE_BROWSE_RATE_LIMIT_SECONDS,
+            RESOURCE_SHARE_BROWSE_MAX_RETRIES,
             offset,
             limit,
             1 if paged else 0,
@@ -558,15 +567,21 @@ async def get_quark_folders_endpoint(request: Request) -> Dict[str, Any]:
     if not cookie:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "请先配置 Quark Cookie"})
     cid = str(request.query_params.get("cid", "0") or "0").strip() or "0"
+    folders_only = request.query_params.get("folders_only") == "1"
     try:
-        entries = await asyncio.to_thread(list_quark_entries, cookie, cid)
-        folders = [{"id": str(entry.get("id", "")).strip(), "name": str(entry.get("name", "")).strip()} for entry in entries if entry.get("is_dir")]
-        files = [entry for entry in entries if not entry.get("is_dir")]
+        entries_all = await asyncio.to_thread(list_quark_entries, cookie, cid)
+        folder_entries = [entry for entry in entries_all if entry.get("is_dir")]
+        files = [entry for entry in entries_all if not entry.get("is_dir")]
+        entries = folder_entries if folders_only else entries_all
+        folders = [
+            {"id": str(entry.get("id", "")).strip(), "name": str(entry.get("name", "")).strip()}
+            for entry in folder_entries
+        ]
         return {
             "ok": True,
             "cid": cid,
             "folders": folders,
-            "files": files,
+            "files": [] if folders_only else files,
             "entries": entries,
             "summary": {
                 "folder_count": len(folders),

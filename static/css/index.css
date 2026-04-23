@@ -5880,6 +5880,15 @@
             border: 1px solid #334155 !important;
         }
         html.theme-day #monitor-modal button.bg-slate-700:hover { background: #334155 !important; }
+        html.theme-day #page-monitor button.bg-slate-700 {
+            background: #475569 !important;
+            color: #ffffff !important;
+            border: 1px solid #334155 !important;
+        }
+        html.theme-day #page-monitor button.bg-slate-700:hover {
+            background: #334155 !important;
+            color: #ffffff !important;
+        }
         html.theme-day #page-subscription button.bg-slate-700 {
             background: #475569 !important;
             color: #ffffff !important;

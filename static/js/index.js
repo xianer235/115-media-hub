@@ -32,6 +32,8 @@
         let resourceFolderSummary = { folder_count: 0, file_count: 0 };
         let resourceFolderLoading = false;
         let resourceFolderCreateBusy = false;
+        let resourceFolderRequestToken = 0;
+        let resourceFolderBranchCache = {};
         let subscriptionFolderTrail = [{ id: '0', name: '根目录' }];
         let subscriptionFolderEntries = [];
         let subscriptionFolderSummary = { folder_count: 0, file_count: 0 };
@@ -83,6 +85,7 @@
         let resourceShareTrail = [{ cid: '0', name: '分享根目录' }];
         let resourceShareCurrentCid = '0';
         let resourceShareRequestToken = 0;
+        let resourceShareBranchCache = {};
         let resourceSectionCollapsed = {};
         let resourceSearchBusy = false;
         let resourceSyncBusy = false;
@@ -204,7 +207,9 @@
         const TOAST_DEFAULT_DURATION_MS = 3000;
         const SUBSCRIPTION_EPISODE_CACHE_TTL_MS = 1000 * 60 * 3;
         const SUBSCRIPTION_INTRO_EPISODE_RETRY_MS = 1000 * 60;
-        const RESOURCE_SHARE_BROWSE_PAGE_LIMIT = 200;
+        const RESOURCE_FOLDER_BRANCH_CACHE_TTL_MS = 1000 * 60 * 5;
+        const RESOURCE_SHARE_BRANCH_CACHE_TTL_MS = 1000 * 60 * 10;
+        const RESOURCE_SHARE_BROWSE_PAGE_LIMIT = 120;
         const SUBSCRIPTION_WEEKDAY_LABELS = {
             1: '周一',
             2: '周二',
@@ -7697,9 +7702,76 @@
             syncResourceJobModalTrigger();
         }
 
-        async function fetchResourceFolderData(cid = '0', { provider = '115' } = {}) {
+        function cloneJsonValue(value, fallback = null) {
+            try {
+                return JSON.parse(JSON.stringify(value));
+            } catch (e) {
+                return fallback;
+            }
+        }
+
+        function normalizeResourceProviderCacheKey(provider = '115') {
+            return normalizeSubscriptionProvider(provider, '115') === 'quark' ? 'quark' : '115';
+        }
+
+        function buildResourceFolderBranchCacheKey(cid = '0', { provider = '115', foldersOnly = false } = {}) {
+            const normalizedCid = String(cid || '0').trim() || '0';
+            const providerKey = normalizeResourceProviderCacheKey(provider);
+            return `${providerKey}|${foldersOnly ? '1' : '0'}|${normalizedCid}`;
+        }
+
+        function pruneResourceFolderBranchCache() {
+            const now = Date.now();
+            Object.keys(resourceFolderBranchCache || {}).forEach((key) => {
+                const cached = resourceFolderBranchCache[key];
+                const cachedAt = Number(cached?.cached_at || 0);
+                if (!cached || !cachedAt || (now - cachedAt) > RESOURCE_FOLDER_BRANCH_CACHE_TTL_MS) {
+                    delete resourceFolderBranchCache[key];
+                }
+            });
+        }
+
+        function getResourceFolderBranchCache(cid = '0', options = {}) {
+            pruneResourceFolderBranchCache();
+            const cacheKey = buildResourceFolderBranchCacheKey(cid, options);
+            const cached = resourceFolderBranchCache[cacheKey];
+            if (!cached) return null;
+            return {
+                entries: cloneJsonValue(cached.entries, []),
+                summary: cloneJsonValue(cached.summary, { folder_count: 0, file_count: 0 })
+            };
+        }
+
+        function setResourceFolderBranchCache(cid = '0', payload = {}, options = {}) {
+            const entries = Array.isArray(payload?.entries) ? payload.entries : [];
+            const summary = payload?.summary || { folder_count: 0, file_count: 0 };
+            const cacheKey = buildResourceFolderBranchCacheKey(cid, options);
+            resourceFolderBranchCache[cacheKey] = {
+                entries: cloneJsonValue(entries, []),
+                summary: cloneJsonValue(summary, { folder_count: 0, file_count: 0 }),
+                cached_at: Date.now()
+            };
+            pruneResourceFolderBranchCache();
+        }
+
+        function invalidateResourceFolderBranchCache(provider = '') {
+            const providerKey = String(provider || '').trim()
+                ? normalizeResourceProviderCacheKey(provider)
+                : '';
+            if (!providerKey) {
+                resourceFolderBranchCache = {};
+                return;
+            }
+            Object.keys(resourceFolderBranchCache || {}).forEach((key) => {
+                if (key.startsWith(`${providerKey}|`)) delete resourceFolderBranchCache[key];
+            });
+        }
+
+        async function fetchResourceFolderData(cid = '0', { provider = '115', foldersOnly = false } = {}) {
             const apiPrefix = getResourceFolderApiPrefix(provider);
-            const res = await fetch(`${apiPrefix}/folders?cid=${encodeURIComponent(String(cid || '0'))}`);
+            const params = new URLSearchParams({ cid: String(cid || '0') });
+            if (foldersOnly) params.set('folders_only', '1');
+            const res = await fetch(`${apiPrefix}/folders?${params.toString()}`);
             const data = await res.json();
             if (!res.ok || !data.ok) throw new Error(data.msg || '读取目录失败');
             return {
@@ -7724,6 +7796,82 @@
             const data = await res.json();
             if (!res.ok || !data.ok) throw new Error(data.msg || '新建文件夹失败');
             return data;
+        }
+
+        function buildResourceShareBranchCacheKey(resourceId, item, receiveCode = '') {
+            const resolvedId = Math.max(0, Number(resourceId || item?.id || 0));
+            const linkUrl = String(item?.link_url || '').trim();
+            if (!linkUrl) return '';
+            const normalizedCode = normalizeReceiveCodeInput(receiveCode);
+            return `${resolvedId}|${linkUrl}|${normalizedCode || '-'}`;
+        }
+
+        function pruneResourceShareBranchCache() {
+            const now = Date.now();
+            Object.keys(resourceShareBranchCache || {}).forEach((key) => {
+                const cached = resourceShareBranchCache[key];
+                const cachedAt = Number(cached?.cached_at || 0);
+                if (!cached || !cachedAt || (now - cachedAt) > RESOURCE_SHARE_BRANCH_CACHE_TTL_MS) {
+                    delete resourceShareBranchCache[key];
+                }
+            });
+        }
+
+        function saveResourceShareBranchCache(resourceId, item, receiveCode = '') {
+            if (!resourceShareRootLoaded) return;
+            const cacheKey = buildResourceShareBranchCacheKey(resourceId, item, receiveCode);
+            if (!cacheKey) return;
+            resourceShareBranchCache[cacheKey] = {
+                entriesByParent: cloneJsonValue(resourceShareEntriesByParent, { '0': [] }),
+                nextOffsetByParent: cloneJsonValue(resourceShareNextOffsetByParent, { '0': 0 }),
+                hasMoreByParent: cloneJsonValue(resourceShareHasMoreByParent, {}),
+                info: cloneJsonValue(resourceShareInfo, { title: '', count: 0, share_code: '', receive_code: '' }),
+                rootLoaded: !!resourceShareRootLoaded,
+                cached_at: Date.now()
+            };
+            pruneResourceShareBranchCache();
+        }
+
+        function restoreResourceShareBranchCache(resourceId, item, receiveCode = '') {
+            pruneResourceShareBranchCache();
+            const cacheKey = buildResourceShareBranchCacheKey(resourceId, item, receiveCode);
+            if (!cacheKey) return false;
+            const cached = resourceShareBranchCache[cacheKey];
+            if (!cached) return false;
+
+            resourceShareEntriesByParent = cloneJsonValue(cached.entriesByParent, { '0': [] }) || { '0': [] };
+            resourceShareNextOffsetByParent = cloneJsonValue(cached.nextOffsetByParent, { '0': 0 }) || { '0': 0 };
+            resourceShareHasMoreByParent = cloneJsonValue(cached.hasMoreByParent, {}) || {};
+            resourceShareInfo = cloneJsonValue(
+                cached.info,
+                { title: '', count: 0, share_code: '', receive_code: '' }
+            ) || { title: '', count: 0, share_code: '', receive_code: '' };
+            resourceShareRootLoaded = !!cached.rootLoaded;
+            resourceShareEntryIndex = {};
+
+            Object.keys(resourceShareEntriesByParent || {}).forEach((parentId) => {
+                const branchEntries = Array.isArray(resourceShareEntriesByParent[parentId])
+                    ? resourceShareEntriesByParent[parentId]
+                    : [];
+                resourceShareEntriesByParent[parentId] = branchEntries;
+                branchEntries.forEach((entry) => {
+                    const normalized = buildResourceShareSelectableEntry(entry);
+                    if (normalized.id) resourceShareEntryIndex[normalized.id] = { ...entry, ...normalized };
+                });
+            });
+
+            resourceShareExpanded = {};
+            resourceShareLoadingParents = {};
+            resourceShareLoadingMoreParents = {};
+            resourceShareLoading = false;
+            resourceShareError = '';
+            resourceShareCurrentCid = '0';
+            resourceShareTrail = [{ cid: '0', name: resourceShareInfo?.title || '分享根目录' }];
+            resourceShareSelected = {};
+            if (resourceShareRootLoaded) {
+                selectAllResourceShareRoot({ renderAfter: false });
+            }
+            return resourceShareRootLoaded;
         }
 
         function resetResourceShareState() {
@@ -7794,6 +7942,11 @@
             resourceShareReceiveCode = normalizedCode;
             syncResourceShareReceiveCodeSection();
             if (!isLinkTypeCookieConfigured(resourceModalLinkType) || !selectedResourceItem) return;
+            if (restoreResourceShareBranchCache(selectedResourceId, selectedResourceItem, resourceShareReceiveCode)) {
+                syncResourceSharetitleFromSelection();
+                renderResourceShareBrowser();
+                return;
+            }
             await loadResourceShareBranch(selectedResourceId, '0', { resetSelection: true });
         }
 
@@ -8103,6 +8256,7 @@
                         syncResourceSharetitleFromSelection();
                     }
                 }
+                saveResourceShareBranchCache(resourceId, selectedResourceItem, resourceShareReceiveCode);
             } catch (e) {
                 if (selectedResourceId !== Number(resourceId)) return;
                 if (isRoot && !appendMode) {
@@ -8441,7 +8595,10 @@
                 const expected = normalizedTrail[i] || {};
                 const expectedId = String(expected.id || '').trim();
                 if (!expectedId || expectedId === '0') break;
-                const result = await fetchResourceFolderData(parentCid, { provider: getCurrentResourceProvider() });
+                const result = await fetchResourceFolderData(parentCid, {
+                    provider: getCurrentResourceProvider(),
+                    foldersOnly: true
+                });
                 const entries = Array.isArray(result.entries) ? result.entries : [];
                 const matched = entries.find(entry => {
                     if (!entry?.is_dir) return false;
@@ -8469,7 +8626,10 @@
             let parentCid = '0';
             const parts = normalizedPath.split('/').filter(Boolean);
             for (const part of parts) {
-                const result = await fetchResourceFolderData(parentCid, { provider: getCurrentResourceProvider() });
+                const result = await fetchResourceFolderData(parentCid, {
+                    provider: getCurrentResourceProvider(),
+                    foldersOnly: true
+                });
                 const entries = Array.isArray(result.entries) ? result.entries : [];
                 const matched = entries.find(entry => !!entry?.is_dir && String(entry?.name || '').trim() === part);
                 if (!matched) {
@@ -8749,6 +8909,12 @@
                 || extractReceiveCodeFromShareUrl(item?.link_url || '')
                 || extractReceiveCodeFromText(item?.raw_text || '')
             );
+            const shareCacheRestored = (
+                resourceModalMode === 'import'
+                && isCurrentResource115Share()
+                && isLinkTypeCookieConfigured(resourceModalLinkType)
+                && restoreResourceShareBranchCache(selectedResourceId, item, resourceShareReceiveCode)
+            );
             setSelectedResourceFolder(
                 rememberedFolder.folder_id || '0',
                 rememberedFolder.display_path || '',
@@ -8764,10 +8930,10 @@
             renderResourceShareBrowser();
             renderResourceImportSummary();
             showLockedModal('resource-import-modal');
-            if (resourceModalMode === 'import' && isProviderCookieConfigured(getCurrentResourceProvider())) {
-                void ensureResourceFolderSelectionValid({ phase: 'open' });
-            }
-            if (resourceModalMode === 'import' && isCurrentResource115Share() && isLinkTypeCookieConfigured(resourceModalLinkType)) {
+            if (shareCacheRestored) {
+                syncResourceSharetitleFromSelection();
+                renderResourceShareBrowser();
+            } else if (resourceModalMode === 'import' && isCurrentResource115Share() && isLinkTypeCookieConfigured(resourceModalLinkType)) {
                 loadResourceShareBranch(selectedResourceId, '0', { resetSelection: true });
             }
         }
@@ -9074,19 +9240,38 @@
             }).join('');
         }
 
-        async function loadResourceFolders(cid = '0') {
-            resourceFolderLoading = true;
+        async function loadResourceFolders(cid = '0', { forceRefresh = false } = {}) {
+            const targetCid = String(cid || '0').trim() || '0';
+            const provider = getCurrentResourceProvider();
+            const cacheOptions = { provider, foldersOnly: false };
+            const cachedBranch = forceRefresh ? null : getResourceFolderBranchCache(targetCid, cacheOptions);
+            const requestToken = ++resourceFolderRequestToken;
+
+            if (cachedBranch) {
+                resourceFolderEntries = Array.isArray(cachedBranch.entries) ? cachedBranch.entries : [];
+                resourceFolderSummary = cachedBranch.summary || { folder_count: 0, file_count: 0 };
+                resourceFolderLoading = false;
+            } else {
+                resourceFolderLoading = true;
+            }
             renderResourceFolderBreadcrumbs();
             renderResourceFolderList();
+
             try {
-                const result = await fetchResourceFolderData(cid, { provider: getCurrentResourceProvider() });
+                const result = await fetchResourceFolderData(targetCid, cacheOptions);
+                if (requestToken !== resourceFolderRequestToken) return;
                 resourceFolderEntries = result.entries;
                 resourceFolderSummary = result.summary;
+                setResourceFolderBranchCache(targetCid, result, cacheOptions);
             } catch (e) {
-                resourceFolderEntries = [];
-                resourceFolderSummary = { folder_count: 0, file_count: 0 };
-                showToast(`目录读取失败：${e.message || '请稍后重试'}`, { tone: 'error', duration: 3200 });
+                if (requestToken !== resourceFolderRequestToken) return;
+                if (!cachedBranch) {
+                    resourceFolderEntries = [];
+                    resourceFolderSummary = { folder_count: 0, file_count: 0 };
+                    showToast(`目录读取失败：${e.message || '请稍后重试'}`, { tone: 'error', duration: 3200 });
+                }
             } finally {
+                if (requestToken !== resourceFolderRequestToken) return;
                 resourceFolderLoading = false;
                 renderResourceFolderBreadcrumbs();
                 renderResourceFolderList();
@@ -9112,6 +9297,7 @@
                 const createdFolderName = String(folder.name || folderName).trim() || folderName;
                 if (nameInput) nameInput.value = '';
 
+                invalidateResourceFolderBranchCache(getCurrentResourceProvider());
                 await loadResourceFolders(currentCid);
 
                 if (createdFolderId) {
@@ -9235,7 +9421,10 @@
             renderSubscriptionFolderBreadcrumbs();
             renderSubscriptionFolderList();
             try {
-                const result = await fetchResourceFolderData(cid, { provider: getCurrentSubscriptionProvider() });
+                const result = await fetchResourceFolderData(cid, {
+                    provider: getCurrentSubscriptionProvider(),
+                    foldersOnly: true
+                });
                 subscriptionFolderEntries = result.entries;
                 subscriptionFolderSummary = result.summary;
             } catch (e) {
@@ -9305,6 +9494,7 @@
                 const createdFolderName = String(folder.name || folderName).trim() || folderName;
                 if (nameInput) nameInput.value = '';
 
+                invalidateResourceFolderBranchCache(getCurrentSubscriptionProvider());
                 await loadSubscriptionFolders(currentCid);
                 if (createdFolderId) {
                     const selectedTrail = normalizeResourceFolderTrail(subscriptionFolderTrail.concat([{ id: createdFolderId, name: createdFolderName }]));
@@ -9606,7 +9796,10 @@
             showLockedModal('subscription-share-folder-modal');
             renderSubscriptionShareFolderBreadcrumbs();
             renderSubscriptionShareFolderList();
-            await loadSubscriptionShareFolderBranch(subscriptionShareFolderCurrentCid || '0', { forceRefresh: true });
+            const targetCid = String(subscriptionShareFolderCurrentCid || '0').trim() || '0';
+            const hasBranchCache = Object.prototype.hasOwnProperty.call(subscriptionShareFolderEntriesByParent, targetCid);
+            const shouldForceRefresh = !hasBranchCache || (targetCid === '0' && !subscriptionShareFolderRootLoaded);
+            await loadSubscriptionShareFolderBranch(targetCid, { forceRefresh: shouldForceRefresh });
         }
 
         function closeSubscriptionShareFolderModal() {
