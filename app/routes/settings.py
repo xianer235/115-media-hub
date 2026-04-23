@@ -11,6 +11,22 @@ from ..services.sign115 import refresh_sign115_status, run_sign115_job
 router = APIRouter()
 
 
+async def _run_postsave_health_checks() -> None:
+    try:
+        await refresh_cookie_health_status(
+            providers=list(COOKIE_HEALTH_PROVIDERS),
+            trigger="settings_save",
+            force=True,
+        )
+    except Exception:
+        pass
+    try:
+        await refresh_sign115_status(force_remote=False, trigger="settings_save")
+    except Exception:
+        pass
+    schedule_ui_state_push(0)
+
+
 @router.get("/get_settings")
 async def get_settings_endpoint(request: Request) -> Dict[str, Any]:
     cfg = get_config()
@@ -43,14 +59,15 @@ async def save_settings_endpoint(request: Request) -> Dict[str, Any]:
         for task in subscription_tasks_payload
     ]
     save_config(merged_cfg)
-    cookie_health = await refresh_cookie_health_status(
-        providers=list(COOKIE_HEALTH_PROVIDERS),
-        trigger="settings_save",
-        force=True,
-    )
-    await refresh_sign115_status(force_remote=False, trigger="settings_save")
+    saved_cfg = get_config()
+    if str(saved_cfg.get("cookie_115", "")).strip():
+        mark_cookie_health_checking("115", trigger="settings_save")
+    if str(saved_cfg.get("cookie_quark", "")).strip():
+        mark_cookie_health_checking("quark", trigger="settings_save")
+    cookie_health = build_cookie_health_payload(saved_cfg)
     schedule_ui_state_push(0)
-    return {"ok": True, "cookie_health": cookie_health}
+    asyncio.create_task(_run_postsave_health_checks())
+    return {"ok": True, "cookie_health": cookie_health, "checks_queued": True}
 
 
 @router.get("/settings/cookies/status")

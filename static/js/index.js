@@ -31,9 +31,12 @@
         let resourceFolderEntries = [];
         let resourceFolderSummary = { folder_count: 0, file_count: 0 };
         let resourceFolderLoading = false;
+        let resourceFolderFilesLoading = false;
+        let resourceFolderShowAllFiles = false;
         let resourceFolderCreateBusy = false;
         let resourceFolderRequestToken = 0;
         let resourceFolderBranchCache = {};
+        let resourceFolderFetchInFlight = {};
         let subscriptionFolderTrail = [{ id: '0', name: '根目录' }];
         let subscriptionFolderEntries = [];
         let subscriptionFolderSummary = { folder_count: 0, file_count: 0 };
@@ -208,6 +211,7 @@
         const SUBSCRIPTION_EPISODE_CACHE_TTL_MS = 1000 * 60 * 3;
         const SUBSCRIPTION_INTRO_EPISODE_RETRY_MS = 1000 * 60;
         const RESOURCE_FOLDER_BRANCH_CACHE_TTL_MS = 1000 * 60 * 5;
+        const RESOURCE_FOLDER_FILE_PREVIEW_LIMIT = 120;
         const RESOURCE_SHARE_BRANCH_CACHE_TTL_MS = 1000 * 60 * 10;
         const RESOURCE_SHARE_BROWSE_PAGE_LIMIT = 120;
         const SUBSCRIPTION_WEEKDAY_LABELS = {
@@ -2071,7 +2075,6 @@
 
             if (res.ok && data?.ok) {
                 if (data?.cookie_health) applyCookieHealthState(data.cookie_health);
-                await refreshResourceState({ allowSearch: false });
                 const nextSensitiveMeta = { ...sensitiveConfigMeta };
                 SENSITIVE_SETTING_FIELDS.forEach((key) => {
                     const value = String(document.getElementById(key)?.value || '').trim();
@@ -2079,7 +2082,8 @@
                 });
                 applySensitiveConfigMeta(nextSensitiveMeta);
                 alert('✅ 配置已保存');
-                refreshSign115Status(false);
+                void refreshResourceState({ allowSearch: false });
+                void refreshSign115Status(false);
             } else {
                 alert(`❌ ${data?.msg || '保存失败'}`);
             }
@@ -7754,33 +7758,129 @@
             pruneResourceFolderBranchCache();
         }
 
+        function buildResourceFolderSummaryFromEntries(entries = []) {
+            const normalizedEntries = Array.isArray(entries) ? entries : [];
+            let folderCount = 0;
+            for (const entry of normalizedEntries) {
+                if (entry?.is_dir) folderCount += 1;
+            }
+            return {
+                folder_count: folderCount,
+                file_count: Math.max(0, normalizedEntries.length - folderCount)
+            };
+        }
+
+        function buildResourceFoldersOnlyPayload(payload = {}) {
+            const sourceEntries = Array.isArray(payload?.entries) ? payload.entries : [];
+            const folderEntries = sourceEntries.filter(entry => !!entry?.is_dir);
+            const sourceSummary = payload?.summary && typeof payload.summary === 'object'
+                ? payload.summary
+                : buildResourceFolderSummaryFromEntries(sourceEntries);
+            return {
+                entries: folderEntries,
+                summary: {
+                    folder_count: Number(sourceSummary.folder_count || folderEntries.length),
+                    file_count: Number(sourceSummary.file_count || 0)
+                }
+            };
+        }
+
+        function setResourceFolderBranchCaches(cid = '0', payload = {}, { provider = '115' } = {}) {
+            const fullPayload = {
+                entries: Array.isArray(payload?.entries) ? payload.entries : [],
+                summary: payload?.summary || buildResourceFolderSummaryFromEntries(payload?.entries || [])
+            };
+            setResourceFolderBranchCache(cid, fullPayload, { provider, foldersOnly: false });
+            setResourceFolderBranchCache(cid, buildResourceFoldersOnlyPayload(fullPayload), { provider, foldersOnly: true });
+        }
+
         function invalidateResourceFolderBranchCache(provider = '') {
             const providerKey = String(provider || '').trim()
                 ? normalizeResourceProviderCacheKey(provider)
                 : '';
             if (!providerKey) {
                 resourceFolderBranchCache = {};
+                resourceFolderFetchInFlight = {};
                 return;
             }
             Object.keys(resourceFolderBranchCache || {}).forEach((key) => {
                 if (key.startsWith(`${providerKey}|`)) delete resourceFolderBranchCache[key];
             });
+            Object.keys(resourceFolderFetchInFlight || {}).forEach((key) => {
+                if (key.startsWith(`${providerKey}|`)) delete resourceFolderFetchInFlight[key];
+            });
         }
 
-        async function fetchResourceFolderData(cid = '0', { provider = '115', foldersOnly = false } = {}) {
-            const apiPrefix = getResourceFolderApiPrefix(provider);
-            const params = new URLSearchParams({ cid: String(cid || '0') });
-            if (foldersOnly) params.set('folders_only', '1');
-            const res = await fetch(`${apiPrefix}/folders?${params.toString()}`);
-            const data = await res.json();
-            if (!res.ok || !data.ok) throw new Error(data.msg || '读取目录失败');
-            return {
-                entries: Array.isArray(data.entries) ? data.entries : [],
-                summary: data.summary || {
-                    folder_count: Array.isArray(data.folders) ? data.folders.length : 0,
-                    file_count: Array.isArray(data.files) ? data.files.length : 0
-                }
+        async function fetchResourceFolderData(
+            cid = '0',
+            { provider = '115', foldersOnly = false, forceRefresh = false } = {}
+        ) {
+            const normalizedProvider = normalizeResourceProviderCacheKey(provider);
+            const normalizedCid = String(cid || '0').trim() || '0';
+            const normalizedFoldersOnly = !!foldersOnly;
+            const cacheOptions = {
+                provider: normalizedProvider,
+                foldersOnly: normalizedFoldersOnly
             };
+            if (!forceRefresh) {
+                const cached = getResourceFolderBranchCache(normalizedCid, cacheOptions);
+                if (cached) {
+                    return {
+                        entries: Array.isArray(cached.entries) ? cached.entries : [],
+                        summary: cached.summary || { folder_count: 0, file_count: 0 }
+                    };
+                }
+            }
+            const cacheKey = buildResourceFolderBranchCacheKey(normalizedCid, {
+                provider: normalizedProvider,
+                foldersOnly: normalizedFoldersOnly
+            });
+            const inFlight = resourceFolderFetchInFlight[cacheKey];
+            if (inFlight) {
+                const sharedPayload = await inFlight;
+                return {
+                    entries: cloneJsonValue(sharedPayload.entries, []),
+                    summary: cloneJsonValue(sharedPayload.summary, { folder_count: 0, file_count: 0 })
+                };
+            }
+            const requestPromise = (async () => {
+                const apiPrefix = getResourceFolderApiPrefix(normalizedProvider);
+                const params = new URLSearchParams({ cid: normalizedCid });
+                params.set('compact', '1');
+                if (normalizedFoldersOnly) params.set('folders_only', '1');
+                const res = await fetch(`${apiPrefix}/folders?${params.toString()}`);
+                const data = await res.json();
+                if (!res.ok || !data.ok) throw new Error(data.msg || '读取目录失败');
+                const entries = Array.isArray(data.entries) ? data.entries : [];
+                const summary = data.summary && typeof data.summary === 'object'
+                    ? data.summary
+                    : buildResourceFolderSummaryFromEntries(entries);
+                const payload = {
+                    entries,
+                    summary: {
+                        folder_count: Number(summary.folder_count || 0),
+                        file_count: Number(summary.file_count || 0)
+                    }
+                };
+                if (normalizedFoldersOnly) {
+                    setResourceFolderBranchCache(normalizedCid, payload, cacheOptions);
+                } else {
+                    setResourceFolderBranchCaches(normalizedCid, payload, { provider: normalizedProvider });
+                }
+                return payload;
+            })();
+            resourceFolderFetchInFlight[cacheKey] = requestPromise;
+            try {
+                const payload = await requestPromise;
+                return {
+                    entries: cloneJsonValue(payload.entries, []),
+                    summary: cloneJsonValue(payload.summary, { folder_count: 0, file_count: 0 })
+                };
+            } finally {
+                if (resourceFolderFetchInFlight[cacheKey] === requestPromise) {
+                    delete resourceFolderFetchInFlight[cacheKey];
+                }
+            }
         }
 
         async function createResourceFolder(cid = '0', name = '', { provider = '115' } = {}) {
@@ -8733,11 +8833,21 @@
                 listEl.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">当前目录为空，你可以直接把资源保存到这里。</div>';
                 return;
             }
-            listEl.innerHTML = resourceTargetPreviewEntries.map(entry => buildResourceEntryRow(entry)).join('');
+            const entries = Array.isArray(resourceTargetPreviewEntries) ? resourceTargetPreviewEntries : [];
+            const folders = entries.filter(entry => !!entry?.is_dir);
+            const files = entries.filter(entry => !entry?.is_dir);
+            const visibleEntries = folders.concat(files.slice(0, RESOURCE_FOLDER_FILE_PREVIEW_LIMIT));
+            let html = visibleEntries.map(entry => buildResourceEntryRow(entry)).join('');
+            if (files.length > RESOURCE_FOLDER_FILE_PREVIEW_LIMIT) {
+                html += `<div class="rounded-2xl border border-slate-700/60 bg-slate-900/40 px-4 py-3 text-[12px] text-slate-300">为保证加载速度，预览默认仅显示前 ${RESOURCE_FOLDER_FILE_PREVIEW_LIMIT} 个文件。</div>`;
+            }
+            listEl.innerHTML = html;
         }
 
         async function loadResourceTargetPreview(folderId = '0', { force = false } = {}) {
-            if (!isProviderCookieConfigured(getCurrentResourceProvider())) {
+            const provider = getCurrentResourceProvider();
+            const normalizedFolderId = String(folderId || '0').trim() || '0';
+            if (!isProviderCookieConfigured(provider)) {
                 resourceTargetPreviewEntries = [];
                 resourceTargetPreviewSummary = { folder_count: 0, file_count: 0 };
                 resourceTargetPreviewLoading = false;
@@ -8746,11 +8856,21 @@
                 return;
             }
             if (!force && resourceTargetPreviewLoading) return;
+            const cacheOptions = { provider, foldersOnly: false };
+            const cachedBranch = force ? null : getResourceFolderBranchCache(normalizedFolderId, cacheOptions);
+            if (cachedBranch) {
+                resourceTargetPreviewEntries = Array.isArray(cachedBranch.entries) ? cachedBranch.entries : [];
+                resourceTargetPreviewSummary = cachedBranch.summary || { folder_count: 0, file_count: 0 };
+                resourceTargetPreviewLoading = false;
+                resourceTargetPreviewError = '';
+                renderResourceTargetPreview();
+                return;
+            }
             resourceTargetPreviewLoading = true;
             resourceTargetPreviewError = '';
             renderResourceTargetPreview();
             try {
-                const result = await fetchResourceFolderData(folderId, { provider: getCurrentResourceProvider() });
+                const result = await fetchResourceFolderData(normalizedFolderId, { provider, forceRefresh: force });
                 resourceTargetPreviewEntries = result.entries;
                 resourceTargetPreviewSummary = result.summary;
             } catch (e) {
@@ -8898,6 +9018,8 @@
             resourceFolderTrail = normalizeResourceFolderTrail(rememberedFolder.trail);
             resourceFolderEntries = [];
             resourceFolderSummary = { folder_count: 0, file_count: 0 };
+            resourceFolderFilesLoading = false;
+            resourceFolderShowAllFiles = false;
             resourceTargetPreviewEntries = [];
             resourceTargetPreviewSummary = { folder_count: 0, file_count: 0 };
             resourceTargetPreviewLoading = false;
@@ -9199,15 +9321,40 @@
             if (summary) {
                 summary.innerText = `当前目录下共有 ${Number(resourceFolderSummary?.folder_count || 0)} 个文件夹 / ${Number(resourceFolderSummary?.file_count || 0)} 个文件。`;
             }
-            if (resourceFolderLoading) {
+            if (resourceFolderLoading && !resourceFolderEntries.length) {
                 container.innerHTML = `<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">正在读取${escapeHtml(providerLabel)}目录...</div>`;
                 return;
             }
-            if (!resourceFolderEntries.length) {
+            const entries = Array.isArray(resourceFolderEntries) ? resourceFolderEntries : [];
+            if (!entries.length) {
                 container.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">当前目录为空，可以直接选择这里作为保存位置。</div>';
                 return;
             }
-            container.innerHTML = resourceFolderEntries.map(entry => buildResourceEntryRow(entry, { showOpenButton: true })).join('');
+            const folders = [];
+            const files = [];
+            for (const entry of entries) {
+                if (entry?.is_dir) folders.push(entry);
+                else files.push(entry);
+            }
+            const shouldTrimFiles = !resourceFolderShowAllFiles && files.length > RESOURCE_FOLDER_FILE_PREVIEW_LIMIT;
+            const visibleFiles = shouldTrimFiles ? files.slice(0, RESOURCE_FOLDER_FILE_PREVIEW_LIMIT) : files;
+            const visibleEntries = folders.concat(visibleFiles);
+            const lines = visibleEntries.map(entry => buildResourceEntryRow(entry, { showOpenButton: true }));
+            if (resourceFolderFilesLoading) {
+                lines.push('<div class="rounded-2xl border border-dashed border-slate-700 px-4 py-3 text-[12px] text-slate-400">目录已可操作，正在后台补充文件列表...</div>');
+            }
+            if (files.length > RESOURCE_FOLDER_FILE_PREVIEW_LIMIT) {
+                const label = shouldTrimFiles
+                    ? `显示全部文件（共 ${files.length} 个）`
+                    : `仅显示前 ${RESOURCE_FOLDER_FILE_PREVIEW_LIMIT} 个文件`;
+                lines.push(
+                    `<div class="rounded-2xl border border-slate-700/60 bg-slate-900/40 px-4 py-3 text-[12px] text-slate-300">` +
+                    `为保证目录打开速度，默认仅渲染前 ${RESOURCE_FOLDER_FILE_PREVIEW_LIMIT} 个文件。` +
+                    `<button type="button" data-resource-folder-action="toggle-files" class="ml-2 resource-entry-action">${escapeHtml(label)}</button>` +
+                    `</div>`
+                );
+            }
+            container.innerHTML = lines.join('');
         }
 
         function setResourceFolderCreateBusy(loading = false) {
@@ -9243,36 +9390,57 @@
         async function loadResourceFolders(cid = '0', { forceRefresh = false } = {}) {
             const targetCid = String(cid || '0').trim() || '0';
             const provider = getCurrentResourceProvider();
-            const cacheOptions = { provider, foldersOnly: false };
-            const cachedBranch = forceRefresh ? null : getResourceFolderBranchCache(targetCid, cacheOptions);
+            const fullCacheOptions = { provider, foldersOnly: false };
+            const foldersOnlyCacheOptions = { provider, foldersOnly: true };
+            const cachedBranch = forceRefresh ? null : getResourceFolderBranchCache(targetCid, fullCacheOptions);
+            const cachedFoldersOnlyBranch = (forceRefresh || cachedBranch)
+                ? null
+                : getResourceFolderBranchCache(targetCid, foldersOnlyCacheOptions);
             const requestToken = ++resourceFolderRequestToken;
+            resourceFolderShowAllFiles = false;
 
             if (cachedBranch) {
                 resourceFolderEntries = Array.isArray(cachedBranch.entries) ? cachedBranch.entries : [];
                 resourceFolderSummary = cachedBranch.summary || { folder_count: 0, file_count: 0 };
                 resourceFolderLoading = false;
+                resourceFolderFilesLoading = false;
+                renderResourceFolderBreadcrumbs();
+                renderResourceFolderList();
+                return;
+            }
+
+            if (cachedFoldersOnlyBranch) {
+                resourceFolderEntries = Array.isArray(cachedFoldersOnlyBranch.entries) ? cachedFoldersOnlyBranch.entries : [];
+                resourceFolderSummary = cachedFoldersOnlyBranch.summary || { folder_count: 0, file_count: 0 };
+                resourceFolderLoading = false;
+                resourceFolderFilesLoading = true;
             } else {
+                resourceFolderEntries = [];
+                resourceFolderSummary = { folder_count: 0, file_count: 0 };
                 resourceFolderLoading = true;
+                resourceFolderFilesLoading = false;
             }
             renderResourceFolderBreadcrumbs();
             renderResourceFolderList();
 
             try {
-                const result = await fetchResourceFolderData(targetCid, cacheOptions);
+                const result = await fetchResourceFolderData(targetCid, { ...fullCacheOptions, forceRefresh });
                 if (requestToken !== resourceFolderRequestToken) return;
                 resourceFolderEntries = result.entries;
                 resourceFolderSummary = result.summary;
-                setResourceFolderBranchCache(targetCid, result, cacheOptions);
             } catch (e) {
                 if (requestToken !== resourceFolderRequestToken) return;
-                if (!cachedBranch) {
+                if (!cachedFoldersOnlyBranch) {
                     resourceFolderEntries = [];
                     resourceFolderSummary = { folder_count: 0, file_count: 0 };
                     showToast(`目录读取失败：${e.message || '请稍后重试'}`, { tone: 'error', duration: 3200 });
+                } else {
+                    showToast(`文件列表刷新失败，当前先仅展示文件夹：${e.message || '请稍后重试'}`, { tone: 'warn', duration: 3200 });
                 }
             } finally {
                 if (requestToken !== resourceFolderRequestToken) return;
                 resourceFolderLoading = false;
+                resourceFolderFilesLoading = false;
                 renderResourceFolderBreadcrumbs();
                 renderResourceFolderList();
             }
@@ -10409,6 +10577,11 @@
             const action = btn.dataset.resourceFolderAction || '';
             if (action === 'open') {
                 await openResourceFolderChild(btn.dataset.resourceFolderId || '0', btn.dataset.resourceFolderName || '--');
+                return;
+            }
+            if (action === 'toggle-files') {
+                resourceFolderShowAllFiles = !resourceFolderShowAllFiles;
+                renderResourceFolderList();
             }
         });
         document.getElementById('subscription-folder-list').addEventListener('click', async (e) => {

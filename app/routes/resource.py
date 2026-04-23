@@ -393,11 +393,24 @@ async def get_115_folders_endpoint(request: Request) -> Dict[str, Any]:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "请先配置 115 Cookie"})
     cid = str(request.query_params.get("cid", "0") or "0").strip() or "0"
     folders_only = request.query_params.get("folders_only") == "1"
+    compact = request.query_params.get("compact") == "1"
     try:
         entries_all = await asyncio.to_thread(list_115_entries, cookie, cid)
         folder_entries = [entry for entry in entries_all if entry.get("is_dir")]
-        files = [entry for entry in entries_all if not entry.get("is_dir")]
+        file_count = max(0, len(entries_all) - len(folder_entries))
         entries = folder_entries if folders_only else entries_all
+        summary = {
+            "folder_count": len(folder_entries),
+            "file_count": file_count,
+        }
+        if compact:
+            return {
+                "ok": True,
+                "cid": cid,
+                "entries": entries,
+                "summary": summary,
+            }
+        files = [] if folders_only else [entry for entry in entries_all if not entry.get("is_dir")]
         folders = [
             {"id": str(entry.get("id", "")).strip(), "name": str(entry.get("name", "")).strip()}
             for entry in folder_entries
@@ -406,12 +419,9 @@ async def get_115_folders_endpoint(request: Request) -> Dict[str, Any]:
             "ok": True,
             "cid": cid,
             "folders": folders,
-            "files": [] if folders_only else files,
+            "files": files,
             "entries": entries,
-            "summary": {
-                "folder_count": len(folders),
-                "file_count": len(files),
-            },
+            "summary": summary,
         }
     except Exception as exc:
         return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
@@ -568,11 +578,24 @@ async def get_quark_folders_endpoint(request: Request) -> Dict[str, Any]:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "请先配置 Quark Cookie"})
     cid = str(request.query_params.get("cid", "0") or "0").strip() or "0"
     folders_only = request.query_params.get("folders_only") == "1"
+    compact = request.query_params.get("compact") == "1"
     try:
         entries_all = await asyncio.to_thread(list_quark_entries, cookie, cid)
         folder_entries = [entry for entry in entries_all if entry.get("is_dir")]
-        files = [entry for entry in entries_all if not entry.get("is_dir")]
+        file_count = max(0, len(entries_all) - len(folder_entries))
         entries = folder_entries if folders_only else entries_all
+        summary = {
+            "folder_count": len(folder_entries),
+            "file_count": file_count,
+        }
+        if compact:
+            return {
+                "ok": True,
+                "cid": cid,
+                "entries": entries,
+                "summary": summary,
+            }
+        files = [] if folders_only else [entry for entry in entries_all if not entry.get("is_dir")]
         folders = [
             {"id": str(entry.get("id", "")).strip(), "name": str(entry.get("name", "")).strip()}
             for entry in folder_entries
@@ -581,12 +604,9 @@ async def get_quark_folders_endpoint(request: Request) -> Dict[str, Any]:
             "ok": True,
             "cid": cid,
             "folders": folders,
-            "files": [] if folders_only else files,
+            "files": files,
             "entries": entries,
-            "summary": {
-                "folder_count": len(folders),
-                "file_count": len(files),
-            },
+            "summary": summary,
         }
     except Exception as exc:
         return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})

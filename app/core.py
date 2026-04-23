@@ -34,6 +34,27 @@ app.add_middleware(
     GZipMiddleware,
     minimum_size=1024,
 )
+HTTP_TIMING_HEADER_ENABLED = str(os.environ.get("HTTP_TIMING_HEADER_ENABLED", "1") or "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+    "disable",
+    "disabled",
+}
+
+
+@app.middleware("http")
+async def add_server_timing_header(request: Request, call_next):
+    if not HTTP_TIMING_HEADER_ENABLED:
+        return await call_next(request)
+    started = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = max(0.0, (time.perf_counter() - started) * 1000.0)
+    rounded_ms = f"{duration_ms:.1f}"
+    response.headers["Server-Timing"] = f"app;dur={rounded_ms}"
+    response.headers["X-Server-Time-Ms"] = rounded_ms
+    return response
 
 CONFIG_PATH = "/app/config/settings.json"
 DB_PATH = "/app/config/data.db"
