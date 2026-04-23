@@ -252,7 +252,7 @@ async def run_monitor_task(
                     continue
 
                 target_file = os.path.join(STRM_ROOT, item_local_rel + ".strm")
-                strm_url = build_strm_play_url(cfg, item_remote_path)
+                strm_url = build_strm_play_url(cfg, item_remote_path, pick_code=item.get("pick_code", ""))
                 changed = await asyncio.to_thread(write_strm_file, target_file, strm_url)
                 if changed:
                     stats["generated"] += 1

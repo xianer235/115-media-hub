@@ -18,7 +18,10 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Set, Tuple
 from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
+
+from .config_store import JsonConfigStore
 
 app = FastAPI()
 app.add_middleware(
@@ -26,6 +29,10 @@ app.add_middleware(
     secret_key="115-strm-v7-multi",
     https_only=False,
     same_site="lax",
+)
+app.add_middleware(
+    GZipMiddleware,
+    minimum_size=1024,
 )
 
 CONFIG_PATH = "/app/config/settings.json"
@@ -152,6 +159,7 @@ DEFAULT_MOUNT_POINTS: List[Dict[str, str]] = [
     {"provider": "115", "prefix": "/115"},
     {"provider": "quark", "prefix": "/quark"},
 ]
+_STRM_PICK_CODE_REGEX = re.compile(r"^[A-Za-z0-9]{6,32}$")
 RESOURCE_CHANNEL_CACHE_ACTIVE_MIN_KEEP = max(
     0,
     min(RESOURCE_CHANNEL_CACHE_LIMIT, int(os.environ.get("RESOURCE_CHANNEL_CACHE_ACTIVE_MIN_KEEP", 10) or 10)),
@@ -292,7 +300,47 @@ SUBSCRIPTION_STOP_WORDS = {
 }
 SUBSCRIPTION_ANIME_TASK_HINT_REGEX = re.compile(r"(动漫|動畫|动画|番剧|新番|anime|animation)", re.IGNORECASE)
 
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+class CacheControlStaticFiles(StaticFiles):
+    def __init__(
+        self,
+        *args: Any,
+        asset_max_age: int = 24 * 60 * 60,
+        fallback_max_age: int = 60 * 60,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.asset_max_age = max(60, int(asset_max_age or (24 * 60 * 60)))
+        self.fallback_max_age = max(60, int(fallback_max_age or (60 * 60)))
+
+    async def get_response(self, path: str, scope: Dict[str, Any]) -> Response:
+        response = await super().get_response(path, scope)
+        if int(getattr(response, "status_code", 500) or 500) != 200:
+            return response
+        if "cache-control" in response.headers:
+            return response
+        ext = os.path.splitext(str(path or ""))[1].lower()
+        if ext in {
+            ".js",
+            ".css",
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".gif",
+            ".svg",
+            ".webp",
+            ".ico",
+            ".woff",
+            ".woff2",
+            ".ttf",
+        }:
+            response.headers["Cache-Control"] = f"public, max-age={self.asset_max_age}"
+        else:
+            response.headers["Cache-Control"] = f"public, max-age={self.fallback_max_age}"
+        return response
+
+
+app.mount("/static", CacheControlStaticFiles(directory=STATIC_DIR), name="static")
 
 
 def ensure_parent(path: str) -> None:
@@ -1248,12 +1296,31 @@ def normalize_tree_source_type(value: Any, fallback: str = "tree_file") -> str:
 
 def normalize_mount_points(value: Any) -> List[Dict[str, str]]:
     normalized: List[Dict[str, str]] = []
-    for item in DEFAULT_MOUNT_POINTS:
-        provider = normalize_mount_provider(item.get("provider", ""))
-        prefix = normalize_remote_path(item.get("prefix", ""))
+    seen_providers: Set[str] = set()
+
+    def push(provider_value: Any, prefix_value: Any) -> None:
+        provider = normalize_mount_provider(provider_value)
+        prefix = normalize_remote_path(prefix_value)
         if (not provider) or (not prefix) or prefix == "/":
-            continue
+            return
+        if provider in seen_providers:
+            return
+        seen_providers.add(provider)
         normalized.append({"provider": provider, "prefix": prefix})
+
+    raw_items: List[Dict[str, Any]] = []
+    if isinstance(value, list):
+        raw_items = [item for item in value if isinstance(item, dict)]
+    elif isinstance(value, dict):
+        raw_items = [value]
+
+    for item in raw_items:
+        push(item.get("provider", ""), item.get("prefix", ""))
+
+    # 保底注入内置前缀，避免配置缺失导致运行时无法定位网盘根路径。
+    for item in DEFAULT_MOUNT_POINTS:
+        push(item.get("provider", ""), item.get("prefix", ""))
+
     return normalized
 
 
@@ -1549,25 +1616,30 @@ async def get_version_state(force_refresh: bool = False) -> Dict[str, Any]:
     }
 
 
+_config_store_lock = threading.Lock()
+_config_store: Optional[JsonConfigStore] = None
+
+
+def _get_config_store() -> JsonConfigStore:
+    global _config_store
+    with _config_store_lock:
+        if _config_store is None:
+            _config_store = JsonConfigStore(
+                path=CONFIG_PATH,
+                default_factory=default_config,
+                normalize=normalize_config,
+                post_load=apply_api_115_runtime_tuning,
+                post_save=apply_api_115_runtime_tuning,
+            )
+        return _config_store
+
+
 def get_config() -> Dict[str, Any]:
-    if not os.path.exists(CONFIG_PATH):
-        ensure_parent(CONFIG_PATH)
-        save_config(default_config())
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        raw_cfg = json.load(f)
-    cfg = normalize_config(raw_cfg)
-    apply_api_115_runtime_tuning(cfg)
-    if cfg != raw_cfg:
-        save_config(cfg)
-    return cfg
+    return _get_config_store().get()
 
 
 def save_config(cfg: Dict[str, Any]) -> None:
-    ensure_parent(CONFIG_PATH)
-    normalized_cfg = normalize_config(cfg)
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(normalized_cfg, f, ensure_ascii=False, indent=2)
-    apply_api_115_runtime_tuning(normalized_cfg)
+    _get_config_store().save(cfg)
 
 
 def ensure_db() -> None:
@@ -1891,6 +1963,15 @@ def normalize_115_cid(value: Any) -> str:
     if not token or token == "0":
         return ""
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", token):
+        return ""
+    return token
+
+
+def normalize_115_pick_code(value: Any) -> str:
+    token = str(value or "").strip()
+    if not token:
+        return ""
+    if not _STRM_PICK_CODE_REGEX.fullmatch(token):
         return ""
     return token
 
@@ -5592,11 +5673,25 @@ def build_sign115_status_payload(cfg: Optional[Dict[str, Any]] = None) -> Dict[s
 
 
 def build_ui_state_payload(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    active_cfg = cfg or get_config()
     return {
         "main": build_main_status_payload(),
-        "monitor": build_monitor_status_payload(cfg),
-        "subscription": build_subscription_status_payload(cfg),
-        "sign115": build_sign115_status_payload(cfg),
+        "monitor": build_monitor_status_payload(active_cfg),
+        "subscription": build_subscription_status_payload(active_cfg),
+        "sign115": build_sign115_status_payload(active_cfg),
+    }
+
+
+def build_resource_jobs_state_payload(limit: int = 40, cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    active_cfg = cfg or get_config()
+    jobs = list_resource_jobs(limit=limit)
+    return {
+        "jobs": clone_jsonable(jobs),
+        "monitor_tasks": clone_jsonable(active_cfg.get("monitor_tasks", [])),
+        "stats": {
+            "completed_job_count": count_resource_jobs(status="completed"),
+            "failed_job_count": count_resource_jobs(status="failed"),
+        },
     }
 
 
@@ -5615,11 +5710,13 @@ async def build_resource_state_payload(search: str = "") -> Dict[str, Any]:
     }
     items = search_meta.get("items", []) if keyword else []
     search_sections = search_meta.get("sections", []) if keyword else []
-    jobs = list_resource_jobs(limit=40)
+    jobs_state = build_resource_jobs_state_payload(limit=40, cfg=cfg)
+    jobs = jobs_state.get("jobs", [])
     total_item_count = count_resource_items(source_type="tg")
     filtered_item_count = len(items)
-    completed_job_count = count_resource_jobs(status="completed")
-    failed_job_count = count_resource_jobs(status="failed")
+    stats_payload = jobs_state.get("stats", {})
+    completed_job_count = int(stats_payload.get("completed_job_count", 0) or 0)
+    failed_job_count = int(stats_payload.get("failed_job_count", 0) or 0)
     sources = cfg.get("resource_sources", [])
     channel_ids = [
         normalize_telegram_channel_id_from_input((source or {}).get("channel_id", ""))
@@ -5835,7 +5932,8 @@ async def flush_ui_state_updates(delay: float) -> None:
         await asyncio.sleep(max(0.0, delay))
         while ui_push_pending:
             ui_push_pending = False
-            payload = json.dumps(build_ui_state_payload(), ensure_ascii=False)
+            cfg = get_config()
+            payload = json.dumps(build_ui_state_payload(cfg), ensure_ascii=False)
             await broadcast_ui_state(payload)
             if ui_push_pending:
                 await asyncio.sleep(UI_PUSH_DEBOUNCE_SECONDS)
@@ -8516,9 +8614,13 @@ def fetch_telegram_channel_post_samples(
     }
 
 
-def build_strm_play_url(cfg: Dict[str, Any], remote_path: str) -> str:
+def build_strm_play_url(cfg: Dict[str, Any], remote_path: str, pick_code: str = "") -> str:
     normalized_remote_path = normalize_remote_path(remote_path)
-    query = urllib.parse.urlencode({"path": normalized_remote_path})
+    query_payload: Dict[str, str] = {"path": normalized_remote_path}
+    normalized_pick_code = normalize_115_pick_code(pick_code)
+    if normalized_pick_code:
+        query_payload["pickcode"] = normalized_pick_code
+    query = urllib.parse.urlencode(query_payload)
     proxy_base_url = str(cfg.get("strm_proxy_base_url", "")).strip().rstrip("/")
     if proxy_base_url:
         return f"{proxy_base_url}/strm/proxy?{query}"

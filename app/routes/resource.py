@@ -10,6 +10,30 @@ router = APIRouter()
 resource_job_create_lock = asyncio.Lock()
 
 
+def _build_resource_jobs_state_snapshot(limit: int = 40) -> Dict[str, Any]:
+    cfg = get_config()
+    return build_resource_jobs_state_payload(limit=limit, cfg=cfg)
+
+
+def _import_resource_candidates_to_db(candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
+    ensure_db()
+    conn = open_db()
+    inserted = 0
+    updated = 0
+    item_ids: List[int] = []
+    for item in candidates:
+        item_id, created = upsert_resource_item(conn, item)
+        item_ids.append(item_id)
+        if created:
+            inserted += 1
+        else:
+            updated += 1
+    conn.commit()
+    conn.close()
+    items = [get_resource_item(item_id) for item_id in item_ids]
+    return {"inserted": inserted, "updated": updated, "items": items}
+
+
 @router.get("/resource/state")
 async def get_resource_state(request: Request) -> Dict[str, Any]:
     search = str(request.query_params.get("q", "") or "").strip()
@@ -17,6 +41,12 @@ async def get_resource_state(request: Request) -> Dict[str, Any]:
     if sync_channels:
         await sync_telegram_channels(force=False, limit_per_channel=10)
     return await build_resource_state_payload(search=search)
+
+
+@router.get("/resource/jobs/state")
+async def get_resource_jobs_state(request: Request) -> Dict[str, Any]:
+    limit = max(1, min(int(request.query_params.get("limit", 40) or 40), 120))
+    return await asyncio.to_thread(_build_resource_jobs_state_snapshot, limit)
 
 
 @router.post("/resource/sources/save")
@@ -188,22 +218,8 @@ async def import_resource_text(request: Request) -> Dict[str, Any]:
     if not candidates:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "未识别到可入库内容"})
 
-    ensure_db()
-    conn = open_db()
-    inserted = 0
-    updated = 0
-    item_ids: List[int] = []
-    for item in candidates:
-        item_id, created = upsert_resource_item(conn, item)
-        item_ids.append(item_id)
-        if created:
-            inserted += 1
-        else:
-            updated += 1
-    conn.commit()
-    conn.close()
-    items = [get_resource_item(item_id) for item_id in item_ids]
-    return {"ok": True, "inserted": inserted, "updated": updated, "items": items}
+    result = await asyncio.to_thread(_import_resource_candidates_to_db, candidates)
+    return {"ok": True, **result}
 
 
 @router.post("/resource/items/preview_text")
@@ -237,10 +253,10 @@ async def delete_resource_item_endpoint(request: Request) -> Dict[str, Any]:
     resource_id = int(data.get("id", 0) or 0)
     if resource_id <= 0:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "资源 ID 无效"})
-    resource = get_resource_item(resource_id)
+    resource = await asyncio.to_thread(get_resource_item, resource_id)
     if not resource:
         return JSONResponse(status_code=404, content={"ok": False, "msg": "资源不存在"})
-    delete_resource_item(resource_id)
+    await asyncio.to_thread(delete_resource_item, resource_id)
     return {"ok": True}
 
 

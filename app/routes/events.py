@@ -13,7 +13,8 @@ router = APIRouter()
 async def stream_events(request: Request) -> StreamingResponse:
     queue: asyncio.Queue[str] = asyncio.Queue(maxsize=8)
     ui_event_subscribers.add(queue)
-    queue.put_nowait(json.dumps(build_ui_state_payload(), ensure_ascii=False))
+    cfg = get_config()
+    queue.put_nowait(json.dumps(build_ui_state_payload(cfg), ensure_ascii=False))
 
     async def event_stream() -> AsyncIterator[str]:
         try:

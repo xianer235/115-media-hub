@@ -419,6 +419,12 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
             await update_progress("任务完成", 100, "MD5 校验命中：无变动")
             return
 
+        deduped_scan_results = unique_preserve_order(scan_results)
+        duplicate_scan_count = max(0, len(scan_results) - len(deduped_scan_results))
+        if duplicate_scan_count > 0:
+            await write_log(f"检测到重复路径 {duplicate_scan_count} 条，已去重后继续同步")
+        scan_results = deduped_scan_results
+
         total_files = len(scan_results)
         prefetch_elapsed_seconds = max(0.0, time.perf_counter() - run_started_at)
         await write_log(

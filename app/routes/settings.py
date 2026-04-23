@@ -3,6 +3,7 @@ import asyncio
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from ..config_runtime import build_public_settings_payload, merge_settings_preserve_sensitive
 from ..core import *  # noqa: F401,F403
 from ..services.notify import send_notify_test_message
 from ..services.sign115 import refresh_sign115_status, run_sign115_job
@@ -12,7 +13,8 @@ router = APIRouter()
 
 @router.get("/get_settings")
 async def get_settings_endpoint(request: Request) -> Dict[str, Any]:
-    return get_config()
+    cfg = get_config()
+    return build_public_settings_payload(cfg)
 
 
 @router.get("/version")
@@ -24,13 +26,23 @@ async def get_version_endpoint(request: Request) -> Dict[str, Any]:
 @router.post("/save_settings")
 async def save_settings_endpoint(request: Request) -> Dict[str, Any]:
     incoming = await request.json()
-    cfg = get_config()
-    cfg.update(incoming)
-    cfg["monitor_tasks"] = [normalize_task(task) for task in incoming.get("monitor_tasks", cfg.get("monitor_tasks", []))]
-    cfg["subscription_tasks"] = [
-        normalize_subscription_task(task) for task in incoming.get("subscription_tasks", cfg.get("subscription_tasks", []))
+    incoming_payload = incoming if isinstance(incoming, dict) else {}
+    current_cfg = get_config()
+    merged_cfg = merge_settings_preserve_sensitive(current_cfg, incoming_payload)
+    raw_monitor_tasks = incoming_payload.get("monitor_tasks")
+    raw_subscription_tasks = incoming_payload.get("subscription_tasks")
+    monitor_tasks_payload = raw_monitor_tasks if isinstance(raw_monitor_tasks, list) else current_cfg.get("monitor_tasks", [])
+    subscription_tasks_payload = (
+        raw_subscription_tasks if isinstance(raw_subscription_tasks, list) else current_cfg.get("subscription_tasks", [])
+    )
+    merged_cfg["monitor_tasks"] = [
+        normalize_task(task) for task in monitor_tasks_payload
     ]
-    save_config(cfg)
+    merged_cfg["subscription_tasks"] = [
+        normalize_subscription_task(task)
+        for task in subscription_tasks_payload
+    ]
+    save_config(merged_cfg)
     await refresh_sign115_status(force_remote=False, trigger="settings_save")
     schedule_ui_state_push(0)
     return {"ok": True}
@@ -58,19 +70,21 @@ async def test_tg_proxy(request: Request) -> JSONResponse:
 @router.post("/settings/notify/test")
 async def test_notify_push(request: Request) -> JSONResponse:
     incoming = await request.json()
-    cfg = normalize_config(
+    incoming_payload = incoming if isinstance(incoming, dict) else {}
+    merged_cfg = merge_settings_preserve_sensitive(
+        get_config(),
         {
-            **get_config(),
-            "notify_push_enabled": incoming.get("notify_push_enabled", False),
-            "notify_monitor_enabled": incoming.get("notify_monitor_enabled", False),
-            "notify_channel": incoming.get("notify_channel", "wecom_bot"),
-            "notify_wecom_webhook": incoming.get("notify_wecom_webhook", ""),
-            "notify_wecom_app_corp_id": incoming.get("notify_wecom_app_corp_id", ""),
-            "notify_wecom_app_agent_id": incoming.get("notify_wecom_app_agent_id", ""),
-            "notify_wecom_app_secret": incoming.get("notify_wecom_app_secret", ""),
-            "notify_wecom_app_touser": incoming.get("notify_wecom_app_touser", ""),
-        }
+            "notify_push_enabled": incoming_payload.get("notify_push_enabled", False),
+            "notify_monitor_enabled": incoming_payload.get("notify_monitor_enabled", False),
+            "notify_channel": incoming_payload.get("notify_channel", "wecom_bot"),
+            "notify_wecom_webhook": incoming_payload.get("notify_wecom_webhook", ""),
+            "notify_wecom_app_corp_id": incoming_payload.get("notify_wecom_app_corp_id", ""),
+            "notify_wecom_app_agent_id": incoming_payload.get("notify_wecom_app_agent_id", ""),
+            "notify_wecom_app_secret": incoming_payload.get("notify_wecom_app_secret", ""),
+            "notify_wecom_app_touser": incoming_payload.get("notify_wecom_app_touser", ""),
+        },
     )
+    cfg = normalize_config(merged_cfg)
     try:
         result = await asyncio.to_thread(send_notify_test_message, cfg)
     except Exception as exc:

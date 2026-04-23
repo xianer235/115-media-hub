@@ -3,7 +3,17 @@
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
-- STRM 播放链路统一为容器内 `302` 代理（`/strm/proxy`），播放器直接跟随到 115 真实下载地址。
+
+## [0.2.4] - 2026-04-23
+- 设置接口安全增强：`/get_settings` 对敏感字段脱敏返回并新增 `sensitive_configured` 标记；`/save_settings` 支持敏感字段“留空保持原值”，前端同步按该语义提交。
+- 配置读取与异步链路优化：新增基于 `mtime` 的进程内配置缓存，移除读后自动回写；热点异步路径的阻塞 I/O 改为线程池调用，降低事件循环阻塞。
+- 资源中心降载：新增轻量接口 `/resource/jobs/state`，前端轮询改为 SSE 优先 + 可见性/活跃度自适应策略，减少 `/resource/state` 全量请求频率。
+- 前端首屏体验优化：资源页在首轮状态 hydration 前统一显示加载态，避免“未配置”闪烁；Cookie 提示文案补充“默认不回显、留空不覆盖、填写才覆盖”。
+- 静态资源传输优化：启用 GZip 压缩与静态资源缓存控制策略，降低大体积脚本与 JSON 传输成本。
+- 设置与监控文案优化：Webhook 签名密钥改为前端可见编辑；新增监控“按文件夹修改时间校验”说明及手动删除后需取消勾选提示；补充 115/Quark Cookie 获取方式指引。
+
+## [0.2.3] - 2026-04-23
+- STRM 播放链路统一为容器内代理入口（`/strm/proxy`），由服务端负责 115 下载地址解析与播放转发。
 - 移除 OpenList 运行依赖：目录树任务改为容器内直接读取 115 官方目录树 TXT，文件夹监控任务继续负责目录扫描。
 - 修复目录树 TXT 下载链路：115 返回的签名下载 URL 按原样请求，不再二次编码破坏签名导致 `403 Forbidden`。
 - 修复目录树 TXT 下载链路的 Cookie 丢失问题：解析 `files/download` 响应中的临时 `Set-Cookie` 并回传至 OSS 下载请求，避免 `{"message":"no cookie","status":403}`。
@@ -11,6 +21,15 @@ All notable changes to this project will be documented in this file. The format 
 - 修复 `/strm/proxy` 外链 302 在播放器侧丢失临时下载 Cookie 导致无法播放的问题：改为 `302 -> /strm/relay` 容器内中继拉流，兼容 VLC/Emby/Jellyfin 的直链打开。
 - 设置页新增 115 风控相关调优参数：`115 API 最小间隔`、`目录缓存 TTL`、`下载链接缓存 TTL`。
 - 设置页挂载配置升级为“网盘路径前缀映射”（`provider -> prefix`），用于区分不同网盘路径前缀。
+- 修复 `mount_points` 归一化逻辑忽略用户配置的问题：现在会优先保留用户传入映射，并自动补齐内置 `115/quark` 前缀兜底。
+- 优化 STRM 播放模式：`/strm/proxy` 默认恢复为 `302` 直跳 115 上游地址（速度优先、减少服务端带宽消耗），并保留 `mode=relay`（`307 -> /strm/relay`）与 `mode=proxy`（服务端中继流）兼容异常播放器场景。
+- 修复 `/strm/proxy -> /strm/relay` 的 115 `invalid signature`：中继回源统一复用代理解析阶段的同一 User-Agent，避免签名校验因 UA 不一致而失败。
+- 优化 `/strm/relay` 令牌策略：默认有效期提升为 2 小时，并在每次访问时自动续期，降低长时间播放后拖动/跳转触发 `410 token 失效` 导致卡顿的问题。
+- 优化 `/strm/relay` 跳转稳定性：当上游下载地址过期返回 `401/403/410` 时，自动基于 `pickcode` 刷新下载链接并重试一次，降低长时间播放后 seek 失败概率。
+- 优化 `/strm/relay` 播放兼容性：上游 `Range` 错误状态码与关键响应头（如 `Content-Range`）改为透传，避免播放器把可恢复错误误判为 `502` 致闪退。
+- 优化 `/strm/proxy` 路径解析性能：新增“目录路径 -> pickcode / CID”内存缓存，减少同目录连续播放、切集时重复目录遍历带来的耗时抖动。
+- 优化监控任务生成的 `.strm`：当 115 列表返回 `pick_code` 时写入 `pickcode` 查询参数，播放时可直接跳过路径反查。
+- 优化目录树同步性能：多源扫描命中重复文件路径时先去重再写盘，减少重复生成和无效扫描。
 
 ## [0.2.2] - 2026-04-22
 - 主界面导航支持 URL Hash 同步（`#tab=...`），刷新、前进后退与分享链接可直达对应页面。

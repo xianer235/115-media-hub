@@ -14,6 +14,22 @@ _download_url_cache_lock = threading.Lock()
 _download_url_cache: Dict[str, Dict[str, Any]] = {}
 _relay_token_cache_lock = threading.Lock()
 _relay_token_cache: Dict[str, Dict[str, Any]] = {}
+_pick_code_path_cache_lock = threading.Lock()
+_pick_code_path_cache: Dict[str, Dict[str, Any]] = {}
+_folder_cid_path_cache_lock = threading.Lock()
+_folder_cid_path_cache: Dict[str, Dict[str, Any]] = {}
+_PICK_CODE_PATH_CACHE_TTL_SECONDS = max(
+    60,
+    min(24 * 60 * 60, int(os.environ.get("API_115_PICKCODE_CACHE_TTL_SECONDS", 2 * 60 * 60) or (2 * 60 * 60))),
+)
+_FOLDER_CID_PATH_CACHE_TTL_SECONDS = max(
+    60,
+    min(24 * 60 * 60, int(os.environ.get("API_115_FOLDER_CID_CACHE_TTL_SECONDS", 2 * 60 * 60) or (2 * 60 * 60))),
+)
+_RELAY_STREAM_CHUNK_SIZE = max(
+    32 * 1024,
+    min(1024 * 1024, int(os.environ.get("STRM_RELAY_CHUNK_SIZE", 256 * 1024) or (256 * 1024))),
+)
 _RSA_115_MODULUS = int(
     (
         "8686980c0f5a24c4b9d43020cd2c22703ff3f450756529058b1cf88f09b8602136477198a6e2683149659bd122c33592"
@@ -363,7 +379,149 @@ def _normalize_pick_code(value: Any) -> str:
     return code
 
 
+def _build_pick_code_path_cache_key(cfg: Dict[str, Any], raw_path: str) -> str:
+    _, relative_path = resolve_provider_relative_path(cfg, raw_path, expected_provider="115")
+    normalized_relative_path = normalize_relative_path(relative_path)
+    if not normalized_relative_path:
+        return ""
+    return f"115:{normalized_relative_path}"
+
+
+def _get_cached_pick_code(cache_key: str) -> str:
+    normalized_key = str(cache_key or "").strip()
+    if not normalized_key:
+        return ""
+    now_ts = time.time()
+    with _pick_code_path_cache_lock:
+        payload = _pick_code_path_cache.get(normalized_key)
+        if not payload:
+            return ""
+        expires_at = float((payload or {}).get("expires_at", 0.0) or 0.0)
+        if now_ts >= expires_at:
+            _pick_code_path_cache.pop(normalized_key, None)
+            return ""
+        ttl_seconds = max(
+            60,
+            min(24 * 60 * 60, int((payload or {}).get("ttl_seconds", _PICK_CODE_PATH_CACHE_TTL_SECONDS) or _PICK_CODE_PATH_CACHE_TTL_SECONDS)),
+        )
+        payload["expires_at"] = now_ts + ttl_seconds
+        payload["updated_at"] = now_ts
+        return _normalize_pick_code((payload or {}).get("pick_code", ""))
+
+
+def _set_cached_pick_code(cache_key: str, pick_code: str, ttl_seconds: int = _PICK_CODE_PATH_CACHE_TTL_SECONDS) -> None:
+    normalized_key = str(cache_key or "").strip()
+    normalized_pick_code = _normalize_pick_code(pick_code)
+    if (not normalized_key) or (not normalized_pick_code):
+        return
+    normalized_ttl = max(60, min(24 * 60 * 60, int(ttl_seconds or _PICK_CODE_PATH_CACHE_TTL_SECONDS)))
+    now_ts = time.time()
+    with _pick_code_path_cache_lock:
+        _pick_code_path_cache[normalized_key] = {
+            "pick_code": normalized_pick_code,
+            "ttl_seconds": normalized_ttl,
+            "expires_at": now_ts + normalized_ttl,
+            "updated_at": now_ts,
+        }
+        expired_keys = [
+            key
+            for key, payload in _pick_code_path_cache.items()
+            if now_ts >= float((payload or {}).get("expires_at", 0.0) or 0.0)
+        ]
+        for key in expired_keys:
+            _pick_code_path_cache.pop(key, None)
+        if len(_pick_code_path_cache) > 10000:
+            ordered = sorted(
+                _pick_code_path_cache.items(),
+                key=lambda item: float((item[1] or {}).get("updated_at", 0.0) or 0.0),
+            )
+            for key, _ in ordered[: len(_pick_code_path_cache) - 10000]:
+                _pick_code_path_cache.pop(key, None)
+
+
+def _build_folder_cid_cache_key(relative_path: str) -> str:
+    normalized_relative_path = normalize_relative_path(relative_path)
+    if not normalized_relative_path:
+        return ""
+    return f"115-folder:{normalized_relative_path}"
+
+
+def _get_cached_folder_cid(cache_key: str) -> str:
+    normalized_key = str(cache_key or "").strip()
+    if not normalized_key:
+        return ""
+    now_ts = time.time()
+    with _folder_cid_path_cache_lock:
+        payload = _folder_cid_path_cache.get(normalized_key)
+        if not payload:
+            return ""
+        expires_at = float((payload or {}).get("expires_at", 0.0) or 0.0)
+        if now_ts >= expires_at:
+            _folder_cid_path_cache.pop(normalized_key, None)
+            return ""
+        ttl_seconds = max(
+            60,
+            min(
+                24 * 60 * 60,
+                int(
+                    (payload or {}).get("ttl_seconds", _FOLDER_CID_PATH_CACHE_TTL_SECONDS)
+                    or _FOLDER_CID_PATH_CACHE_TTL_SECONDS
+                ),
+            ),
+        )
+        payload["expires_at"] = now_ts + ttl_seconds
+        payload["updated_at"] = now_ts
+        return normalize_115_cid((payload or {}).get("cid", ""))
+
+
+def _set_cached_folder_cid(
+    cache_key: str,
+    cid: str,
+    ttl_seconds: int = _FOLDER_CID_PATH_CACHE_TTL_SECONDS,
+) -> None:
+    normalized_key = str(cache_key or "").strip()
+    normalized_cid = normalize_115_cid(cid)
+    if (not normalized_key) or (not normalized_cid):
+        return
+    normalized_ttl = max(60, min(24 * 60 * 60, int(ttl_seconds or _FOLDER_CID_PATH_CACHE_TTL_SECONDS)))
+    now_ts = time.time()
+    with _folder_cid_path_cache_lock:
+        _folder_cid_path_cache[normalized_key] = {
+            "cid": normalized_cid,
+            "ttl_seconds": normalized_ttl,
+            "expires_at": now_ts + normalized_ttl,
+            "updated_at": now_ts,
+        }
+        expired_keys = [
+            key
+            for key, payload in _folder_cid_path_cache.items()
+            if now_ts >= float((payload or {}).get("expires_at", 0.0) or 0.0)
+        ]
+        for key in expired_keys:
+            _folder_cid_path_cache.pop(key, None)
+        if len(_folder_cid_path_cache) > 10000:
+            ordered = sorted(
+                _folder_cid_path_cache.items(),
+                key=lambda item: float((item[1] or {}).get("updated_at", 0.0) or 0.0),
+            )
+            for key, _ in ordered[: len(_folder_cid_path_cache) - 10000]:
+                _folder_cid_path_cache.pop(key, None)
+
+
+def _delete_cached_folder_cid(cache_key: str) -> None:
+    normalized_key = str(cache_key or "").strip()
+    if not normalized_key:
+        return
+    with _folder_cid_path_cache_lock:
+        _folder_cid_path_cache.pop(normalized_key, None)
+
+
 def _resolve_pick_code_by_path(cfg: Dict[str, Any], cookie: str, raw_path: str) -> str:
+    cache_key = _build_pick_code_path_cache_key(cfg, raw_path)
+    cached_pick_code = _get_cached_pick_code(cache_key)
+    if cached_pick_code:
+        return cached_pick_code
+
     _, relative_path = resolve_provider_relative_path(cfg, raw_path, expected_provider="115")
     if not relative_path:
         return ""
@@ -372,12 +530,29 @@ def _resolve_pick_code_by_path(cfg: Dict[str, Any], cookie: str, raw_path: str) 
     if not file_name:
         return ""
 
+    parent_cache_key = _build_folder_cid_cache_key(parent_rel)
+    cached_parent_cid = _get_cached_folder_cid(parent_cache_key) if parent_cache_key else ""
     try:
-        parent_cid = _resolve_115_folder_id_by_path_paginated(cookie, parent_rel) if parent_rel else "0"
+        parent_cid = cached_parent_cid or (_resolve_115_folder_id_by_path_paginated(cookie, parent_rel) if parent_rel else "0")
     except Exception:
         return ""
+    if parent_cache_key and parent_cid:
+        _set_cached_folder_cid(parent_cache_key, parent_cid)
     matched = _find_115_file_entry_by_name(cookie, parent_cid, file_name)
-    return _normalize_pick_code((matched or {}).get("pick_code", ""))
+    if (not matched) and parent_cache_key and cached_parent_cid:
+        _delete_cached_folder_cid(parent_cache_key)
+        try:
+            parent_cid = _resolve_115_folder_id_by_path_paginated(cookie, parent_rel) if parent_rel else "0"
+        except Exception:
+            parent_cid = ""
+        if parent_cache_key and parent_cid:
+            _set_cached_folder_cid(parent_cache_key, parent_cid)
+        if parent_cid:
+            matched = _find_115_file_entry_by_name(cookie, parent_cid, file_name)
+    resolved_pick_code = _normalize_pick_code((matched or {}).get("pick_code", ""))
+    if resolved_pick_code:
+        _set_cached_pick_code(cache_key, resolved_pick_code)
+    return resolved_pick_code
 
 
 def _normalize_115_entry_from_list_item(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -504,12 +679,22 @@ def _resolve_115_folder_id_by_path_paginated(cookie: str, relative_path: str) ->
     if not normalized_path:
         return "0"
     current_cid = "0"
+    walked_parts: List[str] = []
     for part in [segment for segment in str(normalized_path).split("/") if segment]:
+        walked_parts.append(part)
+        walked_rel = normalize_relative_path("/".join(walked_parts))
+        walked_cache_key = _build_folder_cid_cache_key(walked_rel)
+        cached_cid = _get_cached_folder_cid(walked_cache_key) if walked_cache_key else ""
+        if cached_cid:
+            current_cid = cached_cid
+            continue
         matched = _find_115_folder_entry_by_name(cookie, current_cid, part)
         next_cid = str((matched or {}).get("id") or (matched or {}).get("cid") or "").strip()
         if not next_cid:
             raise RuntimeError(f"115 网盘目录不存在：{normalized_path}")
         current_cid = next_cid
+        if walked_cache_key and current_cid:
+            _set_cached_folder_cid(walked_cache_key, current_cid)
     return current_cid
 
 
@@ -664,14 +849,23 @@ def _resolve_115_download_payload(cookie: str, pick_code: str, user_agent: str =
     return download_url, download_cookie
 
 
-def _register_relay_token(download_url: str, cookie_header: str, ttl_seconds: int = 120) -> str:
-    normalized_ttl = max(30, min(600, int(ttl_seconds or 120)))
+def _register_relay_token(
+    download_url: str,
+    cookie_header: str,
+    user_agent: str = "",
+    pick_code: str = "",
+    ttl_seconds: int = 2 * 60 * 60,
+) -> str:
+    normalized_ttl = max(60, min(24 * 60 * 60, int(ttl_seconds or (2 * 60 * 60))))
     token = hashlib.md5(f"{time.time()}-{os.urandom(8).hex()}".encode("utf-8")).hexdigest()
     now_ts = time.time()
     with _relay_token_cache_lock:
         _relay_token_cache[token] = {
             "url": str(download_url or "").strip(),
             "cookie": str(cookie_header or "").strip(),
+            "user_agent": _normalize_115_user_agent(user_agent),
+            "pick_code": _normalize_pick_code(pick_code),
+            "ttl_seconds": normalized_ttl,
             "expires_at": now_ts + normalized_ttl,
             "updated_at": now_ts,
         }
@@ -704,11 +898,238 @@ def _resolve_relay_payload(token: str) -> Dict[str, str]:
         if now_ts >= float((payload or {}).get("expires_at", 0.0) or 0.0):
             _relay_token_cache.pop(normalized_token, None)
             return {}
+        # 滑动续期：播放中持续拖动/跳转时刷新有效期，避免中途 seek 因令牌过期失败。
+        payload_ttl = max(60, min(24 * 60 * 60, int((payload or {}).get("ttl_seconds", 2 * 60 * 60) or (2 * 60 * 60))))
+        payload["expires_at"] = now_ts + payload_ttl
+        payload["updated_at"] = now_ts
         return {
             "url": str((payload or {}).get("url", "")).strip(),
             "cookie": str((payload or {}).get("cookie", "")).strip(),
+            "user_agent": _normalize_115_user_agent((payload or {}).get("user_agent", "")),
+            "pick_code": _normalize_pick_code((payload or {}).get("pick_code", "")),
         }
 
+
+def _build_proxy_upstream_headers(cookie_header: str, user_agent: str, range_header: str = "") -> Dict[str, str]:
+    headers = {
+        "Accept": "*/*",
+        "Referer": "https://115.com/",
+        "Origin": "https://115.com",
+        "User-Agent": _normalize_115_user_agent(user_agent),
+    }
+    merged_cookie = str(cookie_header or "").strip()
+    if merged_cookie:
+        headers["Cookie"] = merged_cookie
+    normalized_range = str(range_header or "").strip()
+    if normalized_range:
+        headers["Range"] = normalized_range
+    return headers
+
+
+def _extract_proxy_response_headers(headers_obj: Any) -> Dict[str, str]:
+    response_headers: Dict[str, str] = {}
+    for key in (
+        "Content-Type",
+        "Content-Length",
+        "Content-Range",
+        "Accept-Ranges",
+        "Last-Modified",
+        "ETag",
+        "Cache-Control",
+        "Content-Disposition",
+    ):
+        try:
+            value = str(headers_obj.get(key, "") or "").strip() if headers_obj is not None else ""
+        except Exception:
+            value = ""
+        if value:
+            response_headers[key] = value
+    return response_headers
+
+
+def _open_proxy_upstream(
+    target_url: str,
+    headers: Dict[str, str],
+    method: str,
+    timeout: int = 120,
+) -> Dict[str, Any]:
+    request = urllib.request.Request(str(target_url or "").strip(), headers=dict(headers or {}), method=method)
+    try:
+        response = urllib.request.urlopen(request, timeout=max(10, int(timeout or 120)))
+        return {"ok": True, "response": response}
+    except urllib.error.HTTPError as exc:
+        try:
+            error_body = exc.read()
+        except Exception:
+            error_body = b""
+        return {
+            "ok": False,
+            "http_error": True,
+            "status_code": int(getattr(exc, "code", 502) or 502),
+            "headers": _extract_proxy_response_headers(getattr(exc, "headers", None)),
+            "body": error_body,
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "http_error": False,
+            "error": str(exc),
+        }
+
+
+def _update_relay_token_payload(
+    token: str,
+    download_url: str,
+    cookie_header: str,
+    user_agent: str,
+    pick_code: str = "",
+) -> bool:
+    normalized_token = str(token or "").strip()
+    normalized_download_url = str(download_url or "").strip()
+    normalized_cookie = str(cookie_header or "").strip()
+    normalized_user_agent = _normalize_115_user_agent(user_agent)
+    normalized_pick_code = _normalize_pick_code(pick_code)
+    if (not normalized_token) or (not normalized_download_url):
+        return False
+    now_ts = time.time()
+    with _relay_token_cache_lock:
+        payload = _relay_token_cache.get(normalized_token)
+        if not payload:
+            return False
+        payload_ttl = max(60, min(24 * 60 * 60, int((payload or {}).get("ttl_seconds", 2 * 60 * 60) or (2 * 60 * 60))))
+        payload["url"] = normalized_download_url
+        payload["cookie"] = normalized_cookie
+        payload["pick_code"] = normalized_pick_code
+        payload["user_agent"] = normalized_user_agent
+        payload["expires_at"] = now_ts + payload_ttl
+        payload["updated_at"] = now_ts
+    return True
+
+
+def _refresh_115_download_target_by_pick_code(
+    cookie_115: str,
+    pick_code: str,
+    user_agent: str,
+) -> Tuple[str, str]:
+    normalized_cookie_115 = str(cookie_115 or "").strip()
+    normalized_pick_code = _normalize_pick_code(pick_code)
+    normalized_user_agent = _normalize_115_user_agent(user_agent)
+    if (not normalized_cookie_115) or (not normalized_pick_code):
+        return "", ""
+    refreshed_url, refreshed_download_cookie = _resolve_115_download_payload(
+        normalized_cookie_115,
+        normalized_pick_code,
+        normalized_user_agent,
+    )
+    if not str(refreshed_url or "").strip():
+        return "", ""
+    refreshed_cookie = "; ".join(
+        [part for part in [normalized_cookie_115, str(refreshed_download_cookie or "").strip()] if part]
+    )
+    return str(refreshed_url or "").strip(), refreshed_cookie
+
+
+async def _stream_115_response(
+    request: Request,
+    upstream_url: str,
+    upstream_cookie: str,
+    upstream_user_agent: str,
+    upstream_pick_code: str = "",
+    refresh_cookie_115: str = "",
+    relay_token: str = "",
+) -> Response:
+    current_url = str(upstream_url or "").strip()
+    current_cookie = str(upstream_cookie or "").strip()
+    current_user_agent = _normalize_115_user_agent(upstream_user_agent)
+    current_pick_code = _normalize_pick_code(upstream_pick_code)
+    normalized_refresh_cookie_115 = str(refresh_cookie_115 or "").strip()
+    normalized_relay_token = str(relay_token or "").strip()
+    if not current_url:
+        return JSONResponse(status_code=410, content={"ok": False, "msg": "播放中继令牌已失效，请重试"})
+
+    range_header = str(request.headers.get("range", "") or "").strip()
+    method = "HEAD" if request.method == "HEAD" else "GET"
+    upstream_response = None
+    refresh_attempted = False
+    while True:
+        request_headers = _build_proxy_upstream_headers(current_cookie, current_user_agent, range_header)
+        open_result = await asyncio.to_thread(
+            _open_proxy_upstream,
+            current_url,
+            request_headers,
+            method,
+            120,
+        )
+        if bool(open_result.get("ok", False)):
+            upstream_response = open_result.get("response")
+            break
+        if bool(open_result.get("http_error", False)):
+            status_code = int(open_result.get("status_code", 502) or 502)
+            should_retry_with_refresh = (
+                (not refresh_attempted)
+                and bool(current_pick_code)
+                and bool(normalized_refresh_cookie_115)
+                and status_code in (401, 403, 410)
+            )
+            if should_retry_with_refresh:
+                try:
+                    refreshed_url, refreshed_cookie = await asyncio.to_thread(
+                        _refresh_115_download_target_by_pick_code,
+                        normalized_refresh_cookie_115,
+                        current_pick_code,
+                        current_user_agent,
+                    )
+                except Exception:
+                    refreshed_url, refreshed_cookie = "", ""
+                if refreshed_url:
+                    refresh_attempted = True
+                    current_url = refreshed_url
+                    current_cookie = refreshed_cookie
+                    if normalized_relay_token:
+                        _update_relay_token_payload(
+                            normalized_relay_token,
+                            current_url,
+                            current_cookie,
+                            current_user_agent,
+                            pick_code=current_pick_code,
+                        )
+                    continue
+            error_body = open_result.get("body", b"")
+            response_headers = open_result.get("headers", {})
+            if request.method == "HEAD":
+                return Response(status_code=status_code, headers=response_headers)
+            if error_body:
+                return Response(content=error_body, status_code=status_code, headers=response_headers)
+            return Response(content=f"115 中继下载失败: HTTP {status_code}", status_code=status_code, headers=response_headers)
+        return JSONResponse(
+            status_code=502,
+            content={"ok": False, "msg": f"115 中继下载失败: {str(open_result.get('error', '') or 'unknown error')}"},
+        )
+
+    response_headers = _extract_proxy_response_headers(getattr(upstream_response, "headers", None))
+    status_code = int(getattr(upstream_response, "status", 200) or 200)
+
+    if request.method == "HEAD":
+        try:
+            upstream_response.close()
+        except Exception:
+            pass
+        return Response(status_code=status_code, headers=response_headers)
+
+    def _stream_upstream_body() -> Iterator[bytes]:
+        try:
+            while True:
+                chunk = upstream_response.read(_RELAY_STREAM_CHUNK_SIZE)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            try:
+                upstream_response.close()
+            except Exception:
+                pass
+
+    return StreamingResponse(_stream_upstream_body(), status_code=status_code, headers=response_headers)
 
 @router.api_route("/strm/proxy", methods=["GET", "HEAD"], include_in_schema=False)
 async def proxy_strm_play(request: Request) -> Response:
@@ -731,11 +1152,41 @@ async def proxy_strm_play(request: Request) -> Response:
 
     client_user_agent = _normalize_115_user_agent(request.headers.get("user-agent", ""))
     try:
-        download_url, _ = await asyncio.to_thread(_resolve_115_download_payload, cookie, pick_code, client_user_agent)
+        download_url, download_cookie = await asyncio.to_thread(
+            _resolve_115_download_payload,
+            cookie,
+            pick_code,
+            client_user_agent,
+        )
     except Exception as exc:
         return JSONResponse(status_code=502, content={"ok": False, "msg": f"115 下载地址解析失败: {exc}"})
 
-    # 按用户要求仅执行 302 直连：成功即跳转，失败即返回错误，不做中继回退。
+    relay_cookie = "; ".join(
+        [part for part in [str(cookie or "").strip(), str(download_cookie or "").strip()] if part]
+    )
+
+    mode_param = str(request.query_params.get("mode", "") or "").strip().lower()
+    default_mode = str(cfg.get("strm_proxy_mode", os.environ.get("STRM_PROXY_MODE", "redirect_direct")) or "").strip().lower()
+    resolved_mode = mode_param or default_mode
+    use_relay_redirect = resolved_mode in {"relay", "relay_redirect", "relay307", "307"}
+    use_direct_proxy = resolved_mode in {"proxy", "direct_proxy", "stream"}
+
+    if use_relay_redirect:
+        relay_token = _register_relay_token(download_url, relay_cookie, client_user_agent, pick_code=pick_code)
+        relay_base = str(request.url_for("relay_strm_play"))
+        relay_url = relay_base + "?" + urllib.parse.urlencode({"token": relay_token})
+        # 307 比 302 更稳定：避免播放器在重定向后错误改写请求方法。
+        return RedirectResponse(url=relay_url, status_code=307)
+    if use_direct_proxy:
+        return await _stream_115_response(
+            request=request,
+            upstream_url=download_url,
+            upstream_cookie=relay_cookie,
+            upstream_user_agent=client_user_agent,
+            upstream_pick_code=pick_code,
+            refresh_cookie_115=cookie,
+        )
+    # 默认策略：302 直跳 115 上游下载地址，最大化播放速度并避免服务端中继流量。
     return RedirectResponse(url=download_url, status_code=302)
 
 
@@ -745,70 +1196,18 @@ async def relay_strm_play(request: Request) -> Response:
     payload = _resolve_relay_payload(token)
     relay_url = str(payload.get("url", "")).strip()
     relay_cookie = str(payload.get("cookie", "")).strip()
+    relay_user_agent = _normalize_115_user_agent(payload.get("user_agent", ""))
+    relay_pick_code = _normalize_pick_code(payload.get("pick_code", ""))
     if not relay_url:
         return JSONResponse(status_code=410, content={"ok": False, "msg": "播放中继令牌已失效，请重试"})
-
-    upstream_headers = {
-        "Accept": "*/*",
-        "Referer": "https://115.com/",
-        "Origin": "https://115.com",
-        "User-Agent": "Mozilla/5.0 115-media-hub",
-    }
-    if relay_cookie:
-        upstream_headers["Cookie"] = relay_cookie
-    range_header = str(request.headers.get("range", "") or "").strip()
-    if range_header:
-        upstream_headers["Range"] = range_header
-
-    method = "HEAD" if request.method == "HEAD" else "GET"
-    upstream_request = urllib.request.Request(relay_url, headers=upstream_headers, method=method)
-    try:
-        upstream_response = urllib.request.urlopen(upstream_request, timeout=120)
-    except urllib.error.HTTPError as exc:
-        detail = ""
-        try:
-            detail = exc.read().decode("utf-8", errors="ignore").strip()
-        except Exception:
-            detail = ""
-        message = detail or f"115 中继下载失败: HTTP {exc.code}"
-        return JSONResponse(status_code=502, content={"ok": False, "msg": message})
-    except Exception as exc:
-        return JSONResponse(status_code=502, content={"ok": False, "msg": f"115 中继下载失败: {exc}"})
-
-    response_headers: Dict[str, str] = {}
-    for key in (
-        "Content-Type",
-        "Content-Length",
-        "Content-Range",
-        "Accept-Ranges",
-        "Last-Modified",
-        "ETag",
-        "Cache-Control",
-        "Content-Disposition",
-    ):
-        value = str(upstream_response.headers.get(key, "") or "").strip()
-        if value:
-            response_headers[key] = value
-    status_code = int(getattr(upstream_response, "status", 200) or 200)
-
-    if request.method == "HEAD":
-        try:
-            upstream_response.close()
-        except Exception:
-            pass
-        return Response(status_code=status_code, headers=response_headers)
-
-    def _stream_upstream_body() -> Iterator[bytes]:
-        try:
-            while True:
-                chunk = upstream_response.read(1024 * 1024)
-                if not chunk:
-                    break
-                yield chunk
-        finally:
-            try:
-                upstream_response.close()
-            except Exception:
-                pass
-
-    return StreamingResponse(_stream_upstream_body(), status_code=status_code, headers=response_headers)
+    cfg = get_config()
+    cookie_115 = str(cfg.get("cookie_115", "")).strip()
+    return await _stream_115_response(
+        request=request,
+        upstream_url=relay_url,
+        upstream_cookie=relay_cookie,
+        upstream_user_agent=relay_user_agent,
+        upstream_pick_code=relay_pick_code,
+        refresh_cookie_115=cookie_115,
+        relay_token=token,
+    )

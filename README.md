@@ -214,7 +214,8 @@ POST /webhook/{任务名}
 
 - `GET /get_settings` / `POST /save_settings`
 - `GET /version`：版本检查状态
-- `GET /strm/proxy?path=/...`：STRM 容器代理播放入口（仅在 STRM 代理模式下写入到 `.strm`）
+- `GET /strm/proxy?path=/...`：STRM 播放入口（默认 `302` 直跳 115 上游地址，支持附带 `pickcode` 跳过路径反查；`mode=relay` 时改为 `307` 跳转到容器内 relay，`mode=proxy` 时走服务端中继流）
+- `GET /strm/relay?token=...`：STRM 中继拉流入口（内部临时令牌接口，给 `mode=relay` 使用）
 - `POST /settings/tg_proxy/test`：TG 代理延迟测试
 - `POST /settings/notify/test`：企业微信通知测试
 - `GET /settings/115/sign/status` / `POST /settings/115/sign/run`

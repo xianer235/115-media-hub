@@ -189,14 +189,16 @@
                 </div>
             </div>
 
-            <div id="resource-cookie-hint" class="resource-blocking-hint rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-200">
+            <div id="resource-cookie-hint" class="resource-blocking-hint rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-200 hidden">
                 当前还没配置可用网盘 Cookie。请先到“参数配置”页填写 115 或 Quark Cookie，再使用导入或转存功能。
             </div>
 
             <div id="resource-quick-link-strip" class="resource-quick-link-strip hidden" data-resource-quick-strip aria-label="常用网盘链接快捷入口"></div>
 
             <div class="resource-board-surface">
-                <div id="resource-board" class="resource-board-stack" data-resource-board></div>
+                <div id="resource-board" class="resource-board-stack" data-resource-board>
+                    <div class="rounded-2xl border border-slate-700 p-8 text-center text-slate-400 text-sm">正在加载首页配置，请稍候...</div>
+                </div>
             </div>
 
             <div id="resource-onboarding-card" class="group-card resource-onboarding-card hidden">
@@ -458,17 +460,23 @@
                         <label class="block">
                             <span class="text-xs text-slate-500 inline-flex items-center gap-2">
                                 115 Cookie
-                                <button type="button" class="info-dot" onclick="showHelp('115Cookie推荐使用115不大助手，扫描不常用的支付宝/微信小程序获取。')">i</button>
+                                <button type="button" class="info-dot" onclick="showHelp('推荐用「115不大助手」获取 115 Cookie：登录后扫描小程序二维码，复制完整 Cookie（如 UID/CID/SEID）粘贴到此处并保存。')">i</button>
                             </span>
                             <textarea id="cookie_115" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 min-h-[120px]" placeholder="把浏览器里的 115 Cookie 粘贴到这里，例如 UID=...; CID=...; SEID=...;"></textarea>
                         </label>
                         <label class="block">
                             <span class="text-xs text-slate-500 inline-flex items-center gap-2">
                                 Quark Cookie
-                                <button type="button" class="info-dot" onclick="showHelp('夸克仅支持 Cookie 登录。请把浏览器中的 pan.quark.cn Cookie 完整粘贴到这里。')">i</button>
+                                <button type="button" class="info-dot" onclick="showHelp('夸克建议在网页版 pan.quark.cn 登录后获取 Cookie：可用浏览器开发者工具（Application/存储 -> Cookies -> pan.quark.cn）或 Cookie-Editor 导出，再将完整 Cookie 粘贴到此处保存。')">i</button>
                             </span>
                             <textarea id="cookie_quark" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 min-h-[120px]" placeholder="把浏览器里的 Quark Cookie 粘贴到这里，例如 __puus=...; _UP_A4A_11_=...;"></textarea>
                         </label>
+                        <div class="text-xs text-slate-500 leading-6">
+                            获取方式建议：115 使用「115不大助手」；Quark 在网页版登录后用开发者工具或 Cookie-Editor 获取 `pan.quark.cn` Cookie。
+                        </div>
+                        <div class="text-xs text-slate-500 leading-6">
+                            安全提示：已保存的 Cookie 属于敏感信息，前端默认不回显。输入框留空并保存不会修改后端现有值；只有填写新内容并点击“保存全部配置”时，才会覆盖后端值。
+                        </div>
                         <div class="text-xs text-slate-500 leading-6">
                             当前支持 magnet 离线下载、115 分享链接转存与 Quark 分享转存；保存路径会自动映射到对应网盘目录。
                         </div>
@@ -744,8 +752,10 @@
                     </label>
                     <label class="flex items-center gap-3 cursor-pointer text-sm">
                         <input type="checkbox" id="monitor_skip_by_dir_mtime" class="ui-checkbox">
-                        文件夹修改时间校验跳过更新
+                        <span>按文件夹修改时间校验（未变化目录跳过更新）</span>
+                        <button type="button" class="info-dot" onclick="showHelp('开启后会按文件夹修改时间判断是否刷新；修改时间未变化的目录将跳过更新，以减少无效扫描。若你手动删除了本地文件并需要重新生成，请先取消勾选此项再执行任务。')">i</button>
                     </label>
+                    <div class="text-xs text-slate-500 pl-8 -mt-2">备注：若本地文件是手动删除后要重新生成，请先取消勾选此项，再运行任务。</div>
                     <label class="flex items-center gap-3 cursor-pointer text-sm">
                         <input type="checkbox" id="monitor_incremental" class="ui-checkbox">
                         增量模式 (开启后不删除本地多余文件)

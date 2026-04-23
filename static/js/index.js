@@ -126,7 +126,11 @@
         let monitorTaskIntroExpanded = {};
         let subscriptionTaskIntroExpanded = {};
         let statusEventSource = null;
+        let statusStreamHealthy = false;
         let statusFallbackTimer = null;
+        let resourcePollTimer = null;
+        let resourcePollInFlight = false;
+        let sensitiveConfigMeta = {};
         const monitorActionLocks = new Set();
         let versionInfo = { local: null, latest: null, has_update: false, checked_at: 0, error: '', source: '' };
         let versionBannerDismissed = false;
@@ -169,8 +173,18 @@
         };
         const btnTexts = ["🌐 联网同步更新", "🛠 本地调试解析", "🔥 强制全量重刷"];
         const DEFAULT_EXTENSIONS = "mp4,mkv,avi,mov,wmv,flv,webm,vob,mpg,mpeg,ts,m2ts,mts,rmvb,rm,asf,3gp,m4v,f4v,iso";
+        const SENSITIVE_SETTING_FIELDS = Object.freeze([
+            'password',
+            'cookie_115',
+            'cookie_quark',
+            'notify_wecom_webhook',
+            'notify_wecom_app_secret',
+            'tmdb_api_key',
+        ]);
         const STATUS_FALLBACK_INTERVAL = 15000;
-        const RESOURCE_REFRESH_INTERVAL = 15000;
+        const RESOURCE_POLL_ACTIVE_INTERVAL = 15000;
+        const RESOURCE_POLL_SSE_INTERVAL = 30000;
+        const RESOURCE_POLL_IDLE_INTERVAL = 60000;
         const VERSION_REFRESH_INTERVAL = 1000 * 60 * 15;
         const SIGN115_REFRESH_INTERVAL = 1000 * 60;
         const VERSION_FALLBACK_PROJECT_URL = 'https://github.com/xianer235/115-media-hub';
@@ -515,6 +529,7 @@
                 if (syncHash) await syncLocationHashWithTab(nextTab, { replace: replaceHash });
                 syncMainTabRowState();
                 focusMainTab(nextTab);
+                scheduleResourcePolling();
                 return;
             }
             moduleScrollTopState[prevTab] = getWindowScrollTop();
@@ -532,6 +547,7 @@
             if (switchTicket !== tabSwitchTicket || currentTab !== nextTab) return;
             restoreTabScrollPosition(nextTab);
             focusMainTab(nextTab);
+            scheduleResourcePolling(500);
         }
 
         function normalizeToastPlacement(placement) {
@@ -636,6 +652,36 @@
                 result.push(token);
             });
             return result;
+        }
+
+        function normalizeSensitiveConfigMeta(meta) {
+            const source = meta && typeof meta === 'object' ? meta : {};
+            const result = {};
+            SENSITIVE_SETTING_FIELDS.forEach((key) => {
+                result[key] = !!source[key];
+            });
+            return result;
+        }
+
+        function applySensitiveConfigMeta(meta) {
+            sensitiveConfigMeta = normalizeSensitiveConfigMeta(meta);
+            SENSITIVE_SETTING_FIELDS.forEach((key) => {
+                const el = document.getElementById(key);
+                if (!el) return;
+                if (!Object.prototype.hasOwnProperty.call(el.dataset, 'originPlaceholder')) {
+                    el.dataset.originPlaceholder = String(el.getAttribute('placeholder') || '');
+                }
+                const configured = !!sensitiveConfigMeta[key];
+                const originPlaceholder = String(el.dataset.originPlaceholder || '');
+                if (configured) {
+                    const suffix = '（已配置，留空不覆盖）';
+                    el.setAttribute('placeholder', originPlaceholder ? `${originPlaceholder}${suffix}` : `已配置${suffix}`);
+                    el.dataset.sensitiveConfigured = '1';
+                } else {
+                    el.setAttribute('placeholder', originPlaceholder);
+                    el.dataset.sensitiveConfigured = '0';
+                }
+            });
         }
 
         function buildLogSignature(logs, formatter) {
@@ -1017,12 +1063,64 @@
             statusFallbackTimer = null;
         }
 
+        function getResourcePollingDelay() {
+            const resourceTabVisible = currentTab === 'resource' && !document.hidden;
+            if (resourceTabVisible) {
+                return statusStreamHealthy ? RESOURCE_POLL_SSE_INTERVAL : RESOURCE_POLL_ACTIVE_INTERVAL;
+            }
+            if (hasActiveResourceJobs()) {
+                return RESOURCE_POLL_ACTIVE_INTERVAL;
+            }
+            return statusStreamHealthy ? RESOURCE_POLL_IDLE_INTERVAL : RESOURCE_POLL_SSE_INTERVAL;
+        }
+
+        async function runResourcePollingTick() {
+            if (resourcePollInFlight) {
+                scheduleResourcePolling();
+                return;
+            }
+            resourcePollInFlight = true;
+            try {
+                const keyword = String(document.getElementById('resource-search-input')?.value || resourceState.search || '').trim();
+                const resourceTabVisible = currentTab === 'resource' && !document.hidden;
+                if (resourceTabVisible) {
+                    if (keyword && !isDirectImportInput(keyword)) {
+                        await refreshResourceJobsOnly();
+                    } else {
+                        await refreshResourceState();
+                    }
+                } else if (hasActiveResourceJobs() || !statusStreamHealthy) {
+                    await refreshResourceJobsOnly();
+                }
+            } finally {
+                resourcePollInFlight = false;
+                scheduleResourcePolling();
+            }
+        }
+
+        function scheduleResourcePolling(delayOverride = null) {
+            if (resourcePollTimer) {
+                window.clearTimeout(resourcePollTimer);
+                resourcePollTimer = null;
+            }
+            const parsedDelay = Number(delayOverride);
+            const delay = Number.isFinite(parsedDelay) && parsedDelay >= 0
+                ? parsedDelay
+                : getResourcePollingDelay();
+            resourcePollTimer = window.setTimeout(() => {
+                void runResourcePollingTick();
+            }, Math.max(1000, delay));
+        }
+
         function connectStatusStream() {
             if (!window.EventSource) {
+                statusStreamHealthy = false;
                 startStatusFallbackPolling();
+                scheduleResourcePolling(RESOURCE_POLL_ACTIVE_INTERVAL);
                 return;
             }
             if (statusEventSource) statusEventSource.close();
+            statusStreamHealthy = false;
             statusEventSource = new EventSource('/events');
             statusEventSource.addEventListener('state', (event) => {
                 try {
@@ -1037,10 +1135,14 @@
                 }
             });
             statusEventSource.onopen = () => {
+                statusStreamHealthy = true;
                 stopStatusFallbackPolling();
+                scheduleResourcePolling();
             };
             statusEventSource.onerror = () => {
+                statusStreamHealthy = false;
                 startStatusFallbackPolling();
+                scheduleResourcePolling(RESOURCE_POLL_ACTIVE_INTERVAL);
             };
         }
 
@@ -1758,9 +1860,13 @@
                 'password',
                 'webhook_secret'
             ];
+            const sensitiveFieldSet = new Set(SENSITIVE_SETTING_FIELDS);
             standardIds.forEach(id => {
                 const el = document.getElementById(id);
-                if (el) cfg[id] = el.value;
+                if (!el) return;
+                const value = String(el.value || '');
+                if (sensitiveFieldSet.has(id) && !value.trim()) return;
+                cfg[id] = value;
             });
 
             cfg.check_hash = document.getElementById('check_hash').checked;
@@ -1797,6 +1903,12 @@
 
             if (res.ok) {
                 await refreshResourceState({ allowSearch: false });
+                const nextSensitiveMeta = { ...sensitiveConfigMeta };
+                SENSITIVE_SETTING_FIELDS.forEach((key) => {
+                    const value = String(document.getElementById(key)?.value || '').trim();
+                    if (value) nextSensitiveMeta[key] = true;
+                });
+                applySensitiveConfigMeta(nextSensitiveMeta);
                 alert('✅ 配置已保存');
                 refreshSign115Status(false);
             } else {
@@ -5344,6 +5456,13 @@
             const container = document.getElementById('resource-board');
             if (!container) return;
 
+            if (!resourceStateHydrated) {
+                resourceBoardHintText = '';
+                container.innerHTML = '<div class="rounded-2xl border border-slate-700 p-8 text-center text-slate-400 text-sm">正在加载首页配置，请稍候...</div>';
+                renderResourceBoardHint();
+                return;
+            }
+
             const activeKeyword = String(resourceState.search || '').trim();
             const isSearchMode = !!activeKeyword;
             const sections = (resourceState.channel_sections || []).filter(section => section.enabled !== false);
@@ -5441,7 +5560,7 @@
             const completedCountEl = document.getElementById('resource-completed-job-count');
             if (completedCountEl) completedCountEl.innerText = String(completedCount);
             syncResourceJobClearMenuState();
-            document.getElementById('resource-cookie-hint').classList.toggle('hidden', hasAnyResourceCookieConfigured());
+            document.getElementById('resource-cookie-hint').classList.toggle('hidden', !resourceStateHydrated || hasAnyResourceCookieConfigured());
             syncResourceSourceSelect();
             syncResourceMonitorTaskOptions(document.getElementById('resource_job_savepath')?.value || '');
             renderResourceOnboardingCard();
@@ -5539,35 +5658,53 @@
                 const res = await fetch(endpoint);
                 if (!res.ok) return null;
                 const data = await res.json();
-                applyResourceState(data);
                 resourceStateHydrated = true;
+                applyResourceState(data);
                 return data;
             } catch (e) {
                 return null;
             }
         }
 
+        function hasActiveResourceJobs() {
+            const jobs = Array.isArray(resourceState?.jobs) ? resourceState.jobs : [];
+            return jobs.some((job) => {
+                const status = String(job?.status || '').trim().toLowerCase();
+                return ['pending', 'running', 'queued', 'importing', 'submitted'].includes(status);
+            });
+        }
+
+        function applyResourceJobsState(data) {
+            if (!data || typeof data !== 'object') return;
+            const nextJobs = Array.isArray(data.jobs) ? data.jobs : (resourceState.jobs || []);
+            const nextMonitorTasks = Array.isArray(data.monitor_tasks) ? data.monitor_tasks : (resourceState.monitor_tasks || []);
+            const incomingStats = data.stats && typeof data.stats === 'object' ? data.stats : {};
+            const fallbackCounts = getResourceJobCounts(nextJobs);
+            resourceState = {
+                ...resourceState,
+                jobs: nextJobs,
+                monitor_tasks: nextMonitorTasks,
+                stats: {
+                    ...(resourceState.stats || {}),
+                    completed_job_count: Number(incomingStats.completed_job_count ?? fallbackCounts.completed ?? 0),
+                    failed_job_count: Number(incomingStats.failed_job_count ?? fallbackCounts.failed ?? 0),
+                }
+            };
+            syncResourceMonitorTaskOptions(document.getElementById('resource_job_savepath')?.value || '');
+            renderResourceJobs();
+            syncResourceJobModalTrigger();
+            if (currentTab === 'resource') {
+                renderResourceBoard();
+                renderResourceBoardHint();
+            }
+        }
+
         async function refreshResourceJobsOnly() {
             try {
-                const res = await fetch('/resource/state');
+                const res = await fetch('/resource/jobs/state');
                 if (!res.ok) return null;
                 const data = await res.json();
-                const keptItems = Array.isArray(resourceState.items) ? resourceState.items : [];
-                const keptSections = Array.isArray(resourceState.search_sections) ? resourceState.search_sections : [];
-                const keptSearchMeta = resourceState.search_meta || {};
-                const keptFilteredCount = Number(resourceState?.stats?.filtered_item_count || 0);
-                applyResourceState({
-                    ...data,
-                    search: resourceState.search || '',
-                    items: keptItems,
-                    search_sections: keptSections,
-                    search_meta: keptSearchMeta,
-                    stats: {
-                        ...(data?.stats || {}),
-                        filtered_item_count: keptFilteredCount,
-                    },
-                });
-                resourceStateHydrated = true;
+                applyResourceJobsState(data);
                 return data;
             } catch (e) {
                 return null;
@@ -9456,14 +9593,16 @@
                 const res = await fetch('/get_settings');
                 if (!res.ok) return;
                 const cfg = await res.json();
+                const sensitiveMeta = normalizeSensitiveConfigMeta(cfg.sensitive_configured || {});
 
                 Object.keys(cfg).forEach(k => {
                     const el = document.getElementById(k);
-                    if (el && k !== 'trees') {
+                    if (el && k !== 'trees' && k !== 'sensitive_configured') {
                         if (el.type === 'checkbox') el.checked = cfg[k];
                         else el.value = cfg[k];
                     }
                 });
+                applySensitiveConfigMeta(sensitiveMeta);
                 const tgThreadsInput = document.getElementById('tg_channel_threads');
                 if (tgThreadsInput) {
                     const rawTgThreads = parseInt(cfg.tg_channel_threads || '', 10);
@@ -9482,8 +9621,8 @@
                     sources: cfg.resource_sources || [],
                     quick_links: cfg.resource_quick_links || [],
                     monitor_tasks: cfg.monitor_tasks || [],
-                    cookie_configured: !!String(cfg.cookie_115 || '').trim(),
-                    quark_cookie_configured: !!String(cfg.cookie_quark || '').trim()
+                    cookie_configured: !!sensitiveMeta.cookie_115,
+                    quark_cookie_configured: !!sensitiveMeta.cookie_quark
                 });
                 applySign115State({
                     ...sign115State,
@@ -10045,6 +10184,13 @@
             syncSettingsSaveDock();
             requestViewportMetricsSync();
         });
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                scheduleResourcePolling(500);
+                return;
+            }
+            scheduleResourcePolling();
+        });
         window.addEventListener('orientationchange', requestViewportMetricsSync);
         if (window.visualViewport) {
             window.visualViewport.addEventListener('resize', requestViewportMetricsSync);
@@ -10121,15 +10267,8 @@
             moduleVisitState.settings = true;
             connectStatusStream();
         });
+        scheduleResourcePolling(RESOURCE_POLL_ACTIVE_INTERVAL);
         refreshVersionInfo();
         setInterval(() => refreshVersionInfo(false), VERSION_REFRESH_INTERVAL);
         setInterval(() => refreshSign115Status(false), SIGN115_REFRESH_INTERVAL);
-        setInterval(() => {
-            const keyword = document.getElementById('resource-search-input')?.value?.trim() || '';
-            if (keyword && !isDirectImportInput(keyword)) {
-                refreshResourceJobsOnly();
-                return;
-            }
-            refreshResourceState();
-        }, RESOURCE_REFRESH_INTERVAL);
     

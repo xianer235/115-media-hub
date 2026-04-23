@@ -75,6 +75,15 @@ def _extract_magnet_link(payload: Dict[str, Any]) -> str:
     return ""
 
 
+def _delete_monitor_runtime_records(task_name: str) -> None:
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM monitor_files WHERE task_name = ?", (task_name,))
+    cursor.execute("DELETE FROM monitor_dirs WHERE task_name = ?", (task_name,))
+    conn.commit()
+    conn.close()
+
+
 def _resolve_magnet_title(payload: Dict[str, Any], magnet_link: str) -> str:
     title = normalize_resource_title(str(payload.get("title", "") or "").strip())
     if title:
@@ -202,12 +211,7 @@ async def delete_monitor(request: Request) -> Dict[str, Any]:
     monitor_last_run.pop(task_name, None)
     monitor_next_run.pop(task_name, None)
 
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM monitor_files WHERE task_name = ?", (task_name,))
-    cursor.execute("DELETE FROM monitor_dirs WHERE task_name = ?", (task_name,))
-    conn.commit()
-    conn.close()
+    await asyncio.to_thread(_delete_monitor_runtime_records, task_name)
     schedule_ui_state_push(0)
     return {"ok": True}
 
