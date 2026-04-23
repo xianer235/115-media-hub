@@ -5002,7 +5002,8 @@
         html.theme-day .bg-slate-900\/60,
         html.theme-day .bg-slate-900\/50,
         html.theme-day .bg-slate-800\/80,
-        html.theme-day .bg-slate-950\/80 { background: var(--surface) !important; background-image: none !important; }
+        html.theme-day .bg-slate-950\/80,
+        html.theme-day .bg-slate-950\/70 { background: var(--surface) !important; background-image: none !important; }
         html.theme-day .bg-slate-950\/45 {
             background: var(--surface-soft) !important;
             background-image: none !important;
@@ -5010,7 +5011,9 @@
         html.theme-day .border-slate-700,
         html.theme-day .border-slate-800,
         html.theme-day .border-slate-500\/40,
-        html.theme-day .border-slate-700\/90 { border-color: var(--border) !important; }
+        html.theme-day .border-slate-700\/90,
+        html.theme-day .border-slate-700\/80,
+        html.theme-day .border-slate-700\/70 { border-color: var(--border) !important; }
         html.theme-day .hover\:border-slate-700\/75:hover { border-color: var(--border) !important; }
         html.theme-day .text-slate-100,
         html.theme-day .text-slate-200,
@@ -5821,10 +5824,10 @@
         html.theme-day .text-emerald-400 { color: #047857 !important; }
         html.theme-day .text-red-400 { color: var(--danger) !important; }
         html.theme-day #prog-step,
-        html.theme-day #page-settings .text-white,
-        html.theme-day #page-subscription .text-white,
-        html.theme-day #page-monitor .text-white,
-        html.theme-day #help-modal .text-white { color: var(--text) !important; }
+        html.theme-day #page-settings .text-white:not(button):not(a),
+        html.theme-day #page-subscription .text-white:not(button):not(a),
+        html.theme-day #page-monitor .text-white:not(button):not(a),
+        html.theme-day #help-modal .text-white:not(button):not(a) { color: var(--text) !important; }
         html.theme-day #page-subscription .text-slate-300 { color: #334155 !important; }
         html.theme-day #page-subscription .text-slate-400 { color: #475569 !important; }
         html.theme-day #page-subscription .text-slate-500 { color: #475569 !important; }
