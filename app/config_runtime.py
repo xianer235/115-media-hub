@@ -40,6 +40,8 @@ def build_public_settings_payload(
     cfg: Dict[str, Any],
     sensitive_keys: Iterable[str] = SENSITIVE_SETTING_KEYS,
 ) -> Dict[str, Any]:
+    from .core import build_cookie_health_payload
+
     source = cfg if isinstance(cfg, dict) else {}
     safe_payload = {**source}
     meta: Dict[str, bool] = {}
@@ -49,4 +51,5 @@ def build_public_settings_payload(
         if key in safe_payload:
             safe_payload[key] = ""
     safe_payload["sensitive_configured"] = meta
+    safe_payload["cookie_health"] = build_cookie_health_payload(source)
     return safe_payload

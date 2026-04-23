@@ -143,6 +143,67 @@ API_115_LIST_CACHE_MAX_ROWS = max(
     200,
     int(os.environ.get("API_115_LIST_CACHE_MAX_ROWS", 2000) or 2000),
 )
+COOKIE_HEALTH_PROVIDERS: Tuple[str, ...] = ("115", "quark")
+COOKIE_HEALTH_MIN_REFRESH_INTERVAL_SECONDS = max(
+    5,
+    min(600, int(os.environ.get("COOKIE_HEALTH_MIN_REFRESH_INTERVAL_SECONDS", 20) or 20)),
+)
+COOKIE_HEALTH_SUCCESS_UPDATE_INTERVAL_SECONDS = max(
+    10,
+    min(3600, int(os.environ.get("COOKIE_HEALTH_SUCCESS_UPDATE_INTERVAL_SECONDS", 90) or 90)),
+)
+COOKIE_HEALTH_INVALID_MESSAGE_HINTS: Tuple[str, ...] = (
+    "cookie invalid",
+    "invalid cookie",
+    "no cookie",
+    "not login",
+    "need login",
+    "login expired",
+    "session expired",
+    "invalid token",
+    "unauthorized",
+    "auth failed",
+    "未登录",
+    "未登入",
+    "登录失效",
+    "登入失效",
+    "cookie失效",
+    "cookie 无效",
+    "登录态失效",
+    "请先登录",
+    "驗證失敗",
+    "验证失败",
+    "认证失败",
+    "授權失敗",
+    "授权失败",
+)
+COOKIE_HEALTH_TRANSIENT_MESSAGE_HINTS: Tuple[str, ...] = (
+    "timeout",
+    "timed out",
+    "connection reset",
+    "connection aborted",
+    "connection refused",
+    "temporary",
+    "temporarily",
+    "bad gateway",
+    "service unavailable",
+    "too many requests",
+    "dns",
+    "network",
+    "ssl",
+    "proxy",
+    "连接超时",
+    "连接失败",
+    "网络异常",
+    "网络错误",
+    "请求超时",
+    "服务不可用",
+    "网关错误",
+    "429",
+    "502",
+    "503",
+    "504",
+)
 _share_snap_rate_limit_lock = threading.Lock()
 _share_snap_last_request_monotonic = 0.0
 _api_115_rate_limit_lock = threading.Lock()
@@ -5573,6 +5634,31 @@ sign115_runtime = {
     "last_auto_date": "",
     "last_checked_ts": 0.0,
 }
+cookie_health_lock = threading.Lock()
+cookie_health_status: Dict[str, Dict[str, Any]] = {
+    "115": {
+        "configured": False,
+        "state": "missing",
+        "message": "未配置 115 Cookie",
+        "last_checked_at": "",
+        "last_success_at": "",
+        "trigger": "",
+        "fail_count": 0,
+    },
+    "quark": {
+        "configured": False,
+        "state": "missing",
+        "message": "未配置 Quark Cookie",
+        "last_checked_at": "",
+        "last_success_at": "",
+        "trigger": "",
+        "fail_count": 0,
+    },
+}
+cookie_health_runtime: Dict[str, Dict[str, float]] = {
+    "115": {"last_checked_ts": 0.0, "last_success_ts": 0.0},
+    "quark": {"last_checked_ts": 0.0, "last_success_ts": 0.0},
+}
 version_cache: Dict[str, Any] = {"latest": None, "checked_at": 0.0, "error": ""}
 tmdb_cache_entries: Dict[str, Dict[str, Any]] = {}
 ui_event_subscribers: Set[asyncio.Queue[str]] = set()
@@ -5585,6 +5671,393 @@ resource_channel_last_sync: Dict[str, float] = {}
 resource_channel_last_error: Dict[str, str] = {}
 resource_channel_syncing: Set[str] = set()
 resource_channel_profiles: Dict[str, Dict[str, Any]] = {}
+
+
+def normalize_cookie_health_provider(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if token in {"115", "cookie_115"}:
+        return "115"
+    if token in {"quark", "cookie_quark"}:
+        return "quark"
+    return ""
+
+
+def _cookie_health_provider_label(provider: str) -> str:
+    return "Quark" if normalize_cookie_health_provider(provider) == "quark" else "115"
+
+
+def _cookie_health_cookie_value(cfg: Dict[str, Any], provider: str) -> str:
+    key = "cookie_quark" if normalize_cookie_health_provider(provider) == "quark" else "cookie_115"
+    return str((cfg or {}).get(key, "") or "").strip()
+
+
+def _cookie_health_missing_message(provider: str) -> str:
+    return f"未配置 {_cookie_health_provider_label(provider)} Cookie"
+
+
+def _cookie_health_unknown_message(provider: str) -> str:
+    return f"已配置 {_cookie_health_provider_label(provider)} Cookie，等待检测"
+
+
+def _cookie_health_valid_message(provider: str) -> str:
+    return f"{_cookie_health_provider_label(provider)} Cookie 可用"
+
+
+def _ensure_cookie_health_entry_locked(provider: str) -> Dict[str, Any]:
+    provider_key = normalize_cookie_health_provider(provider)
+    if not provider_key:
+        return {}
+    if provider_key not in cookie_health_status:
+        cookie_health_status[provider_key] = {
+            "configured": False,
+            "state": "missing",
+            "message": _cookie_health_missing_message(provider_key),
+            "last_checked_at": "",
+            "last_success_at": "",
+            "trigger": "",
+            "fail_count": 0,
+        }
+    if provider_key not in cookie_health_runtime:
+        cookie_health_runtime[provider_key] = {"last_checked_ts": 0.0, "last_success_ts": 0.0}
+    return cookie_health_status[provider_key]
+
+
+def _set_cookie_health_entry_locked(provider: str, **fields: Any) -> bool:
+    entry = _ensure_cookie_health_entry_locked(provider)
+    if not entry:
+        return False
+    changed = False
+    for key, value in fields.items():
+        if entry.get(key) == value:
+            continue
+        entry[key] = value
+        changed = True
+    return changed
+
+
+def _normalize_cookie_health_error_detail(error: Any) -> str:
+    detail = str(error or "").strip()
+    if not detail:
+        return "Cookie 检测失败"
+    return detail
+
+
+def _classify_cookie_health_error(error: Any) -> Tuple[str, str]:
+    detail = _normalize_cookie_health_error_detail(error)
+    lowered = detail.lower()
+    if isinstance(error, urllib.error.HTTPError):
+        status_code = int(getattr(error, "code", 0) or 0)
+        if status_code in (401, 403):
+            return "invalid", f"Cookie 可能已失效（HTTP {status_code}）"
+        if status_code in (408, 409, 425, 429, 500, 502, 503, 504):
+            return "error", f"网络或服务异常（HTTP {status_code}）"
+    if any(hint in lowered for hint in COOKIE_HEALTH_INVALID_MESSAGE_HINTS):
+        return "invalid", detail
+    if any(hint in lowered for hint in COOKIE_HEALTH_TRANSIENT_MESSAGE_HINTS):
+        return "error", detail
+    return "error", detail
+
+
+def sync_cookie_health_configured(cfg: Optional[Dict[str, Any]] = None, trigger: str = "sync") -> None:
+    active_cfg = cfg or get_config()
+    changed = False
+    with cookie_health_lock:
+        for provider in COOKIE_HEALTH_PROVIDERS:
+            entry = _ensure_cookie_health_entry_locked(provider)
+            if not entry:
+                continue
+            configured = bool(_cookie_health_cookie_value(active_cfg, provider))
+            if not configured:
+                changed = _set_cookie_health_entry_locked(
+                    provider,
+                    configured=False,
+                    state="missing",
+                    message=_cookie_health_missing_message(provider),
+                    trigger=str(trigger or "").strip(),
+                    fail_count=0,
+                ) or changed
+                continue
+            if not entry.get("configured", False):
+                changed = _set_cookie_health_entry_locked(provider, configured=True) or changed
+            state = str(entry.get("state", "") or "").strip().lower()
+            if state in {"", "missing"}:
+                changed = _set_cookie_health_entry_locked(
+                    provider,
+                    configured=True,
+                    state="unknown",
+                    message=_cookie_health_unknown_message(provider),
+                    trigger=str(trigger or "").strip(),
+                ) or changed
+            elif not entry.get("configured", False):
+                changed = _set_cookie_health_entry_locked(provider, configured=True) or changed
+    if changed:
+        schedule_ui_state_push(0)
+
+
+def mark_cookie_health_checking(provider: str, trigger: str = "manual_check") -> None:
+    provider_key = normalize_cookie_health_provider(provider)
+    if not provider_key:
+        return
+    cfg = get_config()
+    configured = bool(_cookie_health_cookie_value(cfg, provider_key))
+    changed = False
+    with cookie_health_lock:
+        _ensure_cookie_health_entry_locked(provider_key)
+        if not configured:
+            changed = _set_cookie_health_entry_locked(
+                provider_key,
+                configured=False,
+                state="missing",
+                message=_cookie_health_missing_message(provider_key),
+                trigger=str(trigger or "").strip(),
+                fail_count=0,
+            ) or changed
+        else:
+            changed = _set_cookie_health_entry_locked(
+                provider_key,
+                configured=True,
+                state="checking",
+                message=f"正在检测 {_cookie_health_provider_label(provider_key)} Cookie...",
+                trigger=str(trigger or "").strip(),
+            ) or changed
+    if changed:
+        schedule_ui_state_push(0)
+
+
+def mark_cookie_health_success(
+    provider: str,
+    trigger: str = "runtime",
+    force: bool = False,
+    message: str = "",
+) -> None:
+    provider_key = normalize_cookie_health_provider(provider)
+    if not provider_key:
+        return
+    cfg = get_config()
+    configured = bool(_cookie_health_cookie_value(cfg, provider_key))
+    now_ts = time.time()
+    now_iso = now_text()
+    changed = False
+    with cookie_health_lock:
+        entry = _ensure_cookie_health_entry_locked(provider_key)
+        runtime_payload = cookie_health_runtime.get(provider_key, {"last_checked_ts": 0.0, "last_success_ts": 0.0})
+        last_checked_ts = float(runtime_payload.get("last_checked_ts", 0.0) or 0.0)
+        if not configured:
+            changed = _set_cookie_health_entry_locked(
+                provider_key,
+                configured=False,
+                state="missing",
+                message=_cookie_health_missing_message(provider_key),
+                trigger=str(trigger or "").strip(),
+                fail_count=0,
+            ) or changed
+            runtime_payload["last_checked_ts"] = now_ts
+            cookie_health_runtime[provider_key] = runtime_payload
+        else:
+            should_skip = (
+                (not force)
+                and str(trigger or "").strip().lower().startswith("runtime")
+                and str(entry.get("state", "")).strip().lower() == "valid"
+                and (now_ts - last_checked_ts) < COOKIE_HEALTH_SUCCESS_UPDATE_INTERVAL_SECONDS
+            )
+            if should_skip:
+                return
+            changed = _set_cookie_health_entry_locked(
+                provider_key,
+                configured=True,
+                state="valid",
+                message=str(message or "").strip() or _cookie_health_valid_message(provider_key),
+                last_checked_at=now_iso,
+                last_success_at=now_iso,
+                trigger=str(trigger or "").strip(),
+                fail_count=0,
+            ) or changed
+            runtime_payload["last_checked_ts"] = now_ts
+            runtime_payload["last_success_ts"] = now_ts
+            cookie_health_runtime[provider_key] = runtime_payload
+    if changed:
+        schedule_ui_state_push(0)
+
+
+def mark_cookie_health_failure(
+    provider: str,
+    error: Any,
+    trigger: str = "runtime",
+    force: bool = False,
+) -> None:
+    provider_key = normalize_cookie_health_provider(provider)
+    if not provider_key:
+        return
+    cfg = get_config()
+    configured = bool(_cookie_health_cookie_value(cfg, provider_key))
+    now_ts = time.time()
+    now_iso = now_text()
+    changed = False
+    with cookie_health_lock:
+        entry = _ensure_cookie_health_entry_locked(provider_key)
+        runtime_payload = cookie_health_runtime.get(provider_key, {"last_checked_ts": 0.0, "last_success_ts": 0.0})
+        if not configured:
+            changed = _set_cookie_health_entry_locked(
+                provider_key,
+                configured=False,
+                state="missing",
+                message=_cookie_health_missing_message(provider_key),
+                trigger=str(trigger or "").strip(),
+                fail_count=0,
+            ) or changed
+            runtime_payload["last_checked_ts"] = now_ts
+            cookie_health_runtime[provider_key] = runtime_payload
+        else:
+            state, detail = _classify_cookie_health_error(error)
+            fail_count = max(0, int(entry.get("fail_count", 0) or 0)) + 1
+            if (not force) and str(trigger or "").strip().lower().startswith("runtime"):
+                last_checked_ts = float(runtime_payload.get("last_checked_ts", 0.0) or 0.0)
+                if (
+                    str(entry.get("state", "")).strip().lower() == state
+                    and str(entry.get("message", "")).strip() == detail
+                    and (now_ts - last_checked_ts) < COOKIE_HEALTH_MIN_REFRESH_INTERVAL_SECONDS
+                ):
+                    return
+            changed = _set_cookie_health_entry_locked(
+                provider_key,
+                configured=True,
+                state=state,
+                message=detail,
+                last_checked_at=now_iso,
+                trigger=str(trigger or "").strip(),
+                fail_count=fail_count,
+            ) or changed
+            runtime_payload["last_checked_ts"] = now_ts
+            cookie_health_runtime[provider_key] = runtime_payload
+    if changed:
+        schedule_ui_state_push(0)
+
+
+def build_cookie_health_payload(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    active_cfg = cfg or get_config()
+    sync_cookie_health_configured(active_cfg, trigger="payload")
+    with cookie_health_lock:
+        payload: Dict[str, Any] = {}
+        for provider in COOKIE_HEALTH_PROVIDERS:
+            entry = _ensure_cookie_health_entry_locked(provider)
+            payload[provider] = {
+                "configured": bool(entry.get("configured", False)),
+                "state": str(entry.get("state", "unknown") or "unknown"),
+                "message": str(entry.get("message", "") or ""),
+                "last_checked_at": str(entry.get("last_checked_at", "") or ""),
+                "last_success_at": str(entry.get("last_success_at", "") or ""),
+                "trigger": str(entry.get("trigger", "") or ""),
+                "fail_count": max(0, int(entry.get("fail_count", 0) or 0)),
+            }
+    return payload
+
+
+def _probe_115_cookie(cookie: str) -> None:
+    normalized_cookie = str(cookie or "").strip()
+    if not normalized_cookie:
+        raise RuntimeError("115 Cookie 未配置")
+    throttle_115_api_requests()
+    headers = {
+        "Cookie": normalized_cookie,
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://115.com/",
+        "User-Agent": "Mozilla/5.0 115-media-hub",
+    }
+    url = "https://aps.115.com/natsort/files.php?aid=1&cid=0&offset=0&limit=1&show_dir=1&natsort=1&format=json"
+    result = http_request_json(url, extra_headers=headers, timeout=20)
+    if not bool((result or {}).get("state", False)):
+        detail = (
+            str((result or {}).get("error", "")).strip()
+            or str((result or {}).get("msg", "")).strip()
+            or str((result or {}).get("message", "")).strip()
+            or "115 Cookie 检测失败"
+        )
+        raise RuntimeError(detail)
+
+
+def _probe_quark_cookie(cookie: str) -> None:
+    normalized_cookie = str(cookie or "").strip()
+    if not normalized_cookie:
+        raise RuntimeError("Quark Cookie 未配置")
+    headers = {
+        "Cookie": normalized_cookie,
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://pan.quark.cn/",
+        "Origin": "https://pan.quark.cn",
+        "User-Agent": "Mozilla/5.0 115-media-hub",
+    }
+    url = (
+        "https://drive-pc.quark.cn/1/clouddrive/file/sort"
+        "?pr=ucpro&fr=pc&pdir_fid=0&_page=1&_size=1&_fetch_total=1&_fetch_sub_dirs=1&_sort=file_type:asc,file_name:asc"
+    )
+    result = http_request_json(url, extra_headers=headers, timeout=20)
+    code = parse_int((result or {}).get("code"), default=0)
+    status = parse_int((result or {}).get("status"), default=0)
+    success = any(
+        (
+            bool((result or {}).get("success", False)),
+            bool((result or {}).get("state", False)),
+            code == 0,
+            status in (0, 200),
+        )
+    )
+    if not success:
+        detail = (
+            str((result or {}).get("message", "")).strip()
+            or str((result or {}).get("msg", "")).strip()
+            or str((result or {}).get("error", "")).strip()
+            or str((result or {}).get("error_msg", "")).strip()
+            or "Quark Cookie 检测失败"
+        )
+        raise RuntimeError(detail)
+
+
+def _normalize_cookie_health_providers(providers: Any = None) -> List[str]:
+    raw_items = providers if isinstance(providers, list) else COOKIE_HEALTH_PROVIDERS
+    if providers is None:
+        raw_items = list(COOKIE_HEALTH_PROVIDERS)
+    normalized: List[str] = []
+    for item in raw_items:
+        provider = normalize_cookie_health_provider(item)
+        if (not provider) or provider in normalized:
+            continue
+        normalized.append(provider)
+    return normalized or list(COOKIE_HEALTH_PROVIDERS)
+
+
+async def refresh_cookie_health_status(
+    providers: Any = None,
+    trigger: str = "manual_check",
+    force: bool = False,
+) -> Dict[str, Any]:
+    cfg = get_config()
+    sync_cookie_health_configured(cfg, trigger=trigger or "refresh")
+    provider_list = _normalize_cookie_health_providers(providers)
+    now_ts = time.time()
+
+    for provider in provider_list:
+        cookie_value = _cookie_health_cookie_value(cfg, provider)
+        if not cookie_value:
+            mark_cookie_health_failure(provider, _cookie_health_missing_message(provider), trigger=trigger, force=True)
+            continue
+
+        with cookie_health_lock:
+            runtime_payload = cookie_health_runtime.get(provider, {"last_checked_ts": 0.0, "last_success_ts": 0.0})
+            last_checked_ts = float(runtime_payload.get("last_checked_ts", 0.0) or 0.0)
+        if (not force) and last_checked_ts > 0 and (now_ts - last_checked_ts) < COOKIE_HEALTH_MIN_REFRESH_INTERVAL_SECONDS:
+            continue
+
+        mark_cookie_health_checking(provider, trigger=trigger)
+        try:
+            if provider == "quark":
+                await asyncio.to_thread(_probe_quark_cookie, cookie_value)
+            else:
+                await asyncio.to_thread(_probe_115_cookie, cookie_value)
+            mark_cookie_health_success(provider, trigger=trigger, force=True)
+        except Exception as exc:
+            mark_cookie_health_failure(provider, exc, trigger=trigger, force=True)
+
+    return build_cookie_health_payload(cfg)
 
 
 def clone_jsonable(value: Any) -> Any:
@@ -5679,6 +6152,7 @@ def build_ui_state_payload(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, An
         "monitor": build_monitor_status_payload(active_cfg),
         "subscription": build_subscription_status_payload(active_cfg),
         "sign115": build_sign115_status_payload(active_cfg),
+        "cookie_health": build_cookie_health_payload(active_cfg),
     }
 
 
@@ -5740,6 +6214,7 @@ async def build_resource_state_payload(search: str = "") -> Dict[str, Any]:
         "monitor_tasks": clone_jsonable(cfg.get("monitor_tasks", [])),
         "cookie_configured": bool(str(cfg.get("cookie_115", "")).strip()),
         "quark_cookie_configured": bool(str(cfg.get("cookie_quark", "")).strip()),
+        "cookie_health": build_cookie_health_payload(cfg),
         "setup_status": {
             "strm_ready": bool(
                 str(cfg.get("cookie_115", "")).strip() and str(cfg.get("strm_proxy_base_url", "")).strip()
@@ -6771,22 +7246,27 @@ def submit_115_offline_task(cookie: str, resource_url: str, folder_id: str) -> D
         "Origin": "https://115.com",
         "User-Agent": "Mozilla/5.0 115-media-hub",
     }
-    response = http_request_form_json(
-        "https://115.com/web/lixian/?ct=lixian&ac=add_task_url",
-        {"url": resource_url, "wp_path_id": folder_id or "0"},
-        timeout=45,
-        extra_headers=headers,
-    )
-    accepted = bool(response.get("state")) or int(response.get("errcode", 0) or 0) == 10008
-    if not accepted:
-        detail = (
-            str(response.get("error_msg", "")).strip()
-            or str(response.get("message", "")).strip()
-            or str(response.get("msg", "")).strip()
-            or "115 离线任务提交失败"
+    try:
+        response = http_request_form_json(
+            "https://115.com/web/lixian/?ct=lixian&ac=add_task_url",
+            {"url": resource_url, "wp_path_id": folder_id or "0"},
+            timeout=45,
+            extra_headers=headers,
         )
-        raise RuntimeError(detail)
-    return response
+        accepted = bool(response.get("state")) or int(response.get("errcode", 0) or 0) == 10008
+        if not accepted:
+            detail = (
+                str(response.get("error_msg", "")).strip()
+                or str(response.get("message", "")).strip()
+                or str(response.get("msg", "")).strip()
+                or "115 离线任务提交失败"
+            )
+            raise RuntimeError(detail)
+        mark_cookie_health_success("115", trigger="runtime:submit_115_offline_task")
+        return response
+    except Exception as exc:
+        mark_cookie_health_failure("115", exc, trigger="runtime:submit_115_offline_task")
+        raise
 
 
 def throttle_115_api_requests(rate_limit_seconds: float = 0.0) -> None:
@@ -6861,55 +7341,60 @@ def list_115_entries(cookie: str, cid: str = "0", force_refresh: bool = False) -
             if cached and now_ts < float(cached.get("expires_at", 0.0) or 0.0):
                 return _clone_115_entries(cached.get("entries", []))
 
-    throttle_115_api_requests()
-    headers = {
-        "Cookie": cookie,
-        "Accept": "application/json, text/plain, */*",
-        "Referer": "https://115.com/",
-        "User-Agent": "Mozilla/5.0 115-media-hub",
-    }
-    url = (
-        "https://aps.115.com/natsort/files.php"
-        f"?aid=1&cid={urllib.parse.quote(target_cid)}&offset=0&limit=300&show_dir=1&natsort=1&format=json"
-    )
-    result = http_request_json(url, extra_headers=headers, timeout=45)
-    if not result.get("state", False):
-        detail = str(result.get("error", "") or result.get("msg", "") or "读取 115 文件夹失败").strip()
-        raise RuntimeError(detail)
-
-    entries: List[Dict[str, Any]] = []
-    for item in result.get("data") or []:
-        name = str(item.get("n") or "").strip()
-        folder_id = str(item.get("cid") or "").strip()
-        file_id = str(item.get("fid") or "").strip()
-        sha1 = str(item.get("sha1") or item.get("sha") or "").strip()
-        is_dir = not file_id and not sha1
-        entry_id = folder_id if is_dir else (file_id or str(item.get("pick_code") or item.get("pc") or sha1).strip())
-        if not name or not entry_id:
-            continue
-        entries.append(
-            {
-                "id": entry_id,
-                "cid": folder_id if is_dir else "",
-                "name": name,
-                "is_dir": is_dir,
-                "size": parse_int(item.get("s") or item.get("size") or 0),
-                "pick_code": str(item.get("pick_code") or item.get("pc") or "").strip(),
-                "sha1": sha1,
-                "modified_at": str(item.get("te") or item.get("t") or item.get("tp") or item.get("tu") or "").strip(),
-            }
+    try:
+        throttle_115_api_requests()
+        headers = {
+            "Cookie": cookie,
+            "Accept": "application/json, text/plain, */*",
+            "Referer": "https://115.com/",
+            "User-Agent": "Mozilla/5.0 115-media-hub",
+        }
+        url = (
+            "https://aps.115.com/natsort/files.php"
+            f"?aid=1&cid={urllib.parse.quote(target_cid)}&offset=0&limit=300&show_dir=1&natsort=1&format=json"
         )
-    entries.sort(key=lambda item: (0 if item["is_dir"] else 1, str(item["name"]).lower()))
-    if cache_ttl_seconds > 0:
-        now_ts = time.time()
-        with _api_115_list_cache_lock:
-            _api_115_list_cache[target_cid] = {
-                "entries": _clone_115_entries(entries),
-                "updated_at": now_ts,
-                "expires_at": now_ts + cache_ttl_seconds,
-            }
-            _prune_115_list_cache_locked(now_ts)
-    return entries
+        result = http_request_json(url, extra_headers=headers, timeout=45)
+        if not result.get("state", False):
+            detail = str(result.get("error", "") or result.get("msg", "") or "读取 115 文件夹失败").strip()
+            raise RuntimeError(detail)
+
+        entries: List[Dict[str, Any]] = []
+        for item in result.get("data") or []:
+            name = str(item.get("n") or "").strip()
+            folder_id = str(item.get("cid") or "").strip()
+            file_id = str(item.get("fid") or "").strip()
+            sha1 = str(item.get("sha1") or item.get("sha") or "").strip()
+            is_dir = not file_id and not sha1
+            entry_id = folder_id if is_dir else (file_id or str(item.get("pick_code") or item.get("pc") or sha1).strip())
+            if not name or not entry_id:
+                continue
+            entries.append(
+                {
+                    "id": entry_id,
+                    "cid": folder_id if is_dir else "",
+                    "name": name,
+                    "is_dir": is_dir,
+                    "size": parse_int(item.get("s") or item.get("size") or 0),
+                    "pick_code": str(item.get("pick_code") or item.get("pc") or "").strip(),
+                    "sha1": sha1,
+                    "modified_at": str(item.get("te") or item.get("t") or item.get("tp") or item.get("tu") or "").strip(),
+                }
+            )
+        entries.sort(key=lambda item: (0 if item["is_dir"] else 1, str(item["name"]).lower()))
+        if cache_ttl_seconds > 0:
+            now_ts = time.time()
+            with _api_115_list_cache_lock:
+                _api_115_list_cache[target_cid] = {
+                    "entries": _clone_115_entries(entries),
+                    "updated_at": now_ts,
+                    "expires_at": now_ts + cache_ttl_seconds,
+                }
+                _prune_115_list_cache_locked(now_ts)
+        mark_cookie_health_success("115", trigger="runtime:list_115_entries")
+        return entries
+    except Exception as exc:
+        mark_cookie_health_failure("115", exc, trigger="runtime:list_115_entries")
+        raise
 
 
 def create_115_folder(cookie: str, cid: str = "0", folder_name: str = "") -> Dict[str, Any]:
@@ -6928,68 +7413,73 @@ def create_115_folder(cookie: str, cid: str = "0", folder_name: str = "") -> Dic
     if len(normalized_name) > 120:
         raise RuntimeError("文件夹名称过长")
 
-    headers = {
-        "Cookie": cookie,
-        "Accept": "application/json, text/plain, */*",
-        "Referer": "https://115.com/",
-        "Origin": "https://115.com",
-        "User-Agent": "Mozilla/5.0 115-media-hub",
-    }
-    response = http_request_form_json(
-        "https://webapi.115.com/files/add",
-        {"pid": parent_cid, "cname": normalized_name},
-        timeout=45,
-        extra_headers=headers,
-    )
+    try:
+        headers = {
+            "Cookie": cookie,
+            "Accept": "application/json, text/plain, */*",
+            "Referer": "https://115.com/",
+            "Origin": "https://115.com",
+            "User-Agent": "Mozilla/5.0 115-media-hub",
+        }
+        response = http_request_form_json(
+            "https://webapi.115.com/files/add",
+            {"pid": parent_cid, "cname": normalized_name},
+            timeout=45,
+            extra_headers=headers,
+        )
 
-    def resolve_folder_id_from_response(payload: Dict[str, Any]) -> str:
-        candidates: List[str] = []
-        for key in ("cid", "id", "folder_id", "file_id"):
-            candidates.append(str(payload.get(key, "")).strip())
-        data = payload.get("data")
-        if isinstance(data, dict):
+        def resolve_folder_id_from_response(payload: Dict[str, Any]) -> str:
+            candidates: List[str] = []
             for key in ("cid", "id", "folder_id", "file_id"):
-                candidates.append(str(data.get(key, "")).strip())
-        return next((item for item in candidates if item and item != "0"), "")
+                candidates.append(str(payload.get(key, "")).strip())
+            data = payload.get("data")
+            if isinstance(data, dict):
+                for key in ("cid", "id", "folder_id", "file_id"):
+                    candidates.append(str(data.get(key, "")).strip())
+            return next((item for item in candidates if item and item != "0"), "")
 
-    def find_existing_folder_id() -> str:
-        entries = list_115_entries(cookie, parent_cid, True)
-        matched = next(
-            (
-                entry
-                for entry in entries
-                if entry.get("is_dir") and str(entry.get("name", "")).strip() == normalized_name
-            ),
-            None,
-        )
-        return str((matched or {}).get("id", "")).strip()
+        def find_existing_folder_id() -> str:
+            entries = list_115_entries(cookie, parent_cid, True)
+            matched = next(
+                (
+                    entry
+                    for entry in entries
+                    if entry.get("is_dir") and str(entry.get("name", "")).strip() == normalized_name
+                ),
+                None,
+            )
+            return str((matched or {}).get("id", "")).strip()
 
-    folder_id = resolve_folder_id_from_response(response if isinstance(response, dict) else {})
-    success = bool((response or {}).get("state"))
-    if not success and not folder_id:
-        folder_id = find_existing_folder_id()
+        folder_id = resolve_folder_id_from_response(response if isinstance(response, dict) else {})
+        success = bool((response or {}).get("state"))
+        if not success and not folder_id:
+            folder_id = find_existing_folder_id()
 
-    if not success and not folder_id:
-        detail = (
-            str((response or {}).get("error", "")).strip()
-            or str((response or {}).get("msg", "")).strip()
-            or str((response or {}).get("message", "")).strip()
-            or "新建 115 文件夹失败"
-        )
-        raise RuntimeError(detail)
+        if not success and not folder_id:
+            detail = (
+                str((response or {}).get("error", "")).strip()
+                or str((response or {}).get("msg", "")).strip()
+                or str((response or {}).get("message", "")).strip()
+                or "新建 115 文件夹失败"
+            )
+            raise RuntimeError(detail)
 
-    if not folder_id:
-        folder_id = find_existing_folder_id()
-    if not folder_id:
-        raise RuntimeError("文件夹已创建，但未获取到目录 ID")
-    invalidate_115_entries_cache(parent_cid)
+        if not folder_id:
+            folder_id = find_existing_folder_id()
+        if not folder_id:
+            raise RuntimeError("文件夹已创建，但未获取到目录 ID")
+        invalidate_115_entries_cache(parent_cid)
+        mark_cookie_health_success("115", trigger="runtime:create_115_folder")
 
-    return {
-        "id": folder_id,
-        "name": normalized_name,
-        "cid": parent_cid,
-        "created": success,
-    }
+        return {
+            "id": folder_id,
+            "name": normalized_name,
+            "cid": parent_cid,
+            "created": success,
+        }
+    except Exception as exc:
+        mark_cookie_health_failure("115", exc, trigger="runtime:create_115_folder")
+        raise
 
 
 def sanitize_115_folder_name(value: str, fallback: str = "未命名") -> str:
@@ -7388,21 +7878,26 @@ def list_quark_entries(cookie: str, cid: str = "0") -> List[Dict[str, Any]]:
     normalized_cookie = str(cookie or "").strip()
     if not normalized_cookie:
         raise RuntimeError("Quark Cookie 未配置")
-    parent_id = str(cid or "0").strip() or "0"
-    page = 1
-    page_size = 200
-    entries: List[Dict[str, Any]] = []
-    while True:
-        page_payload = _list_quark_folder_page(normalized_cookie, pdir_fid=parent_id, page=page, page_size=page_size)
-        current_entries = page_payload.get("entries", []) if isinstance(page_payload.get("entries"), list) else []
-        entries.extend(current_entries)
-        if not bool(page_payload.get("has_more", False)):
-            break
-        if len(entries) >= 5000:
-            break
-        page += 1
-    entries.sort(key=lambda item: (0 if item.get("is_dir") else 1, str(item.get("name", "")).lower()))
-    return entries
+    try:
+        parent_id = str(cid or "0").strip() or "0"
+        page = 1
+        page_size = 200
+        entries: List[Dict[str, Any]] = []
+        while True:
+            page_payload = _list_quark_folder_page(normalized_cookie, pdir_fid=parent_id, page=page, page_size=page_size)
+            current_entries = page_payload.get("entries", []) if isinstance(page_payload.get("entries"), list) else []
+            entries.extend(current_entries)
+            if not bool(page_payload.get("has_more", False)):
+                break
+            if len(entries) >= 5000:
+                break
+            page += 1
+        entries.sort(key=lambda item: (0 if item.get("is_dir") else 1, str(item.get("name", "")).lower()))
+        mark_cookie_health_success("quark", trigger="runtime:list_quark_entries")
+        return entries
+    except Exception as exc:
+        mark_cookie_health_failure("quark", exc, trigger="runtime:list_quark_entries")
+        raise
 
 
 def create_quark_folder(cookie: str, cid: str = "0", folder_name: str = "") -> Dict[str, Any]:
@@ -7414,44 +7909,49 @@ def create_quark_folder(cookie: str, cid: str = "0", folder_name: str = "") -> D
     if not normalized_name:
         raise RuntimeError("文件夹名称不能为空")
 
-    headers = _build_quark_headers(normalized_cookie, referer="https://pan.quark.cn/")
-    url = _build_quark_api_url("/1/clouddrive/file")
-    payload = {
-        "pdir_fid": parent_id,
-        "file_name": normalized_name,
-        "dir_path": "",
-        "dir_init_lock": False,
-    }
-    response = _request_quark_json_payload(
-        url,
-        payload,
-        headers,
-        timeout=45,
-        method="POST",
-        fallback="新建夸克目录失败",
-    )
-    data = response.get("data") if isinstance(response.get("data"), dict) else {}
-    folder_id = str(data.get("fid", "") or data.get("id", "") or "").strip()
-    success = _is_quark_success(response)
-    if (not success) or (not folder_id):
-        entries = list_quark_entries(normalized_cookie, parent_id)
-        matched = next(
-            (
-                entry
-                for entry in entries
-                if entry.get("is_dir") and str(entry.get("name", "")).strip() == normalized_name
-            ),
-            None,
+    try:
+        headers = _build_quark_headers(normalized_cookie, referer="https://pan.quark.cn/")
+        url = _build_quark_api_url("/1/clouddrive/file")
+        payload = {
+            "pdir_fid": parent_id,
+            "file_name": normalized_name,
+            "dir_path": "",
+            "dir_init_lock": False,
+        }
+        response = _request_quark_json_payload(
+            url,
+            payload,
+            headers,
+            timeout=45,
+            method="POST",
+            fallback="新建夸克目录失败",
         )
-        folder_id = str((matched or {}).get("id", "") or "").strip()
-    if not folder_id:
-        raise RuntimeError(_extract_quark_error(response, "新建夸克目录失败"))
-    return {
-        "id": folder_id,
-        "name": normalized_name,
-        "cid": parent_id,
-        "created": success,
-    }
+        data = response.get("data") if isinstance(response.get("data"), dict) else {}
+        folder_id = str(data.get("fid", "") or data.get("id", "") or "").strip()
+        success = _is_quark_success(response)
+        if (not success) or (not folder_id):
+            entries = list_quark_entries(normalized_cookie, parent_id)
+            matched = next(
+                (
+                    entry
+                    for entry in entries
+                    if entry.get("is_dir") and str(entry.get("name", "")).strip() == normalized_name
+                ),
+                None,
+            )
+            folder_id = str((matched or {}).get("id", "") or "").strip()
+        if not folder_id:
+            raise RuntimeError(_extract_quark_error(response, "新建夸克目录失败"))
+        mark_cookie_health_success("quark", trigger="runtime:create_quark_folder")
+        return {
+            "id": folder_id,
+            "name": normalized_name,
+            "cid": parent_id,
+            "created": success,
+        }
+    except Exception as exc:
+        mark_cookie_health_failure("quark", exc, trigger="runtime:create_quark_folder")
+        raise
 
 
 def ensure_quark_folder_id_by_path(cookie: str, relative_path: str) -> str:
@@ -7650,26 +8150,54 @@ def list_quark_share_entries(
     normalized_cookie = str(cookie or "").strip()
     if not normalized_cookie:
         raise RuntimeError("Quark Cookie 未配置")
-    parsed = resolve_quark_share_payload(normalized_cookie, share_url, raw_text, receive_code)
-    pwd_id = str(parsed.get("pwd_id", "") or parsed.get("share_code", "")).strip()
-    if not pwd_id:
-        raise RuntimeError("未能识别夸克分享链接")
-    receive_code_value = normalize_receive_code(parsed.get("receive_code", ""))
-    current_cid = str(cid or "0").strip() or "0"
-    page_limit = max(20, min(200, int(limit or 200)))
-    start_offset = max(0, int(offset or 0))
-    max_pages_limit = max(0, int(max_pages or 0))
-    folder_only_mode = bool(folders_only)
+    try:
+        parsed = resolve_quark_share_payload(normalized_cookie, share_url, raw_text, receive_code)
+        pwd_id = str(parsed.get("pwd_id", "") or parsed.get("share_code", "")).strip()
+        if not pwd_id:
+            raise RuntimeError("未能识别夸克分享链接")
+        receive_code_value = normalize_receive_code(parsed.get("receive_code", ""))
+        current_cid = str(cid or "0").strip() or "0"
+        page_limit = max(20, min(200, int(limit or 200)))
+        start_offset = max(0, int(offset or 0))
+        max_pages_limit = max(0, int(max_pages or 0))
+        folder_only_mode = bool(folders_only)
 
-    stoken = _request_quark_share_token(normalized_cookie, pwd_id, receive_code_value)
-    entries: List[Dict[str, Any]] = []
-    total_count = 0
-    pages_scanned = 0
-    share_title = ""
+        stoken = _request_quark_share_token(normalized_cookie, pwd_id, receive_code_value)
+        entries: List[Dict[str, Any]] = []
+        total_count = 0
+        pages_scanned = 0
+        share_title = ""
 
-    if start_offset <= 0 and max_pages_limit <= 0 and (not folder_only_mode):
-        page_no = 1
-        while True:
+        if start_offset <= 0 and max_pages_limit <= 0 and (not folder_only_mode):
+            page_no = 1
+            while True:
+                page_payload = _list_quark_share_page(
+                    normalized_cookie,
+                    pwd_id,
+                    stoken,
+                    current_cid,
+                    page=page_no,
+                    page_size=page_limit,
+                )
+                page_entries = page_payload.get("entries", []) if isinstance(page_payload.get("entries"), list) else []
+                if folder_only_mode:
+                    page_entries = [entry for entry in page_entries if entry.get("is_dir")]
+                entries.extend(page_entries)
+                total_count = max(total_count, int(page_payload.get("total", 0) or 0))
+                pages_scanned += 1
+                share_info = page_payload.get("share", {}) if isinstance(page_payload.get("share"), dict) else {}
+                if share_info and not share_title:
+                    share_title = str(share_info.get("title", "") or share_info.get("share_name", "") or "").strip()
+                if not bool(page_payload.get("has_more", False)):
+                    break
+                if pages_scanned >= 20:
+                    break
+                page_no += 1
+            has_more = False
+            next_offset = len(entries)
+        else:
+            page_no = max(1, (start_offset // page_limit) + 1)
+            skip_in_page = start_offset % page_limit
             page_payload = _list_quark_share_page(
                 normalized_cookie,
                 pwd_id,
@@ -7679,65 +8207,43 @@ def list_quark_share_entries(
                 page_size=page_limit,
             )
             page_entries = page_payload.get("entries", []) if isinstance(page_payload.get("entries"), list) else []
+            if skip_in_page > 0:
+                page_entries = page_entries[skip_in_page:]
             if folder_only_mode:
                 page_entries = [entry for entry in page_entries if entry.get("is_dir")]
-            entries.extend(page_entries)
-            total_count = max(total_count, int(page_payload.get("total", 0) or 0))
-            pages_scanned += 1
+            entries = page_entries
+            total_count = max(0, int(page_payload.get("total", 0) or 0))
+            pages_scanned = 1
+            has_more = bool(page_payload.get("has_more", False))
+            next_offset = start_offset + len(entries)
             share_info = page_payload.get("share", {}) if isinstance(page_payload.get("share"), dict) else {}
-            if share_info and not share_title:
-                share_title = str(share_info.get("title", "") or share_info.get("share_name", "") or "").strip()
-            if not bool(page_payload.get("has_more", False)):
-                break
-            if pages_scanned >= 20:
-                break
-            page_no += 1
-        has_more = False
-        next_offset = len(entries)
-    else:
-        page_no = max(1, (start_offset // page_limit) + 1)
-        skip_in_page = start_offset % page_limit
-        page_payload = _list_quark_share_page(
-            normalized_cookie,
-            pwd_id,
-            stoken,
-            current_cid,
-            page=page_no,
-            page_size=page_limit,
-        )
-        page_entries = page_payload.get("entries", []) if isinstance(page_payload.get("entries"), list) else []
-        if skip_in_page > 0:
-            page_entries = page_entries[skip_in_page:]
-        if folder_only_mode:
-            page_entries = [entry for entry in page_entries if entry.get("is_dir")]
-        entries = page_entries
-        total_count = max(0, int(page_payload.get("total", 0) or 0))
-        pages_scanned = 1
-        has_more = bool(page_payload.get("has_more", False))
-        next_offset = start_offset + len(entries)
-        share_info = page_payload.get("share", {}) if isinstance(page_payload.get("share"), dict) else {}
-        share_title = str(share_info.get("title", "") or share_info.get("share_name", "") or "").strip()
-        if max_pages_limit > 0 and max_pages_limit <= pages_scanned:
-            has_more = False
+            share_title = str(share_info.get("title", "") or share_info.get("share_name", "") or "").strip()
+            if max_pages_limit > 0 and max_pages_limit <= pages_scanned:
+                has_more = False
 
-    entries.sort(key=lambda item: (0 if item.get("is_dir") else 1, str(item.get("name", "")).lower()))
-    return {
-        "entries": entries,
-        "summary": {
-            "folder_count": sum(1 for item in entries if item.get("is_dir")),
-            "file_count": sum(1 for item in entries if not item.get("is_dir")),
-        },
-        "share_code": pwd_id,
-        "receive_code": receive_code_value,
-        "share_title": share_title,
-        "current_cid": current_cid,
-        "count": total_count or len(entries),
-        "offset": start_offset,
-        "next_offset": next_offset,
-        "has_more": bool(has_more),
-        "pages_scanned": pages_scanned,
-        "stoken": stoken,
-    }
+        entries.sort(key=lambda item: (0 if item.get("is_dir") else 1, str(item.get("name", "")).lower()))
+        result_payload = {
+            "entries": entries,
+            "summary": {
+                "folder_count": sum(1 for item in entries if item.get("is_dir")),
+                "file_count": sum(1 for item in entries if not item.get("is_dir")),
+            },
+            "share_code": pwd_id,
+            "receive_code": receive_code_value,
+            "share_title": share_title,
+            "current_cid": current_cid,
+            "count": total_count or len(entries),
+            "offset": start_offset,
+            "next_offset": next_offset,
+            "has_more": bool(has_more),
+            "pages_scanned": pages_scanned,
+            "stoken": stoken,
+        }
+        mark_cookie_health_success("quark", trigger="runtime:list_quark_share_entries")
+        return result_payload
+    except Exception as exc:
+        mark_cookie_health_failure("quark", exc, trigger="runtime:list_quark_share_entries")
+        raise
 
 
 def prepare_quark_share_save(
@@ -7867,59 +8373,64 @@ def submit_quark_share_save(
     normalized_cookie = str(cookie or "").strip()
     if not normalized_cookie:
         raise RuntimeError("Quark Cookie 未配置")
-    prepared = prepare_quark_share_save(
-        normalized_cookie,
-        share_url,
-        raw_text,
-        selected_ids,
-        receive_code,
-        selected_entries=selected_entries,
-    )
+    try:
+        prepared = prepare_quark_share_save(
+            normalized_cookie,
+            share_url,
+            raw_text,
+            selected_ids,
+            receive_code,
+            selected_entries=selected_entries,
+        )
 
-    headers = _build_quark_headers(
-        normalized_cookie,
-        referer=f"https://pan.quark.cn/s/{str(prepared.get('pwd_id', '')).strip()}",
-    )
-    payload = {
-        "pwd_id": str(prepared.get("pwd_id", "")).strip(),
-        "stoken": str(prepared.get("stoken", "")).strip(),
-        "pdir_fid": str(prepared.get("pdir_fid", "0")).strip() or "0",
-        "to_pdir_fid": str(folder_id or "0").strip() or "0",
-        "fid_list": prepared.get("fid_list", []),
-        "fid_token_list": prepared.get("fid_token_list", []),
-        "scene": "link",
-    }
+        headers = _build_quark_headers(
+            normalized_cookie,
+            referer=f"https://pan.quark.cn/s/{str(prepared.get('pwd_id', '')).strip()}",
+        )
+        payload = {
+            "pwd_id": str(prepared.get("pwd_id", "")).strip(),
+            "stoken": str(prepared.get("stoken", "")).strip(),
+            "pdir_fid": str(prepared.get("pdir_fid", "0")).strip() or "0",
+            "to_pdir_fid": str(folder_id or "0").strip() or "0",
+            "fid_list": prepared.get("fid_list", []),
+            "fid_token_list": prepared.get("fid_token_list", []),
+            "scene": "link",
+        }
 
-    hosts = ("https://drive-h.quark.cn", "https://drive-pc.quark.cn")
-    last_error = ""
-    response: Dict[str, Any] = {}
-    for host in hosts:
-        url = _build_quark_api_url("/1/clouddrive/share/sharepage/save", host=host)
-        try:
-            response = _request_quark_json_payload(
-                url,
-                payload,
-                headers,
-                timeout=45,
-                method="POST",
-                fallback="夸克网盘转存失败",
-            )
-        except RuntimeError as exc:
-            last_error = str(exc or "夸克网盘转存失败").strip() or "夸克网盘转存失败"
-            continue
+        hosts = ("https://drive-h.quark.cn", "https://drive-pc.quark.cn")
+        last_error = ""
+        response: Dict[str, Any] = {}
+        for host in hosts:
+            url = _build_quark_api_url("/1/clouddrive/share/sharepage/save", host=host)
+            try:
+                response = _request_quark_json_payload(
+                    url,
+                    payload,
+                    headers,
+                    timeout=45,
+                    method="POST",
+                    fallback="夸克网盘转存失败",
+                )
+            except RuntimeError as exc:
+                last_error = str(exc or "夸克网盘转存失败").strip() or "夸克网盘转存失败"
+                continue
 
-        if _is_quark_success(response):
-            last_error = ""
-            break
-        last_error = _extract_quark_error(response, "夸克网盘转存失败")
+            if _is_quark_success(response):
+                last_error = ""
+                break
+            last_error = _extract_quark_error(response, "夸克网盘转存失败")
 
-    if last_error:
-        raise RuntimeError(last_error)
+        if last_error:
+            raise RuntimeError(last_error)
 
-    return {
-        "response": response,
-        "selection": prepared.get("selection", {}),
-    }
+        mark_cookie_health_success("quark", trigger="runtime:submit_quark_share_save")
+        return {
+            "response": response,
+            "selection": prepared.get("selection", {}),
+        }
+    except Exception as exc:
+        mark_cookie_health_failure("quark", exc, trigger="runtime:submit_quark_share_save")
+        raise
 
 
 def normalize_share_selection_entry(item: Any) -> Dict[str, Any]:
@@ -8166,155 +8677,162 @@ def list_115_share_entries(
     cookie = str(cookie or "").strip()
     if not cookie:
         raise RuntimeError("115 Cookie 未配置")
-    parsed = resolve_115_share_payload(cookie, share_url, raw_text, receive_code)
-    share_code = str(parsed.get("share_code", "") or "").strip()
-    receive_code = str(parsed.get("receive_code", "") or "").strip()
-    current_cid = str(cid or "0").strip() or "0"
-    start_offset = max(0, int(offset or 0))
-    page_limit = max(20, min(400, int(limit or 200)))
-    max_pages_limit = max(0, int(max_pages or 0))
-    folder_only_mode = bool(folders_only)
-    use_full_cache = start_offset == 0 and max_pages_limit <= 0 and not folder_only_mode
-    stale_cache: Dict[str, Any] = {}
-    if use_full_cache:
-        stale_cache = load_115_share_snap_cache(share_code, receive_code, current_cid, allow_expired=True)
-        if not force_refresh:
-            fresh_cache = load_115_share_snap_cache(share_code, receive_code, current_cid, allow_expired=False)
-            if fresh_cache:
-                return fresh_cache
+    try:
+        parsed = resolve_115_share_payload(cookie, share_url, raw_text, receive_code)
+        share_code = str(parsed.get("share_code", "") or "").strip()
+        receive_code = str(parsed.get("receive_code", "") or "").strip()
+        current_cid = str(cid or "0").strip() or "0"
+        start_offset = max(0, int(offset or 0))
+        page_limit = max(20, min(400, int(limit or 200)))
+        max_pages_limit = max(0, int(max_pages or 0))
+        folder_only_mode = bool(folders_only)
+        use_full_cache = start_offset == 0 and max_pages_limit <= 0 and not folder_only_mode
+        stale_cache: Dict[str, Any] = {}
+        if use_full_cache:
+            stale_cache = load_115_share_snap_cache(share_code, receive_code, current_cid, allow_expired=True)
+            if not force_refresh:
+                fresh_cache = load_115_share_snap_cache(share_code, receive_code, current_cid, allow_expired=False)
+                if fresh_cache:
+                    return fresh_cache
 
-    request_timeout_value = max(5, int(request_timeout or 45))
-    retry_total = max(0, int(max_request_retries or 0))
+        request_timeout_value = max(5, int(request_timeout or 45))
+        retry_total = max(0, int(max_request_retries or 0))
 
-    headers = {
-        "Cookie": cookie,
-        "Accept": "application/json, text/plain, */*",
-        "Referer": parsed.get("url", "https://115.com/"),
-        "User-Agent": "Mozilla/5.0 115-media-hub",
-    }
-    entries: List[Dict[str, Any]] = []
-    offset_cursor = start_offset
-    total_count = 0
-    pages_scanned = 0
+        headers = {
+            "Cookie": cookie,
+            "Accept": "application/json, text/plain, */*",
+            "Referer": parsed.get("url", "https://115.com/"),
+            "User-Agent": "Mozilla/5.0 115-media-hub",
+        }
+        entries: List[Dict[str, Any]] = []
+        offset_cursor = start_offset
+        total_count = 0
+        pages_scanned = 0
 
-    while True:
-        query = urllib.parse.urlencode(
-            {
-                "share_code": share_code,
-                "receive_code": receive_code,
-                "cid": current_cid,
-                "offset": offset_cursor,
-                "limit": page_limit,
-                "asc": 1,
-                "o": "file_name",
-                "format": "json",
-            }
-        )
-        result: Dict[str, Any] = {}
-        last_request_error: Optional[Exception] = None
-        for attempt in range(0, retry_total + 1):
-            try:
-                _throttle_115_share_snap_requests(rate_limit_seconds=rate_limit_seconds)
-                result = http_request_json(
-                    f"https://webapi.115.com/share/snap?{query}",
-                    extra_headers=headers,
-                    timeout=request_timeout_value,
-                )
-                last_request_error = None
-                break
-            except Exception as exc:
-                last_request_error = exc
-                if (not _is_retryable_115_share_snap_error(exc)) or attempt >= retry_total:
-                    break
-                time.sleep(0.6 * (attempt + 1))
-        if last_request_error is not None:
-            if use_full_cache and stale_cache:
-                stale_payload = dict(stale_cache)
-                stale_payload["cache_stale"] = True
-                stale_payload["cache_error"] = str(last_request_error or "").strip()[:180]
-                stale_payload["cache_cid"] = current_cid
-                return stale_payload
-            raise RuntimeError(str(last_request_error or "读取 115 分享内容失败").strip() or "读取 115 分享内容失败")
-        payload = result.get("data") if isinstance(result, dict) else {}
-        if payload is None:
-            payload = {}
-        batch = payload.get("list") or []
-        if not batch and not payload.get("shareinfo") and not bool(result.get("state", False)):
-            detail = (
-                str(result.get("error", "")).strip()
-                or str(result.get("msg", "")).strip()
-                or str(result.get("message", "")).strip()
-                or "读取 115 分享内容失败"
-            )
-            if use_full_cache and stale_cache:
-                stale_payload = dict(stale_cache)
-                stale_payload["cache_stale"] = True
-                stale_payload["cache_error"] = detail[:180]
-                stale_payload["cache_cid"] = current_cid
-                return stale_payload
-            raise RuntimeError(detail)
-
-        total_count = parse_int(payload.get("count") or total_count)
-        for item in batch:
-            fid = str(item.get("fid") or "").strip()
-            dir_cid = str(item.get("cid") or "").strip()
-            is_dir = not fid
-            entry_id = dir_cid if is_dir else fid
-            name = str(item.get("n") or item.get("name") or "").strip()
-            if not entry_id or not name:
-                continue
-            if folder_only_mode and not is_dir:
-                continue
-            entries.append(
+        while True:
+            query = urllib.parse.urlencode(
                 {
-                    "id": entry_id,
-                    "name": name,
-                    "is_dir": is_dir,
-                    "parent_id": current_cid,
-                    "cid": dir_cid if is_dir else "",
-                    "fid": fid if not is_dir else "",
-                    "size": parse_int(item.get("s") or item.get("size") or 0),
-                    "pick_code": str(item.get("pick_code") or item.get("pc") or "").strip(),
-                    "sha1": str(item.get("sha1") or item.get("sha") or "").strip(),
-                    "icon": str(item.get("ico") or "").strip(),
-                    "modified_at": str(item.get("t") or item.get("te") or item.get("tp") or "").strip(),
+                    "share_code": share_code,
+                    "receive_code": receive_code,
+                    "cid": current_cid,
+                    "offset": offset_cursor,
+                    "limit": page_limit,
+                    "asc": 1,
+                    "o": "file_name",
+                    "format": "json",
                 }
             )
-
-        pages_scanned += 1
-        next_offset = offset_cursor + len(batch)
-        reached_end = not batch or len(batch) < page_limit or (total_count and next_offset >= total_count)
-        reached_page_cap = max_pages_limit > 0 and pages_scanned >= max_pages_limit
-
-        if reached_end or reached_page_cap:
-            shareinfo = payload.get("shareinfo") or {}
-            entries.sort(key=lambda item: (0 if item.get("is_dir") else 1, str(item.get("name", "")).lower()))
-            result_payload = {
-                "entries": entries,
-                "summary": {
-                    "folder_count": sum(1 for item in entries if item.get("is_dir")),
-                    "file_count": sum(1 for item in entries if not item.get("is_dir")),
-                },
-                "share_code": share_code,
-                "receive_code": receive_code,
-                "share_title": str(shareinfo.get("share_title") or "").strip(),
-                "current_cid": current_cid,
-                "count": total_count or len(entries),
-                "offset": start_offset,
-                "next_offset": next_offset,
-                "has_more": not reached_end,
-                "pages_scanned": pages_scanned,
-            }
-            if use_full_cache:
-                save_115_share_snap_cache(
-                    share_code,
-                    receive_code,
-                    current_cid,
-                    result_payload,
-                    ttl_seconds=SHARE_SNAP_CACHE_TTL_SECONDS,
+            result: Dict[str, Any] = {}
+            last_request_error: Optional[Exception] = None
+            for attempt in range(0, retry_total + 1):
+                try:
+                    _throttle_115_share_snap_requests(rate_limit_seconds=rate_limit_seconds)
+                    result = http_request_json(
+                        f"https://webapi.115.com/share/snap?{query}",
+                        extra_headers=headers,
+                        timeout=request_timeout_value,
+                    )
+                    last_request_error = None
+                    break
+                except Exception as exc:
+                    last_request_error = exc
+                    if (not _is_retryable_115_share_snap_error(exc)) or attempt >= retry_total:
+                        break
+                    time.sleep(0.6 * (attempt + 1))
+            if last_request_error is not None:
+                if use_full_cache and stale_cache:
+                    mark_cookie_health_failure("115", last_request_error, trigger="runtime:list_115_share_entries")
+                    stale_payload = dict(stale_cache)
+                    stale_payload["cache_stale"] = True
+                    stale_payload["cache_error"] = str(last_request_error or "").strip()[:180]
+                    stale_payload["cache_cid"] = current_cid
+                    return stale_payload
+                raise RuntimeError(str(last_request_error or "读取 115 分享内容失败").strip() or "读取 115 分享内容失败")
+            payload = result.get("data") if isinstance(result, dict) else {}
+            if payload is None:
+                payload = {}
+            batch = payload.get("list") or []
+            if not batch and not payload.get("shareinfo") and not bool(result.get("state", False)):
+                detail = (
+                    str(result.get("error", "")).strip()
+                    or str(result.get("msg", "")).strip()
+                    or str(result.get("message", "")).strip()
+                    or "读取 115 分享内容失败"
                 )
-            return result_payload
-        offset_cursor = next_offset
+                if use_full_cache and stale_cache:
+                    mark_cookie_health_failure("115", detail, trigger="runtime:list_115_share_entries")
+                    stale_payload = dict(stale_cache)
+                    stale_payload["cache_stale"] = True
+                    stale_payload["cache_error"] = detail[:180]
+                    stale_payload["cache_cid"] = current_cid
+                    return stale_payload
+                raise RuntimeError(detail)
+
+            total_count = parse_int(payload.get("count") or total_count)
+            for item in batch:
+                fid = str(item.get("fid") or "").strip()
+                dir_cid = str(item.get("cid") or "").strip()
+                is_dir = not fid
+                entry_id = dir_cid if is_dir else fid
+                name = str(item.get("n") or item.get("name") or "").strip()
+                if not entry_id or not name:
+                    continue
+                if folder_only_mode and not is_dir:
+                    continue
+                entries.append(
+                    {
+                        "id": entry_id,
+                        "name": name,
+                        "is_dir": is_dir,
+                        "parent_id": current_cid,
+                        "cid": dir_cid if is_dir else "",
+                        "fid": fid if not is_dir else "",
+                        "size": parse_int(item.get("s") or item.get("size") or 0),
+                        "pick_code": str(item.get("pick_code") or item.get("pc") or "").strip(),
+                        "sha1": str(item.get("sha1") or item.get("sha") or "").strip(),
+                        "icon": str(item.get("ico") or "").strip(),
+                        "modified_at": str(item.get("t") or item.get("te") or item.get("tp") or "").strip(),
+                    }
+                )
+
+            pages_scanned += 1
+            next_offset = offset_cursor + len(batch)
+            reached_end = not batch or len(batch) < page_limit or (total_count and next_offset >= total_count)
+            reached_page_cap = max_pages_limit > 0 and pages_scanned >= max_pages_limit
+
+            if reached_end or reached_page_cap:
+                shareinfo = payload.get("shareinfo") or {}
+                entries.sort(key=lambda item: (0 if item.get("is_dir") else 1, str(item.get("name", "")).lower()))
+                result_payload = {
+                    "entries": entries,
+                    "summary": {
+                        "folder_count": sum(1 for item in entries if item.get("is_dir")),
+                        "file_count": sum(1 for item in entries if not item.get("is_dir")),
+                    },
+                    "share_code": share_code,
+                    "receive_code": receive_code,
+                    "share_title": str(shareinfo.get("share_title") or "").strip(),
+                    "current_cid": current_cid,
+                    "count": total_count or len(entries),
+                    "offset": start_offset,
+                    "next_offset": next_offset,
+                    "has_more": not reached_end,
+                    "pages_scanned": pages_scanned,
+                }
+                if use_full_cache:
+                    save_115_share_snap_cache(
+                        share_code,
+                        receive_code,
+                        current_cid,
+                        result_payload,
+                        ttl_seconds=SHARE_SNAP_CACHE_TTL_SECONDS,
+                    )
+                mark_cookie_health_success("115", trigger="runtime:list_115_share_entries")
+                return result_payload
+            offset_cursor = next_offset
+    except Exception as exc:
+        mark_cookie_health_failure("115", exc, trigger="runtime:list_115_share_entries")
+        raise
 
 
 def prepare_115_share_receive(
@@ -8400,42 +8918,47 @@ def submit_115_share_receive(
     cookie = str(cookie or "").strip()
     if not cookie:
         raise RuntimeError("115 Cookie 未配置")
-    prepared = prepare_115_share_receive(cookie, share_url, raw_text, selected_ids, receive_code)
+    try:
+        prepared = prepare_115_share_receive(cookie, share_url, raw_text, selected_ids, receive_code)
 
-    headers = {
-        "Cookie": cookie,
-        "Accept": "application/json, text/plain, */*",
-        "Referer": "https://115.com/",
-        "Origin": "https://115.com",
-        "User-Agent": "Mozilla/5.0 115-media-hub",
-    }
-    payload = {
-        "share_code": prepared.get("share_code", ""),
-        "receive_code": prepared.get("receive_code", ""),
-        "file_id": prepared.get("file_id", ""),
-        "cid": folder_id or "0",
-        "is_check": 0,
-    }
-    response = http_request_form_json(
-        "https://115cdn.com/webapi/share/receive",
-        payload,
-        timeout=45,
-        extra_headers=headers,
-    )
-    success = bool(response.get("state")) or is_115_share_receive_duplicate_response(response)
-    if not success:
-        detail = (
-            str(response.get("error", "")).strip()
-            or str(response.get("msg", "")).strip()
-            or str(response.get("message", "")).strip()
-            or "115 网盘转存失败"
+        headers = {
+            "Cookie": cookie,
+            "Accept": "application/json, text/plain, */*",
+            "Referer": "https://115.com/",
+            "Origin": "https://115.com",
+            "User-Agent": "Mozilla/5.0 115-media-hub",
+        }
+        payload = {
+            "share_code": prepared.get("share_code", ""),
+            "receive_code": prepared.get("receive_code", ""),
+            "file_id": prepared.get("file_id", ""),
+            "cid": folder_id or "0",
+            "is_check": 0,
+        }
+        response = http_request_form_json(
+            "https://115cdn.com/webapi/share/receive",
+            payload,
+            timeout=45,
+            extra_headers=headers,
         )
-        raise RuntimeError(detail)
-    return {
-        "response": response,
-        "selection": prepared.get("selection", {}),
-        "duplicate_receive": is_115_share_receive_duplicate_response(response),
-    }
+        success = bool(response.get("state")) or is_115_share_receive_duplicate_response(response)
+        if not success:
+            detail = (
+                str(response.get("error", "")).strip()
+                or str(response.get("msg", "")).strip()
+                or str(response.get("message", "")).strip()
+                or "115 网盘转存失败"
+            )
+            raise RuntimeError(detail)
+        mark_cookie_health_success("115", trigger="runtime:submit_115_share_receive")
+        return {
+            "response": response,
+            "selection": prepared.get("selection", {}),
+            "duplicate_receive": is_115_share_receive_duplicate_response(response),
+        }
+    except Exception as exc:
+        mark_cookie_health_failure("115", exc, trigger="runtime:submit_115_share_receive")
+        raise
 
 
 def parse_telegram_posts_page(html: str, source: Dict[str, Any], limit: int = 10) -> Dict[str, Any]:

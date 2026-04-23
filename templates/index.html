@@ -190,7 +190,7 @@
             </div>
 
             <div id="resource-cookie-hint" class="resource-blocking-hint rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-200 hidden">
-                当前还没配置可用网盘 Cookie。请先到“参数配置”页填写 115 或 Quark Cookie，再使用导入或转存功能。
+                当前网盘 Cookie 状态异常，请到“参数配置”检查 115 / Quark Cookie 并重新检测。
             </div>
 
             <div id="resource-quick-link-strip" class="resource-quick-link-strip hidden" data-resource-quick-strip aria-label="常用网盘链接快捷入口"></div>
@@ -479,6 +479,33 @@
                         </div>
                         <div class="text-xs text-slate-500 leading-6">
                             当前支持 magnet 离线下载、115 分享链接转存与 Quark 分享转存；保存路径会自动映射到对应网盘目录。
+                        </div>
+
+                        <div class="rounded-2xl border border-slate-700/80 bg-slate-900/50 p-4 space-y-3">
+                            <div class="flex flex-wrap justify-between gap-3 items-center">
+                                <div class="text-sm font-bold text-slate-100">Cookie 健康状态</div>
+                                <button
+                                    id="cookie-health-check-btn"
+                                    type="button"
+                                    onclick="checkCookiesNow(true)"
+                                    class="px-3 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold"
+                                >
+                                    立即检测 Cookie
+                                </button>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div id="cookie-health-115-card" class="rounded-xl border border-slate-700/70 bg-slate-950/70 px-3 py-3 text-xs leading-6">
+                                    <div class="text-slate-300 font-bold mb-1">115</div>
+                                    <div id="cookie-health-115-text" class="text-slate-400">尚未检测</div>
+                                </div>
+                                <div id="cookie-health-quark-card" class="rounded-xl border border-slate-700/70 bg-slate-950/70 px-3 py-3 text-xs leading-6">
+                                    <div class="text-slate-300 font-bold mb-1">Quark</div>
+                                    <div id="cookie-health-quark-text" class="text-slate-400">尚未检测</div>
+                                </div>
+                            </div>
+                            <div class="text-xs text-slate-500 leading-6">
+                                检测只用于提示，不会阻断导入/转存操作；如提示异常，可更新 Cookie 后重新检测。
+                            </div>
                         </div>
 
                         <div class="rounded-2xl border border-slate-700/80 bg-slate-900/50 p-4 space-y-4">

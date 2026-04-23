@@ -749,26 +749,59 @@ def _resolve_115_download_payload(cookie: str, pick_code: str, user_agent: str =
                 if cached_url:
                     return cached_url, cached_cookie
 
-    throttle_115_api_requests()
-    headers = {
-        "Cookie": cookie,
-        "Accept": "application/json, text/plain, */*",
-        "Referer": "https://115.com/",
-        "Origin": "https://115.com",
-        "User-Agent": normalized_user_agent,
-    }
-    url = "https://webapi.115.com/files/download?pickcode=" + urllib.parse.quote(pick_code)
-    request = urllib.request.Request(url, headers=headers, method="GET")
-    with urllib.request.urlopen(request, timeout=45) as resp:
-        charset = resp.headers.get_content_charset() or "utf-8"
-        body = resp.read().decode(charset, errors="ignore")
-        result = safe_json_loads(body, {})
-        response_set_cookies = resp.headers.get_all("Set-Cookie") or []
-    if not isinstance(result, dict):
-        raise RuntimeError("115 下载地址解析返回异常")
-    if not bool(result.get("state", False)):
-        detail = _extract_115_download_error_detail(result)
-        if _is_115_large_file_limit_error(result):
+    try:
+        throttle_115_api_requests()
+        headers = {
+            "Cookie": cookie,
+            "Accept": "application/json, text/plain, */*",
+            "Referer": "https://115.com/",
+            "Origin": "https://115.com",
+            "User-Agent": normalized_user_agent,
+        }
+        url = "https://webapi.115.com/files/download?pickcode=" + urllib.parse.quote(pick_code)
+        request = urllib.request.Request(url, headers=headers, method="GET")
+        with urllib.request.urlopen(request, timeout=45) as resp:
+            charset = resp.headers.get_content_charset() or "utf-8"
+            body = resp.read().decode(charset, errors="ignore")
+            result = safe_json_loads(body, {})
+            response_set_cookies = resp.headers.get_all("Set-Cookie") or []
+        if not isinstance(result, dict):
+            raise RuntimeError("115 下载地址解析返回异常")
+        if not bool(result.get("state", False)):
+            detail = _extract_115_download_error_detail(result)
+            if _is_115_large_file_limit_error(result):
+                try:
+                    download_url, download_cookie = _resolve_115_download_payload_by_chrome_api(
+                        cookie,
+                        pick_code,
+                        normalized_user_agent,
+                    )
+                except Exception as exc:
+                    raise RuntimeError(f"{detail}；downurl 回退失败: {exc}") from exc
+                if download_url:
+                    if cache_ttl_seconds > 0:
+                        now_ts = time.time()
+                        with _download_url_cache_lock:
+                            _download_url_cache[cache_key] = {
+                                "url": download_url,
+                                "download_cookie": download_cookie,
+                                "expires_at": now_ts + cache_ttl_seconds,
+                                "updated_at": now_ts,
+                            }
+                            if len(_download_url_cache) > 1000:
+                                ordered = sorted(
+                                    _download_url_cache.items(),
+                                    key=lambda item: float((item[1] or {}).get("updated_at", 0.0) or 0.0),
+                                )
+                                for key, _ in ordered[: len(_download_url_cache) - 1000]:
+                                    _download_url_cache.pop(key, None)
+                    mark_cookie_health_success("115", trigger="runtime:strm_resolve_download")
+                    return download_url, download_cookie
+            raise RuntimeError(detail)
+
+        download_urls = _collect_115_download_urls(result)
+        download_url = str(download_urls[0] if download_urls else "").strip()
+        if not download_url:
             try:
                 download_url, download_cookie = _resolve_115_download_payload_by_chrome_api(
                     cookie,
@@ -776,7 +809,7 @@ def _resolve_115_download_payload(cookie: str, pick_code: str, user_agent: str =
                     normalized_user_agent,
                 )
             except Exception as exc:
-                raise RuntimeError(f"{detail}；downurl 回退失败: {exc}") from exc
+                raise RuntimeError(f"115 返回成功，但未解析到下载链接；downurl 回退失败: {exc}") from exc
             if download_url:
                 if cache_ttl_seconds > 0:
                     now_ts = time.time()
@@ -794,59 +827,33 @@ def _resolve_115_download_payload(cookie: str, pick_code: str, user_agent: str =
                             )
                             for key, _ in ordered[: len(_download_url_cache) - 1000]:
                                 _download_url_cache.pop(key, None)
+                mark_cookie_health_success("115", trigger="runtime:strm_resolve_download")
                 return download_url, download_cookie
-        raise RuntimeError(detail)
+            raise RuntimeError("115 返回成功，但未解析到下载链接")
 
-    download_urls = _collect_115_download_urls(result)
-    download_url = str(download_urls[0] if download_urls else "").strip()
-    if not download_url:
-        try:
-            download_url, download_cookie = _resolve_115_download_payload_by_chrome_api(
-                cookie,
-                pick_code,
-                normalized_user_agent,
-            )
-        except Exception as exc:
-            raise RuntimeError(f"115 返回成功，但未解析到下载链接；downurl 回退失败: {exc}") from exc
-        if download_url:
-            if cache_ttl_seconds > 0:
-                now_ts = time.time()
-                with _download_url_cache_lock:
-                    _download_url_cache[cache_key] = {
-                        "url": download_url,
-                        "download_cookie": download_cookie,
-                        "expires_at": now_ts + cache_ttl_seconds,
-                        "updated_at": now_ts,
-                    }
-                    if len(_download_url_cache) > 1000:
-                        ordered = sorted(
-                            _download_url_cache.items(),
-                            key=lambda item: float((item[1] or {}).get("updated_at", 0.0) or 0.0),
-                        )
-                        for key, _ in ordered[: len(_download_url_cache) - 1000]:
-                            _download_url_cache.pop(key, None)
-            return download_url, download_cookie
-        raise RuntimeError("115 返回成功，但未解析到下载链接")
+        download_cookie = _collect_set_cookie_pairs(response_set_cookies)
 
-    download_cookie = _collect_set_cookie_pairs(response_set_cookies)
-
-    if cache_ttl_seconds > 0:
-        now_ts = time.time()
-        with _download_url_cache_lock:
-            _download_url_cache[cache_key] = {
-                "url": download_url,
-                "download_cookie": download_cookie,
-                "expires_at": now_ts + cache_ttl_seconds,
-                "updated_at": now_ts,
-            }
-            if len(_download_url_cache) > 1000:
-                ordered = sorted(
-                    _download_url_cache.items(),
-                    key=lambda item: float((item[1] or {}).get("updated_at", 0.0) or 0.0),
-                )
-                for key, _ in ordered[: len(_download_url_cache) - 1000]:
-                    _download_url_cache.pop(key, None)
-    return download_url, download_cookie
+        if cache_ttl_seconds > 0:
+            now_ts = time.time()
+            with _download_url_cache_lock:
+                _download_url_cache[cache_key] = {
+                    "url": download_url,
+                    "download_cookie": download_cookie,
+                    "expires_at": now_ts + cache_ttl_seconds,
+                    "updated_at": now_ts,
+                }
+                if len(_download_url_cache) > 1000:
+                    ordered = sorted(
+                        _download_url_cache.items(),
+                        key=lambda item: float((item[1] or {}).get("updated_at", 0.0) or 0.0),
+                    )
+                    for key, _ in ordered[: len(_download_url_cache) - 1000]:
+                        _download_url_cache.pop(key, None)
+        mark_cookie_health_success("115", trigger="runtime:strm_resolve_download")
+        return download_url, download_cookie
+    except Exception as exc:
+        mark_cookie_health_failure("115", exc, trigger="runtime:strm_resolve_download")
+        raise
 
 
 def _register_relay_token(

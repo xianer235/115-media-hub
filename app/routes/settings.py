@@ -43,9 +43,39 @@ async def save_settings_endpoint(request: Request) -> Dict[str, Any]:
         for task in subscription_tasks_payload
     ]
     save_config(merged_cfg)
+    cookie_health = await refresh_cookie_health_status(
+        providers=list(COOKIE_HEALTH_PROVIDERS),
+        trigger="settings_save",
+        force=True,
+    )
     await refresh_sign115_status(force_remote=False, trigger="settings_save")
     schedule_ui_state_push(0)
-    return {"ok": True}
+    return {"ok": True, "cookie_health": cookie_health}
+
+
+@router.get("/settings/cookies/status")
+async def get_cookies_status(request: Request) -> Dict[str, Any]:
+    force = request.query_params.get("refresh") == "1"
+    payload = await refresh_cookie_health_status(
+        providers=list(COOKIE_HEALTH_PROVIDERS),
+        trigger="status_poll",
+        force=force,
+    )
+    return {"ok": True, "cookie_health": payload}
+
+
+@router.post("/settings/cookies/check")
+async def check_cookies_status(request: Request) -> Dict[str, Any]:
+    incoming = await request.json()
+    payload = incoming if isinstance(incoming, dict) else {}
+    providers = payload.get("providers", list(COOKIE_HEALTH_PROVIDERS))
+    force = bool(payload.get("force", True))
+    result = await refresh_cookie_health_status(
+        providers=providers,
+        trigger="manual_check",
+        force=force,
+    )
+    return {"ok": True, "cookie_health": result}
 
 
 @router.post("/settings/tg_proxy/test")

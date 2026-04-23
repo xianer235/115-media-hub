@@ -15,7 +15,12 @@
             last_sign_at: '',
             last_trigger: ''
         };
-        let resourceState = { sources: [], quick_links: [], items: [], jobs: [], channel_sections: [], channel_profiles: {}, subscription_channel_support: {}, search_sections: [], last_syncs: {}, monitor_tasks: [], stats: { source_count: 0, item_count: 0, filtered_item_count: 0, completed_job_count: 0 }, cookie_configured: false, quark_cookie_configured: false, setup_status: null, search: '', search_meta: {} };
+        let cookieHealthState = {
+            '115': { configured: false, state: 'missing', message: '未配置 115 Cookie', last_checked_at: '', last_success_at: '', trigger: '', fail_count: 0 },
+            quark: { configured: false, state: 'missing', message: '未配置 Quark Cookie', last_checked_at: '', last_success_at: '', trigger: '', fail_count: 0 }
+        };
+        let cookieHealthCheckBusy = false;
+        let resourceState = { sources: [], quick_links: [], items: [], jobs: [], channel_sections: [], channel_profiles: {}, subscription_channel_support: {}, search_sections: [], last_syncs: {}, monitor_tasks: [], stats: { source_count: 0, item_count: 0, filtered_item_count: 0, completed_job_count: 0 }, cookie_configured: false, quark_cookie_configured: false, cookie_health: null, setup_status: null, search: '', search_meta: {} };
         let editingMonitorName = null;
         let editingSubscriptionName = null;
         let editingResourceSourceIndex = null;
@@ -684,6 +689,158 @@
             });
         }
 
+        function normalizeCookieHealthEntry(raw, provider = '115') {
+            const source = raw && typeof raw === 'object' ? raw : {};
+            const providerLabel = provider === 'quark' ? 'Quark' : '115';
+            const configured = !!source.configured;
+            const rawState = String(source.state || (configured ? 'unknown' : 'missing')).trim().toLowerCase();
+            const state = ['missing', 'unknown', 'checking', 'valid', 'invalid', 'error'].includes(rawState)
+                ? rawState
+                : (configured ? 'unknown' : 'missing');
+            let message = String(source.message || '').trim();
+            if (!message) {
+                if (state === 'missing') message = `未配置 ${providerLabel} Cookie`;
+                else if (state === 'checking') message = `正在检测 ${providerLabel} Cookie...`;
+                else if (state === 'valid') message = `${providerLabel} Cookie 可用`;
+                else if (state === 'invalid') message = `${providerLabel} Cookie 可能已失效`;
+                else if (state === 'error') message = `${providerLabel} Cookie 检测异常`;
+                else message = `已配置 ${providerLabel} Cookie，等待检测`;
+            }
+            return {
+                configured,
+                state,
+                message,
+                last_checked_at: String(source.last_checked_at || ''),
+                last_success_at: String(source.last_success_at || ''),
+                trigger: String(source.trigger || ''),
+                fail_count: Math.max(0, Number(source.fail_count || 0) || 0),
+            };
+        }
+
+        function normalizeCookieHealthState(raw) {
+            const source = raw && typeof raw === 'object' ? raw : {};
+            return {
+                '115': normalizeCookieHealthEntry(source['115'], '115'),
+                quark: normalizeCookieHealthEntry(source.quark, 'quark'),
+            };
+        }
+
+        function getCookieHealthTone(entry) {
+            const state = String(entry?.state || '').trim().toLowerCase();
+            if (state === 'valid') return 'success';
+            if (state === 'invalid') return 'error';
+            if (state === 'error') return 'error';
+            if (state === 'checking') return 'checking';
+            if (state === 'missing') return 'warn';
+            return 'idle';
+        }
+
+        function applyCookieHealthCardTone(cardEl, tone) {
+            if (!cardEl) return;
+            cardEl.classList.remove(
+                'border-slate-700/70', 'bg-slate-950/70',
+                'border-sky-500/40', 'bg-sky-500/10',
+                'border-emerald-500/40', 'bg-emerald-500/10',
+                'border-amber-500/40', 'bg-amber-500/10',
+                'border-rose-500/45', 'bg-rose-500/10'
+            );
+            if (tone === 'checking') {
+                cardEl.classList.add('border-sky-500/40', 'bg-sky-500/10');
+                return;
+            }
+            if (tone === 'success') {
+                cardEl.classList.add('border-emerald-500/40', 'bg-emerald-500/10');
+                return;
+            }
+            if (tone === 'warn') {
+                cardEl.classList.add('border-amber-500/40', 'bg-amber-500/10');
+                return;
+            }
+            if (tone === 'error') {
+                cardEl.classList.add('border-rose-500/45', 'bg-rose-500/10');
+                return;
+            }
+            cardEl.classList.add('border-slate-700/70', 'bg-slate-950/70');
+        }
+
+        function renderCookieHealthCards() {
+            const providers = ['115', 'quark'];
+            providers.forEach((provider) => {
+                const entry = cookieHealthState?.[provider] || normalizeCookieHealthEntry({}, provider);
+                const cardEl = document.getElementById(`cookie-health-${provider}-card`);
+                const textEl = document.getElementById(`cookie-health-${provider}-text`);
+                const tone = getCookieHealthTone(entry);
+                applyCookieHealthCardTone(cardEl, tone);
+                if (!textEl) return;
+                const bits = [entry.message];
+                if (entry.last_checked_at) bits.push(`上次检测 ${entry.last_checked_at}`);
+                if (entry.last_success_at && entry.state !== 'valid') bits.push(`上次成功 ${entry.last_success_at}`);
+                if (entry.fail_count > 0 && entry.state !== 'valid') bits.push(`连续失败 ${entry.fail_count} 次`);
+                textEl.innerText = bits.filter(Boolean).join('；');
+                textEl.classList.remove('text-slate-400', 'text-sky-200', 'text-emerald-200', 'text-amber-200', 'text-rose-200');
+                if (tone === 'checking') textEl.classList.add('text-sky-200');
+                else if (tone === 'success') textEl.classList.add('text-emerald-200');
+                else if (tone === 'warn') textEl.classList.add('text-amber-200');
+                else if (tone === 'error') textEl.classList.add('text-rose-200');
+                else textEl.classList.add('text-slate-400');
+            });
+
+            const checkBtn = document.getElementById('cookie-health-check-btn');
+            if (checkBtn) {
+                checkBtn.disabled = cookieHealthCheckBusy;
+                checkBtn.classList.toggle('btn-disabled', cookieHealthCheckBusy);
+                checkBtn.innerText = cookieHealthCheckBusy ? '检测中...' : '立即检测 Cookie';
+            }
+        }
+
+        function applyCookieHealthState(payload) {
+            if (!payload || typeof payload !== 'object') return;
+            cookieHealthState = normalizeCookieHealthState(payload);
+            resourceState = {
+                ...resourceState,
+                cookie_health: cookieHealthState
+            };
+            renderCookieHealthCards();
+            renderResourceCookieHint();
+        }
+
+        async function refreshCookieHealthStatus(force = false) {
+            try {
+                const endpoint = force ? '/settings/cookies/status?refresh=1' : '/settings/cookies/status';
+                const res = await fetch(endpoint);
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data?.cookie_health) applyCookieHealthState(data.cookie_health);
+            } catch (err) {
+                console.warn('Cookie health status refresh failed', err);
+            }
+        }
+
+        async function checkCookiesNow(force = true) {
+            if (cookieHealthCheckBusy) return;
+            cookieHealthCheckBusy = true;
+            renderCookieHealthCards();
+            try {
+                const res = await fetch('/settings/cookies/check', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        providers: ['115', 'quark'],
+                        force: !!force
+                    })
+                });
+                const data = await res.json();
+                if (!res.ok || !data?.ok) throw new Error(data?.msg || '检测失败');
+                if (data?.cookie_health) applyCookieHealthState(data.cookie_health);
+                showToast('Cookie 检测已完成', { tone: 'success', duration: 2200, placement: 'top-center' });
+            } catch (err) {
+                showToast(`Cookie 检测失败：${err?.message || '请稍后重试'}`, { tone: 'error', duration: 3000, placement: 'top-center' });
+            } finally {
+                cookieHealthCheckBusy = false;
+                renderCookieHealthCards();
+            }
+        }
+
         function buildLogSignature(logs, formatter) {
             const list = Array.isArray(logs) ? logs : [];
             const tail = list.length ? formatter(list[list.length - 1]) : '';
@@ -1054,6 +1211,7 @@
                 refreshMonitorState();
                 refreshSubscriptionState();
                 refreshSign115Status(false);
+                refreshCookieHealthStatus(false);
             }, STATUS_FALLBACK_INTERVAL);
         }
 
@@ -1130,6 +1288,7 @@
                     applyMonitorState(payload.monitor);
                     applySubscriptionState(payload.subscription);
                     applySign115State(payload.sign115);
+                    applyCookieHealthState(payload.cookie_health);
                 } catch (err) {
                     console.warn('Status stream parse failed', err);
                 }
@@ -1900,8 +2059,13 @@
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify(cfg)
             });
+            let data = null;
+            try {
+                data = await res.json();
+            } catch (_) {}
 
-            if (res.ok) {
+            if (res.ok && data?.ok) {
+                if (data?.cookie_health) applyCookieHealthState(data.cookie_health);
                 await refreshResourceState({ allowSearch: false });
                 const nextSensitiveMeta = { ...sensitiveConfigMeta };
                 SENSITIVE_SETTING_FIELDS.forEach((key) => {
@@ -1912,7 +2076,7 @@
                 alert('✅ 配置已保存');
                 refreshSign115Status(false);
             } else {
-                alert('❌ 保存失败');
+                alert(`❌ ${data?.msg || '保存失败'}`);
             }
         }
 
@@ -4032,6 +4196,52 @@
             return !!resourceState?.cookie_configured || !!resourceState?.quark_cookie_configured;
         }
 
+        function renderResourceCookieHint() {
+            const hintEl = document.getElementById('resource-cookie-hint');
+            if (!hintEl) return;
+            if (!resourceStateHydrated) {
+                hintEl.classList.add('hidden');
+                return;
+            }
+
+            const state = normalizeCookieHealthState(resourceState?.cookie_health || cookieHealthState || {});
+            const providerMeta = ['115', 'quark'].map((provider) => ({
+                provider,
+                label: provider === 'quark' ? 'Quark' : '115',
+                entry: normalizeCookieHealthEntry(state?.[provider], provider)
+            }));
+            const configuredAny = providerMeta.some((item) => item.entry.configured) || hasAnyResourceCookieConfigured();
+            const riskyProviders = providerMeta.filter((item) => (
+                item.entry.configured && (item.entry.state === 'invalid' || item.entry.state === 'error')
+            ));
+
+            let message = '';
+            let tone = 'warn';
+            if (!configuredAny) {
+                message = '尚未配置可用网盘 Cookie。请在“参数配置”填写 115 或 Quark Cookie，保存后可点击“立即检测 Cookie”。';
+            } else if (riskyProviders.length) {
+                const hasInvalid = riskyProviders.some((item) => item.entry.state === 'invalid');
+                tone = hasInvalid ? 'error' : 'warn';
+                const detailText = riskyProviders
+                    .map((item) => `${item.label}：${item.entry.message}`)
+                    .join('；');
+                message = `检测到网盘 Cookie 状态异常（${detailText}）。可继续执行，但建议在“参数配置”更新后重新检测。`;
+            }
+
+            hintEl.classList.toggle('hidden', !message);
+            if (!message) return;
+            hintEl.classList.remove(
+                'border-amber-500/25', 'bg-amber-500/10', 'text-amber-200',
+                'border-rose-500/25', 'bg-rose-500/10', 'text-rose-200'
+            );
+            if (tone === 'error') {
+                hintEl.classList.add('border-rose-500/25', 'bg-rose-500/10', 'text-rose-200');
+            } else {
+                hintEl.classList.add('border-amber-500/25', 'bg-amber-500/10', 'text-amber-200');
+            }
+            hintEl.innerText = message;
+        }
+
         function isResourceShareLinkType(linkType) {
             const normalized = String(linkType || '').trim().toLowerCase();
             return normalized === '115share' || normalized === 'quark';
@@ -5539,10 +5749,18 @@
                 setup_status: data.setup_status && typeof data.setup_status === 'object'
                     ? data.setup_status
                     : (resourceState.setup_status || null),
+                cookie_health: data.cookie_health && typeof data.cookie_health === 'object'
+                    ? data.cookie_health
+                    : (resourceState.cookie_health || null),
                 stats: nextStats,
                 search: typeof data.search === 'string' ? data.search : (resourceState.search || ''),
                 search_meta: data.search_meta || resourceState.search_meta || {}
             };
+            if (data.cookie_health && typeof data.cookie_health === 'object') {
+                applyCookieHealthState(data.cookie_health);
+            } else {
+                renderResourceCookieHint();
+            }
             normalizeResourceSourceBulkSelections();
             syncResourceChannelPagingState();
             setResourceQuickLinks(nextQuickLinks, { render: true });
@@ -5560,7 +5778,7 @@
             const completedCountEl = document.getElementById('resource-completed-job-count');
             if (completedCountEl) completedCountEl.innerText = String(completedCount);
             syncResourceJobClearMenuState();
-            document.getElementById('resource-cookie-hint').classList.toggle('hidden', !resourceStateHydrated || hasAnyResourceCookieConfigured());
+            renderResourceCookieHint();
             syncResourceSourceSelect();
             syncResourceMonitorTaskOptions(document.getElementById('resource_job_savepath')?.value || '');
             renderResourceOnboardingCard();
@@ -9622,7 +9840,10 @@
                     quick_links: cfg.resource_quick_links || [],
                     monitor_tasks: cfg.monitor_tasks || [],
                     cookie_configured: !!sensitiveMeta.cookie_115,
-                    quark_cookie_configured: !!sensitiveMeta.cookie_quark
+                    quark_cookie_configured: !!sensitiveMeta.cookie_quark,
+                    cookie_health: cfg.cookie_health && typeof cfg.cookie_health === 'object'
+                        ? cfg.cookie_health
+                        : (resourceState.cookie_health || null)
                 });
                 applySign115State({
                     ...sign115State,
