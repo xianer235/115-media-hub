@@ -22,6 +22,26 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from .config_store import JsonConfigStore
+from .db import (
+    DB_PATH,
+    ensure_db,
+    ensure_parent,
+    merge_json_object,
+    now_text,
+    open_db,
+    safe_json_dumps,
+    safe_json_loads,
+    sqlite_row_to_dict,
+)
+from .versioning import (
+    VERSION_CACHE_TTL,
+    VERSION_FILE,
+    VERSION_SOURCE_URL,
+    get_version_state,
+    is_remote_version_newer,
+    load_local_version,
+    version_key,
+)
 
 app = FastAPI()
 app.add_middleware(
@@ -57,7 +77,6 @@ async def add_server_timing_header(request: Request, call_next):
     return response
 
 CONFIG_PATH = "/app/config/settings.json"
-DB_PATH = "/app/config/data.db"
 TREE_DIR = "/app/config/trees"
 STRM_ROOT = "/app/strm"
 LOG_DIR = "/app/logs"
@@ -118,12 +137,6 @@ SUBSCRIPTION_QUALITY_PRIORITY_ALIASES: Dict[str, str] = {
 }
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 TEMPLATE_DIR = os.path.join(BASE_DIR, "templates")
-VERSION_FILE = os.path.join(BASE_DIR, "version.json")
-VERSION_SOURCE_URL = os.environ.get(
-    "VERSION_SOURCE_URL",
-    "https://raw.githubusercontent.com/xianer235/115-media-hub/main/version.json",
-)
-VERSION_CACHE_TTL = int(os.environ.get("VERSION_CACHE_TTL", 6 * 3600))
 UI_EVENT_RETRY_MS = 3000
 UI_HEARTBEAT_SECONDS = 15
 UI_PUSH_DEBOUNCE_SECONDS = 0.15
@@ -423,10 +436,6 @@ class CacheControlStaticFiles(StaticFiles):
 
 
 app.mount("/static", CacheControlStaticFiles(directory=STATIC_DIR), name="static")
-
-
-def ensure_parent(path: str) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
 
 
 def _clamp_api_115_rate_limit_seconds(value: Any, fallback: float = API_115_RATE_LIMIT_SECONDS) -> float:
@@ -1646,58 +1655,6 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     return merged
 
 
-def load_local_version() -> Dict[str, Any]:
-    try:
-        with open(VERSION_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            data["version"] = str(data.get("version", "dev")).strip() or "dev"
-            return data
-    except Exception:
-        return {"version": "dev", "notes": [], "changelogUrl": "", "buildDate": ""}
-
-
-def version_key(value: str) -> Tuple[int, ...]:
-    tokens = [token for token in re.split(r"[^\d]+", str(value or "")) if token.isdigit()]
-    if not tokens:
-        return (0,)
-    return tuple(int(token) for token in tokens)
-
-
-def is_remote_version_newer(local_version: str, remote_version: str) -> bool:
-    return version_key(remote_version) > version_key(local_version)
-
-
-async def get_version_state(force_refresh: bool = False) -> Dict[str, Any]:
-    local = load_local_version()
-    now = time.time()
-    latest = version_cache.get("latest")
-    error = version_cache.get("error", "")
-    should_refresh = force_refresh or (now - version_cache.get("checked_at", 0)) > VERSION_CACHE_TTL
-
-    if should_refresh:
-        try:
-            latest = await asyncio.to_thread(http_request_json, VERSION_SOURCE_URL)
-            version_cache["latest"] = latest
-            version_cache["checked_at"] = now
-            version_cache["error"] = ""
-            error = ""
-        except Exception as exc:
-            error = str(exc)
-            version_cache["error"] = error
-            version_cache["checked_at"] = now
-
-    latest_version = (latest or {}).get("version", "")
-    has_update = bool(latest_version and is_remote_version_newer(local.get("version", ""), latest_version))
-    return {
-        "local": local,
-        "latest": latest or {},
-        "checked_at": version_cache.get("checked_at", 0),
-        "has_update": has_update,
-        "error": error,
-        "source": VERSION_SOURCE_URL,
-    }
-
-
 _config_store_lock = threading.Lock()
 _config_store: Optional[JsonConfigStore] = None
 
@@ -1722,301 +1679,6 @@ def get_config() -> Dict[str, Any]:
 
 def save_config(cfg: Dict[str, Any]) -> None:
     _get_config_store().save(cfg)
-
-
-def ensure_db() -> None:
-    ensure_parent(DB_PATH)
-    conn = sqlite3.connect(DB_PATH, timeout=30)
-    cursor = conn.cursor()
-    cursor.execute(
-        "CREATE TABLE IF NOT EXISTS local_files (path_hash TEXT PRIMARY KEY, relative_path TEXT)"
-    )
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS monitor_files (
-            task_name TEXT NOT NULL,
-            local_rel_path TEXT NOT NULL,
-            remote_rel_path TEXT NOT NULL,
-            remote_modified TEXT,
-            file_size INTEGER DEFAULT 0,
-            PRIMARY KEY (task_name, local_rel_path)
-        )
-        """
-    )
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS monitor_dirs (
-            task_name TEXT NOT NULL,
-            dir_rel_path TEXT NOT NULL,
-            remote_modified TEXT,
-            PRIMARY KEY (task_name, dir_rel_path)
-        )
-        """
-    )
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS resource_items (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            source_type TEXT NOT NULL DEFAULT 'manual',
-            source_name TEXT NOT NULL DEFAULT '',
-            channel_name TEXT NOT NULL DEFAULT '',
-            title TEXT NOT NULL,
-            normalized_title TEXT NOT NULL DEFAULT '',
-            raw_text TEXT NOT NULL DEFAULT '',
-            link_url TEXT NOT NULL DEFAULT '',
-            link_type TEXT NOT NULL DEFAULT 'unknown',
-            message_url TEXT NOT NULL DEFAULT '',
-            quality TEXT NOT NULL DEFAULT '',
-            year TEXT NOT NULL DEFAULT '',
-            status TEXT NOT NULL DEFAULT 'new',
-            created_at TEXT NOT NULL,
-            published_at TEXT NOT NULL DEFAULT '',
-            last_seen_at TEXT NOT NULL DEFAULT '',
-            extra_json TEXT NOT NULL DEFAULT '{}'
-        )
-        """
-    )
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS resource_jobs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            resource_id INTEGER NOT NULL,
-            title TEXT NOT NULL DEFAULT '',
-            link_url TEXT NOT NULL DEFAULT '',
-            link_type TEXT NOT NULL DEFAULT '',
-            folder_id TEXT NOT NULL DEFAULT '',
-            savepath TEXT NOT NULL DEFAULT '',
-            sharetitle TEXT NOT NULL DEFAULT '',
-            monitor_task_name TEXT NOT NULL DEFAULT '',
-            refresh_delay_seconds INTEGER NOT NULL DEFAULT 0,
-            auto_refresh INTEGER NOT NULL DEFAULT 1,
-            status TEXT NOT NULL DEFAULT 'pending',
-            status_detail TEXT NOT NULL DEFAULT '',
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            started_at TEXT NOT NULL DEFAULT '',
-            finished_at TEXT NOT NULL DEFAULT '',
-            last_triggered_at TEXT NOT NULL DEFAULT '',
-            response_json TEXT NOT NULL DEFAULT '{}',
-            extra_json TEXT NOT NULL DEFAULT '{}'
-        )
-        """
-    )
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS subscription_task_state (
-            task_name TEXT PRIMARY KEY,
-            media_type TEXT NOT NULL DEFAULT 'movie',
-            status TEXT NOT NULL DEFAULT 'idle',
-            progress INTEGER NOT NULL DEFAULT 0,
-            detail TEXT NOT NULL DEFAULT '',
-            last_run_at TEXT NOT NULL DEFAULT '',
-            last_success_at TEXT NOT NULL DEFAULT '',
-            last_error TEXT NOT NULL DEFAULT '',
-            last_episode INTEGER NOT NULL DEFAULT 0,
-            total_episodes INTEGER NOT NULL DEFAULT 0,
-            matched_resource_id INTEGER NOT NULL DEFAULT 0,
-            matched_resource_title TEXT NOT NULL DEFAULT '',
-            matched_score INTEGER NOT NULL DEFAULT 0,
-            queued_job_id INTEGER NOT NULL DEFAULT 0,
-            stats_json TEXT NOT NULL DEFAULT '{}',
-            updated_at TEXT NOT NULL
-        )
-        """
-    )
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS subscription_channel_search_watermarks (
-            task_name TEXT NOT NULL,
-            channel_id TEXT NOT NULL,
-            last_post_cursor INTEGER NOT NULL DEFAULT 0,
-            last_published_at TEXT NOT NULL DEFAULT '',
-            last_run_at TEXT NOT NULL DEFAULT '',
-            updated_at TEXT NOT NULL DEFAULT '',
-            PRIMARY KEY (task_name, channel_id)
-        )
-        """
-    )
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS subscription_channel_support_stats (
-            channel_id TEXT PRIMARY KEY,
-            channel_name TEXT NOT NULL DEFAULT '',
-            searched_runs INTEGER NOT NULL DEFAULT 0,
-            matched_runs INTEGER NOT NULL DEFAULT 0,
-            matched_items INTEGER NOT NULL DEFAULT 0,
-            error_runs INTEGER NOT NULL DEFAULT 0,
-            incremental_stop_hits INTEGER NOT NULL DEFAULT 0,
-            pages_scanned INTEGER NOT NULL DEFAULT 0,
-            last_task_name TEXT NOT NULL DEFAULT '',
-            last_provider TEXT NOT NULL DEFAULT '',
-            last_trigger TEXT NOT NULL DEFAULT '',
-            last_error TEXT NOT NULL DEFAULT '',
-            last_searched_at TEXT NOT NULL DEFAULT '',
-            last_matched_at TEXT NOT NULL DEFAULT '',
-            updated_at TEXT NOT NULL DEFAULT ''
-        )
-        """
-    )
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS subscription_matches (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            task_name TEXT NOT NULL,
-            resource_id INTEGER NOT NULL,
-            job_id INTEGER NOT NULL DEFAULT 0,
-            media_type TEXT NOT NULL DEFAULT 'movie',
-            season INTEGER NOT NULL DEFAULT 0,
-            episode INTEGER NOT NULL DEFAULT 0,
-            total_episodes INTEGER NOT NULL DEFAULT 0,
-            score INTEGER NOT NULL DEFAULT 0,
-            matched_at TEXT NOT NULL,
-            UNIQUE(task_name, resource_id)
-        )
-        """
-    )
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS subscription_episode_ledger (
-            task_name TEXT NOT NULL,
-            episode INTEGER NOT NULL,
-            season INTEGER NOT NULL DEFAULT 0,
-            media_type TEXT NOT NULL DEFAULT 'tv',
-            best_score INTEGER NOT NULL DEFAULT 0,
-            best_resolution INTEGER NOT NULL DEFAULT 0,
-            source_fp TEXT NOT NULL DEFAULT '',
-            content_fp TEXT NOT NULL DEFAULT '',
-            link_type TEXT NOT NULL DEFAULT '',
-            link_url TEXT NOT NULL DEFAULT '',
-            resource_id INTEGER NOT NULL DEFAULT 0,
-            job_id INTEGER NOT NULL DEFAULT 0,
-            status TEXT NOT NULL DEFAULT 'active',
-            first_seen_at TEXT NOT NULL DEFAULT '',
-            updated_at TEXT NOT NULL DEFAULT '',
-            PRIMARY KEY (task_name, episode)
-        )
-        """
-    )
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS share_entries_cache (
-            cache_key TEXT PRIMARY KEY,
-            share_code TEXT NOT NULL DEFAULT '',
-            receive_code TEXT NOT NULL DEFAULT '',
-            cid TEXT NOT NULL DEFAULT '0',
-            payload_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT '',
-            expires_at TEXT NOT NULL DEFAULT ''
-        )
-        """
-    )
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS notification_dedupe (
-            dedupe_key TEXT PRIMARY KEY,
-            scene TEXT NOT NULL DEFAULT '',
-            task_name TEXT NOT NULL DEFAULT '',
-            episode INTEGER NOT NULL DEFAULT 0,
-            savepath TEXT NOT NULL DEFAULT '',
-            created_at TEXT NOT NULL DEFAULT '',
-            expires_at TEXT NOT NULL DEFAULT ''
-        )
-        """
-    )
-    cursor.execute("PRAGMA table_info(resource_jobs)")
-    job_columns = {str(row[1]) for row in cursor.fetchall()}
-    if "extra_json" not in job_columns:
-        cursor.execute("ALTER TABLE resource_jobs ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'")
-    cursor.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_resource_items_link ON resource_items(link_url) WHERE link_url <> ''"
-    )
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_resource_items_created_at ON resource_items(created_at DESC)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_resource_items_source_type ON resource_items(source_type)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_resource_items_channel_name ON resource_items(channel_name)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_resource_items_source_channel ON resource_items(source_type, channel_name)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_resource_items_status ON resource_items(status)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_resource_jobs_created_at ON resource_jobs(created_at DESC)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_resource_jobs_status ON resource_jobs(status)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_subscription_state_status ON subscription_task_state(status)")
-    cursor.execute(
-        "CREATE INDEX IF NOT EXISTS idx_subscription_channel_watermarks_updated_at "
-        "ON subscription_channel_search_watermarks(updated_at DESC)"
-    )
-    cursor.execute(
-        "CREATE INDEX IF NOT EXISTS idx_subscription_channel_support_updated_at "
-        "ON subscription_channel_support_stats(updated_at DESC)"
-    )
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_subscription_matches_task ON subscription_matches(task_name, matched_at DESC)")
-    cursor.execute(
-        "CREATE INDEX IF NOT EXISTS idx_subscription_episode_ledger_task_status ON subscription_episode_ledger(task_name, status)"
-    )
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_share_entries_cache_expires_at ON share_entries_cache(expires_at)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_share_entries_cache_share_cid ON share_entries_cache(share_code, cid)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_notification_dedupe_expires_at ON notification_dedupe(expires_at)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_notification_dedupe_scene ON notification_dedupe(scene, task_name)")
-    cursor.execute(
-        """
-        SELECT id, last_seen_at, extra_json
-        FROM resource_items
-        WHERE last_seen_at LIKE '{%' AND extra_json NOT LIKE '{%'
-        """
-    )
-    for row in cursor.fetchall():
-        row_id = int(row[0] or 0)
-        legacy_extra_raw = str(row[1] or "").strip()
-        last_seen_raw = str(row[2] or "").strip()
-        legacy_extra = safe_json_loads(legacy_extra_raw, {})
-        if not isinstance(legacy_extra, dict):
-            continue
-        if not any(str(legacy_extra.get(key, "") or "").strip() for key in ("cover_url", "source_post_id", "source_url")):
-            continue
-        cursor.execute(
-            "UPDATE resource_items SET last_seen_at = ?, extra_json = ? WHERE id = ?",
-            (last_seen_raw or now_text(), legacy_extra_raw, row_id),
-        )
-    conn.commit()
-    conn.close()
-
-
-def open_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, timeout=30)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def now_text() -> str:
-    return datetime.now().isoformat(timespec="seconds")
-
-
-def safe_json_dumps(value: Any) -> str:
-    return json.dumps(value if value is not None else {}, ensure_ascii=False, sort_keys=True)
-
-
-def safe_json_loads(raw: Any, fallback: Any) -> Any:
-    if isinstance(raw, (dict, list)):
-        return raw
-    text = str(raw or "").strip()
-    if not text:
-        return fallback
-    try:
-        return json.loads(text)
-    except Exception:
-        return fallback
-
-
-def merge_json_object(base: Any, patch: Any) -> Dict[str, Any]:
-    merged: Dict[str, Any] = {}
-    if isinstance(base, dict):
-        merged.update(base)
-    if isinstance(patch, dict):
-        merged.update(patch)
-    return merged
-
-
-def sqlite_row_to_dict(row: Optional[sqlite3.Row]) -> Dict[str, Any]:
-    if row is None:
-        return {}
-    return {key: row[key] for key in row.keys()}
 
 
 def unique_preserve_order(values: List[str]) -> List[str]:
@@ -5680,7 +5342,6 @@ cookie_health_runtime: Dict[str, Dict[str, float]] = {
     "115": {"last_checked_ts": 0.0, "last_success_ts": 0.0},
     "quark": {"last_checked_ts": 0.0, "last_success_ts": 0.0},
 }
-version_cache: Dict[str, Any] = {"latest": None, "checked_at": 0.0, "error": ""}
 tmdb_cache_entries: Dict[str, Dict[str, Any]] = {}
 ui_event_subscribers: Set[asyncio.Queue[str]] = set()
 ui_push_pending = False
@@ -8549,9 +8210,42 @@ def resolve_115_share_payload(cookie: str, share_url: str, raw_text: str = "", r
     return parsed
 
 
-def _build_115_share_snap_cache_key(share_code: str, receive_code: str, cid: str) -> str:
-    source = f"{str(share_code or '').strip()}|{str(receive_code or '').strip()}|{str(cid or '0').strip() or '0'}"
+def _build_115_share_cache_key(
+    cache_kind: str,
+    share_code: str,
+    receive_code: str,
+    cid: str,
+    extra: str = "",
+) -> str:
+    source = (
+        f"{str(cache_kind or 'snap').strip()}|"
+        f"{str(share_code or '').strip()}|"
+        f"{str(receive_code or '').strip()}|"
+        f"{str(cid or '0').strip() or '0'}|"
+        f"{str(extra or '').strip()}"
+    )
     return hashlib.sha1(source.encode("utf-8")).hexdigest()
+
+
+def _build_115_share_snap_cache_key(share_code: str, receive_code: str, cid: str) -> str:
+    return _build_115_share_cache_key("snap", share_code, receive_code, cid)
+
+
+def _build_115_share_page_cache_key(
+    share_code: str,
+    receive_code: str,
+    cid: str,
+    offset: int,
+    limit: int,
+    folders_only: bool,
+) -> str:
+    return _build_115_share_cache_key(
+        "page",
+        share_code,
+        receive_code,
+        cid,
+        extra=f"{max(0, int(offset or 0))}|{max(20, min(400, int(limit or 200)))}|{1 if folders_only else 0}",
+    )
 
 
 def _throttle_115_share_snap_requests(rate_limit_seconds: float = 0.0) -> None:
@@ -8597,21 +8291,15 @@ def _is_retryable_115_share_snap_error(exc: Exception) -> bool:
     )
 
 
-def load_115_share_snap_cache(
-    share_code: str,
-    receive_code: str,
-    cid: str,
-    allow_expired: bool = False,
-) -> Dict[str, Any]:
-    normalized_share_code = str(share_code or "").strip()
-    if not normalized_share_code:
+def _load_share_entries_cache_payload(cache_key: str, allow_expired: bool = False) -> Dict[str, Any]:
+    normalized_cache_key = str(cache_key or "").strip()
+    if not normalized_cache_key:
         return {}
-    cache_key = _build_115_share_snap_cache_key(normalized_share_code, receive_code, cid)
     ensure_db()
     conn = open_db()
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT payload_json, expires_at FROM share_entries_cache WHERE cache_key = ?", (cache_key,))
+        cursor.execute("SELECT payload_json, expires_at FROM share_entries_cache WHERE cache_key = ?", (normalized_cache_key,))
         row = cursor.fetchone()
         if not row:
             return {}
@@ -8625,17 +8313,47 @@ def load_115_share_snap_cache(
         conn.close()
 
 
-def save_115_share_snap_cache(
+def load_115_share_snap_cache(
+    share_code: str,
+    receive_code: str,
+    cid: str,
+    allow_expired: bool = False,
+) -> Dict[str, Any]:
+    normalized_share_code = str(share_code or "").strip()
+    if not normalized_share_code:
+        return {}
+    cache_key = _build_115_share_snap_cache_key(normalized_share_code, receive_code, cid)
+    return _load_share_entries_cache_payload(cache_key, allow_expired=allow_expired)
+
+
+def load_115_share_page_cache(
+    share_code: str,
+    receive_code: str,
+    cid: str,
+    offset: int,
+    limit: int,
+    folders_only: bool = False,
+    allow_expired: bool = False,
+) -> Dict[str, Any]:
+    normalized_share_code = str(share_code or "").strip()
+    if not normalized_share_code:
+        return {}
+    cache_key = _build_115_share_page_cache_key(normalized_share_code, receive_code, cid, offset, limit, folders_only)
+    return _load_share_entries_cache_payload(cache_key, allow_expired=allow_expired)
+
+
+def _save_share_entries_cache_payload(
+    cache_key: str,
     share_code: str,
     receive_code: str,
     cid: str,
     payload: Dict[str, Any],
     ttl_seconds: int = SHARE_SNAP_CACHE_TTL_SECONDS,
 ) -> None:
+    normalized_cache_key = str(cache_key or "").strip()
     normalized_share_code = str(share_code or "").strip()
-    if not normalized_share_code or not isinstance(payload, dict):
+    if not normalized_cache_key or not normalized_share_code or not isinstance(payload, dict):
         return
-    cache_key = _build_115_share_snap_cache_key(normalized_share_code, receive_code, cid)
     now_iso = now_text()
     expires_at = (datetime.now() + timedelta(seconds=max(1, int(ttl_seconds or SHARE_SNAP_CACHE_TTL_SECONDS)))).isoformat(
         timespec="seconds"
@@ -8652,7 +8370,7 @@ def save_115_share_snap_cache(
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                cache_key,
+                normalized_cache_key,
                 normalized_share_code,
                 str(receive_code or "").strip(),
                 str(cid or "0").strip() or "0",
@@ -8678,6 +8396,73 @@ def save_115_share_snap_cache(
         conn.commit()
     finally:
         conn.close()
+
+
+def save_115_share_snap_cache(
+    share_code: str,
+    receive_code: str,
+    cid: str,
+    payload: Dict[str, Any],
+    ttl_seconds: int = SHARE_SNAP_CACHE_TTL_SECONDS,
+) -> None:
+    normalized_share_code = str(share_code or "").strip()
+    if not normalized_share_code or not isinstance(payload, dict):
+        return
+    cache_key = _build_115_share_snap_cache_key(normalized_share_code, receive_code, cid)
+    _save_share_entries_cache_payload(cache_key, normalized_share_code, receive_code, cid, payload, ttl_seconds=ttl_seconds)
+
+
+def save_115_share_page_cache(
+    share_code: str,
+    receive_code: str,
+    cid: str,
+    offset: int,
+    limit: int,
+    folders_only: bool,
+    payload: Dict[str, Any],
+    ttl_seconds: int = SHARE_SNAP_CACHE_TTL_SECONDS,
+) -> None:
+    normalized_share_code = str(share_code or "").strip()
+    if not normalized_share_code or not isinstance(payload, dict):
+        return
+    cache_key = _build_115_share_page_cache_key(normalized_share_code, receive_code, cid, offset, limit, folders_only)
+    _save_share_entries_cache_payload(cache_key, normalized_share_code, receive_code, cid, payload, ttl_seconds=ttl_seconds)
+
+
+def _slice_115_share_cache_payload(
+    payload: Dict[str, Any],
+    offset: int = 0,
+    limit: int = 200,
+    folders_only: bool = False,
+) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    source_entries = payload.get("entries", [])
+    if not isinstance(source_entries, list):
+        return {}
+    start_offset = max(0, int(offset or 0))
+    page_limit = max(20, min(400, int(limit or 200)))
+    filtered_entries = [entry for entry in source_entries if (not folders_only) or bool((entry or {}).get("is_dir"))]
+    page_entries = filtered_entries[start_offset:start_offset + page_limit]
+    filtered_total = len(filtered_entries)
+    next_offset = start_offset + len(page_entries)
+    return {
+        "entries": page_entries,
+        "summary": {
+            "folder_count": sum(1 for item in page_entries if (item or {}).get("is_dir")),
+            "file_count": sum(1 for item in page_entries if not (item or {}).get("is_dir")),
+        },
+        "share_code": str(payload.get("share_code", "") or "").strip(),
+        "receive_code": str(payload.get("receive_code", "") or "").strip(),
+        "share_title": str(payload.get("share_title", "") or "").strip(),
+        "current_cid": str(payload.get("current_cid", "") or "0").strip() or "0",
+        "count": filtered_total if folders_only else max(filtered_total, int(payload.get("count", filtered_total) or filtered_total)),
+        "offset": start_offset,
+        "next_offset": next_offset,
+        "has_more": next_offset < filtered_total,
+        "pages_scanned": int(payload.get("pages_scanned", 0) or 0),
+        "cache_derived": True,
+    }
 
 
 def list_115_share_entries(
@@ -8708,13 +8493,40 @@ def list_115_share_entries(
         max_pages_limit = max(0, int(max_pages or 0))
         folder_only_mode = bool(folders_only)
         use_full_cache = start_offset == 0 and max_pages_limit <= 0 and not folder_only_mode
-        stale_cache: Dict[str, Any] = {}
-        if use_full_cache:
-            stale_cache = load_115_share_snap_cache(share_code, receive_code, current_cid, allow_expired=True)
-            if not force_refresh:
-                fresh_cache = load_115_share_snap_cache(share_code, receive_code, current_cid, allow_expired=False)
-                if fresh_cache:
-                    return fresh_cache
+        stale_full_cache: Dict[str, Any] = load_115_share_snap_cache(share_code, receive_code, current_cid, allow_expired=True)
+        stale_page_cache: Dict[str, Any] = load_115_share_page_cache(
+            share_code,
+            receive_code,
+            current_cid,
+            start_offset,
+            page_limit,
+            folder_only_mode,
+            allow_expired=True,
+        )
+        if not force_refresh:
+            fresh_full_cache = load_115_share_snap_cache(share_code, receive_code, current_cid, allow_expired=False)
+            if use_full_cache and fresh_full_cache:
+                return fresh_full_cache
+            if fresh_full_cache:
+                sliced_payload = _slice_115_share_cache_payload(
+                    fresh_full_cache,
+                    offset=start_offset,
+                    limit=page_limit,
+                    folders_only=folder_only_mode,
+                )
+                if sliced_payload:
+                    return sliced_payload
+            fresh_page_cache = load_115_share_page_cache(
+                share_code,
+                receive_code,
+                current_cid,
+                start_offset,
+                page_limit,
+                folder_only_mode,
+                allow_expired=False,
+            )
+            if fresh_page_cache:
+                return fresh_page_cache
 
         request_timeout_value = max(5, int(request_timeout or 45))
         retry_total = max(0, int(max_request_retries or 0))
@@ -8761,9 +8573,20 @@ def list_115_share_entries(
                         break
                     time.sleep(0.6 * (attempt + 1))
             if last_request_error is not None:
-                if use_full_cache and stale_cache:
+                stale_payload = {}
+                if use_full_cache and stale_full_cache:
+                    stale_payload = dict(stale_full_cache)
+                elif stale_page_cache:
+                    stale_payload = dict(stale_page_cache)
+                elif stale_full_cache:
+                    stale_payload = _slice_115_share_cache_payload(
+                        stale_full_cache,
+                        offset=start_offset,
+                        limit=page_limit,
+                        folders_only=folder_only_mode,
+                    )
+                if stale_payload:
                     mark_cookie_health_failure("115", last_request_error, trigger="runtime:list_115_share_entries")
-                    stale_payload = dict(stale_cache)
                     stale_payload["cache_stale"] = True
                     stale_payload["cache_error"] = str(last_request_error or "").strip()[:180]
                     stale_payload["cache_cid"] = current_cid
@@ -8780,9 +8603,20 @@ def list_115_share_entries(
                     or str(result.get("message", "")).strip()
                     or "读取 115 分享内容失败"
                 )
-                if use_full_cache and stale_cache:
+                stale_payload = {}
+                if use_full_cache and stale_full_cache:
+                    stale_payload = dict(stale_full_cache)
+                elif stale_page_cache:
+                    stale_payload = dict(stale_page_cache)
+                elif stale_full_cache:
+                    stale_payload = _slice_115_share_cache_payload(
+                        stale_full_cache,
+                        offset=start_offset,
+                        limit=page_limit,
+                        folders_only=folder_only_mode,
+                    )
+                if stale_payload:
                     mark_cookie_health_failure("115", detail, trigger="runtime:list_115_share_entries")
-                    stale_payload = dict(stale_cache)
                     stale_payload["cache_stale"] = True
                     stale_payload["cache_error"] = detail[:180]
                     stale_payload["cache_cid"] = current_cid
@@ -8845,6 +8679,17 @@ def list_115_share_entries(
                         share_code,
                         receive_code,
                         current_cid,
+                        result_payload,
+                        ttl_seconds=SHARE_SNAP_CACHE_TTL_SECONDS,
+                    )
+                else:
+                    save_115_share_page_cache(
+                        share_code,
+                        receive_code,
+                        current_cid,
+                        start_offset,
+                        page_limit,
+                        folder_only_mode,
                         result_payload,
                         ttl_seconds=SHARE_SNAP_CACHE_TTL_SECONDS,
                     )

@@ -32,6 +32,7 @@
         let resourceFolderSummary = { folder_count: 0, file_count: 0 };
         let resourceFolderLoading = false;
         let resourceFolderFilesLoading = false;
+        let resourceFolderEntriesComplete = false;
         let resourceFolderShowAllFiles = false;
         let resourceFolderCreateBusy = false;
         let resourceFolderRequestToken = 0;
@@ -155,10 +156,13 @@
             settings: 0,
             about: 0
         };
-        const tabModuleCache = {};
+        const tabRuntimeState = {
+            tabModuleCache: {},
+            shellTabRouterPromise: null
+        };
         let tabSwitchTicket = 0;
         let suppressHashTabSync = false;
-        let shellTabRouterPromise = null;
+        let tabRuntimeModulePromise = null;
         let shellMoreMenuOpen = false;
         let shellRailExpanded = false;
         let aboutWorkflowImageLoaded = false;
@@ -224,16 +228,7 @@
             7: '周日'
         };
         const SUBSCRIPTION_DEFAULT_WEEKDAYS = [1, 2, 3, 4, 5, 6, 7];
-        const SHELL_TAB_IDS = Object.freeze(['task', 'resource', 'subscription', 'settings', 'monitor', 'about']);
-        const TAB_MODULE_IMPORT_PATHS = Object.freeze({
-            resource: '/static/js/modules/tabs/resource.js',
-            subscription: '/static/js/modules/tabs/subscription.js',
-            monitor: '/static/js/modules/tabs/monitor.js',
-            task: '/static/js/modules/tabs/task.js',
-            settings: '/static/js/modules/tabs/settings.js',
-            about: '/static/js/modules/tabs/about.js',
-        });
-        const TAB_HASH_SYNC_IMPORT_PATH = '/static/js/modules/tabs/url-sync.js';
+        const TAB_RUNTIME_IMPORT_PATH = '/static/js/modules/tabs/runtime.js';
 
         function getWindowScrollTop() {
             if (document.body.classList.contains('body-scroll-lock')) {
@@ -262,7 +257,13 @@
             });
         }
 
-        function createTabModuleContext() {
+        async function loadTabRuntimeModule() {
+            if (tabRuntimeModulePromise) return tabRuntimeModulePromise;
+            tabRuntimeModulePromise = import(TAB_RUNTIME_IMPORT_PATH).catch(() => null);
+            return tabRuntimeModulePromise;
+        }
+
+        function buildTabModuleContext() {
             return {
                 moduleVisitState,
                 refreshResourceState,
@@ -270,50 +271,93 @@
                 refreshMonitorState,
                 refreshMainLogs,
                 refreshVersionInfo,
-                versionInfo,
+                getVersionInfo: () => versionInfo,
                 isResourceStateHydrated: () => resourceStateHydrated,
             };
         }
 
         async function loadTabModule(tab) {
-            const normalized = String(tab || '').trim().toLowerCase();
-            if (!normalized || !TAB_MODULE_IMPORT_PATHS[normalized]) return null;
-            if (tabModuleCache[normalized]) return tabModuleCache[normalized];
-            try {
-                const mod = await import(TAB_MODULE_IMPORT_PATHS[normalized]);
-                tabModuleCache[normalized] = mod;
-                return mod;
-            } catch (e) {
-                return null;
-            }
+            const runtime = await loadTabRuntimeModule();
+            if (!runtime?.loadTabModule) return null;
+            return runtime.loadTabModule(tab, { tabModuleCache: tabRuntimeState.tabModuleCache });
         }
 
-        async function loadShellTabRouterModule() {
-            if (shellTabRouterPromise) return shellTabRouterPromise;
-            shellTabRouterPromise = import(TAB_HASH_SYNC_IMPORT_PATH).catch(() => null);
-            return shellTabRouterPromise;
+        async function createTabModuleContext() {
+            const runtime = await loadTabRuntimeModule();
+            if (runtime?.createTabModuleContext) {
+                return runtime.createTabModuleContext(buildTabModuleContext());
+            }
+            const fallback = buildTabModuleContext();
+            return {
+                moduleVisitState: fallback.moduleVisitState,
+                refreshResourceState: fallback.refreshResourceState,
+                refreshSubscriptionState: fallback.refreshSubscriptionState,
+                refreshMonitorState: fallback.refreshMonitorState,
+                refreshMainLogs: fallback.refreshMainLogs,
+                refreshVersionInfo: fallback.refreshVersionInfo,
+                versionInfo,
+                isResourceStateHydrated: fallback.isResourceStateHydrated,
+            };
+        }
+
+        async function loadTaskTabModule() {
+            return loadTabModule('task');
+        }
+
+        async function loadSettingsTabModule() {
+            return loadTabModule('settings');
+        }
+
+        async function loadMonitorTabModule() {
+            return loadTabModule('monitor');
+        }
+
+        async function loadSubscriptionTabModule() {
+            return loadTabModule('subscription');
+        }
+
+        async function loadResourceTabModule() {
+            return loadTabModule('resource');
+        }
+
+        async function loadAboutTabModule() {
+            return loadTabModule('about');
         }
 
         async function readTabFromLocationHash() {
-            const router = await loadShellTabRouterModule();
-            if (!router?.readTabFromHash) return '';
-            return router.readTabFromHash(SHELL_TAB_META, window.location.hash);
+            const runtime = await loadTabRuntimeModule();
+            if (!runtime?.readTabFromLocationHash) return '';
+            return runtime.readTabFromLocationHash({
+                state: tabRuntimeState,
+                shellTabMeta: SHELL_TAB_META,
+                currentHash: window.location.hash,
+            });
         }
 
         async function syncLocationHashWithTab(tab, { replace = false } = {}) {
-            const router = await loadShellTabRouterModule();
-            if (!router?.buildHashWithTab) return;
-            const nextHash = router.buildHashWithTab(tab, window.location.hash);
-            if (!nextHash || nextHash === window.location.hash) return;
-            if (replace) {
-                history.replaceState(null, '', `${window.location.pathname}${window.location.search}${nextHash}`);
-                return;
-            }
-            suppressHashTabSync = true;
-            window.location.hash = nextHash;
-            window.setTimeout(() => {
-                suppressHashTabSync = false;
-            }, 0);
+            const runtime = await loadTabRuntimeModule();
+            if (!runtime?.syncLocationHashWithTab) return;
+            await runtime.syncLocationHashWithTab(tab, {
+                state: tabRuntimeState,
+                currentHash: window.location.hash,
+                pathname: window.location.pathname,
+                search: window.location.search,
+                replace,
+                setHash: (nextHash) => {
+                    window.location.hash = nextHash;
+                },
+                replaceUrl: (url) => {
+                    history.replaceState(null, '', url);
+                },
+                onBeforeHashWrite: () => {
+                    suppressHashTabSync = true;
+                },
+                onAfterHashWrite: () => {
+                    window.setTimeout(() => {
+                        suppressHashTabSync = false;
+                    }, 0);
+                }
+            });
         }
 
         function lockPageScroll() {
@@ -503,7 +547,7 @@
         async function ensureTabData(tab) {
             const tabModule = await loadTabModule(tab);
             if (tabModule && typeof tabModule.ensureTabData === 'function') {
-                await tabModule.ensureTabData(createTabModuleContext());
+                await tabModule.ensureTabData(await createTabModuleContext());
                 return;
             }
             if (tab === 'resource') {
@@ -549,7 +593,7 @@
             moduleScrollTopState[prevTab] = getWindowScrollTop();
             currentTab = nextTab;
             const switchTicket = ++tabSwitchTicket;
-            SHELL_TAB_IDS.forEach(name => {
+            Object.keys(SHELL_TAB_META).forEach(name => {
                 const page = document.getElementById(`page-${name}`);
                 if (page) page.classList.toggle('hidden', nextTab !== name);
             });
@@ -590,13 +634,14 @@
         }
 
         function generateWebhookSecret() {
-            const input = document.getElementById('webhook_secret');
-            if (!input) return;
-            const secret = randomAlphaNumericSecret(32);
-            input.value = secret;
-            input.focus();
-            input.select();
-            showToast('已生成随机密钥，请记得点击“保存全部配置”', { tone: 'success', duration: 3000, placement: 'top-center' });
+            const settingsModule = tabRuntimeState.tabModuleCache.settings;
+            if (settingsModule?.generateWebhookSecret) {
+                settingsModule.generateWebhookSecret({ showToast });
+                return;
+            }
+            void loadSettingsTabModule().then((mod) => {
+                mod?.generateWebhookSecret?.({ showToast });
+            });
         }
 
         function getGlobalToastStack(placement = 'bottom-right') {
@@ -814,39 +859,28 @@
         }
 
         async function refreshCookieHealthStatus(force = false) {
-            try {
-                const endpoint = force ? '/settings/cookies/status?refresh=1' : '/settings/cookies/status';
-                const res = await fetch(endpoint);
-                if (!res.ok) return;
-                const data = await res.json();
-                if (data?.cookie_health) applyCookieHealthState(data.cookie_health);
-            } catch (err) {
-                console.warn('Cookie health status refresh failed', err);
+            const settingsModule = await loadSettingsTabModule();
+            if (settingsModule?.refreshCookieHealthStatus) {
+                await settingsModule.refreshCookieHealthStatus({
+                    force,
+                    applyCookieHealthState,
+                });
             }
         }
 
         async function checkCookiesNow(force = true) {
-            if (cookieHealthCheckBusy) return;
-            cookieHealthCheckBusy = true;
-            renderCookieHealthCards();
-            try {
-                const res = await fetch('/settings/cookies/check', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        providers: ['115', 'quark'],
-                        force: !!force
-                    })
+            const settingsModule = await loadSettingsTabModule();
+            if (settingsModule?.checkCookiesNow) {
+                await settingsModule.checkCookiesNow({
+                    force,
+                    isBusy: cookieHealthCheckBusy,
+                    setBusy: (nextValue) => {
+                        cookieHealthCheckBusy = !!nextValue;
+                    },
+                    renderCookieHealthCards,
+                    applyCookieHealthState,
+                    showToast,
                 });
-                const data = await res.json();
-                if (!res.ok || !data?.ok) throw new Error(data?.msg || '检测失败');
-                if (data?.cookie_health) applyCookieHealthState(data.cookie_health);
-                showToast('Cookie 检测已完成', { tone: 'success', duration: 2200, placement: 'top-center' });
-            } catch (err) {
-                showToast(`Cookie 检测失败：${err?.message || '请稍后重试'}`, { tone: 'error', duration: 3000, placement: 'top-center' });
-            } finally {
-                cookieHealthCheckBusy = false;
-                renderCookieHealthCards();
             }
         }
 
@@ -1129,38 +1163,46 @@
         }
 
         async function refreshSign115Status(force = false) {
-            try {
-                const endpoint = force ? '/settings/115/sign/status?refresh=1' : '/settings/115/sign/status';
-                const res = await fetch(endpoint);
-                if (!res.ok) return;
-                const data = await res.json();
-                applySign115State(data);
-            } catch (err) {
-                console.warn('Sign115 status refresh failed', err);
+            const settingsModule = await loadSettingsTabModule();
+            if (settingsModule?.refreshSign115Status) {
+                await settingsModule.refreshSign115Status({
+                    force,
+                    applySign115State,
+                });
             }
         }
 
         async function manualSign115(notify = false) {
-            if (sign115State.running) return;
-            try {
-                const res = await fetch('/settings/115/sign/run', { method: 'POST' });
-                const data = await res.json();
-                if (!res.ok || !data.ok) {
-                    if (data?.state) applySign115State(data.state);
-                    if (notify) showToast(`签到失败：${data?.msg || '请稍后重试'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
-                    return;
-                }
-                if (data?.state) applySign115State(data.state);
-                if (notify) {
-                    const message = String(data?.state?.message || '签到完成');
-                    showToast(message, { tone: 'success', duration: 3000, placement: 'top-center' });
-                }
-            } catch (err) {
-                if (notify) showToast(`签到失败：${err?.message || '请稍后重试'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
+            const settingsModule = await loadSettingsTabModule();
+            if (settingsModule?.manualSign115) {
+                await settingsModule.manualSign115({
+                    notify,
+                    sign115State,
+                    applySign115State,
+                    showToast,
+                });
             }
         }
 
         function applyMainState(data) {
+            const taskModule = tabRuntimeState.tabModuleCache.task;
+            if (taskModule?.applyMainState) {
+                taskModule.applyMainState(data, {
+                    getIsRunning: () => isRunning,
+                    btnTexts,
+                    setIsRunning: (nextValue) => {
+                        isRunning = !!nextValue;
+                    },
+                    getLastLogSignature: () => lastLogSignature,
+                    setLastLogSignature: (nextValue) => {
+                        lastLogSignature = String(nextValue || '');
+                    },
+                    buildLogSignature,
+                    getLogEntryClass,
+                    formatLogHtml: formatMonitorLogHtml,
+                });
+                return;
+            }
             if (!data) return;
             if (data.running !== isRunning) updateButtonState(!!data.running);
 
@@ -1188,6 +1230,33 @@
         }
 
         function applyMonitorState(data, { forceRender = false } = {}) {
+            const monitorModule = tabRuntimeState.tabModuleCache.monitor;
+            if (monitorModule?.applyMonitorState) {
+                monitorModule.applyMonitorState(data, {
+                    forceRender,
+                    getMonitorState: () => monitorState,
+                    setMonitorState: (nextValue) => {
+                        monitorState = { ...nextValue };
+                    },
+                    getIntroExpanded: () => monitorTaskIntroExpanded,
+                    setIntroExpanded: (nextValue) => {
+                        monitorTaskIntroExpanded = { ...(nextValue || {}) };
+                    },
+                    pruneTaskIntroExpanded,
+                    buildMonitorRenderKey,
+                    getLastMonitorRenderKey: () => lastMonitorRenderKey,
+                    setLastMonitorRenderKey: (nextValue) => {
+                        lastMonitorRenderKey = String(nextValue || '');
+                    },
+                    renderMonitorTasks,
+                    renderMonitorLogs,
+                    afterApply: (nextState) => {
+                        resourceState.monitor_tasks = nextState.tasks || resourceState.monitor_tasks || [];
+                        syncResourceMonitorTaskOptions(document.getElementById('resource_job_savepath')?.value || '');
+                    },
+                });
+                return;
+            }
             if (!data) return;
             monitorState = {
                 ...monitorState,
@@ -1314,12 +1383,6 @@
             };
         }
 
-        function normalizeVersionLabel(rawVersion) {
-            const raw = String(rawVersion || 'dev').trim();
-            if (!raw) return 'Vdev';
-            return raw.startsWith('V') ? raw : `V${raw}`;
-        }
-
         function formatTimeText(value) {
             if (!value) return '--';
             const d = new Date(value);
@@ -1327,99 +1390,16 @@
             return d.toLocaleString();
         }
 
-        function getProjectUrl() {
-            return versionInfo?.latest?.projectUrl || versionInfo?.local?.projectUrl || VERSION_FALLBACK_PROJECT_URL;
-        }
-
-        function getChangelogUrl() {
-            return versionInfo?.latest?.changelogUrl || versionInfo?.local?.changelogUrl || getProjectUrl() || VERSION_FALLBACK_CHANGELOG_URL;
-        }
-
-        function getVersionNotes() {
-            const latestNotes = Array.isArray(versionInfo?.latest?.notes) ? versionInfo.latest.notes.filter(Boolean) : [];
-            if (latestNotes.length) return latestNotes;
-            const localNotes = Array.isArray(versionInfo?.local?.notes) ? versionInfo.local.notes.filter(Boolean) : [];
-            return localNotes;
-        }
-
-        function renderVersionInfoPanel() {
-            const localVersion = normalizeVersionLabel(versionInfo?.local?.version || 'dev');
-            const latestRaw = versionInfo?.latest?.version || '';
-            const latestVersion = latestRaw ? normalizeVersionLabel(latestRaw) : '--';
-            const hasUpdate = !!versionInfo?.has_update;
-            const hasChecked = Number(versionInfo?.checked_at || 0) > 0;
-            const error = String(versionInfo?.error || '').trim();
-
-            const footerVersion = document.getElementById('version-text');
-            if (footerVersion) footerVersion.textContent = localVersion;
-
-            const localEl = document.getElementById('about-local-version');
-            if (localEl) localEl.textContent = localVersion;
-            const buildEl = document.getElementById('about-build-date');
-            if (buildEl) buildEl.textContent = formatTimeText(versionInfo?.local?.buildDate);
-            const latestEl = document.getElementById('about-latest-version');
-            if (latestEl) latestEl.textContent = latestVersion;
-            const checkedEl = document.getElementById('about-checked-at');
-            if (checkedEl) checkedEl.textContent = versionInfo?.checked_at ? `约 ${formatTimeText(versionInfo.checked_at * 1000)}` : '--';
-
-            const statusEl = document.getElementById('about-version-status');
-            if (statusEl) {
-                if (error) {
-                    statusEl.textContent = '检查失败';
-                    statusEl.className = 'text-xs px-3 py-2 rounded-xl border border-red-500/20 bg-red-500/10 text-red-300';
-                } else if (!hasChecked) {
-                    statusEl.textContent = '尚未检查更新';
-                    statusEl.className = 'text-xs px-3 py-2 rounded-xl border border-slate-700 bg-slate-900/80 text-slate-300';
-                } else if (hasUpdate) {
-                    statusEl.textContent = latestRaw ? `有可用更新：${normalizeVersionLabel(latestRaw)}` : '发现可用更新';
-                    statusEl.className = 'text-xs px-3 py-2 rounded-xl border border-amber-500/25 bg-amber-500/15 text-amber-300';
-                } else {
-                    statusEl.textContent = '当前已是最新版本';
-                    statusEl.className = 'text-xs px-3 py-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-300';
-                }
-            }
-
-            const errorEl = document.getElementById('about-version-error');
-            if (errorEl) {
-                if (error) {
-                    errorEl.textContent = `版本检查失败：${error}`;
-                    errorEl.classList.remove('hidden');
-                } else {
-                    errorEl.classList.add('hidden');
-                    errorEl.textContent = '';
-                }
-            }
-
-            const hintEl = document.getElementById('about-version-hint');
-            if (hintEl && !error) {
-                if (!hasChecked) {
-                    hintEl.textContent = '提示：进入页面后会自动检查远端版本，也可以手动点击“检查更新”。';
-                } else {
-                    hintEl.textContent = hasUpdate
-                        ? `检测到新版本 ${latestVersion}，建议先查看更新说明后再升级。`
-                        : '当前版本已和远端同步，后续会自动定时检查。';
-                }
-            }
-
-            const notesWrap = document.getElementById('about-version-notes');
-            if (notesWrap) {
-                const notes = getVersionNotes();
-                if (notes.length) {
-                    notesWrap.innerHTML = `<ul class="list-disc pl-5 space-y-2">${notes.map(note => `<li>${escapeHtml(note)}</li>`).join('')}</ul>`;
-                } else {
-                    notesWrap.textContent = '暂无更新说明';
-                }
-            }
-
-            const changelogUrl = getChangelogUrl();
-            const projectUrl = getProjectUrl();
-            const starUrl = `${projectUrl.replace(/\/+$/, '')}/stargazers`;
-            const changelogLink = document.getElementById('about-changelog-link');
-            if (changelogLink) changelogLink.href = changelogUrl;
-            const projectLink = document.getElementById('about-project-link');
-            if (projectLink) projectLink.href = projectUrl;
-            const starLink = document.getElementById('about-star-link');
-            if (starLink) starLink.href = starUrl;
+        async function renderVersionInfoPanel() {
+            const aboutModule = await loadAboutTabModule();
+            if (!aboutModule?.renderVersionInfoPanel) return;
+            aboutModule.renderVersionInfoPanel({
+                versionInfo,
+                fallbackProjectUrl: VERSION_FALLBACK_PROJECT_URL,
+                fallbackChangelogUrl: VERSION_FALLBACK_CHANGELOG_URL,
+                formatTimeText,
+                escapeHtml,
+            });
         }
 
         function showHelp(text) {
@@ -1433,57 +1413,24 @@
         }
 
         async function ensureAboutWorkflowImageLoaded() {
-            if (aboutWorkflowImageLoaded) return true;
-            if (aboutWorkflowImageLoadingPromise) return aboutWorkflowImageLoadingPromise;
-
-            const modalImage = document.getElementById('about-workflow-modal-image');
-            const loadingEl = document.getElementById('about-workflow-modal-loading');
-            const errorEl = document.getElementById('about-workflow-modal-error');
-            if (!modalImage) return false;
-
-            if (loadingEl) loadingEl.classList.remove('hidden');
-            if (errorEl) errorEl.classList.add('hidden');
-
-            const targetSrc = String(modalImage.dataset.src || ABOUT_WORKFLOW_IMAGE_URL).trim() || ABOUT_WORKFLOW_IMAGE_URL;
-            aboutWorkflowImageLoadingPromise = new Promise((resolve) => {
-                let done = false;
-                const finish = (ok) => {
-                    if (done) return;
-                    done = true;
-                    if (ok) {
-                        aboutWorkflowImageLoaded = true;
-                        if (loadingEl) loadingEl.classList.add('hidden');
-                        if (errorEl) errorEl.classList.add('hidden');
-                        modalImage.classList.remove('hidden');
-                    } else {
-                        if (loadingEl) loadingEl.classList.add('hidden');
-                        if (errorEl) errorEl.classList.remove('hidden');
-                    }
-                    aboutWorkflowImageLoadingPromise = null;
-                    resolve(ok);
-                };
-
-                const handleLoad = () => finish(true);
-                const handleError = () => finish(false);
-
-                modalImage.addEventListener('load', handleLoad, { once: true });
-                modalImage.addEventListener('error', handleError, { once: true });
-
-                if (!modalImage.src) {
-                    modalImage.src = targetSrc;
-                }
-                if (modalImage.complete) {
-                    if (modalImage.naturalWidth > 0) finish(true);
-                    else finish(false);
-                }
+            const aboutModule = await loadAboutTabModule();
+            if (!aboutModule?.ensureWorkflowImageLoaded) return false;
+            return aboutModule.ensureWorkflowImageLoaded({
+                loaded: aboutWorkflowImageLoaded,
+                loadingPromise: aboutWorkflowImageLoadingPromise,
+                defaultImageUrl: ABOUT_WORKFLOW_IMAGE_URL,
+                setLoaded: (value) => {
+                    aboutWorkflowImageLoaded = !!value;
+                },
+                setLoadingPromise: (promise) => {
+                    aboutWorkflowImageLoadingPromise = promise;
+                },
             });
-
-            return aboutWorkflowImageLoadingPromise;
         }
 
-        function openAboutWorkflowModal() {
+        async function openAboutWorkflowModal() {
             showLockedModal('about-workflow-modal');
-            void ensureAboutWorkflowImageLoaded();
+            await ensureAboutWorkflowImageLoaded();
         }
 
         function closeAboutWorkflowModal() {
@@ -1548,6 +1495,19 @@
         }
 
         async function triggerTask(local, full) {
+            const taskModule = await loadTaskTabModule();
+            if (taskModule?.triggerTask) {
+                await taskModule.triggerTask({
+                    local,
+                    full,
+                    isRunning,
+                    btnTexts,
+                    setIsRunning: (nextValue) => {
+                        isRunning = !!nextValue;
+                    }
+                });
+                return;
+            }
             if (isRunning) return;
             const res = await fetch('/start', {
                 method: 'POST',
@@ -1558,6 +1518,17 @@
         }
 
         function updateButtonState(running) {
+            const taskModule = tabRuntimeState.tabModuleCache.task;
+            if (taskModule?.updateButtonState) {
+                taskModule.updateButtonState({
+                    running,
+                    btnTexts,
+                    setIsRunning: (nextValue) => {
+                        isRunning = !!nextValue;
+                    }
+                });
+                return;
+            }
             isRunning = running;
             document.querySelectorAll('.btn-ctrl').forEach((btn, i) => {
                 btn.classList.toggle('btn-disabled', running);
@@ -1594,11 +1565,14 @@
         }
 
         function syncNotifyChannelUI() {
-            const channel = String(document.getElementById('notify_channel')?.value || 'wecom_bot').trim().toLowerCase();
-            const botFields = document.getElementById('notify-bot-fields');
-            const appFields = document.getElementById('notify-app-fields');
-            if (botFields) botFields.classList.toggle('hidden', channel !== 'wecom_bot');
-            if (appFields) appFields.classList.toggle('hidden', channel === 'wecom_bot');
+            const settingsModule = tabRuntimeState.tabModuleCache.settings;
+            if (settingsModule?.syncNotifyChannelUI) {
+                settingsModule.syncNotifyChannelUI();
+                return;
+            }
+            void loadSettingsTabModule().then((mod) => {
+                mod?.syncNotifyChannelUI?.();
+            });
         }
 
         function getCurrentTgChannelThreads() {
@@ -1658,167 +1632,69 @@
         }
 
         function renderTgProxyTestStatus() {
-            const btn = document.getElementById('tg-proxy-test-btn');
-            const statusEl = document.getElementById('tg-proxy-test-status');
-            if (btn) {
-                btn.disabled = tgProxyTestState.loading;
-                btn.classList.toggle('btn-disabled', tgProxyTestState.loading);
-                btn.textContent = tgProxyTestState.loading ? '测试中...' : '测试 TG 延迟';
-            }
-            if (!statusEl) return;
-
-            if (tgProxyTestState.loading) {
-                statusEl.className = 'tg-proxy-status tg-proxy-status--loading';
-                statusEl.innerHTML = `
-                    <div class="tg-proxy-status-title">正在测试 TG 访问链路</div>
-                    <div class="tg-proxy-status-meta">正在请求 TG 频道页并测量当前响应时间，请稍候...</div>
-                `;
-                statusEl.classList.remove('hidden');
+            const settingsModule = tabRuntimeState.tabModuleCache.settings;
+            if (settingsModule?.renderTgProxyTestStatus) {
+                settingsModule.renderTgProxyTestStatus({
+                    tgProxyTestState,
+                    escapeHtml,
+                    formatDurationText,
+                });
                 return;
             }
-
-            if (tgProxyTestState.ok === true) {
-                const modeLabel = tgProxyTestState.mode === 'proxy'
-                    ? `代理模式 ${escapeHtml(tgProxyTestState.proxy_url || '--')}`
-                    : '直连模式';
-                statusEl.className = 'tg-proxy-status tg-proxy-status--success';
-                statusEl.innerHTML = `
-                    <div class="tg-proxy-status-title">TG 可达 · ${escapeHtml(formatDurationText(tgProxyTestState.latency_ms) || `总耗时 ${String(tgProxyTestState.latency_ms || 0)} ms`)}</div>
-                    <div class="tg-proxy-status-meta">${modeLabel}</div>
-                    <div class="tg-proxy-status-note">测试地址：${escapeHtml(tgProxyTestState.target_url || '')}</div>
-                `;
-                statusEl.classList.remove('hidden');
-                return;
-            }
-
-            if (tgProxyTestState.ok === false) {
-                statusEl.className = 'tg-proxy-status tg-proxy-status--error';
-                statusEl.innerHTML = `
-                    <div class="tg-proxy-status-title">TG 延迟测试失败</div>
-                    <div class="tg-proxy-status-meta">${escapeHtml(tgProxyTestState.message || '未知错误')}</div>
-                `;
-                statusEl.classList.remove('hidden');
-                return;
-            }
-
-            statusEl.classList.add('hidden');
-            statusEl.textContent = '';
+            void loadSettingsTabModule().then((mod) => {
+                mod?.renderTgProxyTestStatus?.({
+                    tgProxyTestState,
+                    escapeHtml,
+                    formatDurationText,
+                });
+            });
         }
 
         async function testTgProxyLatency() {
-            if (tgProxyTestState.loading) return;
-            tgProxyTestState = { loading: true, ok: null, message: '', latency_ms: 0, mode: '', proxy_url: '', target_url: '' };
-            renderTgProxyTestStatus();
-            try {
-                const res = await fetch('/settings/tg_proxy/test', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(getCurrentTgProxyConfig())
+            const settingsModule = await loadSettingsTabModule();
+            if (settingsModule?.testTgProxyLatency) {
+                await settingsModule.testTgProxyLatency({
+                    getCurrentTgProxyConfig,
+                    getTgProxyTestState: () => tgProxyTestState,
+                    setTgProxyTestState: (nextValue) => {
+                        tgProxyTestState = { ...nextValue };
+                    },
+                    renderTgProxyTestStatus,
                 });
-                const data = await res.json();
-                if (!res.ok || !data.ok) throw new Error(data.msg || 'TG 延迟测试失败');
-                tgProxyTestState = {
-                    loading: false,
-                    ok: true,
-                    message: data.msg || '',
-                    latency_ms: Number(data.latency_ms || 0),
-                    mode: String(data.mode || ''),
-                    proxy_url: String(data.proxy_url || ''),
-                    target_url: String(data.target_url || '')
-                };
-            } catch (e) {
-                tgProxyTestState = {
-                    loading: false,
-                    ok: false,
-                    message: e instanceof Error ? e.message : String(e || 'TG 延迟测试失败'),
-                    latency_ms: 0,
-                    mode: '',
-                    proxy_url: '',
-                    target_url: ''
-                };
             }
-            renderTgProxyTestStatus();
         }
 
         function renderNotifyTestStatus() {
-            const btn = document.getElementById('notify-test-btn');
-            const statusEl = document.getElementById('notify-test-status');
-            if (btn) {
-                btn.disabled = notifyTestState.loading;
-                btn.classList.toggle('btn-disabled', notifyTestState.loading);
-                btn.textContent = notifyTestState.loading ? '发送中...' : '发送测试消息';
-            }
-            if (!statusEl) return;
-
-            if (notifyTestState.loading) {
-                statusEl.className = 'tg-proxy-status tg-proxy-status--loading';
-                statusEl.innerHTML = `
-                    <div class="tg-proxy-status-title">正在发送测试消息</div>
-                    <div class="tg-proxy-status-meta">请稍候，正在请求企业微信通知接口...</div>
-                `;
-                statusEl.classList.remove('hidden');
+            const settingsModule = tabRuntimeState.tabModuleCache.settings;
+            if (settingsModule?.renderNotifyTestStatus) {
+                settingsModule.renderNotifyTestStatus({
+                    notifyTestState,
+                    escapeHtml,
+                    notifyChannelLabel,
+                });
                 return;
             }
-
-            if (notifyTestState.ok === true) {
-                const channelLabel = notifyChannelLabel(notifyTestState.channel || document.getElementById('notify_channel')?.value || '');
-                statusEl.className = 'tg-proxy-status tg-proxy-status--success';
-                statusEl.innerHTML = `
-                    <div class="tg-proxy-status-title">测试消息发送成功</div>
-                    <div class="tg-proxy-status-meta">${escapeHtml(notifyTestState.message || '通知配置可用')}</div>
-                    <div class="tg-proxy-status-note">渠道：${escapeHtml(channelLabel)}｜目标：${escapeHtml(notifyTestState.target_desc || notifyTestState.webhook_host || '--')}</div>
-                `;
-                statusEl.classList.remove('hidden');
-                return;
-            }
-
-            if (notifyTestState.ok === false) {
-                statusEl.className = 'tg-proxy-status tg-proxy-status--error';
-                statusEl.innerHTML = `
-                    <div class="tg-proxy-status-title">测试消息发送失败</div>
-                    <div class="tg-proxy-status-meta">${escapeHtml(notifyTestState.message || '未知错误')}</div>
-                `;
-                statusEl.classList.remove('hidden');
-                return;
-            }
-
-            statusEl.classList.add('hidden');
-            statusEl.textContent = '';
+            void loadSettingsTabModule().then((mod) => {
+                mod?.renderNotifyTestStatus?.({
+                    notifyTestState,
+                    escapeHtml,
+                    notifyChannelLabel,
+                });
+            });
         }
 
         async function testNotifyPush() {
-            if (notifyTestState.loading) return;
-            notifyTestState = { loading: true, ok: null, message: '', channel: '', target_desc: '', webhook_host: '', sent_at: '' };
-            renderNotifyTestStatus();
-            try {
-                const res = await fetch('/settings/notify/test', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(getCurrentNotifyConfig())
+            const settingsModule = await loadSettingsTabModule();
+            if (settingsModule?.testNotifyPush) {
+                await settingsModule.testNotifyPush({
+                    getCurrentNotifyConfig,
+                    getNotifyTestState: () => notifyTestState,
+                    setNotifyTestState: (nextValue) => {
+                        notifyTestState = { ...nextValue };
+                    },
+                    renderNotifyTestStatus,
                 });
-                const data = await res.json();
-                if (!res.ok || !data.ok) throw new Error(data.msg || '测试消息发送失败');
-                notifyTestState = {
-                    loading: false,
-                    ok: true,
-                    message: String(data.msg || '测试消息已发送'),
-                    channel: String(data.channel || ''),
-                    target_desc: String(data.target_desc || ''),
-                    webhook_host: String(data.webhook_host || ''),
-                    sent_at: String(data.sent_at || '')
-                };
-            } catch (e) {
-                notifyTestState = {
-                    loading: false,
-                    ok: false,
-                    message: e instanceof Error ? e.message : String(e || '测试消息发送失败'),
-                    channel: '',
-                    target_desc: '',
-                    webhook_host: '',
-                    sent_at: ''
-                };
             }
-            renderNotifyTestStatus();
         }
 
         function setResourceTgHealthState(nextState = {}) {
@@ -2000,96 +1876,31 @@
         }
 
         async function saveSettings() {
-            const cfg = {};
-            const standardIds = [
-                'strm_proxy_base_url',
-                'api_115_rate_limit_seconds',
-                'api_115_list_cache_ttl_seconds',
-                'api_115_download_url_cache_ttl_seconds',
-                'cookie_115',
-                'cookie_quark',
-                'sign115_cron_time',
-                'tg_proxy_protocol',
-                'tg_proxy_host',
-                'tg_proxy_port',
-                'notify_channel',
-                'notify_wecom_webhook',
-                'notify_wecom_app_corp_id',
-                'notify_wecom_app_agent_id',
-                'notify_wecom_app_secret',
-                'notify_wecom_app_touser',
-                'tmdb_api_key',
-                'tmdb_language',
-                'tmdb_region',
-                'cron_hour',
-                'sync_mode',
-                'extensions',
-                'username',
-                'password',
-                'webhook_secret'
-            ];
-            const sensitiveFieldSet = new Set(SENSITIVE_SETTING_FIELDS);
-            standardIds.forEach(id => {
-                const el = document.getElementById(id);
-                if (!el) return;
-                const value = String(el.value || '');
-                if (sensitiveFieldSet.has(id) && !value.trim()) return;
-                cfg[id] = value;
-            });
-
-            cfg.check_hash = document.getElementById('check_hash').checked;
-            cfg.sync_clean = document.getElementById('sync_clean').checked;
-            cfg.sign115_enabled = document.getElementById('sign115_enabled').checked;
-            cfg.tg_proxy_enabled = document.getElementById('tg_proxy_enabled').checked;
-            cfg.notify_push_enabled = document.getElementById('notify_push_enabled').checked;
-            cfg.notify_monitor_enabled = document.getElementById('notify_monitor_enabled').checked;
-            cfg.tmdb_enabled = document.getElementById('tmdb_enabled').checked;
-            const rawTmdbCacheTtl = parseInt(document.getElementById('tmdb_cache_ttl_hours')?.value || '', 10);
-            cfg.tmdb_cache_ttl_hours = Math.min(720, Math.max(1, Number.isFinite(rawTmdbCacheTtl) ? rawTmdbCacheTtl : 24));
-            const rawTgThreads = parseInt(document.getElementById('tg_channel_threads')?.value || '', 10);
-            cfg.tg_channel_threads = Math.min(20, Math.max(1, Number.isFinite(rawTgThreads) ? rawTgThreads : 6));
-            cfg.monitor_tasks = monitorState.tasks || [];
-            cfg.trees = [];
-
-            document.querySelectorAll('.tree-row').forEach(row => {
-                const path = row.querySelector('.t-url').value.trim();
-                if (path) {
-                    cfg.trees.push({
-                        source_type: 'tree_file',
-                        path,
-                        prefix: row.querySelector('.t-prefix').value.trim(),
-                        exclude: parseInt(row.querySelector('.t-exclude').value || '1', 10) || 1
-                    });
-                }
-            });
-
-            const res = await fetch('/save_settings', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(cfg)
-            });
-            let data = null;
-            try {
-                data = await res.json();
-            } catch (_) {}
-
-            if (res.ok && data?.ok) {
-                if (data?.cookie_health) applyCookieHealthState(data.cookie_health);
-                const nextSensitiveMeta = { ...sensitiveConfigMeta };
-                SENSITIVE_SETTING_FIELDS.forEach((key) => {
-                    const value = String(document.getElementById(key)?.value || '').trim();
-                    if (value) nextSensitiveMeta[key] = true;
+            const settingsModule = await loadSettingsTabModule();
+            if (settingsModule?.saveSettings) {
+                await settingsModule.saveSettings({
+                    sensitiveSettingFields: SENSITIVE_SETTING_FIELDS,
+                    getSensitiveConfigMeta: () => sensitiveConfigMeta,
+                    applySensitiveConfigMeta,
+                    applyCookieHealthState,
+                    refreshResourceState,
+                    refreshSign115Status,
+                    getMonitorTasks: () => monitorState.tasks || [],
                 });
-                applySensitiveConfigMeta(nextSensitiveMeta);
-                alert('✅ 配置已保存');
-                void refreshResourceState({ allowSearch: false });
-                void refreshSign115Status(false);
-            } else {
-                alert(`❌ ${data?.msg || '保存失败'}`);
             }
         }
 
         async function clearMainLogs() {
+            const taskModule = await loadTaskTabModule();
+            if (taskModule?.clearMainLogs) {
+                await taskModule.clearMainLogs({
+                    setLastLogSignature: (nextValue) => {
+                        lastLogSignature = String(nextValue || '');
+                    },
+                    refreshMainLogs,
+                });
+                return;
+            }
             const res = await fetch('/logs/clear', { method: 'POST' });
             if (res.ok) {
                 lastLogSignature = '';
@@ -2098,6 +1909,16 @@
         }
 
         async function clearMonitorLogs() {
+            const monitorModule = await loadMonitorTabModule();
+            if (monitorModule?.clearMonitorLogs) {
+                await monitorModule.clearMonitorLogs({
+                    setLastMonitorLogSignature: (nextValue) => {
+                        lastMonitorLogSignature = String(nextValue || '');
+                    },
+                    refreshMonitorState,
+                });
+                return;
+            }
             const res = await fetch('/monitor/logs/clear', { method: 'POST' });
             if (res.ok) {
                 lastMonitorLogSignature = '';
@@ -2392,6 +2213,13 @@
         }
 
         async function refreshMainLogs() {
+            const taskModule = await loadTaskTabModule();
+            if (taskModule?.refreshMainLogs) {
+                await taskModule.refreshMainLogs({
+                    applyMainState,
+                });
+                return;
+            }
             try {
                 const res = await fetch('/logs');
                 if (!res.ok) return;
@@ -2400,6 +2228,13 @@
         }
 
         async function refreshMonitorState() {
+            const monitorModule = await loadMonitorTabModule();
+            if (monitorModule?.refreshMonitorState) {
+                await monitorModule.refreshMonitorState({
+                    applyMonitorState,
+                });
+                return;
+            }
             try {
                 const res = await fetch('/monitor/status');
                 if (!res.ok) return;
@@ -2445,6 +2280,29 @@
         }
 
         function applySubscriptionState(data, { forceRender = false } = {}) {
+            const subscriptionModule = tabRuntimeState.tabModuleCache.subscription;
+            if (subscriptionModule?.applySubscriptionState) {
+                subscriptionModule.applySubscriptionState(data, {
+                    forceRender,
+                    getSubscriptionState: () => subscriptionState,
+                    setSubscriptionState: (nextValue) => {
+                        subscriptionState = { ...nextValue };
+                    },
+                    getIntroExpanded: () => subscriptionTaskIntroExpanded,
+                    setIntroExpanded: (nextValue) => {
+                        subscriptionTaskIntroExpanded = { ...(nextValue || {}) };
+                    },
+                    pruneTaskIntroExpanded,
+                    buildSubscriptionRenderKey,
+                    getLastSubscriptionRenderKey: () => lastSubscriptionRenderKey,
+                    setLastSubscriptionRenderKey: (nextValue) => {
+                        lastSubscriptionRenderKey = String(nextValue || '');
+                    },
+                    renderSubscriptionTasks,
+                    renderSubscriptionLogs,
+                });
+                return;
+            }
             if (!data) return;
             subscriptionState = {
                 ...subscriptionState,
@@ -4021,6 +3879,13 @@
         }
 
         async function refreshSubscriptionState() {
+            const subscriptionModule = await loadSubscriptionTabModule();
+            if (subscriptionModule?.refreshSubscriptionState) {
+                await subscriptionModule.refreshSubscriptionState({
+                    applySubscriptionState,
+                });
+                return;
+            }
             try {
                 const res = await fetch('/subscription/status');
                 if (!res.ok) return;
@@ -4029,6 +3894,16 @@
         }
 
         async function clearSubscriptionLogs() {
+            const subscriptionModule = await loadSubscriptionTabModule();
+            if (subscriptionModule?.clearSubscriptionLogs) {
+                await subscriptionModule.clearSubscriptionLogs({
+                    setLastSubscriptionLogSignature: (nextValue) => {
+                        lastSubscriptionLogSignature = String(nextValue || '');
+                    },
+                    refreshSubscriptionState,
+                });
+                return;
+            }
             const res = await fetch('/subscription/logs/clear', { method: 'POST' });
             if (res.ok) {
                 lastSubscriptionLogSignature = '';
@@ -5874,6 +5749,19 @@
         }
 
         async function refreshResourceState({ allowSearch = true, keywordOverride = null } = {}) {
+            const resourceModule = await loadResourceTabModule();
+            if (resourceModule?.refreshResourceState) {
+                return resourceModule.refreshResourceState({
+                    allowSearch,
+                    keywordOverride,
+                    getResourceState: () => resourceState,
+                    isDirectImportInput,
+                    setResourceStateHydrated: (nextValue) => {
+                        resourceStateHydrated = !!nextValue;
+                    },
+                    applyResourceState,
+                });
+            }
             try {
                 const activeKeyword = typeof keywordOverride === 'string'
                     ? keywordOverride.trim()
@@ -5894,6 +5782,12 @@
         }
 
         function hasActiveResourceJobs() {
+            const resourceModule = tabRuntimeState.tabModuleCache.resource;
+            if (resourceModule?.hasActiveResourceJobs) {
+                return resourceModule.hasActiveResourceJobs({
+                    getResourceState: () => resourceState,
+                });
+            }
             const jobs = Array.isArray(resourceState?.jobs) ? resourceState.jobs : [];
             return jobs.some((job) => {
                 const status = String(job?.status || '').trim().toLowerCase();
@@ -5902,6 +5796,23 @@
         }
 
         function applyResourceJobsState(data) {
+            const resourceModule = tabRuntimeState.tabModuleCache.resource;
+            if (resourceModule?.applyResourceJobsState) {
+                resourceModule.applyResourceJobsState(data, {
+                    getResourceState: () => resourceState,
+                    setResourceState: (nextValue) => {
+                        resourceState = { ...nextValue };
+                    },
+                    getResourceJobCounts,
+                    syncResourceMonitorTaskOptions,
+                    renderResourceJobs,
+                    syncResourceJobModalTrigger,
+                    renderResourceBoard,
+                    renderResourceBoardHint,
+                    isResourceTabActive: () => currentTab === 'resource',
+                });
+                return;
+            }
             if (!data || typeof data !== 'object') return;
             const nextJobs = Array.isArray(data.jobs) ? data.jobs : (resourceState.jobs || []);
             const nextMonitorTasks = Array.isArray(data.monitor_tasks) ? data.monitor_tasks : (resourceState.monitor_tasks || []);
@@ -5927,6 +5838,12 @@
         }
 
         async function refreshResourceJobsOnly() {
+            const resourceModule = await loadResourceTabModule();
+            if (resourceModule?.refreshResourceJobsOnly) {
+                return resourceModule.refreshResourceJobsOnly({
+                    applyResourceJobsState,
+                });
+            }
             try {
                 const res = await fetch('/resource/jobs/state');
                 if (!res.ok) return null;
@@ -9019,6 +8936,7 @@
             resourceFolderEntries = [];
             resourceFolderSummary = { folder_count: 0, file_count: 0 };
             resourceFolderFilesLoading = false;
+            resourceFolderEntriesComplete = false;
             resourceFolderShowAllFiles = false;
             resourceTargetPreviewEntries = [];
             resourceTargetPreviewSummary = { folder_count: 0, file_count: 0 };
@@ -9319,14 +9237,18 @@
             if (!container) return;
             const providerLabel = getResourceProviderLabel(getCurrentResourceProvider());
             if (summary) {
-                summary.innerText = `当前目录下共有 ${Number(resourceFolderSummary?.folder_count || 0)} 个文件夹 / ${Number(resourceFolderSummary?.file_count || 0)} 个文件。`;
+                const folderCount = Number(resourceFolderSummary?.folder_count || 0);
+                const fileCount = Number(resourceFolderSummary?.file_count || 0);
+                summary.innerText = resourceFolderEntriesComplete
+                    ? `当前目录下共有 ${folderCount} 个文件夹 / ${fileCount} 个文件。`
+                    : `当前目录下共有 ${folderCount} 个文件夹 / ${fileCount} 个文件，默认优先加载文件夹以提升打开速度。`;
             }
             if (resourceFolderLoading && !resourceFolderEntries.length) {
                 container.innerHTML = `<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">正在读取${escapeHtml(providerLabel)}目录...</div>`;
                 return;
             }
             const entries = Array.isArray(resourceFolderEntries) ? resourceFolderEntries : [];
-            if (!entries.length) {
+            if (!entries.length && Number(resourceFolderSummary?.file_count || 0) <= 0) {
                 container.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">当前目录为空，可以直接选择这里作为保存位置。</div>';
                 return;
             }
@@ -9335,6 +9257,24 @@
             for (const entry of entries) {
                 if (entry?.is_dir) folders.push(entry);
                 else files.push(entry);
+            }
+            if (!resourceFolderEntriesComplete) {
+                const lines = folders.map(entry => buildResourceEntryRow(entry, { showOpenButton: true }));
+                const fileCount = Number(resourceFolderSummary?.file_count || 0);
+                if (resourceFolderFilesLoading && fileCount > 0) {
+                    lines.push('<div class="rounded-2xl border border-dashed border-slate-700 px-4 py-3 text-[12px] text-slate-400">目录已可操作，正在后台补充文件预览...</div>');
+                } else if (fileCount > 0) {
+                    lines.push(
+                        `<div class="rounded-2xl border border-slate-700/60 bg-slate-900/40 px-4 py-3 text-[12px] text-slate-300">` +
+                        `为保证目录打开速度，文件列表默认延后加载。` +
+                        `<button type="button" data-resource-folder-action="load-files" class="ml-2 resource-entry-action">加载文件预览（共 ${escapeHtml(String(fileCount))} 个）</button>` +
+                        `</div>`
+                    );
+                }
+                container.innerHTML = lines.length
+                    ? lines.join('')
+                    : '<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">当前目录仅包含文件，点击下方按钮后会加载文件预览。</div>';
+                return;
             }
             const shouldTrimFiles = !resourceFolderShowAllFiles && files.length > RESOURCE_FOLDER_FILE_PREVIEW_LIMIT;
             const visibleFiles = shouldTrimFiles ? files.slice(0, RESOURCE_FOLDER_FILE_PREVIEW_LIMIT) : files;
@@ -9387,6 +9327,40 @@
             }).join('');
         }
 
+        async function loadResourceFolderFiles(cid = '0', { forceRefresh = false, requestToken = 0, silent = false } = {}) {
+            const targetCid = String(cid || '0').trim() || '0';
+            const provider = getCurrentResourceProvider();
+            const cacheOptions = { provider, foldersOnly: false };
+            const cachedBranch = forceRefresh ? null : getResourceFolderBranchCache(targetCid, cacheOptions);
+            if (cachedBranch) {
+                if (requestToken && requestToken !== resourceFolderRequestToken) return;
+                resourceFolderEntries = Array.isArray(cachedBranch.entries) ? cachedBranch.entries : [];
+                resourceFolderSummary = cachedBranch.summary || { folder_count: 0, file_count: 0 };
+                resourceFolderEntriesComplete = true;
+                resourceFolderFilesLoading = false;
+                renderResourceFolderList();
+                return;
+            }
+            resourceFolderFilesLoading = true;
+            renderResourceFolderList();
+            try {
+                const result = await fetchResourceFolderData(targetCid, { provider, forceRefresh });
+                if (requestToken && requestToken !== resourceFolderRequestToken) return;
+                resourceFolderEntries = Array.isArray(result.entries) ? result.entries : [];
+                resourceFolderSummary = result.summary || { folder_count: 0, file_count: 0 };
+                resourceFolderEntriesComplete = true;
+            } catch (e) {
+                if (requestToken && requestToken !== resourceFolderRequestToken) return;
+                if (!silent) {
+                    showToast(`文件列表刷新失败：${e.message || '请稍后重试'}`, { tone: 'warn', duration: 3200 });
+                }
+            } finally {
+                if (requestToken && requestToken !== resourceFolderRequestToken) return;
+                resourceFolderFilesLoading = false;
+                renderResourceFolderList();
+            }
+        }
+
         async function loadResourceFolders(cid = '0', { forceRefresh = false } = {}) {
             const targetCid = String(cid || '0').trim() || '0';
             const provider = getCurrentResourceProvider();
@@ -9402,6 +9376,7 @@
             if (cachedBranch) {
                 resourceFolderEntries = Array.isArray(cachedBranch.entries) ? cachedBranch.entries : [];
                 resourceFolderSummary = cachedBranch.summary || { folder_count: 0, file_count: 0 };
+                resourceFolderEntriesComplete = true;
                 resourceFolderLoading = false;
                 resourceFolderFilesLoading = false;
                 renderResourceFolderBreadcrumbs();
@@ -9412,11 +9387,13 @@
             if (cachedFoldersOnlyBranch) {
                 resourceFolderEntries = Array.isArray(cachedFoldersOnlyBranch.entries) ? cachedFoldersOnlyBranch.entries : [];
                 resourceFolderSummary = cachedFoldersOnlyBranch.summary || { folder_count: 0, file_count: 0 };
+                resourceFolderEntriesComplete = Number(resourceFolderSummary?.file_count || 0) <= 0;
                 resourceFolderLoading = false;
-                resourceFolderFilesLoading = true;
+                resourceFolderFilesLoading = !resourceFolderEntriesComplete;
             } else {
                 resourceFolderEntries = [];
                 resourceFolderSummary = { folder_count: 0, file_count: 0 };
+                resourceFolderEntriesComplete = false;
                 resourceFolderLoading = true;
                 resourceFolderFilesLoading = false;
             }
@@ -9424,25 +9401,32 @@
             renderResourceFolderList();
 
             try {
-                const result = await fetchResourceFolderData(targetCid, { ...fullCacheOptions, forceRefresh });
+                const result = cachedFoldersOnlyBranch
+                    ? cachedFoldersOnlyBranch
+                    : await fetchResourceFolderData(targetCid, { ...foldersOnlyCacheOptions, forceRefresh });
                 if (requestToken !== resourceFolderRequestToken) return;
-                resourceFolderEntries = result.entries;
-                resourceFolderSummary = result.summary;
+                resourceFolderEntries = Array.isArray(result.entries) ? result.entries : [];
+                resourceFolderSummary = result.summary || { folder_count: 0, file_count: 0 };
+                resourceFolderEntriesComplete = Number(resourceFolderSummary?.file_count || 0) <= 0;
             } catch (e) {
                 if (requestToken !== resourceFolderRequestToken) return;
-                if (!cachedFoldersOnlyBranch) {
-                    resourceFolderEntries = [];
-                    resourceFolderSummary = { folder_count: 0, file_count: 0 };
-                    showToast(`目录读取失败：${e.message || '请稍后重试'}`, { tone: 'error', duration: 3200 });
-                } else {
-                    showToast(`文件列表刷新失败，当前先仅展示文件夹：${e.message || '请稍后重试'}`, { tone: 'warn', duration: 3200 });
-                }
+                resourceFolderEntries = [];
+                resourceFolderSummary = { folder_count: 0, file_count: 0 };
+                resourceFolderEntriesComplete = false;
+                showToast(`目录读取失败：${e.message || '请稍后重试'}`, { tone: 'error', duration: 3200 });
             } finally {
                 if (requestToken !== resourceFolderRequestToken) return;
                 resourceFolderLoading = false;
-                resourceFolderFilesLoading = false;
+                resourceFolderFilesLoading = !resourceFolderEntriesComplete && Number(resourceFolderSummary?.file_count || 0) > 0;
                 renderResourceFolderBreadcrumbs();
                 renderResourceFolderList();
+            }
+            if (
+                requestToken === resourceFolderRequestToken
+                && !resourceFolderEntriesComplete
+                && Number(resourceFolderSummary?.file_count || 0) > 0
+            ) {
+                void loadResourceFolderFiles(targetCid, { forceRefresh, requestToken, silent: true });
             }
         }
 
@@ -10084,86 +10068,69 @@
             showToast(`已创建重试任务 #${Number(data.job_id || 0) || '--'}`, { tone: 'success', duration: 2800, placement: 'top-center' });
         }
 
-        function showVersionBanner(latest) {
-            if (!latest) return;
-            const banner = document.getElementById('version-banner');
-            if (!banner) return;
-            const textEl = document.getElementById('version-banner-text');
-            const noteEl = document.getElementById('version-banner-notes');
-            const linkEl = document.getElementById('version-banner-link');
-            const fromVer = normalizeVersionLabel(versionInfo?.local?.version || 'dev');
-            const toVer = latest.version ? normalizeVersionLabel(latest.version) : '';
-            if (textEl) textEl.textContent = toVer ? `${fromVer} -> ${toVer} 可更新` : '检测到可用更新';
-            if (noteEl) {
-                const notes = getVersionNotes();
-                noteEl.textContent = notes.length ? notes[0] : '建议先在「关于」页查看更新说明，再执行升级。';
-            }
-            if (linkEl) linkEl.href = getChangelogUrl();
-            banner.classList.remove('hidden');
+        async function showVersionBanner(latest) {
+            const aboutModule = await loadAboutTabModule();
+            if (!aboutModule?.showVersionBanner) return;
+            aboutModule.showVersionBanner({
+                versionInfo,
+                latest,
+                fallbackProjectUrl: VERSION_FALLBACK_PROJECT_URL,
+                fallbackChangelogUrl: VERSION_FALLBACK_CHANGELOG_URL,
+            });
         }
 
         function hideVersionBanner() {
-            const banner = document.getElementById('version-banner');
-            if (banner) banner.classList.add('hidden');
+            const aboutModule = tabRuntimeState.tabModuleCache.about;
+            if (aboutModule?.hideVersionBanner) {
+                aboutModule.hideVersionBanner();
+                return;
+            }
+            document.getElementById('version-banner')?.classList.add('hidden');
         }
 
         function dismissVersionBanner() {
+            const aboutModule = tabRuntimeState.tabModuleCache.about;
+            if (aboutModule?.dismissVersionBanner) {
+                aboutModule.dismissVersionBanner({
+                    setDismissed: (value) => {
+                        versionBannerDismissed = !!value;
+                    },
+                });
+                return;
+            }
             versionBannerDismissed = true;
             hideVersionBanner();
         }
 
         async function refreshVersionInfo(force = false) {
-            try {
-                const endpoint = force ? '/version?refresh=1' : '/version';
-                const res = await fetch(endpoint);
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                const data = await res.json();
-                versionInfo = {
-                    ...versionInfo,
-                    ...data,
-                    error: data?.error || ''
-                };
-                renderVersionInfoPanel();
-                if (!versionBannerDismissed && versionInfo.has_update) {
-                    showVersionBanner(versionInfo.latest || {});
-                } else if (!versionInfo.has_update) {
-                    hideVersionBanner();
-                    versionBannerDismissed = false;
-                }
-            } catch (err) {
-                console.warn('Version refresh failed', err);
-                versionInfo = {
-                    ...versionInfo,
-                    error: err instanceof Error ? err.message : String(err || 'unknown error')
-                };
-                renderVersionInfoPanel();
+            const aboutModule = await loadAboutTabModule();
+            if (aboutModule?.refreshVersionInfo) {
+                await aboutModule.refreshVersionInfo({
+                    force,
+                    getVersionInfo: () => versionInfo,
+                    setVersionInfo: (nextVersionInfo) => {
+                        versionInfo = nextVersionInfo || versionInfo;
+                    },
+                    isDismissed: () => versionBannerDismissed,
+                    setDismissed: (value) => {
+                        versionBannerDismissed = !!value;
+                    },
+                    renderPanel: renderVersionInfoPanel,
+                    showBanner: ({ latest: nextLatest }) => showVersionBanner(nextLatest),
+                    hideBanner: hideVersionBanner,
+                    fallbackProjectUrl: VERSION_FALLBACK_PROJECT_URL,
+                    fallbackChangelogUrl: VERSION_FALLBACK_CHANGELOG_URL,
+                });
             }
         }
 
         async function manualVersionCheck() {
-            const btn = document.getElementById('about-check-btn');
-            const hintEl = document.getElementById('about-version-hint');
-            const originalText = btn ? btn.textContent : '';
-            if (btn) {
-                btn.disabled = true;
-                btn.classList.add('btn-disabled');
-                btn.textContent = '检查中...';
-            }
-            await refreshVersionInfo(true);
-            if (hintEl) {
-                if (versionInfo?.error) {
-                    hintEl.textContent = `手动检查失败：${versionInfo.error}`;
-                } else if (versionInfo?.has_update) {
-                    const latest = normalizeVersionLabel(versionInfo?.latest?.version || '');
-                    hintEl.textContent = latest ? `手动检查完成，发现可用更新 ${latest}。` : '手动检查完成，发现可用更新。';
-                } else {
-                    hintEl.textContent = '手动检查完成，当前已是最新版本。';
-                }
-            }
-            if (btn) {
-                btn.disabled = false;
-                btn.classList.remove('btn-disabled');
-                btn.textContent = originalText || '手动检查更新';
+            const aboutModule = await loadAboutTabModule();
+            if (aboutModule?.manualVersionCheck) {
+                await aboutModule.manualVersionCheck({
+                    refreshVersionInfo,
+                    getVersionInfo: () => versionInfo,
+                });
             }
         }
 
@@ -10219,7 +10186,7 @@
                 resetResourceSourceForm();
                 syncResourceSourceSelect();
                 refreshWebhookHint();
-                renderVersionInfoPanel();
+                void renderVersionInfoPanel();
                 await refreshSign115Status(true);
             } catch (e) {}
         }
@@ -10579,6 +10546,10 @@
                 await openResourceFolderChild(btn.dataset.resourceFolderId || '0', btn.dataset.resourceFolderName || '--');
                 return;
             }
+            if (action === 'load-files') {
+                await loadResourceFolderFiles(resourceFolderTrail[resourceFolderTrail.length - 1]?.id || '0');
+                return;
+            }
             if (action === 'toggle-files') {
                 resourceFolderShowAllFiles = !resourceFolderShowAllFiles;
                 renderResourceFolderList();
@@ -10837,6 +10808,11 @@
         applyThemeFromStorage();
         loadResourceQuickLinksFromStorage();
         initMainTabRow();
+        void loadTaskTabModule();
+        void loadSettingsTabModule();
+        void loadMonitorTabModule();
+        void loadSubscriptionTabModule();
+        void loadResourceTabModule();
         const initPromise = init();
         syncResourceBackTopButton();
         syncSettingsSaveDock();
