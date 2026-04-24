@@ -157,14 +157,14 @@ async def _run_subscription_task_quark(
             f"已拦截 {int(search_stats.get('title_blocked_candidates', 0) or 0)} 条“仅集数命中/标题不匹配”候选",
             "warn",
         )
-    if int(search_stats.get("quark_media_relaxed_pass", 0) or 0) > 0:
+    if int(search_stats.get("title_match_media_relaxed_pass", search_stats.get("quark_media_relaxed_pass", 0)) or 0) > 0:
         await write_subscription_log(
-            f"已放行 {int(search_stats.get('quark_media_relaxed_pass', 0) or 0)} 条“标题命中但无集数标记”候选，待后续精细扫描判定",
+            f"已放行 {int(search_stats.get('title_match_media_relaxed_pass', search_stats.get('quark_media_relaxed_pass', 0)) or 0)} 条“标题命中但无集数标记”候选，待后续精细扫描判定",
             "info",
         )
-    if int(search_stats.get("quark_low_score_kept", 0) or 0) > 0:
+    if int(search_stats.get("title_match_low_score_kept", search_stats.get("quark_low_score_kept", 0)) or 0) > 0:
         await write_subscription_log(
-            f"已保留 {int(search_stats.get('quark_low_score_kept', 0) or 0)} 条低于阈值但标题命中的电视剧候选（召回优先）",
+            f"已保留 {int(search_stats.get('title_match_low_score_kept', search_stats.get('quark_low_score_kept', 0)) or 0)} 条低于阈值但标题命中的电视剧候选（召回优先）",
             "info",
         )
     if bool(search_stats.get("incremental_search_enabled", False)):
@@ -1462,6 +1462,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                     "tv_like": "电影命中电视剧关键词",
                     "movie_like": "电视剧命中电影资源",
                     "missing_episode_meta": "电视剧缺少季集信息",
+                    "title_mismatch": "标题不匹配",
                 }
                 reason_text = "，".join(
                     f"{reason_labels.get(str(key), str(key))} {int(value or 0)} 条"
@@ -1480,6 +1481,16 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                         f"（目标 S{int(search_stats.get('target_season', 0) or 0):02d}）"
                     ),
                     "warn",
+                )
+            if int(search_stats.get("title_match_media_relaxed_pass", 0) or 0) > 0:
+                await write_subscription_log(
+                    f"已放行 {int(search_stats.get('title_match_media_relaxed_pass', 0) or 0)} 条“标题命中但无集数标记”候选，待后续精细扫描判定",
+                    "info",
+                )
+            if int(search_stats.get("title_match_low_score_kept", 0) or 0) > 0:
+                await write_subscription_log(
+                    f"已保留 {int(search_stats.get('title_match_low_score_kept', 0) or 0)} 条低于阈值但标题命中的电视剧候选（召回优先）",
+                    "info",
                 )
             if bool(search_stats.get("relaxed_score_mode", False)):
                 await write_subscription_log(

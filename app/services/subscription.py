@@ -802,7 +802,8 @@ async def find_subscription_task_match_candidate_by_search(
     trigger: str = "",
 ) -> Dict[str, Any]:
     provider = normalize_subscription_provider(task.get("provider", "115"), fallback="115")
-    search_identity_mode = "link" if provider == "quark" else "message"
+    title_first_search_enabled = provider in {"115", "quark"}
+    search_identity_mode = "link" if title_first_search_enabled else "message"
     trigger_mode = str(trigger or "").strip().lower()
     incremental_search_enabled = trigger_mode == "cron"
     task_name = str(task.get("name", "") or task.get("title", "") or "").strip()
@@ -1070,8 +1071,8 @@ async def find_subscription_task_match_candidate_by_search(
     single_season_tv = media_type == "tv" and (not is_subscription_multi_season_mode(task))
     target_season = max(1, int(task.get("season", 1) or 1))
     title_blocked_candidates = 0
-    quark_low_score_kept = 0
-    quark_media_relaxed_pass = 0
+    title_match_low_score_kept = 0
+    title_match_media_relaxed_pass = 0
     seen_quark_scored_keys: Set[str] = set()
     for item in persisted_items:
         link_url = str(item.get("link_url", "") or "").strip()
@@ -1081,9 +1082,13 @@ async def find_subscription_task_match_candidate_by_search(
             continue
         media_match, media_reason = match_subscription_media_type(task, item)
         if not media_match:
-            if provider == "quark" and media_type == "tv" and str(media_reason or "").strip() == "missing_episode_meta":
-                # 夸克剧集标题经常只保留剧名，不带标准季集字段；此类候选交给后续标题/精细扫描再判定。
-                quark_media_relaxed_pass += 1
+            if (
+                title_first_search_enabled
+                and media_type == "tv"
+                and str(media_reason or "").strip() == "missing_episode_meta"
+            ):
+                # 115/夸克频道标题经常只保留剧名，不带标准季集字段；此类候选交给后续标题/精细扫描再判定。
+                title_match_media_relaxed_pass += 1
             else:
                 media_guard_filtered += 1
                 reason_key = str(media_reason or "unknown").strip() or "unknown"
@@ -1094,10 +1099,10 @@ async def find_subscription_task_match_candidate_by_search(
         matched_before = has_subscription_match(task.get("name", ""), item_id)
         scored = (
             score_subscription_candidate_quark(task, item, query_tokens, last_episode)
-            if provider == "quark"
+            if title_first_search_enabled
             else score_subscription_candidate(task, item, query_tokens, last_episode)
         )
-        if provider == "quark" and not bool(scored.get("title_match", False)):
+        if title_first_search_enabled and not bool(scored.get("title_match", False)):
             media_guard_filtered += 1
             title_blocked_candidates += 1
             reason_key = "title_mismatch"
@@ -1128,13 +1133,18 @@ async def find_subscription_task_match_candidate_by_search(
             scored["matched_before"] = True
         scored_candidates.append(scored)
         keep_candidate = int(scored.get("score", 0) or 0) >= min_score
-        if (not keep_candidate) and provider == "quark" and media_type == "tv" and bool(scored.get("title_match", False)):
-            # quark 电视剧场景优先保证召回：标题命中即可入队，低分放在队尾处理。
+        if (
+            (not keep_candidate)
+            and title_first_search_enabled
+            and media_type == "tv"
+            and bool(scored.get("title_match", False))
+        ):
+            # 115/夸克电视剧场景优先保证召回：标题命中即可入队，低分放在队尾处理。
             keep_candidate = True
-            quark_low_score_kept += 1
+            title_match_low_score_kept += 1
             scored["low_score_fallback"] = True
         if not keep_candidate:
-            if provider != "quark" and media_type == "tv":
+            if (not title_first_search_enabled) and media_type == "tv":
                 episode_no = int(scored.get("episode", 0) or 0)
                 token_hits = int(scored.get("token_hits", 0) or 0)
                 if episode_no > 0 and token_hits > 0:
@@ -1168,7 +1178,7 @@ async def find_subscription_task_match_candidate_by_search(
     )
 
     relaxed_score_mode = False
-    if provider != "quark" and not candidates and media_type == "tv" and relaxed_candidates:
+    if (not title_first_search_enabled) and not candidates and media_type == "tv" and relaxed_candidates:
         relaxed_candidates.sort(
             key=lambda candidate: (
                 int(candidate.get("episode", 0) or 0),
@@ -1221,8 +1231,10 @@ async def find_subscription_task_match_candidate_by_search(
             "provider": provider,
             "min_score": min_score,
             "title_blocked_candidates": title_blocked_candidates,
-            "quark_low_score_kept": quark_low_score_kept,
-            "quark_media_relaxed_pass": quark_media_relaxed_pass,
+            "title_match_low_score_kept": title_match_low_score_kept,
+            "title_match_media_relaxed_pass": title_match_media_relaxed_pass,
+            "quark_low_score_kept": title_match_low_score_kept if provider == "quark" else 0,
+            "quark_media_relaxed_pass": title_match_media_relaxed_pass if provider == "quark" else 0,
             "incremental_search_enabled": incremental_search_enabled,
             "incremental_stop_channels": incremental_stop_channels,
             "incremental_channel_watermarks_loaded": len(incremental_since_cursor_by_channel),
@@ -1342,6 +1354,11 @@ def merge_subscription_search_results(
         "scored_candidates",
         "relaxed_candidates",
         "search_errors",
+        "title_blocked_candidates",
+        "title_match_low_score_kept",
+        "title_match_media_relaxed_pass",
+        "quark_low_score_kept",
+        "quark_media_relaxed_pass",
         "incremental_stop_channels",
         "incremental_channel_watermarks_loaded",
         "incremental_channel_watermarks_observed",

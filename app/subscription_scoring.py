@@ -526,7 +526,7 @@ def score_subscription_candidate_quark(
     score_value = int(scored.get("score", 0) or 0)
 
     if not title_match:
-        # 夸克候选要求强标题命中，纯“集数命中”不允许放行。
+        # 标题优先的频道候选要求强标题命中，纯“集数命中”不允许放行。
         score_value -= 80
         if media_type == "tv" and episode_hit:
             score_value -= 20
