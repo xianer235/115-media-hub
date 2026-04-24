@@ -28,14 +28,25 @@ from .resource_linking import (
 )
 
 
-RESOURCE_CHANNEL_TYPE_SAMPLE_SIZE = max(20, int(os.environ.get("RESOURCE_CHANNEL_TYPE_SAMPLE_SIZE", 50) or 50))
+RESOURCE_CHANNEL_TYPE_SAMPLE_SIZE = max(5, int(os.environ.get("RESOURCE_CHANNEL_TYPE_SAMPLE_SIZE", 10) or 10))
 RESOURCE_CHANNEL_TYPE_PAGE_LIMIT = max(10, int(os.environ.get("RESOURCE_CHANNEL_TYPE_PAGE_LIMIT", 20) or 20))
 RESOURCE_CHANNEL_TYPE_MAX_PAGES = max(1, int(os.environ.get("RESOURCE_CHANNEL_TYPE_MAX_PAGES", 6) or 6))
 TG_SEARCH_PAGE_LIMIT = max(10, int(os.environ.get("TG_SEARCH_PAGE_LIMIT", 20) or 20))
-TG_SEARCH_MAX_PAGES = max(1, int(os.environ.get("TG_SEARCH_MAX_PAGES", 6) or 6))
+TG_SEARCH_MAX_PAGES = max(1, int(os.environ.get("TG_SEARCH_MAX_PAGES", 3) or 3))
 TG_SEARCH_MATCH_LIMIT_PER_CHANNEL = max(1, int(os.environ.get("TG_SEARCH_MATCH_LIMIT_PER_CHANNEL", 12) or 12))
 TG_SEARCH_TOTAL_LIMIT = max(TG_SEARCH_MATCH_LIMIT_PER_CHANNEL, int(os.environ.get("TG_SEARCH_TOTAL_LIMIT", 60) or 60))
-TG_SEARCH_CHANNEL_TIMEOUT_SECONDS = max(5, int(os.environ.get("TG_SEARCH_CHANNEL_TIMEOUT_SECONDS", 15) or 15))
+TG_SEARCH_CHANNEL_TIMEOUT_SECONDS = max(
+    5,
+    min(60, int(os.environ.get("TG_SEARCH_CHANNEL_TIMEOUT_SECONDS", 10) or 10)),
+)
+TG_SEARCH_REQUEST_TIMEOUT_SECONDS = max(
+    3,
+    min(45, int(os.environ.get("TG_SEARCH_REQUEST_TIMEOUT_SECONDS", 8) or 8)),
+)
+TG_SEARCH_RETRY_ATTEMPTS = max(
+    1,
+    min(3, int(os.environ.get("TG_SEARCH_RETRY_ATTEMPTS", 1) or 1)),
+)
 TG_CHANNEL_THREADS_MAX = 20
 TG_CHANNEL_THREADS_DEFAULT = max(1, min(TG_CHANNEL_THREADS_MAX, int(os.environ.get("TG_CHANNEL_THREADS_DEFAULT", 6) or 6)))
 TG_FETCH_RETRY_ATTEMPTS = max(1, int(os.environ.get("TG_FETCH_RETRY_ATTEMPTS", 3) or 3))
@@ -269,6 +280,8 @@ def fetch_telegram_channel_posts_page(
     before: str = "",
     query: str = "",
     allow_empty: bool = False,
+    timeout_seconds: int = 45,
+    retry_attempts: int = TG_FETCH_RETRY_ATTEMPTS,
 ) -> Dict[str, Any]:
     channel_id = normalize_telegram_channel_id_from_input(source.get("channel_id", ""))
     if not channel_id:
@@ -281,18 +294,20 @@ def fetch_telegram_channel_posts_page(
     request_url = build_telegram_channel_page_url(channel_id, before, query)
     html = ""
     final_url = request_url
-    for attempt in range(1, TG_FETCH_RETRY_ATTEMPTS + 1):
+    request_timeout = max(3, min(60, int(timeout_seconds or 45)))
+    attempts = max(1, min(5, int(retry_attempts or TG_FETCH_RETRY_ATTEMPTS)))
+    for attempt in range(1, attempts + 1):
         try:
             html, final_url = http_request_text_with_final_url(
                 request_url,
-                timeout=45,
+                timeout=request_timeout,
                 extra_headers=headers,
                 proxy_url=proxy_url,
             )
             break
         except Exception as exc:
             is_retryable = is_retryable_telegram_request_error(exc)
-            if attempt >= TG_FETCH_RETRY_ATTEMPTS or not is_retryable:
+            if attempt >= attempts or not is_retryable:
                 detail = format_network_error(exc)
                 if is_retryable and attempt > 1:
                     if not proxy_url:
@@ -376,6 +391,8 @@ __all__ = [
     "TG_SEARCH_MATCH_LIMIT_PER_CHANNEL",
     "TG_SEARCH_TOTAL_LIMIT",
     "TG_SEARCH_CHANNEL_TIMEOUT_SECONDS",
+    "TG_SEARCH_REQUEST_TIMEOUT_SECONDS",
+    "TG_SEARCH_RETRY_ATTEMPTS",
     "TG_CHANNEL_THREADS_MAX",
     "TG_CHANNEL_THREADS_DEFAULT",
     "TG_FETCH_RETRY_ATTEMPTS",

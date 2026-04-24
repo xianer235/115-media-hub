@@ -10,6 +10,44 @@ globals().update(
     }
 )
 
+
+async def _write_subscription_search_diagnostics(search_stats: Dict[str, Any], label: str) -> None:
+    payload = search_stats if isinstance(search_stats, dict) else {}
+    keyword_limit = int(payload.get("search_keyword_limit", 0) or 0)
+    keyword_concurrency = int(payload.get("search_keyword_concurrency", 0) or 0)
+    max_pages = int(payload.get("search_max_pages", 0) or 0)
+    request_timeout = int(payload.get("search_request_timeout_seconds", 0) or 0)
+    channel_timeout = int(payload.get("search_channel_timeout_seconds", 0) or 0)
+    thread_limit = int(payload.get("search_thread_limit", 0) or 0)
+    if keyword_limit > 0 or max_pages > 0 or request_timeout > 0 or channel_timeout > 0 or thread_limit > 0:
+        await write_subscription_log(
+            (
+                f"{label}限速参数：关键词 {keyword_limit or '--'} 个，"
+                f"关键词并发 {keyword_concurrency or '--'}，"
+                f"频道并发 {thread_limit or '--'}，"
+                f"每频道最多 {max_pages or '--'} 页，"
+                f"单请求 {request_timeout or '--'} 秒，"
+                f"单频道 {channel_timeout or '--'} 秒"
+            ),
+            "info",
+        )
+    slow_channels = payload.get("slow_channels", [])
+    if not isinstance(slow_channels, list) or not slow_channels:
+        return
+    fragments: List[str] = []
+    for row in slow_channels[:3]:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name", "") or row.get("channel_id", "") or "未知频道").strip()
+        keyword = str(row.get("keyword", "") or "").strip()
+        elapsed = max(0.0, float(row.get("elapsed_seconds", 0.0) or 0.0))
+        pages = max(0, int(row.get("pages_scanned", 0) or 0))
+        suffix = f"/{keyword}" if keyword else ""
+        fragments.append(f"{name}{suffix} {elapsed:.1f}秒 {pages}页")
+    if fragments:
+        await write_subscription_log(f"{label}慢频道 Top：{'；'.join(fragments)}", "info")
+
+
 async def _run_subscription_task_quark(
     cfg: Dict[str, Any],
     task: Dict[str, Any],
@@ -108,6 +146,7 @@ async def _run_subscription_task_quark(
         "info",
     )
     await write_subscription_log(f"夸克搜索阶段耗时：{_format_elapsed_seconds(search_duration_seconds)}", "info")
+    await _write_subscription_search_diagnostics(search_stats, "夸克搜索")
     if unsupported_items > 0:
         await write_subscription_log(
             f"已过滤 {unsupported_items} 条非夸克链接（当前 provider=quark，仅支持夸克分享）",
@@ -1410,6 +1449,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 f"{search_label}阶段耗时：{_format_elapsed_seconds(search_duration_seconds)}",
                 "info",
             )
+            await _write_subscription_search_diagnostics(search_stats, search_label)
             if unsupported_items > 0:
                 await write_subscription_log(
                     f"已过滤 {unsupported_items} 条不支持链接（仅支持 magnet / 115 分享）",

@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
+- 全局性能优化：SQLite schema 初始化改为进程内只执行一次，并启用 WAL/轻量 PRAGMA，降低高频状态接口的重复 I/O。
+- 资源中心状态接口降载：频道资源概览改为批量查询，任务回收检查增加节流，并把状态快照构建移出事件循环，减少页面轮询卡顿。
+- 首屏与静态资源优化：模板渲染和 asset version 增加短 TTL 缓存，CSS 也纳入版本参数，Tailwind CDN 脚本改为 defer 加载。
+- 容器构建优化：新增 `requirements.txt` 依赖层缓存，镜像只复制运行必需文件，并默认使用 `uvicorn[standard]` 的 uvloop/httptools 加速运行时。
+- 订阅频道搜索提速：默认搜索关键词从最多 6 个收敛为 2 个，并改为关键词层并发搜索；每频道默认最多翻 3 页，TG 搜索请求使用短超时与独立重试参数，并在日志输出实际关键词并发、频道并发和慢频道 Top，避免慢/失效频道把搜索阶段拖到分钟级。
+- 频道缓存瘦身：单频道资源缓存和频道类型识别采样默认值调整为 `10`，减少频道同步与资源中心状态构建的额外数据量。
 
 ## [0.2.5] - 2026-04-24
 - 资源导入目录选择体验优化：目录弹窗改为缓存优先与请求去重，命中缓存可秒开；仅命中文件夹缓存时先可操作目录，再后台补齐文件列表。

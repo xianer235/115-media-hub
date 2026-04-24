@@ -96,6 +96,7 @@ from .resource_store import (
     count_resource_items,
     get_resource_item,
     get_resource_job_snapshot,
+    list_resource_channel_items,
     list_resource_items,
     sanitize_resource_job_input,
     serialize_resource_item_row,
@@ -118,6 +119,8 @@ from .resource_tg import (
     TG_SEARCH_MATCH_LIMIT_PER_CHANNEL,
     TG_SEARCH_MAX_PAGES,
     TG_SEARCH_PAGE_LIMIT,
+    TG_SEARCH_REQUEST_TIMEOUT_SECONDS,
+    TG_SEARCH_RETRY_ATTEMPTS,
     TG_SEARCH_TOTAL_LIMIT,
     TG_WIDGET_POST_REGEX,
     build_tg_proxy_url,
@@ -172,7 +175,7 @@ app.add_middleware(
     GZipMiddleware,
     minimum_size=1024,
 )
-HTTP_TIMING_HEADER_ENABLED = str(os.environ.get("HTTP_TIMING_HEADER_ENABLED", "1") or "1").strip().lower() not in {
+HTTP_TIMING_HEADER_ENABLED = str(os.environ.get("HTTP_TIMING_HEADER_ENABLED", "0") or "0").strip().lower() not in {
     "0",
     "false",
     "no",
@@ -182,17 +185,16 @@ HTTP_TIMING_HEADER_ENABLED = str(os.environ.get("HTTP_TIMING_HEADER_ENABLED", "1
 }
 
 
-@app.middleware("http")
-async def add_server_timing_header(request: Request, call_next):
-    if not HTTP_TIMING_HEADER_ENABLED:
-        return await call_next(request)
-    started = time.perf_counter()
-    response = await call_next(request)
-    duration_ms = max(0.0, (time.perf_counter() - started) * 1000.0)
-    rounded_ms = f"{duration_ms:.1f}"
-    response.headers["Server-Timing"] = f"app;dur={rounded_ms}"
-    response.headers["X-Server-Time-Ms"] = rounded_ms
-    return response
+if HTTP_TIMING_HEADER_ENABLED:
+    @app.middleware("http")
+    async def add_server_timing_header(request: Request, call_next):
+        started = time.perf_counter()
+        response = await call_next(request)
+        duration_ms = max(0.0, (time.perf_counter() - started) * 1000.0)
+        rounded_ms = f"{duration_ms:.1f}"
+        response.headers["Server-Timing"] = f"app;dur={rounded_ms}"
+        response.headers["X-Server-Time-Ms"] = rounded_ms
+        return response
 
 CONFIG_PATH = "/app/config/settings.json"
 TREE_DIR = "/app/config/trees"
@@ -215,6 +217,17 @@ SUBSCRIPTION_115_SEARCH_CANDIDATE_LIMIT = max(
 SUBSCRIPTION_QUARK_SEARCH_CANDIDATE_LIMIT = max(
     20,
     min(200, int(os.environ.get("SUBSCRIPTION_QUARK_SEARCH_CANDIDATE_LIMIT", 120) or 120)),
+)
+SUBSCRIPTION_SEARCH_KEYWORD_LIMIT = max(
+    1,
+    min(6, int(os.environ.get("SUBSCRIPTION_SEARCH_KEYWORD_LIMIT", 2) or 2)),
+)
+SUBSCRIPTION_SEARCH_KEYWORD_CONCURRENCY = max(
+    1,
+    min(
+        SUBSCRIPTION_SEARCH_KEYWORD_LIMIT,
+        int(os.environ.get("SUBSCRIPTION_SEARCH_KEYWORD_CONCURRENCY", SUBSCRIPTION_SEARCH_KEYWORD_LIMIT) or SUBSCRIPTION_SEARCH_KEYWORD_LIMIT),
+    ),
 )
 SUBSCRIPTION_MAX_CRON_MINUTES = 24 * 60
 SUBSCRIPTION_MAX_SCHEDULE_INTERVAL_MINUTES = SUBSCRIPTION_MAX_CRON_MINUTES
@@ -252,7 +265,7 @@ UI_EVENT_RETRY_MS = 3000
 UI_HEARTBEAT_SECONDS = 15
 UI_PUSH_DEBOUNCE_SECONDS = 0.15
 TG_SYNC_TTL_SECONDS = 5 * 60
-RESOURCE_CHANNEL_CACHE_LIMIT = max(RESOURCE_CHANNEL_TYPE_SAMPLE_SIZE, int(os.environ.get("RESOURCE_CHANNEL_CACHE_LIMIT", 60) or 60))
+RESOURCE_CHANNEL_CACHE_LIMIT = max(1, int(os.environ.get("RESOURCE_CHANNEL_CACHE_LIMIT", 10) or 10))
 RESOURCE_CHANNEL_CACHE_GLOBAL_LIMIT = max(
     RESOURCE_CHANNEL_CACHE_LIMIT,
     int(os.environ.get("RESOURCE_CHANNEL_CACHE_GLOBAL_LIMIT", 2000) or 2000),
@@ -2101,12 +2114,22 @@ def build_resource_channel_sections(
 ) -> List[Dict[str, Any]]:
     sections: List[Dict[str, Any]] = []
     indexed_items: Dict[str, List[Dict[str, Any]]] = {}
+    batch_channel_items: Dict[str, List[Dict[str, Any]]] = {}
+    batch_channel_counts: Dict[str, int] = {}
     if items is not None:
         for item in items:
             item_channel_id = normalize_telegram_channel_id_from_input(item.get("channel_name", ""))
             if not item_channel_id:
                 continue
             indexed_items.setdefault(item_channel_id, []).append(item)
+    else:
+        channel_ids = [
+            normalize_telegram_channel_id_from_input((source or {}).get("channel_id", ""))
+            for source in (sources or [])
+            if isinstance(source, dict)
+        ]
+        sample_limit = max(per_channel, RESOURCE_CHANNEL_TYPE_SAMPLE_SIZE)
+        batch_channel_items, batch_channel_counts = list_resource_channel_items(channel_ids, limit_per_channel=sample_limit)
     for source in sources:
         channel_id = normalize_telegram_channel_id_from_input(source.get("channel_id", ""))
         if not channel_id:
@@ -2118,13 +2141,9 @@ def build_resource_channel_sections(
             cached_profile = resource_channel_profiles.get(channel_id, {})
             channel_profile = cached_profile if cached_profile else build_resource_channel_profile(channel_id, channel_pool)
         else:
-            channel_pool = list_resource_items(
-                channel_id=channel_id,
-                source_type="tg",
-                limit=max(per_channel, RESOURCE_CHANNEL_TYPE_SAMPLE_SIZE),
-            )
+            channel_pool = batch_channel_items.get(channel_id, [])
             channel_items = channel_pool[:per_channel]
-            item_count = count_resource_items(channel_id=channel_id, source_type="tg")
+            item_count = int(batch_channel_counts.get(channel_id, len(channel_pool)) or 0)
             cached_profile = resource_channel_profiles.get(channel_id, {})
             if cached_profile:
                 channel_profile = cached_profile
@@ -2170,6 +2189,8 @@ def search_telegram_channel_resource_items(
     start_before: str = "",
     identity_mode: str = "message",
     stop_cursor: int = 0,
+    request_timeout_seconds: int = 45,
+    retry_attempts: int = TG_FETCH_RETRY_ATTEMPTS,
 ) -> Dict[str, Any]:
     normalized_source = normalize_resource_source(source or {})
     channel_id = normalize_telegram_channel_id_from_input(normalized_source.get("channel_id", ""))
@@ -2199,6 +2220,8 @@ def search_telegram_channel_resource_items(
             before=before,
             query=keyword,
             allow_empty=True,
+            timeout_seconds=request_timeout_seconds,
+            retry_attempts=retry_attempts,
         )
         pages_scanned += 1
         page_matches: List[Dict[str, Any]] = []
@@ -2297,9 +2320,10 @@ async def search_resource_sources(
     async def search_one_source(source: Dict[str, Any]) -> Dict[str, Any]:
         channel_id = normalize_telegram_channel_id_from_input(source.get("channel_id", ""))
         stop_cursor = max(0, int(normalized_incremental_cursors.get(channel_id, 0) or 0))
+        started_at = time.perf_counter()
         try:
             async with semaphore:
-                return await asyncio.wait_for(
+                result = await asyncio.wait_for(
                     asyncio.to_thread(
                         search_telegram_channel_resource_items,
                         cfg,
@@ -2311,12 +2335,21 @@ async def search_resource_sources(
                         "",
                         normalized_identity_mode,
                         stop_cursor,
+                        TG_SEARCH_REQUEST_TIMEOUT_SECONDS,
+                        TG_SEARCH_RETRY_ATTEMPTS,
                     ),
                     timeout=TG_SEARCH_CHANNEL_TIMEOUT_SECONDS,
                 )
+                if isinstance(result, dict):
+                    result["elapsed_seconds"] = max(0.0, time.perf_counter() - started_at)
+                return result
         except asyncio.TimeoutError as exc:
             channel_id = normalize_telegram_channel_id_from_input(source.get("channel_id", ""))
-            raise RuntimeError(f"频道搜索超时（{channel_id}）") from exc
+            elapsed_seconds = max(0.0, time.perf_counter() - started_at)
+            raise RuntimeError(f"频道搜索超时（{channel_id}，{elapsed_seconds:.1f}秒）") from exc
+        except Exception as exc:
+            elapsed_seconds = max(0.0, time.perf_counter() - started_at)
+            raise RuntimeError(f"{exc}（{elapsed_seconds:.1f}秒）") from exc
 
     tasks = [search_one_source(source) for source in sources]
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -2344,6 +2377,7 @@ async def search_resource_sources(
                     "incremental_stop_hit": False,
                     "latest_scanned_cursor": 0,
                     "latest_scanned_published_at": "",
+                    "elapsed_seconds": 0.0,
                     "error": str(result),
                 }
             )
@@ -2359,6 +2393,7 @@ async def search_resource_sources(
         pages_scanned += int(result.get("pages_scanned", 0) or 0) if isinstance(result, dict) else 0
         latest_scanned_cursor = max(0, int(result.get("latest_scanned_cursor", 0) or 0)) if isinstance(result, dict) else 0
         latest_scanned_published_at = str(result.get("latest_scanned_published_at", "") or "").strip() if isinstance(result, dict) else ""
+        elapsed_seconds = max(0.0, float(result.get("elapsed_seconds", 0.0) or 0.0)) if isinstance(result, dict) else 0.0
         channel_stats.append(
             {
                 "channel_id": channel_id,
@@ -2369,6 +2404,7 @@ async def search_resource_sources(
                 "incremental_stop_hit": bool(result.get("incremental_stop_hit", False)) if isinstance(result, dict) else False,
                 "latest_scanned_cursor": latest_scanned_cursor,
                 "latest_scanned_published_at": latest_scanned_published_at,
+                "elapsed_seconds": elapsed_seconds,
                 "error": "",
             }
         )
@@ -2647,6 +2683,12 @@ resource_channel_last_sync: Dict[str, float] = {}
 resource_channel_last_error: Dict[str, str] = {}
 resource_channel_syncing: Set[str] = set()
 resource_channel_profiles: Dict[str, Dict[str, Any]] = {}
+RESOURCE_JOB_RECOVERY_INTERVAL_SECONDS = max(
+    5,
+    min(300, int(os.environ.get("RESOURCE_JOB_RECOVERY_INTERVAL_SECONDS", 20) or 20)),
+)
+resource_job_recovery_lock = threading.Lock()
+resource_job_recovery_last_ts = 0.0
 
 
 def normalize_cookie_health_provider(value: Any) -> str:
@@ -3145,19 +3187,39 @@ def build_resource_jobs_state_payload(limit: int = 40, cfg: Optional[Dict[str, A
     }
 
 
-async def build_resource_state_payload(search: str = "") -> Dict[str, Any]:
-    cfg = get_config()
-    recover_stale_resource_jobs()
-    recover_submitted_resource_jobs_without_monitor()
-    keyword = str(search or "").strip()
-    search_meta = await search_resource_sources(keyword) if keyword else {
-        "items": [],
-        "sections": [],
-        "errors": [],
-        "searched_sources": len([source for source in cfg.get("resource_sources", []) if source.get("enabled")]),
-        "matched_channels": 0,
-        "pages_scanned": 0,
+def recover_resource_jobs_if_due(force: bool = False) -> Dict[str, Any]:
+    global resource_job_recovery_last_ts
+    now_ts = time.time()
+    if (
+        not force
+        and resource_job_recovery_last_ts > 0
+        and (now_ts - resource_job_recovery_last_ts) < RESOURCE_JOB_RECOVERY_INTERVAL_SECONDS
+    ):
+        return {"skipped": True}
+
+    with resource_job_recovery_lock:
+        now_ts = time.time()
+        if (
+            not force
+            and resource_job_recovery_last_ts > 0
+            and (now_ts - resource_job_recovery_last_ts) < RESOURCE_JOB_RECOVERY_INTERVAL_SECONDS
+        ):
+            return {"skipped": True}
+        resource_job_recovery_last_ts = now_ts
+
+    return {
+        "skipped": False,
+        "stale": recover_stale_resource_jobs(),
+        "submitted_without_monitor": recover_submitted_resource_jobs_without_monitor(),
     }
+
+
+def _build_resource_state_payload_snapshot(
+    cfg: Dict[str, Any],
+    keyword: str,
+    search_meta: Dict[str, Any],
+) -> Dict[str, Any]:
+    keyword = str(keyword or "").strip()
     items = search_meta.get("items", []) if keyword else []
     search_sections = search_meta.get("sections", []) if keyword else []
     jobs_state = build_resource_jobs_state_payload(limit=40, cfg=cfg)
@@ -3225,6 +3287,21 @@ async def build_resource_state_payload(search: str = "") -> Dict[str, Any]:
             "failed_job_count": failed_job_count,
         },
     }
+
+
+async def build_resource_state_payload(search: str = "") -> Dict[str, Any]:
+    cfg = get_config()
+    await asyncio.to_thread(recover_resource_jobs_if_due)
+    keyword = str(search or "").strip()
+    search_meta = await search_resource_sources(keyword) if keyword else {
+        "items": [],
+        "sections": [],
+        "errors": [],
+        "searched_sources": len([source for source in cfg.get("resource_sources", []) if source.get("enabled")]),
+        "matched_channels": 0,
+        "pages_scanned": 0,
+    }
+    return await asyncio.to_thread(_build_resource_state_payload_snapshot, cfg, keyword, search_meta)
 
 
 async def sync_telegram_channels(force: bool = False, limit_per_channel: int = 10) -> Dict[str, Any]:

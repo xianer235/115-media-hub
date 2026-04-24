@@ -824,27 +824,51 @@ async def find_subscription_task_match_candidate_by_search(
     if not query_tokens:
         return {"candidate": {}, "keywords": [], "stats": {}, "errors": []}
 
-    keywords = _build_subscription_search_keywords(task, limit=6)
+    keywords = _build_subscription_search_keywords(task, limit=SUBSCRIPTION_SEARCH_KEYWORD_LIMIT)
     all_items: List[Dict[str, Any]] = []
     all_errors: List[Dict[str, Any]] = []
     searched_sources = 0
     matched_channels = 0
     pages_scanned = 0
+    search_thread_limit = 0
+    slow_channel_rows: List[Dict[str, Any]] = []
+    keyword_search_started_at = time.perf_counter()
+    keyword_semaphore = asyncio.Semaphore(SUBSCRIPTION_SEARCH_KEYWORD_CONCURRENCY)
 
-    for keyword in keywords:
+    async def search_one_keyword(keyword: str) -> Tuple[str, Dict[str, Any]]:
         check_subscription_cancelled()
-        search_meta = await search_resource_sources(
-            keyword,
-            identity_mode=search_identity_mode,
-            incremental_since_cursor_by_channel=(
-                incremental_since_cursor_by_channel if incremental_search_enabled else None
-            ),
-        )
+        async with keyword_semaphore:
+            check_subscription_cancelled()
+            search_started_at = time.perf_counter()
+            search_meta = await search_resource_sources(
+                keyword,
+                identity_mode=search_identity_mode,
+                incremental_since_cursor_by_channel=(
+                    incremental_since_cursor_by_channel if incremental_search_enabled else None
+                ),
+            )
+            if isinstance(search_meta, dict):
+                search_meta["keyword"] = keyword
+                search_meta["elapsed_seconds"] = max(0.0, time.perf_counter() - search_started_at)
+            return keyword, search_meta
+
+    keyword_results = await asyncio.gather(
+        *(search_one_keyword(keyword) for keyword in keywords),
+        return_exceptions=True,
+    )
+
+    for keyword, raw_search_meta in zip(keywords, keyword_results):
+        check_subscription_cancelled()
+        if isinstance(raw_search_meta, Exception):
+            all_errors.append({"channel_id": "", "name": keyword, "message": str(raw_search_meta)})
+            continue
+        _, search_meta = raw_search_meta
         all_items.extend(search_meta.get("items", []) if isinstance(search_meta.get("items"), list) else [])
         all_errors.extend(search_meta.get("errors", []) if isinstance(search_meta.get("errors"), list) else [])
         searched_sources += max(0, int(search_meta.get("searched_sources", 0) or 0))
         matched_channels += max(0, int(search_meta.get("matched_channels", 0) or 0))
         pages_scanned += max(0, int(search_meta.get("pages_scanned", 0) or 0))
+        search_thread_limit = max(search_thread_limit, max(0, int(search_meta.get("thread_limit", 0) or 0)))
         channel_stats = search_meta.get("channel_stats", []) if isinstance(search_meta.get("channel_stats"), list) else []
         for raw_row in channel_stats:
             if not isinstance(raw_row, dict):
@@ -869,6 +893,19 @@ async def find_subscription_task_match_candidate_by_search(
             row["searched_runs"] = int(row.get("searched_runs", 0) or 0) + 1
             matched = bool(raw_row.get("matched", False))
             item_count = max(0, int(raw_row.get("item_count", 0) or 0))
+            elapsed_seconds = max(0.0, float(raw_row.get("elapsed_seconds", 0.0) or 0.0))
+            if elapsed_seconds > 0:
+                slow_channel_rows.append(
+                    {
+                        "channel_id": channel_id,
+                        "name": str(raw_row.get("name", "") or channel_id).strip() or channel_id,
+                        "keyword": keyword,
+                        "elapsed_seconds": elapsed_seconds,
+                        "matched": matched,
+                        "pages_scanned": max(0, int(raw_row.get("pages_scanned", 0) or 0)),
+                        "error": str(raw_row.get("error", "") or "").strip(),
+                    }
+                )
             row["matched_runs"] = int(row.get("matched_runs", 0) or 0) + (1 if matched else 0)
             row["matched_items"] = int(row.get("matched_items", 0) or 0) + item_count
             row["pages_scanned"] = int(row.get("pages_scanned", 0) or 0) + max(
@@ -919,6 +956,7 @@ async def find_subscription_task_match_candidate_by_search(
                 channel_id = normalize_telegram_channel_id_from_input(err.get("channel_id", ""))
                 if channel_id:
                     incremental_error_channels.add(channel_id)
+    keyword_search_elapsed_seconds = max(0.0, time.perf_counter() - keyword_search_started_at)
 
     deduped_items = dedupe_resource_item_dicts(all_items, identity_mode=search_identity_mode)
     deduped_items.sort(key=get_resource_item_sort_key, reverse=True)
@@ -972,6 +1010,7 @@ async def find_subscription_task_match_candidate_by_search(
         if provider == "quark"
         else max(30, min(100, int(task.get("min_score", SUBSCRIPTION_MIN_SCORE) or SUBSCRIPTION_MIN_SCORE)))
     )
+    slow_channel_rows.sort(key=lambda row: float(row.get("elapsed_seconds", 0.0) or 0.0), reverse=True)
     persisted_items: List[Dict[str, Any]] = []
     ensure_db()
     conn = open_db()
@@ -1153,6 +1192,14 @@ async def find_subscription_task_match_candidate_by_search(
         "errors": merged_errors,
         "stats": {
             "search_keywords": len(keywords),
+            "search_keyword_limit": int(SUBSCRIPTION_SEARCH_KEYWORD_LIMIT),
+            "search_keyword_concurrency": int(SUBSCRIPTION_SEARCH_KEYWORD_CONCURRENCY),
+            "search_keyword_elapsed_seconds": keyword_search_elapsed_seconds,
+            "search_max_pages": int(TG_SEARCH_MAX_PAGES),
+            "search_page_limit": int(TG_SEARCH_PAGE_LIMIT),
+            "search_channel_timeout_seconds": int(TG_SEARCH_CHANNEL_TIMEOUT_SECONDS),
+            "search_request_timeout_seconds": int(TG_SEARCH_REQUEST_TIMEOUT_SECONDS),
+            "search_thread_limit": search_thread_limit,
             "searched_sources": searched_sources,
             "matched_channels": matched_channels,
             "pages_scanned": pages_scanned,
@@ -1183,6 +1230,7 @@ async def find_subscription_task_match_candidate_by_search(
             "incremental_channel_watermarks_error_channels": len(incremental_error_channels),
             "incremental_channel_watermarks_advanced": int(incremental_channels_advanced or 0),
             "channel_support_rows_updated": int(channel_support_rows_updated or 0),
+            "slow_channels": slow_channel_rows[:5],
         },
     }
 
@@ -1339,6 +1387,29 @@ def merge_subscription_search_results(
     merged_stats["channel_deduped_items"] = int(channel_stats.get("deduped_items", 0) or 0)
     merged_stats["channel_supported_items"] = int(channel_stats.get("supported_items", 0) or 0)
     merged_stats["channel_unsupported_items"] = int(channel_stats.get("unsupported_items", 0) or 0)
+    for key in (
+        "search_keyword_limit",
+        "search_max_pages",
+        "search_page_limit",
+        "search_channel_timeout_seconds",
+        "search_request_timeout_seconds",
+        "search_keyword_concurrency",
+        "search_keyword_elapsed_seconds",
+        "search_thread_limit",
+    ):
+        if key == "search_keyword_elapsed_seconds":
+            merged_stats[key] = max(
+                float(channel_stats.get(key, 0.0) or 0.0),
+                float(fixed_stats.get(key, 0.0) or 0.0),
+            )
+        else:
+            merged_stats[key] = int(channel_stats.get(key, fixed_stats.get(key, 0)) or 0)
+    merged_slow_channels: List[Dict[str, Any]] = []
+    for part in [fixed_stats.get("slow_channels", []), channel_stats.get("slow_channels", [])]:
+        if isinstance(part, list):
+            merged_slow_channels.extend([row for row in part if isinstance(row, dict)])
+    merged_slow_channels.sort(key=lambda row: float(row.get("elapsed_seconds", 0.0) or 0.0), reverse=True)
+    merged_stats["slow_channels"] = merged_slow_channels[:5]
 
     provider = normalize_subscription_provider(
         channel_stats.get("provider", fixed_stats.get("provider", "115")),

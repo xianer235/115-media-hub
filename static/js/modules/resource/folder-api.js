@@ -1069,6 +1069,7 @@
             invalidateResourceFolderBranchCache,
             getResourceFolderBranchCache,
             resetResourceShareState,
+            isCurrentResource115Share,
             applyResourceShareReceiveCode,
             getResourceShareSelectionState,
             clearResourceShareSelection,

@@ -2231,7 +2231,6 @@
             getResourceProviderLabel,
             getResourceProviderByLinkType,
             getEffectiveResourceLinkType,
-            isCurrentResource115Share,
             isLinkTypeCookieConfigured,
             isProviderCookieConfigured,
             normalizeReceiveCodeInput,

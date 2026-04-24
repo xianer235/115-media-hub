@@ -306,6 +306,83 @@ def count_resource_items(search: str = "", status: str = "", channel_id: str = "
     return int(row[0] if row else 0)
 
 
+def list_resource_channel_items(
+    channel_ids: List[str],
+    limit_per_channel: int = 20,
+) -> Tuple[Dict[str, List[Dict[str, Any]]], Dict[str, int]]:
+    normalized_channels: List[str] = []
+    seen = set()
+    for channel_id in channel_ids or []:
+        normalized = normalize_telegram_channel_id_from_input(channel_id)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        normalized_channels.append(normalized)
+    if not normalized_channels:
+        return {}, {}
+
+    ensure_db()
+    per_channel_limit = max(1, min(int(limit_per_channel or 20), 200))
+    conn = open_db()
+    cursor = conn.cursor()
+    placeholders = ",".join("?" for _ in normalized_channels)
+    counts: Dict[str, int] = {}
+    grouped: Dict[str, List[Dict[str, Any]]] = {channel_id: [] for channel_id in normalized_channels}
+    try:
+        cursor.execute(
+            f"""
+            SELECT channel_name, COUNT(1)
+            FROM resource_items
+            WHERE source_type = 'tg' AND channel_name IN ({placeholders})
+            GROUP BY channel_name
+            """,
+            normalized_channels,
+        )
+        counts = {
+            normalize_telegram_channel_id_from_input(row[0]): int(row[1] or 0)
+            for row in cursor.fetchall()
+            if row and normalize_telegram_channel_id_from_input(row[0])
+        }
+        cursor.execute(
+            f"""
+            WITH ranked AS (
+                SELECT
+                    *,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY channel_name
+                        ORDER BY CASE WHEN published_at <> '' THEN published_at ELSE created_at END DESC, id DESC
+                    ) AS rn
+                FROM resource_items
+                WHERE source_type = 'tg' AND channel_name IN ({placeholders})
+            )
+            SELECT *
+            FROM ranked
+            WHERE rn <= ?
+            ORDER BY channel_name, rn
+            """,
+            normalized_channels + [per_channel_limit],
+        )
+        for row in cursor.fetchall():
+            item = serialize_resource_item_row(row)
+            channel_id = normalize_telegram_channel_id_from_input(item.get("channel_name", ""))
+            if channel_id:
+                grouped.setdefault(channel_id, []).append(item)
+    except sqlite3.OperationalError:
+        conn.close()
+        fallback_items: Dict[str, List[Dict[str, Any]]] = {}
+        fallback_counts: Dict[str, int] = {}
+        for channel_id in normalized_channels:
+            fallback_items[channel_id] = list_resource_items(
+                channel_id=channel_id,
+                source_type="tg",
+                limit=per_channel_limit,
+            )
+            fallback_counts[channel_id] = count_resource_items(channel_id=channel_id, source_type="tg")
+        return fallback_items, fallback_counts
+    conn.close()
+    return grouped, counts
+
+
 __all__ = [
     "upsert_resource_item",
     "update_resource_item_status",
@@ -316,5 +393,6 @@ __all__ = [
     "get_resource_item",
     "serialize_resource_job_row",
     "list_resource_items",
+    "list_resource_channel_items",
     "count_resource_items",
 ]

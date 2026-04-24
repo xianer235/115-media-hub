@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 import threading
@@ -25,7 +26,7 @@ class JsonConfigStore:
         self._cache_mtime_ns: int = -1
 
     def _clone(self, value: Dict[str, Any]) -> Dict[str, Any]:
-        return json.loads(json.dumps(value, ensure_ascii=False))
+        return copy.deepcopy(value)
 
     def _ensure_parent(self) -> None:
         os.makedirs(os.path.dirname(self._path), exist_ok=True)

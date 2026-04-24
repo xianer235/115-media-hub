@@ -17,9 +17,10 @@ config/
 .codex-ui-check/
 .superpowers/
 preview-runtime/
+backup/
+design/
 .vscode/
 
 # local agent handoff context (not for image build context)
 AGENTS.md
 doc/
-

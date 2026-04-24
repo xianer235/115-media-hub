@@ -1,11 +1,14 @@
 import json
 import os
 import sqlite3
+import threading
 from datetime import datetime
 from typing import Any, Dict, Optional
 
 
 DB_PATH = "/app/config/data.db"
+_DB_ENSURED = False
+_DB_ENSURE_LOCK = threading.Lock()
 
 
 def ensure_parent(path: str) -> None:
@@ -47,9 +50,28 @@ def sqlite_row_to_dict(row: Optional[sqlite3.Row]) -> Dict[str, Any]:
     return {key: row[key] for key in row.keys()}
 
 
+def _configure_connection(conn: sqlite3.Connection, enable_wal: bool = False) -> None:
+    try:
+        conn.execute("PRAGMA busy_timeout = 30000")
+        if enable_wal:
+            conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
+        conn.execute("PRAGMA temp_store = MEMORY")
+    except Exception:
+        # Some mounted filesystems do not support WAL; keep SQLite usable.
+        pass
+
+
 def ensure_db() -> None:
+    global _DB_ENSURED
+    if _DB_ENSURED and os.path.exists(DB_PATH):
+        return
+    with _DB_ENSURE_LOCK:
+        if _DB_ENSURED and os.path.exists(DB_PATH):
+            return
     ensure_parent(DB_PATH)
     conn = sqlite3.connect(DB_PATH, timeout=30)
+    _configure_connection(conn, enable_wal=True)
     cursor = conn.cursor()
     cursor.execute(
         "CREATE TABLE IF NOT EXISTS local_files (path_hash TEXT PRIMARY KEY, relative_path TEXT)"
@@ -304,9 +326,11 @@ def ensure_db() -> None:
         )
     conn.commit()
     conn.close()
+    _DB_ENSURED = True
 
 
 def open_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, timeout=30)
+    _configure_connection(conn)
     conn.row_factory = sqlite3.Row
     return conn
