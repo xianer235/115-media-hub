@@ -1,0 +1,173 @@
+        <div id="resource-source-modal" class="hidden fixed inset-0 bg-black/65 backdrop-blur-sm z-[58] p-4">
+            <div class="w-full max-w-xl mx-auto mt-[8vh] group-card modal-card resource-source-modal-shell">
+                <div class="resource-source-modal-header">
+                    <div class="min-w-0">
+                        <div class="resource-source-modal-eyebrow">Subscription</div>
+                        <div id="resource-source-modal-title" class="resource-source-modal-title">新增频道订阅</div>
+                        <div id="resource-source-modal-subtitle" class="resource-source-modal-subtitle">只需要填写公开频道 ID，保存后会立刻出现在资源中心的订阅列表里。</div>
+                    </div>
+                    <button type="button" class="resource-source-modal-close" onclick="closeResourceSourceModal()" aria-label="关闭频道订阅弹窗">✕</button>
+                </div>
+                <div class="space-y-4 mt-5">
+                    <label class="block">
+                        <span class="text-xs text-slate-500">频道名称</span>
+                        <input id="resource_source_name" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：趣看电影">
+                    </label>
+                    <label class="block">
+                        <span class="text-xs text-slate-500">频道 ID</span>
+                        <input id="resource_source_channel" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：QukanMovie">
+                    </label>
+                    <label class="ui-switch-field">
+                        <span class="text-sm text-slate-200">启用频道</span>
+                        <span class="ui-switch">
+                            <input type="checkbox" id="resource_source_enabled" checked>
+                            <span class="ui-switch-slider"></span>
+                        </span>
+                    </label>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                        <button id="resource-source-modal-save-btn" onclick="saveResourceSource()" class="resource-source-modal-action-btn resource-source-modal-action-btn-primary">保存频道订阅</button>
+                        <button type="button" onclick="closeResourceSourceModal()" class="resource-source-modal-action-btn resource-source-modal-action-btn-secondary">取消</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="resource-channel-manage-modal" class="hidden fixed inset-0 bg-black/65 backdrop-blur-sm z-[58] p-4">
+            <div class="w-full max-w-xl mx-auto mt-[8vh] group-card modal-card resource-source-modal-shell">
+                <div class="resource-source-modal-header">
+                    <div class="min-w-0">
+                        <div class="resource-source-modal-eyebrow">Quick Manage</div>
+                        <div id="resource-channel-manage-title" class="resource-source-modal-title">频道快捷管理</div>
+                        <div class="resource-source-modal-subtitle">只保留高频操作：启用/停用、改名、置顶（排序挪到 1 号）。</div>
+                    </div>
+                    <button type="button" class="resource-source-modal-close" onclick="closeResourceChannelManageModal()" aria-label="关闭频道快捷管理弹窗">✕</button>
+                </div>
+                <div class="space-y-4 mt-5">
+                    <label class="block">
+                        <span class="text-xs text-slate-500">频道名称</span>
+                        <input id="resource-channel-manage-name" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="请输入频道名称">
+                    </label>
+                    <label class="ui-switch-field">
+                        <span class="text-sm text-slate-200">启用频道</span>
+                        <span class="ui-switch">
+                            <input type="checkbox" id="resource-channel-manage-enabled" checked>
+                            <span class="ui-switch-slider"></span>
+                        </span>
+                    </label>
+                    <div class="resource-channel-manage-meta">当前排序：<span id="resource-channel-manage-order">--</span></div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                        <button id="resource-channel-manage-pin-btn" type="button" onclick="pinResourceChannelToTop()" class="resource-source-modal-action-btn resource-source-modal-action-btn-secondary">置顶（排序挪到1号）</button>
+                        <button type="button" onclick="saveResourceChannelManage()" class="resource-source-modal-action-btn resource-source-modal-action-btn-primary">保存</button>
+                        <button type="button" onclick="closeResourceChannelManageModal()" class="resource-source-modal-action-btn resource-source-modal-action-btn-secondary md:col-span-2">关闭</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="resource-source-import-modal" class="hidden fixed inset-0 bg-black/65 backdrop-blur-sm z-[58] p-4">
+            <div class="w-full max-w-2xl mx-auto mt-[8vh] group-card modal-card resource-source-modal-shell">
+                <div class="resource-source-modal-header">
+                    <div class="min-w-0">
+                        <div class="resource-source-modal-eyebrow">Import / Export</div>
+                        <div class="resource-source-modal-title">导入频道订阅模板</div>
+                        <div class="resource-source-modal-subtitle">粘贴 JSON 数组后可一键导入。兼容你提供的 `[{"name":"频道名","id":"频道ID"}]` 模版，也兼容 `channel_id / channel / url` 字段。</div>
+                    </div>
+                    <button type="button" class="resource-source-modal-close" onclick="closeResourceSourceImportModal()" aria-label="关闭频道导入弹窗">✕</button>
+                </div>
+                <div class="space-y-4 mt-5">
+                    <textarea id="resource_source_import_json" class="resource-source-import-textarea w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" placeholder='请粘贴 JSON 数组，例如：&#10;[{"name":"115影视资源分享频道","id":"QukanMovie"}]'></textarea>
+                    <label class="ui-switch-field">
+                        <span class="text-sm text-slate-200">覆盖现有频道（关闭则追加并按频道 ID 去重）</span>
+                        <span class="ui-switch">
+                            <input type="checkbox" id="resource_source_import_replace" checked>
+                            <span class="ui-switch-slider"></span>
+                        </span>
+                    </label>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                        <button id="resource-source-import-submit-btn" type="button" onclick="importResourceSources()" class="resource-source-modal-action-btn resource-source-modal-action-btn-primary">开始导入</button>
+                        <button type="button" onclick="closeResourceSourceImportModal()" class="resource-source-modal-action-btn resource-source-modal-action-btn-secondary">取消</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="resource-source-manager-modal" class="hidden fixed inset-0 bg-black/65 backdrop-blur-sm z-[58] p-4">
+            <div class="w-full max-w-6xl mx-auto mt-[4vh] group-card modal-card resource-source-modal-shell resource-source-manager-shell">
+                <div class="resource-source-modal-header">
+                    <div class="min-w-0">
+                        <div class="resource-source-modal-eyebrow">Manage / Detect</div>
+                        <div class="resource-source-modal-title">频道批量管理</div>
+                        <div class="resource-source-modal-subtitle">支持手动测试频道分类、按资源类型/启用状态/活跃时间快捷筛选，再对选中频道批量启用、停用或删除。</div>
+                    </div>
+                    <button type="button" class="resource-source-modal-close" onclick="closeResourceSourceManagerModal()" aria-label="关闭频道管理弹窗">✕</button>
+                </div>
+                <div class="resource-source-manager-mobile-bar" aria-label="竖屏频道管理视图切换">
+                    <div class="resource-source-manager-mobile-summary">
+                        <div class="resource-source-manager-mobile-pill">筛选结果 <span id="resource-source-manager-mobile-filtered-count">0</span></div>
+                        <div class="resource-source-manager-mobile-pill">已选频道 <span id="resource-source-manager-mobile-selected-count">0</span></div>
+                    </div>
+                    <div class="resource-source-manager-mobile-tabs" role="tablist" aria-label="频道管理模式">
+                        <button id="resource-source-manager-mobile-list-tab" type="button" data-resource-source-manager-panel="list" class="resource-source-manager-mobile-tab">频道列表</button>
+                        <button id="resource-source-manager-mobile-tools-tab" type="button" data-resource-source-manager-panel="tools" class="resource-source-manager-mobile-tab">筛选与批量</button>
+                    </div>
+                </div>
+                <div class="resource-source-manager-body">
+                    <div class="resource-source-manager-side">
+                        <div class="resource-source-manager-card">
+                            <div class="resource-source-manager-card-title">测试分类</div>
+                            <div class="resource-source-manager-test-row">
+                                <button id="resource-source-manager-test-btn" type="button" onclick="testResourceSourceClassification()" class="resource-source-manager-primary-btn">测试全部频道分类</button>
+                            </div>
+                            <div id="resource-source-manager-test-result" class="resource-source-manager-test-result">点击后会按当前配置并发测试频道分类（每个频道采样 20 条）。</div>
+                        </div>
+
+                        <div class="resource-source-manager-card">
+                            <div class="resource-source-manager-card-title">快捷筛选</div>
+                            <div class="resource-source-manager-filter-block">
+                                <div class="resource-source-manager-filter-label">资源类型</div>
+                                <div id="resource-source-manager-type-filters" class="resource-source-manager-filter-tabs"></div>
+                            </div>
+                            <div class="resource-source-manager-filter-block">
+                                <div class="resource-source-manager-filter-label">启用状态</div>
+                                <div id="resource-source-manager-status-filters" class="resource-source-manager-filter-tabs"></div>
+                            </div>
+                            <div class="resource-source-manager-filter-block">
+                                <div class="resource-source-manager-filter-label">最近活跃时间</div>
+                                <div id="resource-source-manager-activity-filters" class="resource-source-manager-filter-tabs"></div>
+                            </div>
+                            <div id="resource-source-manager-filter-hint" class="resource-source-manager-filter-hint">可先筛选，再批量勾选。</div>
+                            <div class="resource-source-manager-toolbar">
+                                <input id="resource-source-manager-search" type="text" class="resource-source-manager-search" placeholder="搜索频道名 / 频道 ID / 类型">
+                                <select id="resource-source-manager-sort" class="resource-source-manager-sort">
+                                    <option value="recent">按最近发布时间</option>
+                                    <option value="activity">按活跃度分层</option>
+                                    <option value="support">按订阅支持度</option>
+                                    <option value="name">按频道名称</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="resource-source-manager-card">
+                            <div class="resource-source-manager-card-title">批量操作</div>
+                            <div class="resource-source-manager-bulk-meta">
+                                已选频道 <span id="resource-source-manager-selected-count">0</span>
+                            </div>
+                            <div class="resource-source-manager-select-actions">
+                                <button id="resource-source-manager-select-all-btn" type="button" onclick="selectAllFilteredResourceSources()" class="resource-source-secondary-btn resource-source-manager-select-btn">全选当前筛选结果</button>
+                                <button id="resource-source-manager-invert-btn" type="button" onclick="invertFilteredResourceSourceSelections()" class="resource-source-secondary-btn resource-source-manager-select-btn">反选当前筛选结果</button>
+                            </div>
+                            <div class="resource-source-manager-bulk-actions">
+                                <button type="button" onclick="clearResourceSourceSelections()" class="resource-source-secondary-btn">清空选择</button>
+                                <button type="button" onclick="bulkEnableResourceSources(true)" class="resource-source-manager-primary-btn">启用选中</button>
+                                <button type="button" onclick="bulkEnableResourceSources(false)" class="resource-source-secondary-btn">停用选中</button>
+                                <button type="button" onclick="bulkDeleteResourceSources()" class="resource-source-manager-danger-btn">删除选中</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="resource-source-manager-main">
+                        <div id="resource-source-manager-list" class="resource-source-manager-list"></div>
+                    </div>
+                </div>
+            </div>
+        </div>

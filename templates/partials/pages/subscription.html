@@ -1,0 +1,31 @@
+        <div id="page-subscription" class="page-panel module-page hidden space-y-6">
+            <div class="group-card">
+                <div class="flex flex-wrap justify-between gap-3 items-center">
+                    <div>
+                        <h3 class="group-title mb-2">影视订阅任务</h3>
+                        <div class="text-xs text-slate-400">电影会在命中资源后自动创建导入任务；电视剧会识别季集并记录追更进度。</div>
+                    </div>
+                    <div class="flex items-center gap-3 flex-wrap">
+                        <button onclick="openNewSubscriptionTask()" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold min-h-[42px]">+ 新增订阅任务</button>
+                        <div class="text-xs px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-300">
+                            当前状态：<span id="subscription-summary-step" class="text-sky-400 font-bold">空闲</span>
+                            <span class="text-slate-500"> / </span>
+                            <span id="subscription-summary-detail">等待订阅任务</span>
+                        </div>
+                    </div>
+                </div>
+                <div id="subscription-task-list" class="space-y-3 mt-5"></div>
+            </div>
+
+            <div class="group-card">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="group-title mb-0">订阅日志</h3>
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <button onclick="clearSubscriptionLogs()" class="px-3 py-1 text-xs rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300">清空日志</button>
+                    </div>
+                </div>
+                <div class="bg-slate-950/80 rounded-3xl border border-slate-800 p-4 shadow-inner">
+                    <div id="subscription-log-box" class="overflow-y-auto font-mono text-[13px] p-2 scroll-smooth"></div>
+                </div>
+            </div>
+        </div>

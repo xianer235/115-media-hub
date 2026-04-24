@@ -1,0 +1,87 @@
+        <div id="page-monitor" class="page-panel module-page hidden space-y-6">
+            <div class="group-card">
+                <div class="flex flex-wrap justify-between gap-3 items-center">
+                    <div>
+                        <h3 class="group-title mb-2">文件夹监控任务列表</h3>
+                        <div class="text-xs text-slate-400">执行前会先触发 `reload(refresh=true)`。Webhook 优先尝试定位变动子目录，只刷新对应目录。</div>
+                    </div>
+                    <div class="flex items-center gap-3 flex-wrap">
+                        <div class="text-xs px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-300">
+                            当前状态：<span id="monitor-summary-step" class="text-sky-400 font-bold">空闲</span>
+                            <span class="text-slate-500"> / </span>
+                            <span id="monitor-summary-detail">等待监控任务</span>
+                        </div>
+                        <button onclick="openNewMonitorTask()" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold min-h-[42px]">+ 新增任务</button>
+                    </div>
+                </div>
+                <div id="monitor-task-list" class="space-y-3 mt-5"></div>
+            </div>
+
+            <div class="group-card">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="group-title mb-0">监控日志</h3>
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <div class="text-xs text-slate-400">绿色为生成成功，红色为失败或中断</div>
+                        <button onclick="clearMonitorLogs()" class="px-3 py-1 text-xs rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300">清空日志</button>
+                    </div>
+                </div>
+                <div class="bg-slate-950/80 rounded-3xl border border-slate-800 p-4 shadow-inner">
+                    <div id="monitor-log-box" class="overflow-y-auto font-mono text-[13px] p-2 scroll-smooth"></div>
+                </div>
+            </div>
+        </div>
+
+        <div id="page-about" class="page-panel module-page hidden space-y-6">
+            <div class="group-card">
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                        <div class="text-base font-black text-white">关于 115 Media Hub</div>
+                        <div class="text-xs text-slate-400 mt-1">在这里可以查看版本状态、更新说明和项目链接。</div>
+                    </div>
+                    <div id="about-version-status" class="text-xs px-3 py-2 rounded-xl border border-slate-700 bg-slate-900/80 text-slate-300">尚未检查更新</div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div class="group-card">
+                    <div class="about-stat-label text-xs uppercase tracking-wide text-slate-500">当前版本</div>
+                    <div id="about-local-version" class="text-3xl font-black text-white mt-2">--</div>
+                    <div class="text-xs text-slate-400 mt-3">构建时间：<span id="about-build-date">--</span></div>
+                </div>
+                <div class="group-card">
+                    <div class="about-stat-label text-xs uppercase tracking-wide text-slate-500">远端最新版本</div>
+                    <div id="about-latest-version" class="text-3xl font-black text-sky-400 mt-2">--</div>
+                    <div class="text-xs text-slate-400 mt-3">最近检查（参考）：<span id="about-checked-at">--</span></div>
+                    <div class="about-stat-note text-[11px] text-slate-500 mt-1">受网络代理与缓存影响，时间可能有延迟。</div>
+                    <div id="about-version-error" class="hidden mt-3 text-xs text-red-300 bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2"></div>
+                </div>
+            </div>
+
+            <div class="group-card">
+                <h3 class="group-title">更新说明</h3>
+                <div id="about-version-notes" class="text-sm text-slate-300 leading-7">暂无更新说明</div>
+            </div>
+
+            <div class="group-card">
+                <h3 class="group-title">更新与支持</h3>
+                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                    <button id="about-check-btn" onclick="manualVersionCheck()" class="about-action about-action-primary">手动检查更新</button>
+                    <a id="about-changelog-link" href="https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md" target="_blank" rel="noopener noreferrer" class="about-action about-action-secondary">查看更新日志</a>
+                    <a id="about-project-link" href="https://github.com/xianer235/115-media-hub" target="_blank" rel="noopener noreferrer" class="about-action about-action-secondary">项目主页</a>
+                    <a id="about-star-link" href="https://github.com/xianer235/115-media-hub/stargazers" target="_blank" rel="noopener noreferrer" class="about-action about-action-star">给项目点个 Star</a>
+                </div>
+                <div id="about-version-hint" class="text-xs text-slate-400 mt-4">提示：如果检测到新版本，顶部会出现轻提醒，并可直接跳转本页。</div>
+            </div>
+
+            <div class="group-card">
+                <h3 class="group-title">导入与 STRM 生成流程</h3>
+                <div class="about-workflow-card">
+                    <div class="about-workflow-title">115 导入与容器内 STRM 生成链路图</div>
+                    <div class="about-workflow-copy">资源导入与 STRM 播放都在容器内完成：先用 115 Cookie 解析目录，再由 `/strm/proxy` 返回 302 到真实下载地址。流程图采用按需加载，避免影响页面首屏速度。</div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mt-4">
+                        <button type="button" onclick="openAboutWorkflowModal()" class="about-action about-action-primary">查看流程图</button>
+                        <a href="/static/images/about-workflow-115-container.png" target="_blank" rel="noopener noreferrer" class="about-action about-action-secondary">新窗口打开</a>
+                    </div>
+                </div>
+            </div>
+        </div>

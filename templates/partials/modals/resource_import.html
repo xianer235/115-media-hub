@@ -1,0 +1,232 @@
+        <div id="help-modal" class="hidden fixed inset-0 bg-black/60 z-[60] p-4">
+            <div class="w-full max-w-xl mx-auto mt-[12vh] group-card modal-card">
+                <div class="flex items-center justify-between mb-3">
+                    <div class="text-lg font-black text-white">参数说明</div>
+                    <button onclick="closeHelpModal()" class="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm">关闭</button>
+                </div>
+                <div id="help-modal-body" class="help-text text-sm text-slate-200 bg-slate-900/70 border border-slate-700 rounded-xl p-4"></div>
+            </div>
+        </div>
+
+        <div id="resource-import-modal" class="hidden fixed inset-0 bg-black/60 z-[55] p-4">
+            <div class="w-full max-w-[1400px] mx-auto mt-[2.5vh] max-h-[93vh] overflow-y-auto group-card modal-card">
+                <div class="flex items-center justify-between">
+                    <h3 id="resource-import-modal-title" class="group-title mb-0">资源详情与保存</h3>
+                    <button onclick="closeResourceJobModal()" class="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm">关闭</button>
+                </div>
+                <div class="space-y-3 mt-4">
+                    <div id="resource-import-detail-grid" class="resource-detail-grid">
+                        <div id="resource-import-main-column" class="resource-import-main-column">
+                            <div class="resource-detail-card resource-import-overview-card">
+                                <div class="resource-import-overview">
+                                    <div id="resource-import-poster" class="resource-detail-poster shrink-0"></div>
+                                    <div class="resource-import-overview-main">
+                                        <div class="min-w-0">
+                                            <div id="resource-import-title" class="resource-import-overview-title">--</div>
+                                            <div id="resource-import-subtitle" class="resource-import-overview-subtitle mt-2">--</div>
+                                            <div id="resource-import-meta" class="flex flex-wrap items-center gap-2 mt-3"></div>
+                                        </div>
+                                        <div id="resource-import-link-actions" class="flex flex-wrap gap-2"></div>
+                                        <div id="resource-import-inline-summary" class="resource-import-inline-summary">
+                                            <span id="resource-import-selection-count" class="resource-import-inline-chip">未选择</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div id="resource-import-raw-card" class="resource-detail-card">
+                                <div class="flex items-center justify-between gap-3 mb-3">
+                                    <div>
+                                        <div class="text-sm font-black text-white">资源文案预览</div>
+                                        <div class="text-xs text-slate-400 mt-1">点开资源后可以先确认原始文案、来源和链接类型。</div>
+                                    </div>
+                                </div>
+                                <div id="resource-import-raw-text" class="resource-detail-text">--</div>
+                            </div>
+                            <div id="resource-import-stepper" class="resource-import-stepper hidden">
+                                <div class="resource-import-step" data-step="1">
+                                    <span class="resource-import-step-index">1</span>
+                                    <span class="resource-import-step-text">选择资源</span>
+                                </div>
+                                <div class="resource-import-step" data-step="2">
+                                    <span class="resource-import-step-index">2</span>
+                                    <span class="resource-import-step-text">选择目录</span>
+                                </div>
+                                <div class="resource-import-step" data-step="3">
+                                    <span class="resource-import-step-index">3</span>
+                                    <span class="resource-import-step-text">提交导入</span>
+                                </div>
+                            </div>
+                            <div id="resource-share-browser-card" class="resource-detail-card hidden">
+                                <div class="resource-import-toolbar">
+                                    <div class="text-sm font-black text-white">资源选择</div>
+                                    <div class="resource-import-toolbar-actions">
+                                        <button type="button" onclick="goResourceShareRoot()" class="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-[11px] font-bold">根目录</button>
+                                        <button type="button" onclick="goResourceShareBack()" class="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-[11px] font-bold">上级</button>
+                                        <button type="button" onclick="setCurrentResourceShareEntriesChecked(true)" class="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-[11px] font-bold">全选当前层</button>
+                                        <button type="button" onclick="clearResourceShareSelection()" class="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-[11px] font-bold">清空</button>
+                                    </div>
+                                </div>
+                                <div class="resource-browser-toolbar mt-3">
+                                    <div id="resource-share-root-title" class="resource-browser-breadcrumbs">--</div>
+                                </div>
+                                <div class="resource-browser-table mt-3">
+                                    <div class="resource-browser-header">
+                                        <label class="resource-browser-name-cell">
+                                            <input id="resource-share-current-check-all" type="checkbox" class="ui-checkbox ui-checkbox-sm">
+                                            <span>文件名</span>
+                                        </label>
+                                        <div class="resource-browser-col-size">大小</div>
+                                    </div>
+                                    <div id="resource-share-tree" class="resource-browser-body"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="resource-import-save-panel" class="resource-import-side-column resource-import-side-stack">
+                            <div id="resource-import-save-hint" class="hidden rounded-2xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm leading-6 text-amber-200"></div>
+                            <div class="resource-detail-card resource-import-side-shell">
+                                <div class="resource-import-side-header">
+                                    <div class="text-sm font-black text-white">保存设置</div>
+                                </div>
+                                <div class="resource-save-layout">
+                                    <div class="resource-save-section">
+                                        <div id="resource-savepath-provider-label" class="resource-import-section-label">115 保存目录</div>
+                                        <div class="resource-save-path-grid">
+                                            <input id="resource_job_folder_path" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" value="根目录" readonly>
+                                            <button type="button" onclick="openResourceFolderModal()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">浏览目录</button>
+                                        </div>
+                                        <input id="resource_job_folder_id" class="hidden" value="0">
+                                        <div class="resource-import-compact-meta">
+                                            <div class="resource-import-compact-item">
+                                                <div class="resource-import-compact-label">提交路径</div>
+                                                <div id="resource_job_savepath_preview" class="resource-import-compact-value">请选择保存目录</div>
+                                            </div>
+                                            <div class="resource-import-compact-item">
+                                                <div class="resource-import-compact-label">监控任务</div>
+                                                <div id="resource_job_monitor_task_display" class="resource-import-compact-value">请先选择保存目录</div>
+                                            </div>
+                                        </div>
+                                        <input id="resource_job_savepath" class="hidden" value="">
+                                        <input id="resource_job_monitor_task" class="hidden" value="">
+                                    </div>
+                                    <div id="resource-share-receive-code-section" class="resource-save-section hidden">
+                                        <div id="resource-share-receive-code-label" class="resource-import-section-label">115 提取码</div>
+                                        <div class="resource-save-path-grid">
+                                            <input id="resource_share_receive_code" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm font-mono uppercase tracking-[0.08em]" placeholder="可选：可后续补录提取码">
+                                            <button id="resource-share-receive-code-apply" type="button" onclick="applyResourceShareReceiveCode()" class="px-4 py-3 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold whitespace-nowrap">应用并刷新</button>
+                                        </div>
+                                        <div class="text-[11px] text-slate-500 leading-5 px-1 mt-2">原始文案没有提取码时，可以在这里补录后再读取分享目录与提交转存。</div>
+                                    </div>
+                                    <div class="resource-save-section">
+                                        <div class="resource-delay-row">
+                                            <div class="resource-delay-copy">
+                                                <div class="resource-import-section-label">监控触发延时</div>
+                                            </div>
+                                            <div class="resource-delay-inline">
+                                                <input id="resource_job_refresh_delay_seconds" type="number" min="0" class="resource-delay-input bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" value="4">
+                                                <span class="resource-delay-suffix">秒</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div id="resource_job_monitor_task_hint" class="text-[11px] text-slate-500 leading-5 px-1">
+                                        目录命中监控任务时自动刷新；未命中时只保存到网盘。
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="resource-import-feedback-card" class="resource-import-feedback hidden"></div>
+                    <div id="resource-import-footer" class="resource-import-footer-shell grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                        <button id="resource-submit-btn" onclick="submitResourceJob()" class="resource-import-submit-btn">保存到 115</button>
+                        <button id="resource-close-btn" onclick="closeResourceJobModal()" class="resource-import-cancel-btn">取消</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="resource-folder-modal" class="hidden fixed inset-0 bg-black/60 z-[56] p-4">
+            <div class="w-full max-w-2xl mx-auto mt-[8vh] max-h-[88vh] overflow-y-auto group-card modal-card">
+                <div class="flex items-center justify-between">
+                    <h3 id="resource-folder-modal-title" class="group-title mb-0">选择 115 目录</h3>
+                    <button onclick="closeResourceFolderModal()" class="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm">关闭</button>
+                </div>
+                <div class="space-y-4 mt-4">
+                    <div class="resource-folder-pathbar">
+                        <div class="resource-folder-path-label">保存目录路径</div>
+                        <div id="resource-folder-breadcrumbs" class="resource-folder-path-track">根目录</div>
+                    </div>
+                    <div id="resource-folder-summary" class="text-xs text-slate-500">
+                        将同时显示当前目录下的子文件夹和文件，方便确认保存位置。
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                        <button type="button" onclick="selectCurrentResourceFolder()" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold">选择当前目录</button>
+                        <button type="button" onclick="goResourceFolderBack()" class="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">返回上一级</button>
+                    </div>
+                    <div class="flex flex-col sm:flex-row gap-2">
+                        <input id="resource-folder-create-name" class="w-full sm:flex-1 bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm" placeholder="在当前目录新建文件夹（例如：电影）">
+                        <button id="resource-folder-create-btn" type="button" onclick="createResourceFolderInCurrent()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold whitespace-nowrap">新建文件夹</button>
+                    </div>
+                    <div id="resource-folder-list" class="space-y-3"></div>
+                </div>
+            </div>
+        </div>
+
+        <div id="resource-quick-link-modal" class="hidden fixed inset-0 bg-black/65 backdrop-blur-sm z-[58] p-4">
+            <div class="w-full max-w-3xl mx-auto mt-[6vh] max-h-[88vh] overflow-y-auto group-card modal-card resource-source-modal-shell resource-quick-link-modal-shell">
+                <div class="resource-source-modal-header">
+                    <div>
+                        <div class="resource-source-modal-eyebrow">Quick Link</div>
+                        <div class="resource-source-modal-title">常用网盘链接</div>
+                        <div class="resource-source-modal-subtitle">支持自定义名称，点击“识别”会自动填入搜索框并按现有流程解析，适合快速处理会持续更新的分享链接。</div>
+                    </div>
+                    <button type="button" class="resource-source-modal-close" onclick="closeResourceQuickLinkModal()" aria-label="关闭常用网盘链接弹窗">✕</button>
+                </div>
+                <div class="space-y-4 mt-4">
+                    <div class="resource-quick-link-form-grid">
+                        <label class="block">
+                            <span class="resource-quick-link-field-label">显示名称</span>
+                            <input id="resource-quick-link-name" class="resource-quick-link-input" placeholder="例如：电影追更合集">
+                        </label>
+                        <label class="block">
+                            <span class="resource-quick-link-field-label">网盘分享链接</span>
+                            <input id="resource-quick-link-url" class="resource-quick-link-input" placeholder="https://pan.quark.cn/s/xxxxxx">
+                        </label>
+                    </div>
+                    <div class="resource-quick-link-form-actions">
+                        <button type="button" onclick="fillResourceQuickLinkFormFromSearch()" class="resource-quick-link-action-btn resource-quick-link-action-btn-muted">读取搜索框</button>
+                        <button id="resource-quick-link-cancel-edit-btn" type="button" onclick="cancelEditResourceQuickLink()" class="resource-quick-link-action-btn resource-quick-link-action-btn-muted hidden">取消编辑</button>
+                        <button id="resource-quick-link-save-btn" type="button" onclick="saveResourceQuickLink()" class="resource-quick-link-action-btn resource-quick-link-action-btn-primary">添加常用网盘链接</button>
+                    </div>
+                    <div class="resource-quick-link-note">
+                        提示：如果粘贴的是纯分享页链接，点击“识别”即可进入原有导入流程；点击“跳转”会新开标签页访问源链接。
+                    </div>
+                    <div id="resource-quick-link-list" class="space-y-3"></div>
+                </div>
+            </div>
+        </div>
+
+        <div id="resource-job-modal" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-[57] p-4">
+            <div class="w-full max-w-5xl mx-auto mt-[4vh] max-h-[92vh] overflow-hidden group-card modal-card resource-job-modal-shell">
+                <div class="resource-job-modal-header">
+                    <div class="min-w-0">
+                        <div class="resource-job-modal-eyebrow">任务中心</div>
+                        <div class="resource-job-modal-title">任务列表</div>
+                    </div>
+                    <div class="resource-job-modal-actions">
+                        <div id="resource-job-clear-menu" class="resource-job-clear-menu">
+                            <button id="resource-job-clear-toggle" type="button" onclick="toggleResourceJobClearMenu()" class="resource-job-modal-action resource-job-clear-toggle" aria-haspopup="menu" aria-expanded="false">清空</button>
+                            <div id="resource-job-clear-dropdown" class="resource-job-clear-dropdown hidden" role="menu" aria-label="清理任务记录">
+                                <button id="resource-clear-completed-btn" type="button" onclick="clearCompletedResourceJobs()" class="resource-job-clear-item" role="menuitem">清空已完成</button>
+                                <button id="resource-clear-failed-btn" type="button" onclick="clearFailedResourceJobs()" class="resource-job-clear-item" role="menuitem">清空失败</button>
+                                <button id="resource-clear-terminal-btn" type="button" onclick="clearTerminalResourceJobs()" class="resource-job-clear-item" role="menuitem">清空完成+失败</button>
+                            </div>
+                        </div>
+                        <button type="button" class="resource-job-modal-close" onclick="toggleResourceJobModal(false)" aria-label="关闭任务列表">✕</button>
+                    </div>
+                </div>
+                <div class="resource-job-modal-toolbar">
+                    <div id="resource-job-filter-tabs" class="resource-job-filter-tabs"></div>
+                    <div class="resource-job-modal-note">显示最近 40 条导入任务，可按状态快速筛选。</div>
+                </div>
+                <div id="resource-job-list" class="resource-job-modal-list"></div>
+            </div>
+        </div>

@@ -1,0 +1,26 @@
+        <div id="page-task" class="page-panel module-page hidden space-y-6">
+            <div class="bg-slate-800 p-6 rounded-3xl border border-slate-700 shadow-2xl">
+                <div class="flex justify-between items-end mb-4">
+                    <div>
+                        <span id="prog-step" class="text-2xl font-black text-white">就绪</span>
+                        <div id="next-run-container" class="hidden text-xs text-emerald-400 mt-1 font-bold">⏱ 下次自动同步: <span id="next-run-time">--:--:--</span></div>
+                        <div id="prog-detail" class="text-xs text-slate-400 mt-1 italic">等待指令...</div>
+                    </div>
+                    <div class="text-right"><span id="prog-percent" class="text-3xl font-mono font-black text-sky-500">0%</span></div>
+                </div>
+                <div class="w-full bg-slate-950 rounded-full h-4 p-1 overflow-hidden shadow-inner">
+                    <div id="prog-bar" class="bg-gradient-to-r from-sky-600 to-sky-400 h-full rounded-full transition-width prog-glow" style="width: 0%"></div>
+                </div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <button onclick="triggerTask(false, false)" class="btn-ctrl bg-sky-600 hover:bg-sky-500 p-5 rounded-2xl font-bold transition-all active:scale-95 shadow-lg text-white">🌐 联网同步更新</button>
+                <button onclick="triggerTask(true, false)" class="btn-ctrl bg-slate-700 hover:bg-slate-600 p-5 rounded-2xl font-bold transition-all active:scale-95 shadow-lg text-white">🛠 本地调试解析</button>
+                <button onclick="triggerTask(false, true)" class="btn-ctrl border-2 border-red-500/50 text-red-400 hover:bg-red-500/10 p-5 rounded-2xl font-bold transition-all active:scale-95 shadow-lg">🔥 强制全量重刷</button>
+            </div>
+            <div class="bg-slate-950/80 rounded-3xl border border-slate-800 p-4 shadow-inner">
+                <div class="flex justify-end mb-2">
+                    <button onclick="clearMainLogs()" class="px-3 py-1 text-xs rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300">清空日志</button>
+                </div>
+                <div id="log-box" class="overflow-y-auto font-mono text-[13px] p-2 scroll-smooth"></div>
+            </div>
+        </div>

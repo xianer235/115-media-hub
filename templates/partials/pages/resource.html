@@ -1,0 +1,47 @@
+        <div id="page-resource" class="page-panel resource-page space-y-4">
+            <div class="resource-search-strip" data-resource-search-strip>
+                <div class="resource-search-controls">
+                    <div class="resource-search-input-shell">
+                        <div class="resource-search-input-wrap">
+                            <input id="resource-search-input" class="resource-search-input w-full bg-slate-950/85 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-100 placeholder:text-slate-500" placeholder="搜索订阅频道，或粘贴 magnet / 常见网盘分享链接快速识别">
+                            <button id="resource-search-paste-btn" type="button" onclick="pasteResourceSearch()" class="resource-search-input-action resource-search-paste-btn hidden" aria-label="粘贴剪贴板内容">粘贴</button>
+                            <button id="resource-search-clear-btn" type="button" onclick="clearResourceSearch()" class="resource-search-input-action resource-search-clear-btn hidden" aria-label="清空搜索">✕</button>
+                        </div>
+                    </div>
+                    <button id="resource-search-btn" type="button" onclick="searchResources()" class="resource-search-btn bg-sky-600 hover:bg-sky-500 text-white shadow-lg">搜索</button>
+                    <button id="resource-sync-btn" type="button" onclick="syncResourceChannels(true)" class="resource-search-btn bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700">同步频道</button>
+                </div>
+                <div class="resource-search-strip-head">
+                    <div id="resource-board-hint" class="resource-search-sub min-w-0 hidden" aria-live="polite"></div>
+                    <div class="resource-search-stats">
+                        <div class="resource-search-stat">源 <span id="resource-source-count" class="text-sky-400 font-bold">0</span></div>
+                        <div class="resource-search-stat">缓存 <span id="resource-item-count" class="text-emerald-400 font-bold">0</span></div>
+                        <div class="resource-search-stat">完成 <span id="resource-completed-job-count" class="text-amber-300 font-bold">0</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="resource-cookie-hint" class="resource-blocking-hint rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-200 hidden">
+                当前网盘 Cookie 状态异常，请到“参数配置”检查 115 / Quark Cookie 并重新检测。
+            </div>
+
+            <div id="resource-quick-link-strip" class="resource-quick-link-strip hidden" data-resource-quick-strip aria-label="常用网盘链接快捷入口"></div>
+
+            <div class="resource-board-surface">
+                <div id="resource-board" class="resource-board-stack" data-resource-board>
+                    <div class="rounded-2xl border border-slate-700 p-8 text-center text-slate-400 text-sm">正在加载首页配置，请稍候...</div>
+                </div>
+            </div>
+
+            <div id="resource-onboarding-card" class="group-card resource-onboarding-card hidden">
+                <div class="resource-onboarding-head">
+                    <div>
+                        <div class="resource-onboarding-title">初始化清单</div>
+                        <div class="resource-onboarding-sub">不再占据首屏，但仍保留完整的首次配置进度与直达入口。</div>
+                    </div>
+                    <button type="button" onclick="switchTab('settings')" class="resource-onboarding-action">前往参数配置</button>
+                </div>
+                <div id="resource-onboarding-steps" class="resource-onboarding-steps"></div>
+            </div>
+        </div>
+        <button id="resource-back-top-btn" type="button" onclick="scrollResourceToTop()" class="resource-back-top-btn hidden" aria-label="回到资源页顶部">↑</button>

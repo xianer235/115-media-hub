@@ -3,9 +3,9 @@ import json
 import os
 import re
 import time
-import urllib.parse
-import urllib.request
 from typing import Any, Dict, Tuple
+
+from .http_utils import http_request_json
 
 
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
@@ -17,22 +17,6 @@ VERSION_SOURCE_URL = os.environ.get(
 VERSION_CACHE_TTL = int(os.environ.get("VERSION_CACHE_TTL", 6 * 3600))
 
 version_cache: Dict[str, Any] = {"latest": None, "checked_at": 0.0, "error": ""}
-
-
-def _normalize_http_url(url: str) -> str:
-    parts = urllib.parse.urlsplit(str(url or "").strip())
-    path = urllib.parse.quote(urllib.parse.unquote(parts.path), safe="/%:@,+")
-    query = urllib.parse.quote(urllib.parse.unquote(parts.query), safe="=&%:@,+")
-    fragment = urllib.parse.quote(urllib.parse.unquote(parts.fragment), safe="%:@,+")
-    return urllib.parse.urlunsplit((parts.scheme, parts.netloc, path, query, fragment))
-
-
-def _http_request_json(url: str, timeout: int = 30) -> Dict[str, Any]:
-    req = urllib.request.Request(_normalize_http_url(url), method="GET")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        charset = resp.headers.get_content_charset() or "utf-8"
-        body = resp.read().decode(charset, errors="ignore")
-    return json.loads(body or "{}")
 
 
 def load_local_version() -> Dict[str, Any]:
@@ -65,7 +49,7 @@ async def get_version_state(force_refresh: bool = False) -> Dict[str, Any]:
 
     if should_refresh:
         try:
-            latest = await asyncio.to_thread(_http_request_json, VERSION_SOURCE_URL)
+            latest = await asyncio.to_thread(http_request_json, VERSION_SOURCE_URL)
             version_cache["latest"] = latest
             version_cache["checked_at"] = now
             version_cache["error"] = ""

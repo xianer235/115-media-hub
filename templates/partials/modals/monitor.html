@@ -1,0 +1,84 @@
+        <div id="monitor-modal" class="hidden fixed inset-0 bg-black/60 z-50 p-4">
+            <div class="w-full max-w-2xl mx-auto mt-[4vh] max-h-[92vh] group-card modal-card monitor-modal-shell">
+                <div class="flex items-center justify-between">
+                    <h3 id="monitor-modal-title" class="group-title mb-0">新增监控任务</h3>
+                    <button onclick="closeMonitorModal()" class="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm">关闭</button>
+                </div>
+                <div class="monitor-modal-body space-y-4">
+                    <label class="block">
+                        <span class="text-xs text-slate-500 inline-flex items-center gap-2">
+                            任务名 (用于 webhook 路径)
+                            <button type="button" class="info-dot" onclick="showHelp('任务名会用于 webhook 地址：/webhook/任务名。建议用中文短名，且保持唯一。')">i</button>
+                        </span>
+                        <input id="monitor_name" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：自存影视">
+                    </label>
+                    <label class="flex items-center gap-3 cursor-pointer text-sm">
+                        <input type="checkbox" id="monitor_webhook_enabled" class="ui-checkbox" onchange="refreshWebhookHint()">
+                        开启 webhook
+                        <button type="button" class="info-dot" onclick="showHelp('Webhook 参数说明：\\n1) 接口地址：/webhook/任务名（任务名用于匹配并触发对应监控任务）\\n2) 请求方式：POST + JSON\\n3) 普通刷新参数：savepath、sharetitle、refresh_target_type、delayTime、title\\n4) 磁力导入参数：magnet 或 link_url（磁力链接）+ savepath（必填）\\n5) 签名校验（可选）：X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign，或 X-Webhook-Token\\n6) 签名密钥在“后台安全管理”中设置，留空表示不校验。')">i</button>
+                    </label>
+                    <div id="webhook-hint" class="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3 leading-5">
+                        webhook 地址：IP:容器端口/webhook/任务名（用于触发指定任务）
+                        <br>普通刷新参数：savepath / sharetitle / refresh_target_type / delayTime / title
+                        <br>磁力任务参数：magnet 或 link_url（值为磁力链接） + savepath（必填）
+                        <br>签名校验（可选）：X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign 或 X-Webhook-Token
+                        <br>说明：签名密钥在「参数配置 -> 后台安全管理」中设置；为空时不校验
+                    </div>
+                    <label class="block">
+                        <span class="text-xs text-slate-500 inline-flex items-center gap-2">
+                            扫描路径 (115 网盘内监控的源路径)
+                            <button type="button" class="info-dot" onclick="showHelp('手动运行会从该路径开始递归。Webhook 触发时会根据 savepath/path 自动定位这个路径下的变动子目录，优先局部刷新。')">i</button>
+                        </span>
+                        <input id="monitor_scan_path" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="/115/自存影视/115自存电视剧">
+                    </label>
+                    <label class="block">
+                        <span class="text-xs text-slate-500 inline-flex items-center gap-2">
+                            目标路径 (追加到 /strm 下的父路径)
+                            <button type="button" class="info-dot" onclick="showHelp('最终路径是 /strm/目标路径/扫描路径末级/...。系统会自动去重末级目录，避免出现 /自存影视/自存影视 这种重复嵌套。')">i</button>
+                        </span>
+                        <input id="monitor_target_path" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="自存影视">
+                    </label>
+                    <label class="flex items-center gap-3 cursor-pointer text-sm">
+                        <input type="checkbox" id="monitor_skip_by_dir_mtime" class="ui-checkbox">
+                        <span>按文件夹修改时间校验（未变化目录跳过更新）</span>
+                        <button type="button" class="info-dot" onclick="showHelp('开启后会按文件夹修改时间判断是否刷新；修改时间未变化的目录将跳过更新，以减少无效扫描。若你手动删除了本地文件并需要重新生成，请先取消勾选此项再执行任务。')">i</button>
+                    </label>
+                    <div class="text-xs text-slate-500 pl-8 -mt-2">备注：若本地文件是手动删除后要重新生成，请先取消勾选此项，再运行任务。</div>
+                    <label class="flex items-center gap-3 cursor-pointer text-sm">
+                        <input type="checkbox" id="monitor_incremental" class="ui-checkbox">
+                        增量模式 (开启后不删除本地多余文件)
+                    </label>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <label class="block">
+                            <span class="text-xs text-slate-500">读取失败尝试次数</span>
+                            <input id="monitor_retries" type="number" min="1" max="5" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="3">
+                        </label>
+                        <label class="block">
+                            <span class="text-xs text-slate-500">目录列出后延时 (毫秒)</span>
+                            <input id="monitor_list_delay_ms" type="number" min="0" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
+                        </label>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <label class="block">
+                            <span class="text-xs text-slate-500">文件大小过滤 (MB)</span>
+                            <input id="monitor_min_file_size_mb" type="number" min="0" step="0.1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
+                        </label>
+                        <label class="block">
+                            <span class="text-xs text-slate-500">任务执行延时 (秒)</span>
+                            <input id="monitor_delay_seconds" type="number" min="0" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
+                        </label>
+                    </div>
+                    <label class="block">
+                        <span class="text-xs text-slate-500 inline-flex items-center gap-2">
+                            定时执行 (分钟，0 为关闭)
+                            <button type="button" class="info-dot" onclick="showHelp('按分钟周期自动运行文件夹监控任务。0 表示不自动执行，仅手动或 webhook 触发。')">i</button>
+                        </span>
+                        <input id="monitor_cron_minutes" type="number" min="0" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
+                    </label>
+                </div>
+                <div id="monitor-modal-footer" class="monitor-modal-footer-shell grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                    <button onclick="saveMonitorTask()" class="task-modal-save-btn monitor-modal-save-btn">保存任务</button>
+                    <button onclick="closeMonitorModal()" class="task-modal-cancel-btn monitor-modal-cancel-btn">取消</button>
+                </div>
+            </div>
+        </div>
