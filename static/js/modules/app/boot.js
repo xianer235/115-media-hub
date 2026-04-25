@@ -401,6 +401,10 @@
                 else await startSubscriptionTask(name);
                 return;
             }
+            if (action === 'search') {
+                await quickSearchSubscriptionTask(name);
+                return;
+            }
             if (action === 'edit') editSubscriptionTask(name);
             if (action === 'delete') await deleteSubscriptionTask(name);
             if (action === 'rebuild') await rebuildSubscriptionTask(name);

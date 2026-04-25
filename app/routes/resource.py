@@ -17,6 +17,10 @@ RESOURCE_SHARE_BROWSE_RATE_LIMIT_SECONDS = max(
     min(2.0, float(os.environ.get("RESOURCE_SHARE_BROWSE_RATE_LIMIT_SECONDS", 0.05) or 0.05)),
 )
 RESOURCE_SHARE_BROWSE_MAX_RETRIES = 1
+RESOURCE_QUARK_SHARE_FAST_DEADLINE_SECONDS = max(
+    1.0,
+    min(8.0, float(os.environ.get("QUARK_SHARE_FAST_DEADLINE_SECONDS", 3.0) or 3.0)),
+)
 RESOURCE_BROWSE_WORKERS = max(2, min(8, int(os.environ.get("RESOURCE_BROWSE_WORKERS", 4) or 4)))
 resource_browse_executor = ThreadPoolExecutor(
     max_workers=RESOURCE_BROWSE_WORKERS,
@@ -758,19 +762,22 @@ async def get_quark_share_entries_endpoint(request: Request) -> Dict[str, Any]:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "提取码格式不正确，请输入 1-16 位字母或数字"})
     paged = request.query_params.get("paged") == "1"
     folders_only = request.query_params.get("folders_only") == "1"
+    force_refresh = request.query_params.get("force_refresh") == "1"
     offset = max(0, parse_int(request.query_params.get("offset", 0), default=0))
     limit = max(20, min(parse_int(request.query_params.get("limit", 200), default=200), 400))
     max_pages = 1 if paged else 0
+    share_reader = list_quark_share_entries_fast if paged else list_quark_share_entries
+    request_timeout = RESOURCE_QUARK_SHARE_FAST_DEADLINE_SECONDS if paged else RESOURCE_SHARE_BROWSE_TIMEOUT_SECONDS
     try:
         result = await run_resource_browse_io(
-            list_quark_share_entries,
+            share_reader,
             cookie,
             str(resource.get("link_url", "")).strip(),
             str(resource.get("raw_text", "") or ""),
             cid,
             receive_code,
-            False,
-            45,
+            force_refresh,
+            request_timeout,
             offset,
             limit,
             max_pages,
@@ -805,19 +812,22 @@ async def preview_quark_share_entries_endpoint(request: Request) -> Dict[str, An
     cid = str(data.get("cid", "0") or "0").strip() or "0"
     paged = bool(data.get("paged", False))
     folders_only = bool(data.get("folders_only", False))
+    force_refresh = bool(data.get("force_refresh", False))
     offset = max(0, parse_int(data.get("offset", 0), default=0))
     limit = max(20, min(parse_int(data.get("limit", 200), default=200), 400))
     max_pages = 1 if paged else 0
+    share_reader = list_quark_share_entries_fast if paged else list_quark_share_entries
+    request_timeout = RESOURCE_QUARK_SHARE_FAST_DEADLINE_SECONDS if paged else RESOURCE_SHARE_BROWSE_TIMEOUT_SECONDS
     try:
         result = await run_resource_browse_io(
-            list_quark_share_entries,
+            share_reader,
             cookie,
             link_url,
             raw_text,
             cid,
             receive_code,
-            False,
-            45,
+            force_refresh,
+            request_timeout,
             offset,
             limit,
             max_pages,

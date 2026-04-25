@@ -9,12 +9,12 @@ __pycache__/
 .mypy_cache/
 .venv/
 
-# 忽略数据/临时文件
+# 忽略数据
 strm/
+config/
 
 # 忽略敏感配置 (如果 config 目录下全是私密信息)
-# 如果只想忽略特定文件，可以写 config/auth.json 等
-config/
+
 
 .codex/
 .cursor/

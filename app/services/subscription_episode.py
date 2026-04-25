@@ -37,6 +37,60 @@ def _clamp_episode_values(episode_values: Set[int], episode_upper_bound: int = 0
     return normalized
 
 
+def _is_subscription_skipped_archive_file(name: str) -> bool:
+    normalized_name = normalize_relative_path(str(name or "").strip())
+    if "." not in normalized_name:
+        return False
+    return normalized_name.rsplit(".", 1)[-1].lower() in {"zip", "rar"}
+
+
+def _extract_subscription_season_values_from_segment(segment: str) -> Set[int]:
+    normalized_segment = str(segment or "").strip()
+    if not normalized_segment:
+        return set()
+    values: Set[int] = set()
+    for matched in RESOURCE_SEASON_EPISODE_REGEX.finditer(normalized_segment):
+        season_no = max(0, int(str(matched.group(1) or "0").replace("O", "0").replace("o", "0") or 0))
+        if season_no > 0:
+            values.add(season_no)
+    for pattern in (RESOURCE_SEASON_ONLY_REGEX, RESOURCE_SEASON_ENGLISH_REGEX):
+        for matched in pattern.finditer(normalized_segment):
+            season_no = max(0, int(str(matched.group(1) or "0").replace("O", "0").replace("o", "0") or 0))
+            if season_no > 0:
+                values.add(season_no)
+    for matched in RESOURCE_SEASON_ONLY_CN_REGEX.finditer(normalized_segment):
+        meta = parse_resource_episode_meta({"title": matched.group(0), "raw_text": matched.group(0)})
+        season_no = max(0, int(meta.get("season", 0) or 0))
+        if season_no > 0:
+            values.add(season_no)
+    return values
+
+
+def _extract_subscription_season_from_name(name: str) -> int:
+    normalized_name = normalize_relative_path(str(name or "").strip())
+    if not normalized_name:
+        return 0
+    for segment in reversed([part for part in normalized_name.split("/") if part]):
+        season_values = _extract_subscription_season_values_from_segment(segment)
+        if len(season_values) == 1:
+            return next(iter(season_values))
+        if len(season_values) > 1:
+            return 0
+    return 0
+
+
+def _convert_parent_season_episode_values(task: Dict[str, Any], parent_season: int, episodes: Set[int]) -> Set[int]:
+    normalized_parent_season = max(0, int(parent_season or 0))
+    if normalized_parent_season <= 0:
+        return episodes
+    converted: Set[int] = set()
+    for episode in sorted(_clamp_episode_values(episodes or set())):
+        absolute_episode = convert_subscription_episode_to_absolute(task, normalized_parent_season, episode)
+        if absolute_episode > 0:
+            converted.add(absolute_episode)
+    return converted or episodes
+
+
 def _extract_task_episodes_from_name(task: Dict[str, Any], name: str, max_expand: int = 400) -> Set[int]:
     normalized_name = str(name or "").strip()
     if not normalized_name:
@@ -106,30 +160,40 @@ def _extract_task_episodes_from_file_entry(task: Dict[str, Any], file_name: str,
     normalized_file_name = normalize_relative_path(str(file_name or "").strip())
     if not normalized_file_name:
         return set()
-    normalized_parent = normalize_relative_path(str(parent_path or "").strip())
+    if _is_subscription_skipped_archive_file(normalized_file_name):
+        return set()
 
-    for probe in (normalized_file_name, os.path.splitext(normalized_file_name)[0]):
+    file_parts = [part for part in normalized_file_name.split("/") if part]
+    file_leaf = file_parts[-1] if file_parts else normalized_file_name
+    inline_parent = normalize_relative_path("/".join(file_parts[:-1]))
+    normalized_parent = normalize_relative_path(join_relative_path(str(parent_path or "").strip(), inline_parent))
+    parent_season = _extract_subscription_season_from_name(normalized_parent)
+    multi_season_mode = is_subscription_multi_season_mode(task)
+    if not multi_season_mode:
+        target_season = max(1, int(task.get("season", 1) or 1))
+        if parent_season > 0 and parent_season != target_season:
+            return set()
+
+    for probe in (file_leaf, os.path.splitext(file_leaf)[0]):
         parsed = _extract_task_episodes_from_name(task, probe)
         if parsed:
+            probe_season = _extract_subscription_season_from_name(probe)
+            if multi_season_mode and parent_season > 0 and probe_season <= 0:
+                return _convert_parent_season_episode_values(task, parent_season, parsed)
             return parsed
 
-    numeric_episode = _extract_numeric_episode_from_filename(normalized_file_name)
+    numeric_episode = _extract_numeric_episode_from_filename(file_leaf)
     if numeric_episode > 0:
-        parent_meta = parse_resource_episode_meta({"title": normalized_parent, "raw_text": normalized_parent})
-        parent_season = max(0, int(parent_meta.get("season", 0) or 0))
-        if is_subscription_multi_season_mode(task):
+        if multi_season_mode:
             if parent_season > 0:
                 absolute_episode = convert_subscription_episode_to_absolute(task, parent_season, numeric_episode)
                 if absolute_episode > 0:
                     return {absolute_episode}
             return {numeric_episode}
-        target_season = max(1, int(task.get("season", 1) or 1))
-        if parent_season > 0 and parent_season != target_season:
-            return set()
         return {numeric_episode}
 
     if normalized_parent:
-        full_name = normalize_relative_path(join_relative_path(normalized_parent, normalized_file_name))
+        full_name = normalize_relative_path(join_relative_path(normalized_parent, file_leaf))
         full_path_values = _extract_task_episodes_from_name(task, full_name)
         # 父目录区间（如 E01-E24）会让每个子文件都命中整段范围，容易造成整包误选。
         # 仅在全路径能明确到单集时才回退使用。
@@ -434,6 +498,8 @@ def _pick_best_tv_share_files_by_episode_bucket(
         entry_id = str(raw_entry.get("id", "") or raw_entry.get("fid", "") or "").strip()
         entry_name = normalize_relative_path(str(raw_entry.get("name", "") or "").strip())
         if not entry_id or not entry_name:
+            continue
+        if _is_subscription_skipped_archive_file(entry_name):
             continue
 
         entry_episodes = _clamp_episode_values(
@@ -835,6 +901,7 @@ def _prune_tv_candidates_without_new_episodes(
 __all__ = [
     "_expand_episode_values",
     "_clamp_episode_values",
+    "_is_subscription_skipped_archive_file",
     "_extract_task_episodes_from_name",
     "_extract_numeric_episode_from_filename",
     "_extract_task_episodes_from_file_entry",

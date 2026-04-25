@@ -861,6 +861,7 @@ async def _build_tv_share_selection_for_missing_episodes(
     scanned_dirs = 0
     scanned_entries = 0
     failed_dirs = 0
+    skipped_archive_files = 0
 
     request_timeout = max(10, int(per_request_timeout or 25))
     concurrency = max(1, int(SUBSCRIPTION_SHARE_SCAN_CONCURRENCY or 1))
@@ -919,6 +920,9 @@ async def _build_tv_share_selection_for_missing_episodes(
                 if is_dir:
                     continue
 
+                if _is_subscription_skipped_archive_file(rel_name or entry_name):
+                    skipped_archive_files += 1
+                    continue
                 matched_episodes = _extract_task_episodes_from_file_entry(task, rel_name or entry_name, parent_path)
                 if not matched_episodes:
                     continue
@@ -962,6 +966,7 @@ async def _build_tv_share_selection_for_missing_episodes(
         "share_subdir_cid": share_subdir_cid,
         "share_scope_cid": start_cid,
         "share_scope_path": start_parent_path,
+        "skipped_archive_files": skipped_archive_files,
     }
 
     best_selection = _pick_best_tv_share_files_by_episode_bucket(task, matched_file_entries, target_missing)
@@ -1044,6 +1049,7 @@ async def _scan_subscription_share_tree_snapshot(
     scanned_entries = 0
     failed_dirs = 0
     share_root_title = ""
+    skipped_archive_files = 0
     request_timeout = max(10, int(per_request_timeout or 25))
     concurrency = max(1, int(SUBSCRIPTION_SHARE_SCAN_CONCURRENCY or 1))
 
@@ -1130,6 +1136,9 @@ async def _scan_subscription_share_tree_snapshot(
 
                 if not entry_id or entry_id in seen_file_ids:
                     continue
+                if _is_subscription_skipped_archive_file(rel_name or entry_name):
+                    skipped_archive_files += 1
+                    continue
                 matched_episodes = sorted(_extract_task_episodes_from_file_entry(task, rel_name or entry_name, parent_path))
                 files.append(
                     {
@@ -1165,6 +1174,7 @@ async def _scan_subscription_share_tree_snapshot(
         "failed_dirs": failed_dirs,
         "truncated": bool(queue) or scanned_dirs >= max_dirs or scanned_entries >= max_entries,
         "force_refresh": bool(force_refresh),
+        "skipped_archive_files": skipped_archive_files,
     }
 
 
@@ -1427,6 +1437,7 @@ async def _scan_subscription_share_episode_manifest(
     failed_dirs = 0
     share_root_title = normalize_relative_path(str(normalized_selection.get("share_root_title", "") or "").strip())
     concurrency = max(1, int(SUBSCRIPTION_SHARE_SCAN_CONCURRENCY or 1))
+    skipped_archive_files = 0
 
     while queue and scanned_dirs < max_dirs and scanned_entries < max_entries:
         batch: List[Tuple[str, int, str]] = []
@@ -1480,6 +1491,9 @@ async def _scan_subscription_share_episode_manifest(
                         queue.append((child_cid, depth + 1, full_name or rel_name))
                     continue
 
+                if _is_subscription_skipped_archive_file(rel_name or entry_name):
+                    skipped_archive_files += 1
+                    continue
                 matched_episodes = sorted(_extract_task_episodes_from_file_entry(task, rel_name or entry_name, parent_path))
                 if not matched_episodes:
                     continue
@@ -1516,6 +1530,7 @@ async def _scan_subscription_share_episode_manifest(
         "failed_dirs": failed_dirs,
         "truncated": bool(queue) or scanned_dirs >= max_dirs or scanned_entries >= max_entries,
         "force_refresh": bool(force_refresh),
+        "skipped_archive_files": skipped_archive_files,
     }
 
 
@@ -1556,6 +1571,7 @@ def _build_tv_share_selection_from_manifest(
         "scanned_entries": max(0, int(payload.get("scanned_entries", 0) or 0)),
         "failed_dirs": max(0, int(payload.get("failed_dirs", 0) or 0)),
         "truncated": bool(payload.get("truncated", False)),
+        "skipped_archive_files": max(0, int(payload.get("skipped_archive_files", 0) or 0)),
         "share_scope_cid": str(payload.get("share_scope_cid", "") or "").strip(),
         "share_scope_path": normalize_relative_path(str(payload.get("share_scope_path", "") or "").strip()),
         "bucket_count": max(0, int(best_selection.get("bucket_count", 0) or 0)),

@@ -525,6 +525,7 @@ async def _run_subscription_task_quark(
         selected_share_episode_values: Set[int] = set()
         selected_share_file_samples: List[str] = []
         precise_selection: Dict[str, Any] = {}
+        precise_stats: Dict[str, Any] = {}
         if task["media_type"] == "tv":
             if (
                 candidate_episode_values
@@ -543,12 +544,13 @@ async def _run_subscription_task_quark(
                 continue
 
             precise_missing_episode_values = set(candidate_episode_values)
-            if not precise_missing_episode_values and known_total > 0 and last_episode > 0:
+            if not precise_missing_episode_values:
                 episode_upper = known_total
                 if single_season_episode_upper_bound > 0:
-                    episode_upper = min(episode_upper, single_season_episode_upper_bound)
-                if episode_upper > last_episode:
-                    precise_missing_episode_values = set(range(last_episode + 1, episode_upper + 1))
+                    episode_upper = min(episode_upper, single_season_episode_upper_bound) if episode_upper > 0 else single_season_episode_upper_bound
+                start_episode = 1 if existing_episode_scan_ready or last_episode <= 0 else max(1, last_episode + 1)
+                if episode_upper >= start_episode:
+                    precise_missing_episode_values = set(range(start_episode, episode_upper + 1))
 
             if existing_episode_scan_ready and precise_missing_episode_values:
                 precise_missing_episode_values = {
@@ -564,6 +566,18 @@ async def _run_subscription_task_quark(
                         f"候选资源 #{index}（评分 {score}）集数 {episode_label} 与已落盘记录无缺失，"
                         "已跳过避免重复导入"
                     ),
+                    "info",
+                )
+                continue
+            if (
+                (not precise_missing_episode_values)
+                and existing_episode_scan_ready
+                and (known_total > 0 or single_season_episode_upper_bound > 0)
+            ):
+                skipped_existing_candidates += 1
+                target_upper = single_season_episode_upper_bound or known_total
+                await write_subscription_log(
+                    f"候选资源 #{index} 目标季目录已覆盖 E1-E{target_upper}，已跳过避免整包导入",
                     "info",
                 )
                 continue
@@ -650,10 +664,13 @@ async def _run_subscription_task_quark(
                 if not precise_ids:
                     skipped_precise_mismatch_candidates += 1
                     reason_label = _format_subscription_reason_chain(reason)
+                    archive_skipped = int((precise_stats or {}).get("skipped_archive_files", 0) or 0)
+                    archive_tail = f"，已排除 zip/rar {archive_skipped} 个" if archive_skipped > 0 else ""
                     await write_subscription_log(
                         (
                             f"候选资源 #{index} 精细筛选未命中缺失集（目标 {_format_episode_preview(precise_missing_episode_values)}，"
-                            f"原因 {reason_label}，扫描目录 {scanned_dirs} 个，条目 {scanned_entries} 条），已跳过整包导入"
+                            f"原因 {reason_label}，扫描目录 {scanned_dirs} 个，条目 {scanned_entries} 条{archive_tail}），"
+                            "已跳过整包导入"
                         ),
                         "warn",
                     )
@@ -690,6 +707,108 @@ async def _run_subscription_task_quark(
                         ),
                         "info",
                     )
+
+            if not precise_selection:
+                manifest_cache_key = candidate_share_key or candidate_link_url or f"resource:{resource_id}"
+                manifest_payload = quark_manifest_cache.get(manifest_cache_key)
+                if not manifest_payload:
+                    manifest_payload = await _scan_subscription_share_tree_snapshot(
+                        cookie_quark,
+                        task,
+                        item,
+                        max_depth=5,
+                        max_dirs=140,
+                        max_entries=5000,
+                        per_request_timeout=max(12, int(SUBSCRIPTION_SHARE_SCAN_REQUEST_TIMEOUT_SECONDS or 12)),
+                        force_refresh=False,
+                    )
+                    quark_manifest_cache[manifest_cache_key] = manifest_payload
+                manifest_episodes = _clamp_episode_values(
+                    {
+                        max(0, int(value or 0))
+                        for value in (
+                            manifest_payload.get("covered_episodes", [])
+                            if isinstance(manifest_payload.get("covered_episodes"), list)
+                            else []
+                        )
+                        if max(0, int(value or 0)) > 0
+                    },
+                    episode_upper_bound=single_season_episode_upper_bound,
+                )
+                manifest_missing_episode_values = {
+                    episode_no
+                    for episode_no in manifest_episodes
+                    if episode_no not in existing_folder_episodes
+                }
+                if manifest_missing_episode_values:
+                    precise_selection, precise_stats = _build_tv_share_selection_from_manifest(
+                        manifest_payload,
+                        manifest_missing_episode_values,
+                        task=task,
+                    )
+                else:
+                    precise_stats = {
+                        "reason": (
+                            "manifest_no_missing"
+                            if manifest_episodes
+                            else str((manifest_payload or {}).get("reason", "") or "manifest_empty").strip()
+                        ),
+                        "scanned_dirs": max(0, int((manifest_payload or {}).get("scanned_dirs", 0) or 0)),
+                        "scanned_entries": max(0, int((manifest_payload or {}).get("scanned_entries", 0) or 0)),
+                        "skipped_archive_files": max(0, int((manifest_payload or {}).get("skipped_archive_files", 0) or 0)),
+                    }
+                precise_ids = (
+                    precise_selection.get("selected_ids", [])
+                    if isinstance(precise_selection.get("selected_ids"), list)
+                    else []
+                )
+                if not precise_ids:
+                    skipped_precise_mismatch_candidates += 1
+                    reason = str((precise_stats or {}).get("reason", "") or "no_precise_episode_match").strip()
+                    reason_label = _format_subscription_reason_chain(reason)
+                    scanned_dirs = int((precise_stats or {}).get("scanned_dirs", 0) or 0)
+                    scanned_entries = int((precise_stats or {}).get("scanned_entries", 0) or 0)
+                    archive_skipped = int((precise_stats or {}).get("skipped_archive_files", 0) or 0)
+                    archive_tail = f"，已排除 zip/rar {archive_skipped} 个" if archive_skipped > 0 else ""
+                    await write_subscription_log(
+                        (
+                            f"候选资源 #{index} 清单精查未能定位目标季剧集文件"
+                            f"（原因 {reason_label}，扫描目录 {scanned_dirs} 个，条目 {scanned_entries} 条{archive_tail}），"
+                            "已跳过整包导入"
+                        ),
+                        "warn",
+                    )
+                    continue
+                selected_share_episode_values = {
+                    max(0, int(value or 0))
+                    for value in (
+                        precise_stats.get("covered_episodes", [])
+                        if isinstance(precise_stats, dict)
+                        else []
+                    )
+                    if max(0, int(value or 0)) > 0
+                }
+                selected_share_file_samples = [
+                    str(sample or "").strip()
+                    for sample in (
+                        precise_stats.get("selected_file_samples", [])
+                        if isinstance(precise_stats, dict)
+                        else []
+                    )
+                    if str(sample or "").strip()
+                ]
+                dedupe_hits = int((precise_stats or {}).get("duplicate_bucket_hits", 0) or 0)
+                archive_skipped = int((manifest_payload or {}).get("skipped_archive_files", 0) or 0)
+                dedupe_tail = f"，同集/同范围已优选 {dedupe_hits} 条重复版本" if dedupe_hits > 0 else ""
+                archive_tail = f"，已排除 zip/rar {archive_skipped} 个" if archive_skipped > 0 else ""
+                await write_subscription_log(
+                    (
+                        f"候选资源 #{index} 标题未给出明确集数，已按分享清单识别 "
+                        f"{_format_episode_preview(selected_share_episode_values)} 并筛选 {len(precise_ids)} 个文件后转存"
+                        f"{dedupe_tail}{archive_tail}"
+                    ),
+                    "info",
+                )
 
         attempted_candidates += 1
         candidate_folder_id = str(savepath_folder_id_cache.get(candidate_savepath, "") or "").strip()

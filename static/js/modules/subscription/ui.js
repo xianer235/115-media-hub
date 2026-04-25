@@ -1226,6 +1226,48 @@
             await rebuildSubscriptionTask(taskName, { refreshEpisodeModal: true });
         }
 
+        function buildSubscriptionQuickSearchKeyword(task) {
+            const payload = task && typeof task === 'object' ? task : {};
+            const title = String(payload.title || payload.tmdb_title || payload.name || '').trim();
+            if (!title) return '';
+            const mediaType = normalizeSubscriptionMediaType(payload.media_type || 'movie');
+            const season = Math.max(1, parseInt(payload.season || '1', 10) || 1);
+            const multiSeasonMode = resolveTaskMultiSeasonMode(payload);
+            if (mediaType === 'tv' && !multiSeasonMode && season > 1) {
+                return `${title} 第${season}季`;
+            }
+            return title;
+        }
+
+        async function quickSearchSubscriptionTask(taskName) {
+            const task = getSubscriptionTaskByName(taskName);
+            if (!task) {
+                showToast('任务不存在或已被删除', { tone: 'warn', duration: 2400, placement: 'top-center' });
+                return;
+            }
+            const keyword = buildSubscriptionQuickSearchKeyword(task);
+            if (!keyword) {
+                showToast('订阅任务缺少可搜索标题', { tone: 'warn', duration: 2400, placement: 'top-center' });
+                return;
+            }
+
+            if (typeof switchTab === 'function') {
+                await switchTab('resource');
+            }
+            const input = document.getElementById('resource-search-input');
+            if (input) {
+                input.value = keyword;
+                input.focus();
+                input.setSelectionRange?.(keyword.length, keyword.length);
+            }
+            if (typeof syncResourceSearchInputActions === 'function') syncResourceSearchInputActions();
+            if (typeof searchResources === 'function') {
+                await searchResources();
+                return;
+            }
+            showToast(`已跳转资源搜索：${keyword}`, { tone: 'info', duration: 2400, placement: 'top-center' });
+        }
+
         function renderSubscriptionTasks() {
             const container = document.getElementById('subscription-task-list');
             if (!container) return;
@@ -1299,6 +1341,7 @@
                             </div>
                             <div class="${actionGridClass}">
                                 <button type="button" data-subscription-action="toggle-run" data-subscription-run-action="${toggleRunAction}" data-task-name="${encodeURIComponent(taskName)}" class="px-4 py-2 rounded-xl text-sm font-bold ${toggleRunClass} ${toggleRunDisabled ? 'btn-disabled' : ''}" ${toggleRunDisabled ? 'disabled' : ''}>${toggleRunLabel}</button>
+                                <button type="button" data-subscription-action="search" data-task-name="${encodeURIComponent(taskName)}" class="px-4 py-2 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-200 text-sm font-bold">搜索</button>
                                 <button type="button" data-subscription-action="edit" data-task-name="${encodeURIComponent(taskName)}" class="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">编辑</button>
                                 <button type="button" data-subscription-action="delete" data-task-name="${encodeURIComponent(taskName)}" class="px-4 py-2 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-300 text-sm font-bold">删除</button>
                                 ${rebuildButton}

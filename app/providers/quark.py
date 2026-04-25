@@ -1,6 +1,244 @@
+import threading
+
+import requests
+
 from .common import parse_int
 from ..share_selection import normalize_share_selection_entry, normalize_share_selection_meta
 from ..core import *  # noqa: F401,F403
+
+_quark_http_local = threading.local()
+_QUARK_BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0"
+)
+_QUARK_SHARE_CACHE_TTL_SECONDS = max(60, min(30 * 60, int(SHARE_SNAP_CACHE_TTL_SECONDS or 300)))
+_QUARK_SHARE_TOKEN_CACHE_MAX_ROWS = 256
+_QUARK_SHARE_PAGE_CACHE_MAX_ROWS = 1200
+_QUARK_SHARE_RESULT_CACHE_MAX_ROWS = 1200
+_QUARK_SHARE_FAST_DEADLINE_SECONDS = max(
+    1.0,
+    min(8.0, float(os.environ.get("QUARK_SHARE_FAST_DEADLINE_SECONDS", 3.0) or 3.0)),
+)
+_QUARK_SHARE_FAST_CONNECT_TIMEOUT_SECONDS = max(
+    0.2,
+    min(2.0, float(os.environ.get("QUARK_SHARE_FAST_CONNECT_TIMEOUT_SECONDS", 0.8) or 0.8)),
+)
+_QUARK_SHARE_FAST_READ_TIMEOUT_SECONDS = max(
+    0.5,
+    min(5.0, float(os.environ.get("QUARK_SHARE_FAST_READ_TIMEOUT_SECONDS", 2.4) or 2.4)),
+)
+_quark_share_token_cache: Dict[str, Dict[str, Any]] = {}
+_quark_share_page_cache: Dict[str, Dict[str, Any]] = {}
+_quark_share_result_cache: Dict[str, Dict[str, Any]] = {}
+_quark_share_token_cache_lock = threading.Lock()
+_quark_share_page_cache_lock = threading.Lock()
+_quark_share_result_cache_lock = threading.Lock()
+_quark_share_singleflight: Dict[str, Dict[str, Any]] = {}
+_quark_share_singleflight_lock = threading.Lock()
+
+
+def _get_quark_http_session() -> requests.Session:
+    session = getattr(_quark_http_local, "session", None)
+    if session is None:
+        session = requests.Session()
+        _quark_http_local.session = session
+    return session
+
+
+def _clone_quark_entries(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [dict(item or {}) for item in (entries or [])]
+
+
+def _clone_quark_share_page_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    source = payload if isinstance(payload, dict) else {}
+    return {
+        "entries": _clone_quark_entries(source.get("entries", [])),
+        "share": dict(source.get("share", {}) if isinstance(source.get("share"), dict) else {}),
+        "has_more": bool(source.get("has_more", False)),
+        "total": int(source.get("total", 0) or 0),
+        "next_page": int(source.get("next_page", 0) or 0),
+        "page": int(source.get("page", 1) or 1),
+        "size": int(source.get("size", 200) or 200),
+        "cache_derived": bool(source.get("cache_derived", False)),
+    }
+
+
+def _clone_quark_share_result_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    source = payload if isinstance(payload, dict) else {}
+    cloned = {
+        "entries": _clone_quark_entries(source.get("entries", [])),
+        "summary": dict(source.get("summary", {}) if isinstance(source.get("summary"), dict) else {}),
+        "share_code": str(source.get("share_code", "") or "").strip(),
+        "receive_code": str(source.get("receive_code", "") or "").strip(),
+        "share_title": str(source.get("share_title", "") or "").strip(),
+        "current_cid": str(source.get("current_cid", "") or "0").strip() or "0",
+        "count": int(source.get("count", 0) or 0),
+        "offset": int(source.get("offset", 0) or 0),
+        "next_offset": int(source.get("next_offset", 0) or 0),
+        "has_more": bool(source.get("has_more", False)),
+        "pages_scanned": int(source.get("pages_scanned", 0) or 0),
+        "stoken": str(source.get("stoken", "") or "").strip(),
+        "cache_derived": bool(source.get("cache_derived", False)),
+    }
+    for key in ("fast_path", "cache_stale"):
+        if key in source:
+            cloned[key] = bool(source.get(key, False))
+    for key in ("elapsed_ms",):
+        if key in source:
+            cloned[key] = int(source.get(key, 0) or 0)
+    for key in ("cache_error", "cache_cid"):
+        if key in source:
+            cloned[key] = str(source.get(key, "") or "").strip()
+    return cloned
+
+
+def _build_quark_share_cache_key(
+    cache_kind: str,
+    cookie: str,
+    pwd_id: str,
+    receive_or_token: str,
+    cid: str,
+    extra: str = "",
+) -> str:
+    cookie_hash = hashlib.sha1(str(cookie or "").strip().encode("utf-8")).hexdigest()[:16]
+    source = (
+        f"{str(cache_kind or '').strip()}|{cookie_hash}|"
+        f"{str(pwd_id or '').strip()}|{str(receive_or_token or '').strip()}|"
+        f"{str(cid or '0').strip() or '0'}|{str(extra or '').strip()}"
+    )
+    return hashlib.sha1(source.encode("utf-8")).hexdigest()
+
+
+def _prune_quark_memory_cache_locked(cache: Dict[str, Dict[str, Any]], now_ts: float, max_rows: int) -> None:
+    expired_keys = [
+        key
+        for key, payload in cache.items()
+        if now_ts >= float((payload or {}).get("expires_at", 0.0) or 0.0)
+    ]
+    for key in expired_keys:
+        cache.pop(key, None)
+    if len(cache) <= max_rows:
+        return
+    overflow = len(cache) - max_rows
+    ordered = sorted(cache.items(), key=lambda item: float((item[1] or {}).get("updated_at", 0.0) or 0.0))
+    for key, _payload in ordered[:overflow]:
+        cache.pop(key, None)
+
+
+def _get_quark_memory_cache_payload(
+    cache: Dict[str, Dict[str, Any]],
+    lock: threading.Lock,
+    key: str,
+    clone_func,
+    allow_expired: bool = False,
+) -> Dict[str, Any]:
+    cache_key = str(key or "").strip()
+    if not cache_key:
+        return {}
+    now_ts = time.time()
+    with lock:
+        cached = cache.get(cache_key)
+        if not cached:
+            return {}
+        expired = now_ts >= float(cached.get("expires_at", 0.0) or 0.0)
+        if expired and not allow_expired:
+            cache.pop(cache_key, None)
+            return {}
+        payload = clone_func(cached.get("payload", {}))
+        if payload:
+            payload["cache_derived"] = True
+            if expired:
+                payload["cache_stale"] = True
+        return payload
+
+
+def _set_quark_memory_cache_payload(
+    cache: Dict[str, Dict[str, Any]],
+    lock: threading.Lock,
+    key: str,
+    payload: Dict[str, Any],
+    clone_func,
+    max_rows: int,
+) -> None:
+    cache_key = str(key or "").strip()
+    if not cache_key or not isinstance(payload, dict):
+        return
+    now_ts = time.time()
+    with lock:
+        cache[cache_key] = {
+            "payload": clone_func(payload),
+            "updated_at": now_ts,
+            "expires_at": now_ts + _QUARK_SHARE_CACHE_TTL_SECONDS,
+        }
+        _prune_quark_memory_cache_locked(cache, now_ts, max_rows)
+
+
+def _run_quark_share_singleflight(key: str, deadline_ts: float, work) -> Any:
+    singleflight_key = str(key or "").strip()
+    if not singleflight_key:
+        return work()
+    owner = False
+    with _quark_share_singleflight_lock:
+        state = _quark_share_singleflight.get(singleflight_key)
+        if not state:
+            state = {"event": threading.Event(), "result": None, "error": None}
+            _quark_share_singleflight[singleflight_key] = state
+            owner = True
+    if owner:
+        try:
+            state["result"] = work()
+            return state["result"]
+        except Exception as exc:
+            state["error"] = exc
+            raise
+        finally:
+            state["event"].set()
+            with _quark_share_singleflight_lock:
+                if _quark_share_singleflight.get(singleflight_key) is state:
+                    _quark_share_singleflight.pop(singleflight_key, None)
+
+    wait_seconds = max(0.05, float(deadline_ts or 0.0) - time.monotonic())
+    if not state["event"].wait(wait_seconds):
+        raise TimeoutError("夸克分享读取等待超时")
+    if state.get("error") is not None:
+        raise state["error"]
+    return state.get("result")
+
+
+def _quark_timeout_from_deadline(deadline_ts: float) -> Tuple[float, float]:
+    remaining = float(deadline_ts or 0.0) - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("夸克分享读取超时")
+    connect_timeout = min(remaining, max(0.05, _QUARK_SHARE_FAST_CONNECT_TIMEOUT_SECONDS))
+    read_timeout = min(remaining, max(0.05, _QUARK_SHARE_FAST_READ_TIMEOUT_SECONDS))
+    return (connect_timeout, read_timeout)
+
+
+def _request_quark_json_fast(
+    method: str,
+    url: str,
+    headers: Dict[str, str],
+    deadline_ts: float,
+    payload: Optional[Dict[str, Any]] = None,
+    fallback: str = "夸克网盘请求失败",
+) -> Dict[str, Any]:
+    try:
+        response = _get_quark_http_session().request(
+            str(method or "GET").strip().upper() or "GET",
+            normalize_http_url(url),
+            json=payload if isinstance(payload, dict) else None,
+            headers=headers,
+            timeout=_quark_timeout_from_deadline(deadline_ts),
+        )
+        response.raise_for_status()
+        try:
+            payload_json = response.json()
+        except ValueError as exc:
+            raise RuntimeError("夸克网盘返回内容不是有效 JSON") from exc
+        return payload_json if isinstance(payload_json, dict) else {}
+    except Exception as exc:
+        _raise_quark_http_error(exc, fallback=fallback)
+        return {}
 
 def http_request_json_payload(
     url: str,
@@ -37,9 +275,19 @@ def _build_quark_headers(cookie: str, referer: str = "https://pan.quark.cn/") ->
     return {
         "Cookie": str(cookie or "").strip(),
         "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+        "Connection": "keep-alive",
+        "Content-Type": "application/json",
         "Referer": str(referer or "https://pan.quark.cn/").strip() or "https://pan.quark.cn/",
         "Origin": "https://pan.quark.cn",
-        "User-Agent": "Mozilla/5.0 115-media-hub",
+        "Priority": "u=1, i",
+        "Sec-Ch-Ua": '"Microsoft Edge";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-site",
+        "User-Agent": _QUARK_BROWSER_USER_AGENT,
     }
 
 def _extract_quark_error(payload: Any, fallback: str = "夸克网盘请求失败") -> str:
@@ -65,6 +313,13 @@ def _extract_quark_error(payload: Any, fallback: str = "夸克网盘请求失败
 def _raise_quark_http_error(exc: Exception, fallback: str = "夸克网盘请求失败") -> None:
     status_code = 0
     payload: Dict[str, Any] = {}
+    if isinstance(exc, requests.HTTPError):
+        response = getattr(exc, "response", None)
+        status_code = int(getattr(response, "status_code", 0) or 0)
+        raw_body = str(getattr(response, "text", "") or "")
+        payload_obj = safe_json_loads(raw_body, {})
+        if isinstance(payload_obj, dict):
+            payload = payload_obj
     if isinstance(exc, urllib.error.HTTPError):
         status_code = int(exc.code or 0)
         try:
@@ -82,6 +337,9 @@ def _raise_quark_http_error(exc: Exception, fallback: str = "夸克网盘请求�
         raise RuntimeError(message) from exc
     if detail:
         raise RuntimeError(detail) from exc
+    if isinstance(exc, requests.RequestException):
+        message = str(exc or "").strip()
+        raise RuntimeError(message or str(fallback or "夸克网盘请求失败")) from exc
     raise RuntimeError(str(fallback or "夸克网盘请求失败")) from exc
 
 def _is_quark_share_content_error(error: Any) -> bool:
@@ -99,7 +357,17 @@ def _is_quark_share_content_error(error: Any) -> bool:
 
 def _request_quark_json(url: str, headers: Dict[str, str], timeout: int = 45, fallback: str = "夸克网盘请求失败") -> Dict[str, Any]:
     try:
-        return http_request_json(url, extra_headers=headers, timeout=timeout)
+        response = _get_quark_http_session().get(
+            normalize_http_url(url),
+            headers=headers,
+            timeout=max(3, int(timeout or 45)),
+        )
+        response.raise_for_status()
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise RuntimeError("夸克网盘返回内容不是有效 JSON") from exc
+        return payload if isinstance(payload, dict) else {}
     except Exception as exc:
         _raise_quark_http_error(exc, fallback=fallback)
         return {}
@@ -113,13 +381,19 @@ def _request_quark_json_payload(
     fallback: str = "夸克网盘请求失败",
 ) -> Dict[str, Any]:
     try:
-        return http_request_json_payload(
-            url,
-            payload,
-            timeout=timeout,
-            extra_headers=headers,
-            method=method,
+        response = _get_quark_http_session().request(
+            str(method or "POST").strip().upper() or "POST",
+            normalize_http_url(url),
+            json=payload if isinstance(payload, dict) else {},
+            headers=headers,
+            timeout=max(3, int(timeout or 45)),
         )
+        response.raise_for_status()
+        try:
+            payload_json = response.json()
+        except ValueError as exc:
+            raise RuntimeError("夸克网盘返回内容不是有效 JSON") from exc
+        return payload_json if isinstance(payload_json, dict) else {}
     except Exception as exc:
         _raise_quark_http_error(exc, fallback=fallback)
         return {}
@@ -199,12 +473,15 @@ def _list_quark_folder_page(cookie: str, pdir_fid: str = "0", page: int = 1, pag
     url = _build_quark_api_url(
         "/1/clouddrive/file/sort",
         {
+            "uc_param_str": "",
             "pdir_fid": str(pdir_fid or "0").strip() or "0",
             "_page": max(1, int(page or 1)),
             "_size": max(20, min(200, int(page_size or 200))),
             "_fetch_total": 1,
             "_fetch_sub_dirs": 1,
             "_sort": "file_type:asc,file_name:asc",
+            "__dt": 2093126,
+            "__t": int(time.time() * 1000),
         },
     )
     result = _request_quark_json(url, headers, timeout=45, fallback="读取夸克目录失败")
@@ -321,7 +598,8 @@ def create_quark_folder(cookie: str, cid: str = "0", folder_name: str = "") -> D
         folder_id = str(data.get("fid", "") or data.get("id", "") or "").strip()
         success = _is_quark_success(response)
         if (not success) or (not folder_id):
-            entries = list_quark_entries(normalized_cookie, parent_id)
+            folder_payload = list_quark_entries_payload(normalized_cookie, parent_id, folders_only=True)
+            entries = folder_payload.get("entries", []) if isinstance(folder_payload.get("entries"), list) else []
             matched = next(
                 (
                     entry
@@ -353,7 +631,8 @@ def ensure_quark_folder_id_by_path(cookie: str, relative_path: str) -> str:
         part = str(raw_part or "").strip()
         if not part:
             continue
-        entries = list_quark_entries(cookie, current_id)
+        folder_payload = list_quark_entries_payload(cookie, current_id, folders_only=True)
+        entries = folder_payload.get("entries", []) if isinstance(folder_payload.get("entries"), list) else []
         matched = next(
             (
                 entry
@@ -377,7 +656,8 @@ def resolve_quark_folder_id_by_path(cookie: str, relative_path: str) -> str:
     walked_parts: List[str] = []
     for part in [segment for segment in normalized_path.split("/") if segment]:
         walked_parts.append(part)
-        entries = list_quark_entries(cookie, current_id)
+        folder_payload = list_quark_entries_payload(cookie, current_id, folders_only=True)
+        entries = folder_payload.get("entries", []) if isinstance(folder_payload.get("entries"), list) else []
         matched = next(
             (
                 entry
@@ -391,18 +671,45 @@ def resolve_quark_folder_id_by_path(cookie: str, relative_path: str) -> str:
         current_id = str(matched.get("id", "")).strip() or "0"
     return current_id
 
-def _request_quark_share_token(cookie: str, pwd_id: str, passcode: str = "") -> str:
+def _request_quark_share_token(
+    cookie: str,
+    pwd_id: str,
+    passcode: str = "",
+    force_refresh: bool = False,
+    timeout: int = 45,
+) -> str:
+    normalized_pwd_id = str(pwd_id or "").strip()
+    normalized_passcode = normalize_receive_code(passcode)
+    cache_key = _build_quark_share_cache_key("token", cookie, normalized_pwd_id, normalized_passcode, "0")
+    if not force_refresh:
+        cached = _get_quark_memory_cache_payload(
+            _quark_share_token_cache,
+            _quark_share_token_cache_lock,
+            cache_key,
+            lambda value: dict(value if isinstance(value, dict) else {}),
+        )
+        cached_stoken = str(cached.get("stoken", "") or "").strip()
+        if cached_stoken:
+            return cached_stoken
     headers = _build_quark_headers(cookie, referer=f"https://pan.quark.cn/s/{pwd_id}")
-    url = _build_quark_api_url("/1/clouddrive/share/sharepage/token", host="https://drive-h.quark.cn")
+    url = _build_quark_api_url(
+        "/1/clouddrive/share/sharepage/token",
+        {
+            "uc_param_str": "",
+            "__dt": 994,
+            "__t": int(time.time() * 1000),
+        },
+        host="https://drive-h.quark.cn",
+    )
     payload = {
-        "pwd_id": str(pwd_id or "").strip(),
-        "passcode": normalize_receive_code(passcode),
+        "pwd_id": normalized_pwd_id,
+        "passcode": normalized_passcode,
     }
     response = _request_quark_json_payload(
         url,
         payload,
         headers,
-        timeout=45,
+        timeout=timeout,
         method="POST",
         fallback="夸克分享访问失败",
     )
@@ -412,6 +719,14 @@ def _request_quark_share_token(cookie: str, pwd_id: str, passcode: str = "") -> 
     stoken = str(data.get("stoken", "") or data.get("token", "")).strip()
     if not stoken:
         raise RuntimeError("夸克分享令牌获取失败")
+    _set_quark_memory_cache_payload(
+        _quark_share_token_cache,
+        _quark_share_token_cache_lock,
+        cache_key,
+        {"stoken": stoken},
+        lambda value: dict(value if isinstance(value, dict) else {}),
+        _QUARK_SHARE_TOKEN_CACHE_MAX_ROWS,
+    )
     return stoken
 
 def _list_quark_share_page(
@@ -421,31 +736,59 @@ def _list_quark_share_page(
     pdir_fid: str = "0",
     page: int = 1,
     page_size: int = 200,
+    force_refresh: bool = False,
+    timeout: int = 45,
 ) -> Dict[str, Any]:
-    headers = _build_quark_headers(cookie, referer=f"https://pan.quark.cn/s/{pwd_id}")
+    normalized_pwd_id = str(pwd_id or "").strip()
+    parent_id = str(pdir_fid or "0").strip() or "0"
+    page_no = max(1, int(page or 1))
+    normalized_size = max(20, min(200, int(page_size or 200)))
+    cache_key = _build_quark_share_cache_key(
+        "page",
+        cookie,
+        normalized_pwd_id,
+        str(stoken or "").strip(),
+        parent_id,
+        extra=f"{page_no}|{normalized_size}",
+    )
+    if not force_refresh:
+        cached = _get_quark_memory_cache_payload(
+            _quark_share_page_cache,
+            _quark_share_page_cache_lock,
+            cache_key,
+            _clone_quark_share_page_payload,
+        )
+        if cached:
+            return cached
+    headers = _build_quark_headers(cookie, referer=f"https://pan.quark.cn/s/{normalized_pwd_id}")
     # Quark share detail 接口对 stoken 的解析存在双重 decode 行为；
     # 这里先手动 quote，再交给 urlencode，等价于双编码，避免返回“非法token”。
     stoken_query_value = urllib.parse.quote(str(stoken or "").strip(), safe="")
     url = _build_quark_api_url(
         "/1/clouddrive/share/sharepage/detail",
         {
-            "pwd_id": str(pwd_id or "").strip(),
+            "uc_param_str": "",
+            "pwd_id": normalized_pwd_id,
             "stoken": stoken_query_value,
-            "pdir_fid": str(pdir_fid or "0").strip() or "0",
-            "_page": max(1, int(page or 1)),
-            "_size": max(20, min(200, int(page_size or 200))),
+            "pdir_fid": parent_id,
+            "force": 0,
+            "_page": page_no,
+            "_size": normalized_size,
+            "_fetch_banner": 1,
+            "_fetch_share": 1,
             "_fetch_total": 1,
             "_sort": "file_type:asc,file_name:asc",
+            "__dt": 1589,
+            "__t": int(time.time() * 1000),
         },
         host="https://drive-h.quark.cn",
     )
-    result = _request_quark_json(url, headers, timeout=45, fallback="读取夸克分享目录失败")
+    result = _request_quark_json(url, headers, timeout=timeout, fallback="读取夸克分享目录失败")
     if not _is_quark_success(result):
         raise RuntimeError(_extract_quark_error(result, "读取夸克分享目录失败"))
     data = result.get("data") if isinstance(result.get("data"), dict) else {}
     raw_list = data.get("list") if isinstance(data.get("list"), list) else []
     entries = []
-    parent_id = str(pdir_fid or "0").strip() or "0"
     for raw_item in raw_list:
         parsed_entry = _parse_quark_entry(raw_item if isinstance(raw_item, dict) else {}, parent_id=parent_id)
         if parsed_entry:
@@ -458,15 +801,357 @@ def _list_quark_share_page(
     if not has_more and next_page > max(1, int(page or 1)):
         has_more = True
     total = parse_int(data.get("total"), default=len(entries))
-    return {
+    page_payload = {
         "entries": entries,
         "share": share_info,
         "has_more": has_more,
         "total": total,
         "next_page": next_page,
-        "page": max(1, int(page or 1)),
-        "size": max(20, min(200, int(page_size or 200))),
+        "page": page_no,
+        "size": normalized_size,
     }
+    _set_quark_memory_cache_payload(
+        _quark_share_page_cache,
+        _quark_share_page_cache_lock,
+        cache_key,
+        page_payload,
+        _clone_quark_share_page_payload,
+        _QUARK_SHARE_PAGE_CACHE_MAX_ROWS,
+    )
+    return _clone_quark_share_page_payload(page_payload)
+
+
+def _request_quark_share_token_fast(
+    cookie: str,
+    pwd_id: str,
+    passcode: str,
+    force_refresh: bool,
+    deadline_ts: float,
+) -> str:
+    normalized_pwd_id = str(pwd_id or "").strip()
+    normalized_passcode = normalize_receive_code(passcode)
+    cache_key = _build_quark_share_cache_key("token", cookie, normalized_pwd_id, normalized_passcode, "0")
+    if not force_refresh:
+        cached = _get_quark_memory_cache_payload(
+            _quark_share_token_cache,
+            _quark_share_token_cache_lock,
+            cache_key,
+            lambda value: dict(value if isinstance(value, dict) else {}),
+        )
+        cached_stoken = str(cached.get("stoken", "") or "").strip()
+        if cached_stoken:
+            return cached_stoken
+
+    def request_token() -> str:
+        if not force_refresh:
+            cached_inner = _get_quark_memory_cache_payload(
+                _quark_share_token_cache,
+                _quark_share_token_cache_lock,
+                cache_key,
+                lambda value: dict(value if isinstance(value, dict) else {}),
+            )
+            cached_inner_stoken = str(cached_inner.get("stoken", "") or "").strip()
+            if cached_inner_stoken:
+                return cached_inner_stoken
+
+        headers = _build_quark_headers(cookie, referer=f"https://pan.quark.cn/s/{normalized_pwd_id}")
+        url = _build_quark_api_url(
+            "/1/clouddrive/share/sharepage/token",
+            {
+                "uc_param_str": "",
+                "__dt": 994,
+                "__t": int(time.time() * 1000),
+            },
+            host="https://drive-h.quark.cn",
+        )
+        response = _request_quark_json_fast(
+            "POST",
+            url,
+            headers,
+            deadline_ts,
+            payload={
+                "pwd_id": normalized_pwd_id,
+                "passcode": normalized_passcode,
+            },
+            fallback="夸克分享访问失败",
+        )
+        if not _is_quark_success(response):
+            raise RuntimeError(_extract_quark_error(response, "夸克分享访问失败"))
+        data = response.get("data") if isinstance(response.get("data"), dict) else {}
+        stoken = str(data.get("stoken", "") or data.get("token", "")).strip()
+        if not stoken:
+            raise RuntimeError("夸克分享令牌获取失败")
+        _set_quark_memory_cache_payload(
+            _quark_share_token_cache,
+            _quark_share_token_cache_lock,
+            cache_key,
+            {"stoken": stoken},
+            lambda value: dict(value if isinstance(value, dict) else {}),
+            _QUARK_SHARE_TOKEN_CACHE_MAX_ROWS,
+        )
+        return stoken
+
+    try:
+        return _run_quark_share_singleflight(f"quark-token:{cache_key}", deadline_ts, request_token)
+    except Exception:
+        stale = _get_quark_memory_cache_payload(
+            _quark_share_token_cache,
+            _quark_share_token_cache_lock,
+            cache_key,
+            lambda value: dict(value if isinstance(value, dict) else {}),
+            allow_expired=True,
+        )
+        stale_stoken = str(stale.get("stoken", "") or "").strip()
+        if stale_stoken:
+            return stale_stoken
+        raise
+
+
+def _list_quark_share_page_fast(
+    cookie: str,
+    pwd_id: str,
+    stoken: str,
+    pdir_fid: str,
+    page: int,
+    page_size: int,
+    force_refresh: bool,
+    deadline_ts: float,
+) -> Dict[str, Any]:
+    normalized_pwd_id = str(pwd_id or "").strip()
+    parent_id = str(pdir_fid or "0").strip() or "0"
+    page_no = max(1, int(page or 1))
+    normalized_size = max(20, min(100, int(page_size or 50)))
+    cache_key = _build_quark_share_cache_key(
+        "fast_page",
+        cookie,
+        normalized_pwd_id,
+        str(stoken or "").strip(),
+        parent_id,
+        extra=f"{page_no}|{normalized_size}",
+    )
+    if not force_refresh:
+        cached = _get_quark_memory_cache_payload(
+            _quark_share_page_cache,
+            _quark_share_page_cache_lock,
+            cache_key,
+            _clone_quark_share_page_payload,
+        )
+        if cached:
+            return cached
+
+    def request_page() -> Dict[str, Any]:
+        if not force_refresh:
+            cached_inner = _get_quark_memory_cache_payload(
+                _quark_share_page_cache,
+                _quark_share_page_cache_lock,
+                cache_key,
+                _clone_quark_share_page_payload,
+            )
+            if cached_inner:
+                return cached_inner
+
+        headers = _build_quark_headers(cookie, referer=f"https://pan.quark.cn/s/{normalized_pwd_id}")
+        stoken_query_value = urllib.parse.quote(str(stoken or "").strip(), safe="")
+        url = _build_quark_api_url(
+            "/1/clouddrive/share/sharepage/detail",
+            {
+                "uc_param_str": "",
+                "pwd_id": normalized_pwd_id,
+                "stoken": stoken_query_value,
+                "pdir_fid": parent_id,
+                "force": 0,
+                "_page": page_no,
+                "_size": normalized_size,
+                "_fetch_banner": 1,
+                "_fetch_share": 1,
+                "_fetch_total": 1,
+                "_sort": "file_type:asc,updated_at:desc",
+                "__dt": 1589,
+                "__t": int(time.time() * 1000),
+            },
+            host="https://drive-h.quark.cn",
+        )
+        result = _request_quark_json_fast("GET", url, headers, deadline_ts, fallback="读取夸克分享目录失败")
+        if not _is_quark_success(result):
+            raise RuntimeError(_extract_quark_error(result, "读取夸克分享目录失败"))
+        data = result.get("data") if isinstance(result.get("data"), dict) else {}
+        raw_list = data.get("list") if isinstance(data.get("list"), list) else []
+        entries = []
+        for raw_item in raw_list:
+            parsed_entry = _parse_quark_entry(raw_item if isinstance(raw_item, dict) else {}, parent_id=parent_id)
+            if parsed_entry:
+                entries.append(parsed_entry)
+        share_info = data.get("share") if isinstance(data.get("share"), dict) else {}
+        if not share_info:
+            share_info = data.get("share_info") if isinstance(data.get("share_info"), dict) else {}
+        has_more = bool(data.get("has_more", False))
+        next_page = parse_int(data.get("next_page"), default=0)
+        if not has_more and next_page > page_no:
+            has_more = True
+        page_payload = {
+            "entries": entries,
+            "share": share_info,
+            "has_more": has_more,
+            "total": parse_int(data.get("total"), default=len(entries)),
+            "next_page": next_page,
+            "page": page_no,
+            "size": normalized_size,
+        }
+        _set_quark_memory_cache_payload(
+            _quark_share_page_cache,
+            _quark_share_page_cache_lock,
+            cache_key,
+            page_payload,
+            _clone_quark_share_page_payload,
+            _QUARK_SHARE_PAGE_CACHE_MAX_ROWS,
+        )
+        return _clone_quark_share_page_payload(page_payload)
+
+    try:
+        return _run_quark_share_singleflight(f"quark-page:{cache_key}", deadline_ts, request_page)
+    except Exception:
+        stale = _get_quark_memory_cache_payload(
+            _quark_share_page_cache,
+            _quark_share_page_cache_lock,
+            cache_key,
+            _clone_quark_share_page_payload,
+            allow_expired=True,
+        )
+        if stale:
+            stale["cache_error"] = "夸克上游响应超时，已返回旧缓存"
+            return stale
+        raise
+
+
+def list_quark_share_entries_fast(
+    cookie: str,
+    share_url: str,
+    raw_text: str = "",
+    cid: str = "0",
+    receive_code: str = "",
+    force_refresh: bool = False,
+    request_timeout: int = 3,
+    offset: int = 0,
+    limit: int = 50,
+    max_pages: int = 1,
+    folders_only: bool = False,
+) -> Dict[str, Any]:
+    normalized_cookie = str(cookie or "").strip()
+    if not normalized_cookie:
+        raise RuntimeError("Quark Cookie 未配置")
+
+    parsed = parse_quark_share_payload(share_url, raw_text, receive_code)
+    pwd_id = str(parsed.get("pwd_id", "") or parsed.get("share_code", "")).strip()
+    if not pwd_id:
+        raise RuntimeError("未能识别夸克分享链接")
+    receive_code_value = normalize_receive_code(parsed.get("receive_code", ""))
+    current_cid = str(cid or "0").strip() or "0"
+    page_limit = max(20, min(100, int(limit or 50)))
+    start_offset = max(0, int(offset or 0))
+    page_no = max(1, (start_offset // page_limit) + 1)
+    skip_in_page = start_offset % page_limit
+    folder_only_mode = bool(folders_only)
+    deadline_seconds = max(1.0, min(8.0, float(request_timeout or _QUARK_SHARE_FAST_DEADLINE_SECONDS)))
+    deadline_ts = time.monotonic() + deadline_seconds
+    started_mono = time.monotonic()
+    result_cache_key = _build_quark_share_cache_key(
+        "fast_result",
+        normalized_cookie,
+        pwd_id,
+        receive_code_value,
+        current_cid,
+        extra=f"{start_offset}|{page_limit}|{page_no}|{1 if folder_only_mode else 0}",
+    )
+    if not force_refresh:
+        cached_result = _get_quark_memory_cache_payload(
+            _quark_share_result_cache,
+            _quark_share_result_cache_lock,
+            result_cache_key,
+            _clone_quark_share_result_payload,
+        )
+        if cached_result:
+            return cached_result
+
+    def request_result() -> Dict[str, Any]:
+        if not force_refresh:
+            cached_inner = _get_quark_memory_cache_payload(
+                _quark_share_result_cache,
+                _quark_share_result_cache_lock,
+                result_cache_key,
+                _clone_quark_share_result_payload,
+            )
+            if cached_inner:
+                return cached_inner
+
+        stoken = _request_quark_share_token_fast(
+            normalized_cookie,
+            pwd_id,
+            receive_code_value,
+            force_refresh=force_refresh,
+            deadline_ts=deadline_ts,
+        )
+        page_payload = _list_quark_share_page_fast(
+            normalized_cookie,
+            pwd_id,
+            stoken,
+            current_cid,
+            page=page_no,
+            page_size=page_limit,
+            force_refresh=force_refresh,
+            deadline_ts=deadline_ts,
+        )
+        page_entries = page_payload.get("entries", []) if isinstance(page_payload.get("entries"), list) else []
+        if skip_in_page > 0:
+            page_entries = page_entries[skip_in_page:]
+        if folder_only_mode:
+            page_entries = [entry for entry in page_entries if entry.get("is_dir")]
+        total_count = max(0, int(page_payload.get("total", 0) or 0))
+        next_offset = start_offset + len(page_entries)
+        share_info = page_payload.get("share", {}) if isinstance(page_payload.get("share"), dict) else {}
+        result_payload = {
+            "entries": page_entries,
+            "summary": {
+                "folder_count": sum(1 for item in page_entries if item.get("is_dir")),
+                "file_count": sum(1 for item in page_entries if not item.get("is_dir")),
+            },
+            "share_code": pwd_id,
+            "receive_code": receive_code_value,
+            "share_title": str(share_info.get("title", "") or share_info.get("share_name", "") or "").strip(),
+            "current_cid": current_cid,
+            "count": total_count or len(page_entries),
+            "offset": start_offset,
+            "next_offset": next_offset,
+            "has_more": bool(page_payload.get("has_more", False)),
+            "pages_scanned": 1,
+            "stoken": stoken,
+            "fast_path": True,
+            "elapsed_ms": int((time.monotonic() - started_mono) * 1000),
+        }
+        _set_quark_memory_cache_payload(
+            _quark_share_result_cache,
+            _quark_share_result_cache_lock,
+            result_cache_key,
+            result_payload,
+            _clone_quark_share_result_payload,
+            _QUARK_SHARE_RESULT_CACHE_MAX_ROWS,
+        )
+        return _clone_quark_share_result_payload(result_payload)
+
+    try:
+        return _run_quark_share_singleflight(f"quark-result:{result_cache_key}", deadline_ts, request_result)
+    except Exception as exc:
+        stale_result = _get_quark_memory_cache_payload(
+            _quark_share_result_cache,
+            _quark_share_result_cache_lock,
+            result_cache_key,
+            _clone_quark_share_result_payload,
+            allow_expired=True,
+        )
+        if stale_result:
+            stale_result["cache_error"] = str(exc or "夸克上游响应超时").strip()[:180]
+            stale_result["cache_cid"] = current_cid
+            return stale_result
+        raise
 
 def _collect_quark_share_entries_with_stoken(
     cookie: str,
@@ -476,6 +1161,8 @@ def _collect_quark_share_entries_with_stoken(
     page_size: int = 200,
     max_pages: int = 20,
     folders_only: bool = False,
+    force_refresh: bool = False,
+    request_timeout: int = 45,
 ) -> Dict[str, Any]:
     current_cid = str(cid or "0").strip() or "0"
     page_limit = max(20, min(200, int(page_size or 200)))
@@ -495,6 +1182,8 @@ def _collect_quark_share_entries_with_stoken(
             current_cid,
             page=page_no,
             page_size=page_limit,
+            force_refresh=force_refresh,
+            timeout=request_timeout,
         )
         page_entries = page_payload.get("entries", []) if isinstance(page_payload.get("entries"), list) else []
         if folder_only_mode:
@@ -532,8 +1221,6 @@ def list_quark_share_entries(
     max_pages: int = 0,
     folders_only: bool = False,
 ) -> Dict[str, Any]:
-    del force_refresh
-    del request_timeout
     normalized_cookie = str(cookie or "").strip()
     if not normalized_cookie:
         raise RuntimeError("Quark Cookie 未配置")
@@ -548,8 +1235,33 @@ def list_quark_share_entries(
         start_offset = max(0, int(offset or 0))
         max_pages_limit = max(0, int(max_pages or 0))
         folder_only_mode = bool(folders_only)
+        request_timeout_value = max(5, int(request_timeout or 45))
 
-        stoken = _request_quark_share_token(normalized_cookie, pwd_id, receive_code_value)
+        result_cache_key = _build_quark_share_cache_key(
+            "result",
+            normalized_cookie,
+            pwd_id,
+            receive_code_value,
+            current_cid,
+            extra=f"{start_offset}|{page_limit}|{max_pages_limit}|{1 if folder_only_mode else 0}",
+        )
+        if not force_refresh:
+            cached_result = _get_quark_memory_cache_payload(
+                _quark_share_result_cache,
+                _quark_share_result_cache_lock,
+                result_cache_key,
+                _clone_quark_share_result_payload,
+            )
+            if cached_result:
+                return cached_result
+
+        stoken = _request_quark_share_token(
+            normalized_cookie,
+            pwd_id,
+            receive_code_value,
+            force_refresh=force_refresh,
+            timeout=request_timeout_value,
+        )
         entries: List[Dict[str, Any]] = []
         total_count = 0
         pages_scanned = 0
@@ -565,6 +1277,8 @@ def list_quark_share_entries(
                     current_cid,
                     page=page_no,
                     page_size=page_limit,
+                    force_refresh=force_refresh,
+                    timeout=request_timeout_value,
                 )
                 page_entries = page_payload.get("entries", []) if isinstance(page_payload.get("entries"), list) else []
                 if folder_only_mode:
@@ -592,6 +1306,8 @@ def list_quark_share_entries(
                 current_cid,
                 page=page_no,
                 page_size=page_limit,
+                force_refresh=force_refresh,
+                timeout=request_timeout_value,
             )
             page_entries = page_payload.get("entries", []) if isinstance(page_payload.get("entries"), list) else []
             if skip_in_page > 0:
@@ -626,8 +1342,16 @@ def list_quark_share_entries(
             "pages_scanned": pages_scanned,
             "stoken": stoken,
         }
+        _set_quark_memory_cache_payload(
+            _quark_share_result_cache,
+            _quark_share_result_cache_lock,
+            result_cache_key,
+            result_payload,
+            _clone_quark_share_result_payload,
+            _QUARK_SHARE_RESULT_CACHE_MAX_ROWS,
+        )
         mark_cookie_health_success("quark", trigger="runtime:list_quark_share_entries")
-        return result_payload
+        return _clone_quark_share_result_payload(result_payload)
     except Exception as exc:
         if not _is_quark_share_content_error(exc):
             mark_cookie_health_failure("quark", exc, trigger="runtime:list_quark_share_entries")

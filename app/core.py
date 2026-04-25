@@ -3889,6 +3889,7 @@ from .providers.quark import (
     list_quark_entries,
     list_quark_entries_payload,
     list_quark_share_entries,
+    list_quark_share_entries_fast,
     prepare_quark_share_save,
     resolve_quark_folder_id_by_path,
     resolve_quark_share_payload,
