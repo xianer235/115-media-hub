@@ -116,8 +116,8 @@ async def startup() -> None:
                     continue
 
                 interval_minutes = normalize_subscription_schedule_interval_minutes(
-                    task.get("schedule_interval_minutes", 30),
-                    fallback=30,
+                    task.get("schedule_interval_minutes", 120),
+                    fallback=120,
                 )
                 interval_seconds = max(60, interval_minutes * 60)
 

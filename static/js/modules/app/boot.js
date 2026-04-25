@@ -150,7 +150,7 @@
             syncSubscriptionTypeUI();
         });
         document.getElementById('subscription_season')?.addEventListener('change', () => {
-            suggestSubscriptionTotalEpisodesFromTmdb({ force: false });
+            suggestSubscriptionTotalEpisodesFromTmdb({ force: true });
             renderSubscriptionTmdbBinding();
         });
         document.getElementById('subscription_anime_mode')?.addEventListener('change', () => {
@@ -364,6 +364,10 @@
             const btn = e.target.closest('[data-resource-job-action]');
             if (!btn) return;
             const action = btn.dataset.resourceJobAction || '';
+            if (action === 'load-more') {
+                await loadMoreResourceJobs();
+                return;
+            }
             const jobId = parseInt(btn.dataset.resourceJobId || '0', 10);
             if (!jobId) return;
             if (action === 'refresh') await triggerResourceJobRefresh(jobId);
@@ -374,9 +378,10 @@
             const btn = e.target.closest('[data-resource-job-filter]');
             if (!btn) return;
             const nextFilter = String(btn.dataset.resourceJobFilter || 'all').trim() || 'all';
-            if (resourceJobFilter === nextFilter) return;
+            const pageFilter = String(resourceState?.job_pagination?.status || 'all').trim() || 'all';
+            if (resourceJobFilter === nextFilter && pageFilter === nextFilter) return;
             resourceJobFilter = nextFilter;
-            renderResourceJobs();
+            void fetchResourceJobsPage({ status: nextFilter, offset: 0 });
         });
         document.getElementById('subscription-task-list')?.addEventListener('click', async (e) => {
             const introBtn = e.target.closest('[data-subscription-toggle-intro]');

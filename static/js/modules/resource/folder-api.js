@@ -6,6 +6,33 @@
             }
         }
 
+        const RESOURCE_BROWSER_FETCH_TIMEOUT_MS = 18000;
+
+        async function fetchResourceBrowserJson(url, options = {}, timeoutMs = RESOURCE_BROWSER_FETCH_TIMEOUT_MS) {
+            const controller = new AbortController();
+            const timer = window.setTimeout(() => controller.abort(), Math.max(3000, Number(timeoutMs || RESOURCE_BROWSER_FETCH_TIMEOUT_MS)));
+            try {
+                const res = await fetch(url, {
+                    ...options,
+                    signal: controller.signal,
+                });
+                let data = {};
+                try {
+                    data = await res.json();
+                } catch (e) {
+                    if (!res.ok) throw new Error(`请求失败（HTTP ${res.status}）`);
+                    throw e;
+                }
+                if (!res.ok || !data.ok) throw new Error(data.msg || `请求失败（HTTP ${res.status}）`);
+                return data;
+            } catch (e) {
+                if (e?.name === 'AbortError') throw new Error('请求超时，请稍后重试');
+                throw e;
+            } finally {
+                window.clearTimeout(timer);
+            }
+        }
+
         function normalizeResourceProviderCacheKey(provider = '115') {
             return normalizeSubscriptionProvider(provider, '115') === 'quark' ? 'quark' : '115';
         }
@@ -140,9 +167,8 @@
                 const params = new URLSearchParams({ cid: normalizedCid });
                 params.set('compact', '1');
                 if (normalizedFoldersOnly) params.set('folders_only', '1');
-                const res = await fetch(`${apiPrefix}/folders?${params.toString()}`);
-                const data = await res.json();
-                if (!res.ok || !data.ok) throw new Error(data.msg || '读取目录失败');
+                if (forceRefresh) params.set('force_refresh', '1');
+                const data = await fetchResourceBrowserJson(`${apiPrefix}/folders?${params.toString()}`);
                 const entries = Array.isArray(data.entries) ? data.entries : [];
                 const summary = data.summary && typeof data.summary === 'object'
                     ? data.summary
@@ -355,7 +381,7 @@
             const normalizedOffset = Math.max(0, Number(offset || 0));
             const normalizedLimit = Math.max(20, Math.min(Number(limit || RESOURCE_SHARE_BROWSE_PAGE_LIMIT), 400));
             const shareApiPrefix = getResourceShareApiPrefix(resourceModalLinkType);
-            let res;
+            let data;
             if (Number(resourceId || 0) > 0) {
                 const params = new URLSearchParams({
                     resource_id: String(resourceId || 0),
@@ -365,9 +391,9 @@
                 if (paged) params.set('paged', '1');
                 params.set('offset', String(normalizedOffset));
                 params.set('limit', String(normalizedLimit));
-                res = await fetch(`${shareApiPrefix}/share_entries?${params.toString()}`);
+                data = await fetchResourceBrowserJson(`${shareApiPrefix}/share_entries?${params.toString()}`);
             } else {
-                res = await fetch(`${shareApiPrefix}/share_entries_preview`, {
+                data = await fetchResourceBrowserJson(`${shareApiPrefix}/share_entries_preview`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
@@ -381,8 +407,6 @@
                     })
                 });
             }
-            const data = await res.json();
-            if (!res.ok || !data.ok) throw new Error(data.msg || '读取分享内容失败');
             const entries = Array.isArray(data.entries) ? data.entries : [];
             const paging = data.paging && typeof data.paging === 'object' ? data.paging : {};
             const nextOffset = Math.max(
@@ -1065,6 +1089,7 @@
 
         Object.assign(window, {
             fetchResourceFolderData,
+            fetchResourceBrowserJson,
             createResourceFolder,
             invalidateResourceFolderBranchCache,
             getResourceFolderBranchCache,

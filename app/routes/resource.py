@@ -1,4 +1,7 @@
 import asyncio
+import functools
+import os
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
@@ -11,11 +14,28 @@ resource_job_create_lock = asyncio.Lock()
 RESOURCE_SHARE_BROWSE_TIMEOUT_SECONDS = 30
 RESOURCE_SHARE_BROWSE_RATE_LIMIT_SECONDS = 0.25
 RESOURCE_SHARE_BROWSE_MAX_RETRIES = 1
+RESOURCE_BROWSE_WORKERS = max(2, min(8, int(os.environ.get("RESOURCE_BROWSE_WORKERS", 4) or 4)))
+resource_browse_executor = ThreadPoolExecutor(
+    max_workers=RESOURCE_BROWSE_WORKERS,
+    thread_name_prefix="resource-browse",
+)
 
 
-def _build_resource_jobs_state_snapshot(limit: int = 40) -> Dict[str, Any]:
+async def run_resource_browse_io(func, *args, **kwargs):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(resource_browse_executor, functools.partial(func, *args, **kwargs))
+
+
+def _build_resource_jobs_state_snapshot(limit: int = 40, offset: int = 0, status_filter: str = "") -> Dict[str, Any]:
     cfg = get_config()
-    return build_resource_jobs_state_payload(limit=limit, cfg=cfg)
+    payload = build_resource_jobs_state_payload(limit=limit, cfg=cfg)
+    normalized_filter = normalize_resource_job_status_filter(status_filter)
+    normalized_offset = max(0, int(offset or 0))
+    if normalized_filter != "all" or normalized_offset > 0:
+        jobs_page = list_resource_jobs_page(limit=limit, offset=normalized_offset, status_filter=normalized_filter)
+        payload["jobs"] = jobs_page.get("jobs", [])
+        payload["pagination"] = jobs_page.get("pagination", {})
+    return payload
 
 
 def _import_resource_candidates_to_db(candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -48,8 +68,10 @@ async def get_resource_state(request: Request) -> Dict[str, Any]:
 
 @router.get("/resource/jobs/state")
 async def get_resource_jobs_state(request: Request) -> Dict[str, Any]:
-    limit = max(1, min(int(request.query_params.get("limit", 40) or 40), 120))
-    return await asyncio.to_thread(_build_resource_jobs_state_snapshot, limit)
+    limit = max(1, min(int(request.query_params.get("limit", 40) or 40), 200))
+    offset = max(0, int(request.query_params.get("offset", 0) or 0))
+    status_filter = str(request.query_params.get("status", "all") or "all").strip().lower()
+    return await asyncio.to_thread(_build_resource_jobs_state_snapshot, limit, offset, status_filter)
 
 
 @router.post("/resource/sources/save")
@@ -183,14 +205,20 @@ async def load_more_resource_channel_items_endpoint(request: Request) -> Dict[st
     items = page.get("posts", []) if isinstance(page, dict) else []
     if query and isinstance(page, dict):
         items = page.get("items", []) or []
+    import_result = await asyncio.to_thread(_import_resource_candidates_to_db, items) if items else {
+        "inserted": 0,
+        "updated": 0,
+        "items": [],
+    }
+    response_items = import_result.get("items", []) if isinstance(import_result, dict) else []
     return {
         "ok": True,
         "channel_id": channel_id,
         "query": query,
         "before": before,
-        "items": items,
-        "inserted": 0,
-        "updated": 0,
+        "items": response_items if response_items else items,
+        "inserted": int(import_result.get("inserted", 0) or 0),
+        "updated": int(import_result.get("updated", 0) or 0),
         "next_before": str(page.get("next_before", "") or "").strip(),
         "has_more": bool(page.get("has_more")),
         "matched_count": int(page.get("matched_count", 0) or len(items)),
@@ -394,8 +422,9 @@ async def get_115_folders_endpoint(request: Request) -> Dict[str, Any]:
     cid = str(request.query_params.get("cid", "0") or "0").strip() or "0"
     folders_only = request.query_params.get("folders_only") == "1"
     compact = request.query_params.get("compact") == "1"
+    force_refresh = request.query_params.get("force_refresh") == "1"
     try:
-        entries_all = await asyncio.to_thread(list_115_entries, cookie, cid)
+        entries_all = await run_resource_browse_io(list_115_entries, cookie, cid, force_refresh)
         folder_entries = [entry for entry in entries_all if entry.get("is_dir")]
         file_count = max(0, len(entries_all) - len(folder_entries))
         entries = folder_entries if folders_only else entries_all
@@ -439,7 +468,7 @@ async def create_115_folder_endpoint(request: Request) -> Dict[str, Any]:
     if not name:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "文件夹名称不能为空"})
     try:
-        folder = await asyncio.to_thread(create_115_folder, cookie, cid, name)
+        folder = await run_resource_browse_io(create_115_folder, cookie, cid, name)
         return {"ok": True, "cid": cid, "folder": folder}
     except Exception as exc:
         return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
@@ -471,7 +500,7 @@ async def get_115_share_entries_endpoint(request: Request) -> Dict[str, Any]:
     offset = max(0, parse_int(request.query_params.get("offset", 0), default=0))
     limit = max(20, min(parse_int(request.query_params.get("limit", 200), default=200), 400))
     try:
-        result = await asyncio.to_thread(
+        result = await run_resource_browse_io(
             list_115_share_entries,
             cookie,
             str(resource.get("link_url", "")).strip(),
@@ -531,7 +560,7 @@ async def preview_115_share_entries_endpoint(request: Request) -> Dict[str, Any]
     offset = max(0, parse_int(data.get("offset", 0), default=0))
     limit = max(20, min(parse_int(data.get("limit", 200), default=200), 400))
     try:
-        result = await asyncio.to_thread(
+        result = await run_resource_browse_io(
             list_115_share_entries,
             cookie,
             link_url,
@@ -580,7 +609,7 @@ async def get_quark_folders_endpoint(request: Request) -> Dict[str, Any]:
     folders_only = request.query_params.get("folders_only") == "1"
     compact = request.query_params.get("compact") == "1"
     try:
-        entries_all = await asyncio.to_thread(list_quark_entries, cookie, cid)
+        entries_all = await run_resource_browse_io(list_quark_entries, cookie, cid)
         folder_entries = [entry for entry in entries_all if entry.get("is_dir")]
         file_count = max(0, len(entries_all) - len(folder_entries))
         entries = folder_entries if folders_only else entries_all
@@ -624,7 +653,7 @@ async def create_quark_folder_endpoint(request: Request) -> Dict[str, Any]:
     if not name:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "文件夹名称不能为空"})
     try:
-        folder = await asyncio.to_thread(create_quark_folder, cookie, cid, name)
+        folder = await run_resource_browse_io(create_quark_folder, cookie, cid, name)
         return {"ok": True, "cid": cid, "folder": folder}
     except Exception as exc:
         return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
@@ -657,7 +686,7 @@ async def get_quark_share_entries_endpoint(request: Request) -> Dict[str, Any]:
     limit = max(20, min(parse_int(request.query_params.get("limit", 200), default=200), 400))
     max_pages = 1 if paged else 0
     try:
-        result = await asyncio.to_thread(
+        result = await run_resource_browse_io(
             list_quark_share_entries,
             cookie,
             str(resource.get("link_url", "")).strip(),
@@ -716,7 +745,7 @@ async def preview_quark_share_entries_endpoint(request: Request) -> Dict[str, An
     limit = max(20, min(parse_int(data.get("limit", 200), default=200), 400))
     max_pages = 1 if paged else 0
     try:
-        result = await asyncio.to_thread(
+        result = await run_resource_browse_io(
             list_quark_share_entries,
             cookie,
             link_url,

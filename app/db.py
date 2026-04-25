@@ -287,6 +287,7 @@ def ensure_db() -> None:
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_resource_items_status_created ON resource_items(status, created_at DESC, id DESC)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_resource_jobs_created_at ON resource_jobs(created_at DESC)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_resource_jobs_status ON resource_jobs(status)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_resource_jobs_status_id ON resource_jobs(status, id DESC)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_subscription_state_status ON subscription_task_state(status)")
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_subscription_channel_watermarks_updated_at "

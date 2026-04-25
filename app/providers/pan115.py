@@ -249,8 +249,8 @@ def create_115_folder(cookie: str, cid: str = "0", folder_name: str = "") -> Dic
 
 def sanitize_115_folder_name(value: str, fallback: str = "未命名") -> str:
     cleaned = re.sub(r"[\\/:*?\"<>|]+", " ", str(value or "")).strip()
-    cleaned = re.sub(r"\s+", " ", cleaned).strip(". ")
-    if not cleaned:
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if not cleaned or cleaned in (".", ".."):
         cleaned = fallback
     return cleaned[:120]
 
@@ -260,7 +260,9 @@ def ensure_115_folder_id_by_path(cookie: str, relative_path: str) -> str:
         return "0"
     current_cid = "0"
     for raw_part in [segment for segment in normalized_path.split("/") if segment]:
-        part = sanitize_115_folder_name(raw_part, fallback="未命名")
+        part = str(raw_part or "").strip()
+        if not part:
+            continue
         entries = list_115_entries(cookie, current_cid)
         matched = next(
             (

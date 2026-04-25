@@ -1,5 +1,14 @@
 from .core import *  # noqa: F401,F403
 
+RESOURCE_JOB_ACTIVE_STATUSES = ("pending", "running", "submitted")
+RESOURCE_JOB_FILTERS = ("all", "active", "submitted", "completed", "failed")
+
+
+def normalize_resource_job_status_filter(value: Any) -> str:
+    normalized = str(value or "all").strip().lower()
+    return normalized if normalized in RESOURCE_JOB_FILTERS else "all"
+
+
 def list_resource_jobs(limit: int = 80) -> List[Dict[str, Any]]:
     ensure_db()
     conn = open_db()
@@ -8,6 +17,75 @@ def list_resource_jobs(limit: int = 80) -> List[Dict[str, Any]]:
     rows = cursor.fetchall()
     conn.close()
     return [serialize_resource_job_row(row) for row in rows]
+
+
+def _build_resource_job_filter_where(status_filter: str) -> Tuple[str, Tuple[Any, ...]]:
+    normalized = normalize_resource_job_status_filter(status_filter)
+    if normalized == "active":
+        placeholders = ",".join(["?"] * len(RESOURCE_JOB_ACTIVE_STATUSES))
+        return f"status IN ({placeholders})", tuple(RESOURCE_JOB_ACTIVE_STATUSES)
+    if normalized in ("submitted", "completed", "failed"):
+        return "status = ?", (normalized,)
+    return "1 = 1", ()
+
+
+def list_resource_jobs_page(limit: int = 40, offset: int = 0, status_filter: str = "") -> Dict[str, Any]:
+    page_limit = max(1, min(int(limit or 40), 200))
+    page_offset = max(0, int(offset or 0))
+    normalized_filter = normalize_resource_job_status_filter(status_filter)
+    where_sql, where_params = _build_resource_job_filter_where(normalized_filter)
+    ensure_db()
+    conn = open_db()
+    cursor = conn.cursor()
+    cursor.execute(f"SELECT COUNT(1) FROM resource_jobs WHERE {where_sql}", where_params)
+    row = cursor.fetchone()
+    total = int(row[0] if row else 0)
+    cursor.execute(
+        f"""
+        SELECT *
+        FROM resource_jobs
+        WHERE {where_sql}
+        ORDER BY
+            CASE WHEN status IN ('pending', 'running', 'submitted') THEN 0 ELSE 1 END,
+            id DESC
+        LIMIT ? OFFSET ?
+        """,
+        (*where_params, page_limit, page_offset),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    next_offset = page_offset + len(rows)
+    return {
+        "jobs": [serialize_resource_job_row(row) for row in rows],
+        "pagination": {
+            "status": normalized_filter,
+            "limit": page_limit,
+            "offset": page_offset,
+            "next_offset": next_offset,
+            "total": total,
+            "has_more": next_offset < total,
+        },
+    }
+
+
+def count_resource_jobs_by_status() -> Dict[str, int]:
+    ensure_db()
+    conn = open_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT status, COUNT(1) FROM resource_jobs GROUP BY status")
+    rows = cursor.fetchall()
+    conn.close()
+    raw_counts = {str(row[0] or "").strip().lower(): int(row[1] or 0) for row in rows}
+    active_count = sum(int(raw_counts.get(status, 0) or 0) for status in RESOURCE_JOB_ACTIVE_STATUSES)
+    return {
+        "total": sum(raw_counts.values()),
+        "active": active_count,
+        "pending": int(raw_counts.get("pending", 0) or 0),
+        "running": int(raw_counts.get("running", 0) or 0),
+        "submitted": int(raw_counts.get("submitted", 0) or 0),
+        "completed": int(raw_counts.get("completed", 0) or 0),
+        "failed": int(raw_counts.get("failed", 0) or 0),
+    }
 
 def list_resource_jobs_by_source(job_source: str, limit: int = 80, scan_limit: int = 400) -> List[Dict[str, Any]]:
     source_key = str(job_source or "").strip()
@@ -145,6 +223,45 @@ def clear_resource_jobs(scope: str = "completed") -> Dict[str, int]:
 def clear_completed_resource_jobs() -> Dict[str, int]:
     # Backward compatibility for existing callers.
     return clear_resource_jobs("completed")
+
+
+def prune_resource_job_history(
+    completed_keep: int = RESOURCE_JOB_COMPLETED_KEEP,
+    failed_keep: int = RESOURCE_JOB_FAILED_KEEP,
+) -> Dict[str, int]:
+    keep_by_status = {
+        "completed": max(100, min(10000, int(completed_keep or RESOURCE_JOB_COMPLETED_KEEP))),
+        "failed": max(100, min(10000, int(failed_keep or RESOURCE_JOB_FAILED_KEEP))),
+    }
+    ensure_db()
+    conn = open_db()
+    cursor = conn.cursor()
+    deleted: Dict[str, int] = {}
+    for status, keep_count in keep_by_status.items():
+        cursor.execute(
+            """
+            DELETE FROM resource_jobs
+            WHERE status = ?
+              AND id NOT IN (
+                SELECT id FROM resource_jobs
+                WHERE status = ?
+                ORDER BY id DESC
+                LIMIT ?
+              )
+            """,
+            (status, status, keep_count),
+        )
+        deleted[status] = int(cursor.rowcount or 0)
+    conn.commit()
+    conn.close()
+    return {
+        "completed": deleted.get("completed", 0),
+        "failed": deleted.get("failed", 0),
+        "deleted": sum(deleted.values()),
+        "completed_keep": keep_by_status["completed"],
+        "failed_keep": keep_by_status["failed"],
+    }
+
 
 def recover_stale_resource_jobs(max_age_seconds: int = RESOURCE_JOB_STALE_RECOVER_SECONDS) -> Dict[str, int]:
     ensure_db()

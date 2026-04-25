@@ -303,7 +303,9 @@ def ensure_quark_folder_id_by_path(cookie: str, relative_path: str) -> str:
         return "0"
     current_id = "0"
     for raw_part in [segment for segment in normalized_path.split("/") if segment]:
-        part = sanitize_115_folder_name(raw_part, fallback="未命名")
+        part = str(raw_part or "").strip()
+        if not part:
+            continue
         entries = list_quark_entries(cookie, current_id)
         matched = next(
             (

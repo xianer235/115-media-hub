@@ -213,6 +213,28 @@ def _fetch_115_tree_file_bytes(cookie: str, source_rel: str) -> bytes:
     return _download_tree_file_bytes(download_urls, cookie, download_cookie)
 
 
+def _load_tree_raw_cache(cache_path: str) -> Optional[bytes]:
+    if not os.path.exists(cache_path):
+        return None
+    try:
+        with open(cache_path, "rb") as f:
+            payload = f.read()
+    except Exception:
+        return None
+    return payload if payload else None
+
+
+def _save_tree_raw_cache(cache_path: str, raw_bytes: bytes) -> None:
+    payload = raw_bytes or b""
+    if not payload:
+        return
+    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+    tmp_path = cache_path + ".tmp"
+    with open(tmp_path, "wb") as f:
+        f.write(payload)
+    os.replace(tmp_path, cache_path)
+
+
 def _decode_tree_file_text(raw_bytes: bytes) -> str:
     payload = raw_bytes or b""
     if not payload:
@@ -309,6 +331,7 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
 
         trees = [t for t in cfg.get("trees", []) if str((t or {}).get("path", "")).strip()]
         fetched_tree_count = 0
+        local_raw_cache_count = 0
         parsed_tree_count = 0
         skipped_tree_count = 0
         scan_results: List[str] = []
@@ -349,6 +372,7 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
             )
             current_tree_keys.append(tree_key)
             tree_cache_path = os.path.join(TREE_DIR, f"cache_{tree_key}.json")
+            tree_raw_cache_path = os.path.join(TREE_DIR, f"raw_{tree_key}.txt")
 
             await update_progress(
                 "读取目录树文件",
@@ -358,8 +382,20 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
             await write_log(f"读取目录树文件源: {source_label}")
 
             cookie = str(cfg.get("cookie_115", "")).strip()
-            raw_bytes = await asyncio.to_thread(_fetch_115_tree_file_bytes, cookie, source_rel)
-            fetched_tree_count += 1
+            try:
+                raw_bytes = await asyncio.to_thread(_fetch_115_tree_file_bytes, cookie, source_rel)
+                fetched_tree_count += 1
+                await asyncio.to_thread(_save_tree_raw_cache, tree_raw_cache_path, raw_bytes)
+            except Exception as exc:
+                cached_raw_bytes = await asyncio.to_thread(_load_tree_raw_cache, tree_raw_cache_path)
+                if cached_raw_bytes is None:
+                    raise
+                raw_bytes = cached_raw_bytes
+                local_raw_cache_count += 1
+                await write_log(
+                    f"⚠ 源 {idx + 1} 联网读取失败，已使用上次成功保存的本地目录树副本：{exc}",
+                    "warn",
+                )
             file_hash = hashlib.md5(raw_bytes).hexdigest()
             parse_signature = build_tree_parse_signature(file_hash, user_exts)
 
@@ -409,7 +445,7 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
         if can_skip_by_hash and trees and skipped_tree_count == len(trees) and not tree_layout_changed:
             prefetch_elapsed_seconds = max(0.0, time.perf_counter() - run_started_at)
             await write_log(
-                f"本轮概况：读取 {fetched_tree_count} 个，缓存复用 {skipped_tree_count} 个，解析 {parsed_tree_count} 个"
+                f"本轮概况：联网读取 {fetched_tree_count} 个，本地副本 {local_raw_cache_count} 个，缓存复用 {skipped_tree_count} 个，解析 {parsed_tree_count} 个"
             )
             await write_log("✅ MD5 校验命中：全部目录树无变动，跳过解析与同步")
             await write_log(
@@ -429,13 +465,13 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
         prefetch_elapsed_seconds = max(0.0, time.perf_counter() - run_started_at)
         await write_log(
             (
-                f"本轮概况：读取 {fetched_tree_count} 个 | 缓存复用 {skipped_tree_count} 个 | 解析 {parsed_tree_count} 个 | "
+                f"本轮概况：联网读取 {fetched_tree_count} 个 | 本地副本 {local_raw_cache_count} 个 | 缓存复用 {skipped_tree_count} 个 | 解析 {parsed_tree_count} 个 | "
                 f"目录树行 {scanned_tree_line_total} | 目录树节点 {scanned_tree_node_total} | 命中 {total_files}"
             )
         )
         await write_log(f"解析完成，共发现 {total_files} 个有效文件")
         if total_files == 0:
-            if fetched_tree_count > 0 or use_local:
+            if fetched_tree_count > 0 or local_raw_cache_count > 0 or use_local:
                 await write_log("⚠ 目录树读取成功，但未匹配到可生成文件；本次按成功结束并跳过清理")
                 total_elapsed_seconds = max(0.0, time.perf_counter() - run_started_at)
                 await write_log(

@@ -106,7 +106,7 @@
             const scheduleWeekdays = normalizeSubscriptionWeekdays(task?.schedule_weekdays || []);
             const scheduleStartTime = normalizeSubscriptionScheduleTime(task?.schedule_start_time || '00:00', '00:00');
             const scheduleEndTime = normalizeSubscriptionScheduleTime(task?.schedule_end_time || '23:59', '23:59');
-            const scheduleIntervalMinutes = Math.max(1, Number(task?.schedule_interval_minutes || task?.cron_minutes || 30) || 30);
+            const scheduleIntervalMinutes = Math.max(1, Number(task?.schedule_interval_minutes || task?.cron_minutes || 120) || 120);
             const weekdayText = formatSubscriptionWeekdayText(scheduleWeekdays);
             const isCrossDayWindow = scheduleStartTime > scheduleEndTime;
             const windowText = isCrossDayWindow
@@ -804,7 +804,7 @@
             );
             const scheduleIntervalMinutes = Math.max(
                 1,
-                parseInt(document.getElementById('subscription_schedule_interval_minutes')?.value || '30', 10) || 30
+                parseInt(document.getElementById('subscription_schedule_interval_minutes')?.value || '120', 10) || 120
             );
             const shareLinkRaw = String(document.getElementById('subscription_share_link_url')?.value || '').trim();
             const shareLinkType = detectResourceLinkTypeByUrl(shareLinkRaw);
@@ -883,7 +883,7 @@
             setSubscriptionWeekdaysToForm(SUBSCRIPTION_DEFAULT_WEEKDAYS);
             document.getElementById('subscription_schedule_start_time').value = '00:00';
             document.getElementById('subscription_schedule_end_time').value = '23:59';
-            document.getElementById('subscription_schedule_interval_minutes').value = 30;
+            document.getElementById('subscription_schedule_interval_minutes').value = 120;
             document.getElementById('subscription_min_score').value = 55;
             document.getElementById('subscription_quality_priority').value = 'ultra';
             document.getElementById('subscription_enabled').checked = true;
@@ -1077,7 +1077,7 @@
             setSubscriptionWeekdaysToForm(task.schedule_weekdays || SUBSCRIPTION_DEFAULT_WEEKDAYS);
             document.getElementById('subscription_schedule_start_time').value = normalizeSubscriptionScheduleTime(task.schedule_start_time || '00:00', '00:00');
             document.getElementById('subscription_schedule_end_time').value = normalizeSubscriptionScheduleTime(task.schedule_end_time || '23:59', '23:59');
-            document.getElementById('subscription_schedule_interval_minutes').value = Math.max(1, parseInt(task.schedule_interval_minutes ?? task.cron_minutes ?? 30, 10) || 30);
+            document.getElementById('subscription_schedule_interval_minutes').value = Math.max(1, parseInt(task.schedule_interval_minutes ?? task.cron_minutes ?? 120, 10) || 120);
             document.getElementById('subscription_min_score').value = task.min_score ?? 55;
             document.getElementById('subscription_quality_priority').value = normalizeSubscriptionQualityPriority(task.quality_priority || 'balanced');
             document.getElementById('subscription_enabled').checked = task.enabled !== false;

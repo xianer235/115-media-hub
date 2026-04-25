@@ -20,7 +20,7 @@
             quark: { configured: false, state: 'missing', message: '未配置 Quark Cookie', last_checked_at: '', last_success_at: '', trigger: '', fail_count: 0 }
         };
         let cookieHealthCheckBusy = false;
-        let resourceState = { sources: [], quick_links: [], items: [], jobs: [], channel_sections: [], channel_profiles: {}, subscription_channel_support: {}, search_sections: [], last_syncs: {}, monitor_tasks: [], stats: { source_count: 0, item_count: 0, filtered_item_count: 0, completed_job_count: 0 }, cookie_configured: false, quark_cookie_configured: false, cookie_health: null, setup_status: null, search: '', search_meta: {} };
+        let resourceState = { sources: [], quick_links: [], items: [], jobs: [], active_jobs: [], job_counts: {}, job_pagination: {}, channel_sections: [], channel_profiles: {}, subscription_channel_support: {}, search_sections: [], last_syncs: {}, monitor_tasks: [], stats: { source_count: 0, item_count: 0, filtered_item_count: 0, completed_job_count: 0 }, cookie_configured: false, quark_cookie_configured: false, cookie_health: null, setup_status: null, search: '', search_meta: {} };
         let editingMonitorName = null;
         let editingSubscriptionName = null;
         let editingResourceSourceIndex = null;
@@ -103,6 +103,7 @@
         let resourceClientIdsByIdentity = {};
         let resourceJobModalOpen = false;
         let resourceJobClearMenuOpen = false;
+        let resourceJobLoadingMore = false;
         let resourceQuickLinkModalOpen = false;
         let resourceSourceModalOpen = false;
         let resourceSourceImportModalOpen = false;
@@ -218,6 +219,7 @@
         const RESOURCE_FOLDER_FILE_PREVIEW_LIMIT = 120;
         const RESOURCE_SHARE_BRANCH_CACHE_TTL_MS = 1000 * 60 * 10;
         const RESOURCE_SHARE_BROWSE_PAGE_LIMIT = 120;
+        const RESOURCE_JOB_PAGE_SIZE = 40;
         const SUBSCRIPTION_WEEKDAY_LABELS = {
             1: '周一',
             2: '周二',

@@ -1000,13 +1000,14 @@
             const sectionHasMore = typeof section?.has_more === 'boolean'
                 ? section.has_more
                 : Number(section?.item_count || 0) > sectionItems.length;
+            const canProbeMore = !!fallbackBefore && sectionItems.length >= 10;
             return {
                 key: pagingKey,
                 loading: !!resourceChannelLoadingMore[pagingKey],
                 nextBefore: String(resourceChannelNextBefore[pagingKey] || section?.next_before || fallbackBefore || '').trim(),
                 noMore: Object.prototype.hasOwnProperty.call(resourceChannelNoMore, pagingKey)
                     ? !!resourceChannelNoMore[pagingKey]
-                    : !sectionHasMore,
+                    : !(sectionHasMore || canProbeMore),
             };
         }
 
@@ -1034,7 +1035,8 @@
             ].filter(Boolean));
             if (!itemKeys.length) return null;
             const jobs = Array.isArray(resourceState.jobs) ? resourceState.jobs : [];
-            for (const job of jobs) {
+            const activeJobs = Array.isArray(resourceState.active_jobs) ? resourceState.active_jobs : [];
+            for (const job of mergeResourceJobPages(jobs, activeJobs)) {
                 const jobKeys = new Set(uniquePreserveOrder([
                     String(job?.source_post_id || '').trim() ? `post:${String(job?.source_post_id || '').trim()}` : '',
                     String(job?.message_url || '').trim() ? `msg:${String(job?.message_url || '').trim()}` : '',
@@ -1683,6 +1685,13 @@
             const nextQuickLinks = Array.isArray(data.quick_links) ? data.quick_links : (resourceState.quick_links || []);
             const nextItems = hydrateResourceItems(Array.isArray(data.items) ? data.items : (resourceState.items || []));
             const nextJobs = Array.isArray(data.jobs) ? data.jobs : (resourceState.jobs || []);
+            const nextActiveJobs = Array.isArray(data.active_jobs) ? data.active_jobs : (resourceState.active_jobs || []);
+            const nextJobCounts = data.job_counts && typeof data.job_counts === 'object'
+                ? data.job_counts
+                : (resourceState.job_counts || {});
+            const nextJobPagination = data.pagination && typeof data.pagination === 'object'
+                ? data.pagination
+                : (resourceState.job_pagination || {});
             const nextStats = data.stats || {
                 source_count: nextSources.length,
                 item_count: Number(resourceState?.stats?.item_count || 0),
@@ -1697,6 +1706,9 @@
                 quick_links: nextQuickLinks,
                 items: nextItems,
                 jobs: nextJobs,
+                active_jobs: nextActiveJobs,
+                job_counts: nextJobCounts,
+                job_pagination: nextJobPagination,
                 channel_sections: hydrateResourceSections(Array.isArray(data.channel_sections) ? data.channel_sections : (resourceState.channel_sections || [])),
                 channel_profiles: data.channel_profiles && typeof data.channel_profiles === 'object'
                     ? data.channel_profiles
@@ -1876,9 +1888,77 @@
                 });
             }
             const jobs = Array.isArray(resourceState?.jobs) ? resourceState.jobs : [];
+            const activeCount = Number(resourceState?.job_counts?.active ?? resourceState?.stats?.active_job_count ?? 0) || 0;
+            if (activeCount > 0) return true;
             return jobs.some((job) => {
                 const status = String(job?.status || '').trim().toLowerCase();
                 return ['pending', 'running', 'queued', 'importing', 'submitted'].includes(status);
+            });
+        }
+
+        function buildResourceJobsStateUrl({ status = resourceJobFilter, offset = 0, limit = RESOURCE_JOB_PAGE_SIZE } = {}) {
+            const params = new URLSearchParams();
+            const normalizedStatus = normalizeResourceJobFilter(status);
+            params.set('status', normalizedStatus);
+            params.set('offset', String(Math.max(0, Number(offset || 0) || 0)));
+            params.set('limit', String(Math.max(1, Number(limit || RESOURCE_JOB_PAGE_SIZE) || RESOURCE_JOB_PAGE_SIZE)));
+            return `/resource/jobs/state?${params.toString()}`;
+        }
+
+        function mergeResourceJobPages(existingJobs = [], incomingJobs = []) {
+            const result = [];
+            const seen = new Set();
+            [...(Array.isArray(existingJobs) ? existingJobs : []), ...(Array.isArray(incomingJobs) ? incomingJobs : [])].forEach((job) => {
+                const jobId = Number(job?.id || 0) || 0;
+                const key = jobId > 0 ? `id:${jobId}` : JSON.stringify(job || {});
+                if (seen.has(key)) return;
+                seen.add(key);
+                result.push(job);
+            });
+            return result;
+        }
+
+        async function fetchResourceJobsPage({ status = resourceJobFilter, offset = 0, append = false } = {}) {
+            const normalizedStatus = normalizeResourceJobFilter(status);
+            const normalizedOffset = Math.max(0, Number(offset || 0) || 0);
+            resourceJobFilter = normalizedStatus;
+            if (append) {
+                resourceJobLoadingMore = true;
+                renderResourceJobs();
+            }
+            try {
+                const res = await fetch(buildResourceJobsStateUrl({
+                    status: normalizedStatus,
+                    offset: normalizedOffset,
+                    limit: RESOURCE_JOB_PAGE_SIZE,
+                }));
+                if (!res.ok) return null;
+                const data = await res.json();
+                if (append) {
+                    data.jobs = mergeResourceJobPages(resourceState.jobs || [], data.jobs || []);
+                }
+                applyResourceJobsState(data);
+                return data;
+            } catch (e) {
+                return null;
+            } finally {
+                if (append) {
+                    resourceJobLoadingMore = false;
+                    renderResourceJobs();
+                }
+            }
+        }
+
+        async function loadMoreResourceJobs() {
+            if (resourceJobLoadingMore) return;
+            const pagination = resourceState?.job_pagination && typeof resourceState.job_pagination === 'object'
+                ? resourceState.job_pagination
+                : {};
+            if (!pagination.has_more) return;
+            await fetchResourceJobsPage({
+                status: pagination.status || resourceJobFilter,
+                offset: pagination.next_offset || 0,
+                append: true,
             });
         }
 
@@ -1902,15 +1982,27 @@
             }
             if (!data || typeof data !== 'object') return;
             const nextJobs = Array.isArray(data.jobs) ? data.jobs : (resourceState.jobs || []);
+            const nextActiveJobs = Array.isArray(data.active_jobs) ? data.active_jobs : (resourceState.active_jobs || []);
             const nextMonitorTasks = Array.isArray(data.monitor_tasks) ? data.monitor_tasks : (resourceState.monitor_tasks || []);
             const incomingStats = data.stats && typeof data.stats === 'object' ? data.stats : {};
+            const nextJobCounts = data.job_counts && typeof data.job_counts === 'object'
+                ? data.job_counts
+                : (resourceState.job_counts || {});
+            const nextJobPagination = data.pagination && typeof data.pagination === 'object'
+                ? data.pagination
+                : (resourceState.job_pagination || {});
             const fallbackCounts = getResourceJobCounts(nextJobs);
             resourceState = {
                 ...resourceState,
                 jobs: nextJobs,
+                active_jobs: nextActiveJobs,
+                job_counts: nextJobCounts,
+                job_pagination: nextJobPagination,
                 monitor_tasks: nextMonitorTasks,
                 stats: {
                     ...(resourceState.stats || {}),
+                    total_job_count: Number(incomingStats.total_job_count ?? nextJobCounts.total ?? fallbackCounts.total ?? 0),
+                    active_job_count: Number(incomingStats.active_job_count ?? nextJobCounts.active ?? fallbackCounts.active ?? 0),
                     completed_job_count: Number(incomingStats.completed_job_count ?? fallbackCounts.completed ?? 0),
                     failed_job_count: Number(incomingStats.failed_job_count ?? fallbackCounts.failed ?? 0),
                 }
@@ -1929,10 +2021,15 @@
             if (resourceModule?.refreshResourceJobsOnly) {
                 return resourceModule.refreshResourceJobsOnly({
                     applyResourceJobsState,
+                    buildResourceJobsStateUrl,
                 });
             }
             try {
-                const res = await fetch('/resource/jobs/state');
+                const res = await fetch(buildResourceJobsStateUrl({
+                    status: resourceJobFilter,
+                    offset: 0,
+                    limit: RESOURCE_JOB_PAGE_SIZE,
+                }));
                 if (!res.ok) return null;
                 const data = await res.json();
                 applyResourceJobsState(data);
@@ -2135,6 +2232,7 @@
             const data = await res.json();
             if (!res.ok || !data.ok) return alert(`❌ ${data.msg || '清空失败'}`);
             await refreshResourceState();
+            await fetchResourceJobsPage({ status: resourceJobFilter, offset: 0 });
             const deleted = Number(data.deleted || 0);
             if (deleted > 0) {
                 alert(`✅ 已清空 ${deleted} 条${meta.label}导入记录`);

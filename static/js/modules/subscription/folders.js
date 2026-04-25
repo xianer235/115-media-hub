@@ -31,8 +31,14 @@
         function renderSubscriptionFolderList() {
             const container = document.getElementById('subscription-folder-list');
             const summary = document.getElementById('subscription-folder-summary');
+            const refreshBtn = document.getElementById('subscription-folder-refresh-btn');
             if (!container) return;
             const providerLabel = getResourceProviderLabel(getCurrentSubscriptionProvider());
+            if (refreshBtn) {
+                refreshBtn.disabled = subscriptionFolderLoading;
+                refreshBtn.classList.toggle('btn-disabled', subscriptionFolderLoading);
+                refreshBtn.innerText = subscriptionFolderLoading ? '刷新中...' : '刷新当前目录';
+            }
             if (summary) {
                 summary.innerText = `当前目录下共有 ${Number(subscriptionFolderSummary?.folder_count || 0)} 个文件夹 / ${Number(subscriptionFolderSummary?.file_count || 0)} 个文件。`;
             }
@@ -51,14 +57,15 @@
             })).join('');
         }
 
-        async function loadSubscriptionFolders(cid = '0') {
+        async function loadSubscriptionFolders(cid = '0', { forceRefresh = false } = {}) {
             subscriptionFolderLoading = true;
             renderSubscriptionFolderBreadcrumbs();
             renderSubscriptionFolderList();
             try {
                 const result = await fetchResourceFolderData(cid, {
                     provider: getCurrentSubscriptionProvider(),
-                    foldersOnly: true
+                    foldersOnly: true,
+                    forceRefresh: !!forceRefresh
                 });
                 subscriptionFolderEntries = result.entries;
                 subscriptionFolderSummary = result.summary;
@@ -71,6 +78,13 @@
                 renderSubscriptionFolderBreadcrumbs();
                 renderSubscriptionFolderList();
             }
+        }
+
+        async function refreshCurrentSubscriptionFolder() {
+            if (subscriptionFolderLoading) return;
+            const currentCid = subscriptionFolderTrail[subscriptionFolderTrail.length - 1]?.id || '0';
+            await loadSubscriptionFolders(currentCid, { forceRefresh: true });
+            showToast('已刷新当前目录', { tone: 'success', duration: 2200, placement: 'top-center' });
         }
 
         async function openSubscriptionFolderModal() {
@@ -215,7 +229,7 @@
             const payload = getSubscriptionShareLinkPayload();
             const normalizedOffset = Math.max(0, Number(offset || 0));
             const normalizedLimit = Math.max(20, Math.min(Number(limit || RESOURCE_SHARE_BROWSE_PAGE_LIMIT), 400));
-            const res = await fetch('/resource/115/share_entries_preview', {
+            const data = await fetchResourceBrowserJson('/resource/115/share_entries_preview', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
@@ -228,8 +242,6 @@
                     limit: normalizedLimit,
                 }),
             });
-            const data = await res.json();
-            if (!res.ok || !data.ok) throw new Error(data.msg || '读取分享目录失败');
             const entries = Array.isArray(data.entries) ? data.entries : [];
             const paging = data.paging && typeof data.paging === 'object' ? data.paging : {};
             const nextOffset = Math.max(

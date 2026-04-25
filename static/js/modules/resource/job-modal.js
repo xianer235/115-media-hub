@@ -9,6 +9,25 @@
             };
         }
 
+        function normalizeResourceJobFilter(value = 'all') {
+            const normalized = String(value || 'all').trim().toLowerCase();
+            return ['all', 'active', 'submitted', 'completed', 'failed'].includes(normalized) ? normalized : 'all';
+        }
+
+        function getResourceJobDisplayCounts(jobs = []) {
+            const fallbackCounts = getResourceJobCounts(jobs);
+            const serverCounts = resourceState?.job_counts && typeof resourceState.job_counts === 'object'
+                ? resourceState.job_counts
+                : {};
+            return {
+                total: Number(serverCounts.total ?? fallbackCounts.total ?? 0),
+                active: Number(serverCounts.active ?? fallbackCounts.active ?? 0),
+                submitted: Number(serverCounts.submitted ?? fallbackCounts.submitted ?? 0),
+                completed: Number(serverCounts.completed ?? resourceState?.stats?.completed_job_count ?? fallbackCounts.completed ?? 0),
+                failed: Number(serverCounts.failed ?? resourceState?.stats?.failed_job_count ?? fallbackCounts.failed ?? 0),
+            };
+        }
+
         function isResourceJobVisible(job, filter = 'all') {
             const status = String(job?.status || '').toLowerCase();
             if (filter === 'active') return ['pending', 'running', 'submitted'].includes(status);
@@ -48,18 +67,22 @@
         function renderResourceJobs() {
             const container = document.getElementById('resource-job-list');
             const jobs = Array.isArray(resourceState.jobs) ? resourceState.jobs : [];
-            const counts = getResourceJobCounts(jobs);
+            const counts = getResourceJobDisplayCounts(jobs);
             if (!container) return;
 
             renderResourceJobFilters(counts);
 
-            const visibleJobs = jobs.filter(job => isResourceJobVisible(job, resourceJobFilter));
+            const normalizedFilter = normalizeResourceJobFilter(resourceJobFilter);
+            const pageStatus = normalizeResourceJobFilter(resourceState?.job_pagination?.status || 'all');
+            const visibleJobs = pageStatus === normalizedFilter
+                ? jobs
+                : jobs.filter(job => isResourceJobVisible(job, normalizedFilter));
             if (!visibleJobs.length) {
                 container.innerHTML = `<div class="resource-job-card-empty">${escapeHtml(getResourceJobEmptyText(resourceJobFilter))}</div>`;
                 return;
             }
 
-            container.innerHTML = visibleJobs.map(job => {
+            const rowsHtml = visibleJobs.map(job => {
                 const hasMonitorTask = !!String(job.monitor_task_name || '').trim();
                 const canManualRefresh = hasMonitorTask && !job.last_triggered_at && String(job.status || '').toLowerCase() === 'submitted';
                 const normalizedStatus = String(job.status || '').toLowerCase();
@@ -119,6 +142,24 @@
                     </div>
                 `;
             }).join('');
+            const pagination = resourceState?.job_pagination && typeof resourceState.job_pagination === 'object'
+                ? resourceState.job_pagination
+                : {};
+            const loadedCount = Number(pagination.next_offset ?? visibleJobs.length) || visibleJobs.length;
+            const totalCount = Number(pagination.total ?? counts.total) || 0;
+            const loadMoreHtml = pagination.has_more && pageStatus === normalizedFilter
+                ? `
+                    <div class="resource-browser-load-more-row">
+                        <button
+                            type="button"
+                            data-resource-job-action="load-more"
+                            class="resource-browser-load-more-btn ${resourceJobLoadingMore ? 'btn-disabled' : ''}"
+                            ${resourceJobLoadingMore ? 'disabled' : ''}
+                        >${resourceJobLoadingMore ? '加载中...' : `加载更多任务（${escapeHtml(String(loadedCount))}/${escapeHtml(String(totalCount))}）`}</button>
+                    </div>
+                `
+                : '';
+            container.innerHTML = `${rowsHtml}${loadMoreHtml}`;
         }
 
         function syncResourceJobModalTrigger() {
@@ -126,7 +167,8 @@
             const badge = document.getElementById('resource-job-modal-badge');
             if (!btn || !badge) return;
             const jobs = Array.isArray(resourceState.jobs) ? resourceState.jobs : [];
-            const activeCount = jobs.filter(job => ['pending', 'running', 'submitted'].includes(String(job?.status || '').toLowerCase())).length;
+            const pageActiveCount = jobs.filter(job => ['pending', 'running', 'submitted'].includes(String(job?.status || '').toLowerCase())).length;
+            const activeCount = Number(resourceState?.job_counts?.active ?? resourceState?.stats?.active_job_count ?? pageActiveCount) || 0;
             badge.textContent = String(activeCount);
             badge.classList.toggle('hidden', activeCount <= 0);
             btn.classList.toggle('border-sky-500', activeCount > 0);
@@ -205,6 +247,7 @@
             if (resourceJobModalOpen) {
                 lockPageScroll();
                 syncResourceJobClearMenuState();
+                void fetchResourceJobsPage({ status: resourceJobFilter, offset: 0 });
             } else {
                 closeResourceJobClearMenu();
                 unlockPageScroll();

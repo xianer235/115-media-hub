@@ -388,6 +388,8 @@ RESOURCE_JOB_STALE_RECOVER_SECONDS = max(
     30,
     min(7 * 24 * 3600, int(os.environ.get("RESOURCE_JOB_STALE_RECOVER_SECONDS", 300) or 300)),
 )
+RESOURCE_JOB_COMPLETED_KEEP = max(100, min(10000, int(os.environ.get("RESOURCE_JOB_COMPLETED_KEEP", 1000) or 1000)))
+RESOURCE_JOB_FAILED_KEEP = max(100, min(10000, int(os.environ.get("RESOURCE_JOB_FAILED_KEEP", 500) or 500)))
 TMDB_API_BASE_URL = os.environ.get("TMDB_API_BASE_URL", "https://api.themoviedb.org/3").strip().rstrip("/")
 TMDB_IMAGE_BASE_URL = os.environ.get("TMDB_IMAGE_BASE_URL", "https://image.tmdb.org/t/p").strip().rstrip("/")
 TMDB_REQUEST_TIMEOUT_SECONDS = max(5, int(os.environ.get("TMDB_REQUEST_TIMEOUT_SECONDS", 20) or 20))
@@ -711,11 +713,11 @@ def parse_subscription_schedule_time_minutes(value: Any, fallback: int = 0) -> i
     return max(0, min(23 * 60 + 59, hour * 60 + minute))
 
 
-def normalize_subscription_schedule_interval_minutes(value: Any, fallback: int = 30) -> int:
+def normalize_subscription_schedule_interval_minutes(value: Any, fallback: int = 120) -> int:
     try:
         interval = int(value if value is not None else fallback)
     except (TypeError, ValueError):
-        interval = int(fallback or 30)
+        interval = int(fallback or 120)
     return max(1, min(SUBSCRIPTION_MAX_SCHEDULE_INTERVAL_MINUTES, int(interval or 1)))
 
 
@@ -1126,9 +1128,9 @@ def normalize_subscription_task(task: Dict[str, Any]) -> Dict[str, Any]:
     except (TypeError, ValueError):
         total_episodes = 0
     try:
-        legacy_cron_minutes = int(task.get("cron_minutes", 30) or 30)
+        legacy_cron_minutes = int(task.get("cron_minutes", 120) or 120)
     except (TypeError, ValueError):
-        legacy_cron_minutes = 30
+        legacy_cron_minutes = 120
     has_schedule_weekdays = ("schedule_weekdays" in task) or ("weekdays" in task)
     has_schedule_start = ("schedule_start_time" in task) or ("start_time" in task)
     has_schedule_end = ("schedule_end_time" in task) or ("end_time" in task)
@@ -1149,13 +1151,13 @@ def normalize_subscription_task(task: Dict[str, Any]) -> Dict[str, Any]:
         fallback="23:59",
     )
     schedule_interval_raw = (
-        task.get("schedule_interval_minutes", task.get("interval_minutes", legacy_cron_minutes if legacy_cron_minutes > 0 else 30))
+        task.get("schedule_interval_minutes", task.get("interval_minutes", legacy_cron_minutes if legacy_cron_minutes > 0 else 120))
         if has_schedule_interval
-        else (legacy_cron_minutes if legacy_cron_minutes > 0 else 30)
+        else (legacy_cron_minutes if legacy_cron_minutes > 0 else 120)
     )
     schedule_interval_minutes = normalize_subscription_schedule_interval_minutes(
         schedule_interval_raw,
-        fallback=(legacy_cron_minutes if legacy_cron_minutes > 0 else 30),
+        fallback=(legacy_cron_minutes if legacy_cron_minutes > 0 else 120),
     )
     try:
         min_score = int(task.get("min_score", SUBSCRIPTION_MIN_SCORE) or SUBSCRIPTION_MIN_SCORE)
@@ -2155,8 +2157,12 @@ def build_resource_channel_sections(
             resource_channel_profiles[channel_id] = clone_jsonable(channel_profile)
         else:
             channel_profile = {}
+        fallback_next_before = get_resource_item_post_cursor(channel_items[-1]) if channel_items else ""
         has_more = item_count > len(channel_items)
-        next_before = get_resource_item_post_cursor(channel_items[-1]) if (has_more and channel_items) else ""
+        if not has_more and fallback_next_before and len(channel_items) >= max(1, int(per_channel or 10)):
+            # Channel sync intentionally keeps only the first page in cache; allow on-demand TG paging.
+            has_more = True
+        next_before = fallback_next_before if has_more else ""
         sections.append(
             {
                 "name": source.get("name", channel_id),
@@ -3176,13 +3182,21 @@ def build_ui_state_payload(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, An
 
 def build_resource_jobs_state_payload(limit: int = 40, cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     active_cfg = cfg or get_config()
-    jobs = list_resource_jobs(limit=limit)
+    jobs_page = list_resource_jobs_page(limit=limit, offset=0, status_filter="")
+    jobs = jobs_page.get("jobs", [])
+    counts = count_resource_jobs_by_status()
+    active_jobs_page = list_resource_jobs_page(limit=80, offset=0, status_filter="active")
     return {
         "jobs": clone_jsonable(jobs),
+        "active_jobs": clone_jsonable(active_jobs_page.get("jobs", [])),
         "monitor_tasks": clone_jsonable(active_cfg.get("monitor_tasks", [])),
+        "pagination": clone_jsonable(jobs_page.get("pagination", {})),
+        "job_counts": clone_jsonable(counts),
         "stats": {
-            "completed_job_count": count_resource_jobs(status="completed"),
-            "failed_job_count": count_resource_jobs(status="failed"),
+            "total_job_count": int(counts.get("total", 0) or 0),
+            "active_job_count": int(counts.get("active", 0) or 0),
+            "completed_job_count": int(counts.get("completed", 0) or 0),
+            "failed_job_count": int(counts.get("failed", 0) or 0),
         },
     }
 
@@ -3211,6 +3225,7 @@ def recover_resource_jobs_if_due(force: bool = False) -> Dict[str, Any]:
         "skipped": False,
         "stale": recover_stale_resource_jobs(),
         "submitted_without_monitor": recover_submitted_resource_jobs_without_monitor(),
+        "history_pruned": prune_resource_job_history(),
     }
 
 
@@ -3224,9 +3239,14 @@ def _build_resource_state_payload_snapshot(
     search_sections = search_meta.get("sections", []) if keyword else []
     jobs_state = build_resource_jobs_state_payload(limit=40, cfg=cfg)
     jobs = jobs_state.get("jobs", [])
+    active_jobs = jobs_state.get("active_jobs", [])
+    job_counts = jobs_state.get("job_counts", {})
+    job_pagination = jobs_state.get("pagination", {})
     total_item_count = count_resource_items(source_type="tg")
     filtered_item_count = len(items)
     stats_payload = jobs_state.get("stats", {})
+    total_job_count = int(stats_payload.get("total_job_count", 0) or 0)
+    active_job_count = int(stats_payload.get("active_job_count", 0) or 0)
     completed_job_count = int(stats_payload.get("completed_job_count", 0) or 0)
     failed_job_count = int(stats_payload.get("failed_job_count", 0) or 0)
     sources = cfg.get("resource_sources", [])
@@ -3249,6 +3269,9 @@ def _build_resource_state_payload_snapshot(
         "quick_links": clone_jsonable(cfg.get("resource_quick_links", [])),
         "items": clone_jsonable(items),
         "jobs": clone_jsonable(jobs),
+        "active_jobs": clone_jsonable(active_jobs),
+        "job_counts": clone_jsonable(job_counts),
+        "pagination": clone_jsonable(job_pagination),
         "monitor_tasks": clone_jsonable(cfg.get("monitor_tasks", [])),
         "cookie_configured": bool(str(cfg.get("cookie_115", "")).strip()),
         "quark_cookie_configured": bool(str(cfg.get("cookie_quark", "")).strip()),
@@ -3283,6 +3306,8 @@ def _build_resource_state_payload_snapshot(
             "source_count": len(enabled_sources),
             "item_count": total_item_count,
             "filtered_item_count": filtered_item_count,
+            "total_job_count": total_job_count,
+            "active_job_count": active_job_count,
             "completed_job_count": completed_job_count,
             "failed_job_count": failed_job_count,
         },
@@ -3808,13 +3833,17 @@ from .resource_jobs import (
     clear_completed_resource_jobs,
     clear_resource_jobs,
     count_resource_jobs,
+    count_resource_jobs_by_status,
     create_resource_job,
     delete_resource_item,
     find_existing_resource_job,
     get_resource_job,
     list_resource_jobs,
+    list_resource_jobs_page,
     list_resource_jobs_by_source,
     normalize_resource_job_clear_scope,
+    normalize_resource_job_status_filter,
+    prune_resource_job_history,
     recover_stale_resource_jobs,
     recover_submitted_resource_jobs_without_monitor,
     update_resource_job,

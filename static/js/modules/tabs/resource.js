@@ -39,6 +39,8 @@ export async function refreshResourceState({
 export function hasActiveResourceJobs({ getResourceState } = {}) {
     const currentResourceState = typeof getResourceState === 'function' ? (getResourceState() || {}) : {};
     const jobs = Array.isArray(currentResourceState?.jobs) ? currentResourceState.jobs : [];
+    const activeCount = Number(currentResourceState?.job_counts?.active ?? currentResourceState?.stats?.active_job_count ?? 0) || 0;
+    if (activeCount > 0) return true;
     return jobs.some((job) => {
         const status = String(job?.status || '').trim().toLowerCase();
         return ['pending', 'running', 'queued', 'importing', 'submitted'].includes(status);
@@ -59,19 +61,31 @@ export function applyResourceJobsState(data, {
     if (!data || typeof data !== 'object') return;
     const currentResourceState = typeof getResourceState === 'function' ? (getResourceState() || {}) : {};
     const nextJobs = Array.isArray(data.jobs) ? data.jobs : (currentResourceState.jobs || []);
+    const nextActiveJobs = Array.isArray(data.active_jobs) ? data.active_jobs : (currentResourceState.active_jobs || []);
     const nextMonitorTasks = Array.isArray(data.monitor_tasks) ? data.monitor_tasks : (currentResourceState.monitor_tasks || []);
     const incomingStats = data.stats && typeof data.stats === 'object' ? data.stats : {};
+    const nextJobCounts = data.job_counts && typeof data.job_counts === 'object'
+        ? data.job_counts
+        : (currentResourceState.job_counts || {});
+    const nextJobPagination = data.pagination && typeof data.pagination === 'object'
+        ? data.pagination
+        : (currentResourceState.job_pagination || {});
     const fallbackCounts = typeof getResourceJobCounts === 'function'
         ? (getResourceJobCounts(nextJobs) || {})
         : {};
     const nextState = {
         ...currentResourceState,
         jobs: nextJobs,
+        active_jobs: nextActiveJobs,
+        job_counts: nextJobCounts,
+        job_pagination: nextJobPagination,
         monitor_tasks: nextMonitorTasks,
         stats: {
             ...(currentResourceState.stats || {}),
-            completed_job_count: Number(incomingStats.completed_job_count ?? fallbackCounts.completed ?? 0),
-            failed_job_count: Number(incomingStats.failed_job_count ?? fallbackCounts.failed ?? 0),
+            total_job_count: Number(incomingStats.total_job_count ?? nextJobCounts.total ?? fallbackCounts.total ?? 0),
+            active_job_count: Number(incomingStats.active_job_count ?? nextJobCounts.active ?? fallbackCounts.active ?? 0),
+            completed_job_count: Number(incomingStats.completed_job_count ?? nextJobCounts.completed ?? fallbackCounts.completed ?? 0),
+            failed_job_count: Number(incomingStats.failed_job_count ?? nextJobCounts.failed ?? fallbackCounts.failed ?? 0),
         }
     };
     if (typeof setResourceState === 'function') setResourceState(nextState);
@@ -86,9 +100,12 @@ export function applyResourceJobsState(data, {
     }
 }
 
-export async function refreshResourceJobsOnly({ applyResourceJobsState } = {}) {
+export async function refreshResourceJobsOnly({ applyResourceJobsState, buildResourceJobsStateUrl } = {}) {
     try {
-        const res = await fetch('/resource/jobs/state');
+        const endpoint = typeof buildResourceJobsStateUrl === 'function'
+            ? buildResourceJobsStateUrl()
+            : '/resource/jobs/state';
+        const res = await fetch(endpoint);
         if (!res.ok) return null;
         const data = await res.json();
         if (typeof applyResourceJobsState === 'function') applyResourceJobsState(data);

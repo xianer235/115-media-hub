@@ -149,7 +149,7 @@
                             </label>
                             <label class="block">
                                 <span class="text-xs text-slate-500">时段内查询间隔（分钟）</span>
-                                <input id="subscription_schedule_interval_minutes" type="number" min="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="30">
+                                <input id="subscription_schedule_interval_minutes" type="number" min="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="120">
                             </label>
                         </div>
                         <div class="text-[11px] text-slate-500 leading-5">仅在所选星期与时间段内按间隔自动查询。支持跨天时段（例如 22:00 到次日 02:00）。</div>
@@ -206,6 +206,7 @@
                     <div class="flex flex-wrap gap-2">
                         <button type="button" onclick="selectCurrentSubscriptionFolder()" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold">选择当前目录</button>
                         <button type="button" onclick="goSubscriptionFolderBack()" class="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">返回上一级</button>
+                        <button id="subscription-folder-refresh-btn" type="button" onclick="refreshCurrentSubscriptionFolder()" class="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">刷新当前目录</button>
                     </div>
                     <div class="flex flex-col sm:flex-row gap-2">
                         <input id="subscription-folder-create-name" class="w-full sm:flex-1 bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm" placeholder="在当前目录新建文件夹（例如：电影）">
