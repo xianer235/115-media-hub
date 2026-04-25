@@ -1,3 +1,7 @@
+import threading
+
+import requests
+
 from .common import parse_int
 from ..share_selection import normalize_share_selection_meta
 from ..core import *  # noqa: F401,F403
@@ -9,6 +13,50 @@ from ..core import (
     _share_snap_last_request_monotonic,
     _share_snap_rate_limit_lock,
 )
+
+_pan115_http_local = threading.local()
+_CLOUD115_WEBAPI_REFERER = "https://servicewechat.com/wx2c744c010a61b0fa/94/page-frame.html"
+_CLOUD115_WEBAPI_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36 "
+    "MicroMessenger/6.8.0(0x16080000) NetType/WIFI MiniProgramEnv/Mac "
+    "MacWechat/WMPF MacWechat/3.8.9(0x13080910) XWEB/1227"
+)
+
+
+def _get_115_webapi_session() -> requests.Session:
+    session = getattr(_pan115_http_local, "webapi_session", None)
+    if session is None:
+        session = requests.Session()
+        _pan115_http_local.webapi_session = session
+    return session
+
+
+def _build_115_webapi_headers(cookie: str, referer: str = "") -> Dict[str, str]:
+    return {
+        "Cookie": str(cookie or "").strip(),
+        "Accept": "application/json, text/plain, */*",
+        "Connection": "keep-alive",
+        "xweb_xhr": "1",
+        "Referer": str(referer or "").strip() or _CLOUD115_WEBAPI_REFERER,
+        "User-Agent": _CLOUD115_WEBAPI_USER_AGENT,
+        "Accept-Language": "zh-CN,zh;q=0.9",
+    }
+
+
+def _request_115_webapi_json(url: str, headers: Dict[str, str], timeout: int = 30) -> Dict[str, Any]:
+    response = _get_115_webapi_session().get(
+        normalize_http_url(url),
+        headers=headers,
+        timeout=max(3, int(timeout or 30)),
+    )
+    response.raise_for_status()
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise RuntimeError("115 返回内容不是有效 JSON") from exc
+    return payload if isinstance(payload, dict) else {}
+
 
 def submit_115_offline_task(cookie: str, resource_url: str, folder_id: str) -> Dict[str, Any]:
     cookie = str(cookie or "").strip()
@@ -64,6 +112,21 @@ def throttle_115_api_requests(rate_limit_seconds: float = 0.0) -> None:
 def _clone_115_entries(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [dict(item or {}) for item in (entries or [])]
 
+
+def _clone_115_entries_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    source = payload if isinstance(payload, dict) else {}
+    return {
+        "entries": _clone_115_entries(source.get("entries", [])),
+        "summary": dict(source.get("summary", {}) if isinstance(source.get("summary"), dict) else {}),
+        "entries_complete": bool(source.get("entries_complete", True)),
+    }
+
+
+def _build_115_list_cache_key(cid: str, folders_only: bool = False) -> str:
+    target_cid = str(cid or "0").strip() or "0"
+    return f"{target_cid}|{'folders' if folders_only else 'full'}"
+
+
 def _prune_115_list_cache_locked(now_ts: float) -> None:
     if not _api_115_list_cache:
         return
@@ -92,76 +155,187 @@ def invalidate_115_entries_cache(cid: str = "") -> None:
             _api_115_list_cache.clear()
             return
         _api_115_list_cache.pop(target_cid, None)
+        _api_115_list_cache.pop(_build_115_list_cache_key(target_cid, False), None)
+        _api_115_list_cache.pop(_build_115_list_cache_key(target_cid, True), None)
 
-def list_115_entries(cookie: str, cid: str = "0", force_refresh: bool = False) -> List[Dict[str, Any]]:
+
+def _normalize_115_file_entry(item: Dict[str, Any]) -> Dict[str, Any]:
+    source = item if isinstance(item, dict) else {}
+    name = str(source.get("n") or source.get("name") or "").strip()
+    folder_id = str(source.get("cid") or "").strip()
+    file_id = str(source.get("fid") or source.get("file_id") or "").strip()
+    sha1 = str(source.get("sha1") or source.get("sha") or "").strip()
+    is_dir = bool(folder_id) and not file_id and not sha1
+    entry_id = folder_id if is_dir else (file_id or str(source.get("pick_code") or source.get("pc") or sha1).strip())
+    if not name or not entry_id:
+        return {}
+    return {
+        "id": entry_id,
+        "cid": folder_id if is_dir else "",
+        "name": name,
+        "is_dir": is_dir,
+        "size": parse_int(source.get("s") or source.get("size") or 0),
+        "pick_code": str(source.get("pick_code") or source.get("pc") or "").strip(),
+        "sha1": sha1,
+        "modified_at": str(source.get("te") or source.get("t") or source.get("tp") or source.get("tu") or "").strip(),
+    }
+
+
+def _request_115_entries_payload_fast(
+    cookie: str,
+    target_cid: str,
+    folders_only: bool,
+    timeout: int = 30,
+) -> Dict[str, Any]:
+    page_limit = 300
+    params = {
+        "aid": 1,
+        "cid": target_cid,
+        "o": "user_ptime",
+        "asc": 1,
+        "offset": 0,
+        "show_dir": 1,
+        "limit": page_limit,
+        "type": 0,
+        "format": "json",
+        "star": 0,
+        "suffix": "",
+        "natsort": 0,
+        "snap": 0,
+        "record_open_time": 1,
+        "fc_mix": 0,
+    }
+    url = f"https://webapi.115.com/files?{urllib.parse.urlencode(params)}"
+    result = _request_115_webapi_json(
+        url,
+        headers=_build_115_webapi_headers(cookie),
+        timeout=timeout,
+    )
+    if not result.get("state", False):
+        detail = str(result.get("error", "") or result.get("msg", "") or "读取 115 文件夹失败").strip()
+        raise RuntimeError(detail)
+    raw_entries = result.get("data") or []
+    entries = [
+        entry
+        for entry in (_normalize_115_file_entry(item) for item in raw_entries)
+        if entry.get("id") and entry.get("name") and ((not folders_only) or entry.get("is_dir"))
+    ]
+    entries.sort(key=lambda item: (0 if item["is_dir"] else 1, str(item["name"]).lower()))
+    folder_count = sum(1 for item in entries if item.get("is_dir"))
+    total_count = max(0, parse_int(result.get("count") or result.get("total") or 0))
+    if folders_only:
+        file_count = max(0, total_count - folder_count) if total_count > folder_count else 0
+    else:
+        file_count = sum(1 for item in entries if not item.get("is_dir"))
+    return {
+        "entries": entries,
+        "summary": {
+            "folder_count": folder_count,
+            "file_count": file_count,
+        },
+        "entries_complete": not folders_only,
+    }
+
+
+def _request_115_entries_payload_legacy(
+    cookie: str,
+    target_cid: str,
+    folders_only: bool,
+    timeout: int = 45,
+) -> Dict[str, Any]:
+    headers = {
+        "Cookie": cookie,
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://115.com/",
+        "User-Agent": "Mozilla/5.0 115-media-hub",
+    }
+    url = (
+        "https://aps.115.com/natsort/files.php"
+        f"?aid=1&cid={urllib.parse.quote(target_cid)}&offset=0&limit=300&show_dir=1&natsort=1&format=json"
+    )
+    result = http_request_json(url, extra_headers=headers, timeout=timeout)
+    if not result.get("state", False):
+        detail = str(result.get("error", "") or result.get("msg", "") or "读取 115 文件夹失败").strip()
+        raise RuntimeError(detail)
+
+    all_entries = [
+        entry
+        for entry in (_normalize_115_file_entry(item) for item in (result.get("data") or []))
+        if entry.get("id") and entry.get("name")
+    ]
+    entries = [entry for entry in all_entries if (not folders_only) or entry.get("is_dir")]
+    entries.sort(key=lambda item: (0 if item["is_dir"] else 1, str(item["name"]).lower()))
+    folder_count = sum(1 for item in entries if item.get("is_dir"))
+    file_count = max(0, len(all_entries) - sum(1 for item in all_entries if item.get("is_dir")))
+    return {
+        "entries": entries,
+        "summary": {
+            "folder_count": folder_count,
+            "file_count": file_count,
+        },
+        "entries_complete": not folders_only,
+    }
+
+
+def list_115_entries_payload(
+    cookie: str,
+    cid: str = "0",
+    force_refresh: bool = False,
+    folders_only: bool = False,
+) -> Dict[str, Any]:
     cookie = str(cookie or "").strip()
     if not cookie:
         raise RuntimeError("115 Cookie 未配置")
     target_cid = str(cid or "0").strip() or "0"
+    folder_only_mode = bool(folders_only)
     runtime_tuning = get_api_115_runtime_tuning()
     cache_ttl_seconds = max(0, int(runtime_tuning.get("list_cache_ttl_seconds", API_115_LIST_CACHE_TTL_SECONDS) or 0))
+    cache_key = _build_115_list_cache_key(target_cid, folder_only_mode)
 
     if (not force_refresh) and cache_ttl_seconds > 0:
         now_ts = time.time()
         with _api_115_list_cache_lock:
-            cached = _api_115_list_cache.get(target_cid)
+            cached = _api_115_list_cache.get(cache_key)
+            if (not folder_only_mode) and not cached:
+                cached = _api_115_list_cache.get(target_cid)
             if cached and now_ts < float(cached.get("expires_at", 0.0) or 0.0):
-                return _clone_115_entries(cached.get("entries", []))
+                return _clone_115_entries_payload(cached)
 
     try:
         throttle_115_api_requests()
-        headers = {
-            "Cookie": cookie,
-            "Accept": "application/json, text/plain, */*",
-            "Referer": "https://115.com/",
-            "User-Agent": "Mozilla/5.0 115-media-hub",
-        }
-        url = (
-            "https://aps.115.com/natsort/files.php"
-            f"?aid=1&cid={urllib.parse.quote(target_cid)}&offset=0&limit=300&show_dir=1&natsort=1&format=json"
-        )
-        result = http_request_json(url, extra_headers=headers, timeout=45)
-        if not result.get("state", False):
-            detail = str(result.get("error", "") or result.get("msg", "") or "读取 115 文件夹失败").strip()
-            raise RuntimeError(detail)
-
-        entries: List[Dict[str, Any]] = []
-        for item in result.get("data") or []:
-            name = str(item.get("n") or "").strip()
-            folder_id = str(item.get("cid") or "").strip()
-            file_id = str(item.get("fid") or "").strip()
-            sha1 = str(item.get("sha1") or item.get("sha") or "").strip()
-            is_dir = not file_id and not sha1
-            entry_id = folder_id if is_dir else (file_id or str(item.get("pick_code") or item.get("pc") or sha1).strip())
-            if not name or not entry_id:
-                continue
-            entries.append(
-                {
-                    "id": entry_id,
-                    "cid": folder_id if is_dir else "",
-                    "name": name,
-                    "is_dir": is_dir,
-                    "size": parse_int(item.get("s") or item.get("size") or 0),
-                    "pick_code": str(item.get("pick_code") or item.get("pc") or "").strip(),
-                    "sha1": sha1,
-                    "modified_at": str(item.get("te") or item.get("t") or item.get("tp") or item.get("tu") or "").strip(),
-                }
-            )
-        entries.sort(key=lambda item: (0 if item["is_dir"] else 1, str(item["name"]).lower()))
+        if folder_only_mode:
+            try:
+                payload = _request_115_entries_payload_fast(cookie, target_cid, folder_only_mode, timeout=30)
+            except Exception:
+                payload = _request_115_entries_payload_legacy(cookie, target_cid, folder_only_mode, timeout=45)
+        else:
+            payload = _request_115_entries_payload_legacy(cookie, target_cid, folder_only_mode, timeout=45)
         if cache_ttl_seconds > 0:
             now_ts = time.time()
             with _api_115_list_cache_lock:
-                _api_115_list_cache[target_cid] = {
-                    "entries": _clone_115_entries(entries),
+                _api_115_list_cache[cache_key] = {
+                    "entries": _clone_115_entries(payload.get("entries", [])),
+                    "summary": dict(payload.get("summary", {}) if isinstance(payload.get("summary"), dict) else {}),
+                    "entries_complete": bool(payload.get("entries_complete", True)),
                     "updated_at": now_ts,
                     "expires_at": now_ts + cache_ttl_seconds,
                 }
                 _prune_115_list_cache_locked(now_ts)
         mark_cookie_health_success("115", trigger="runtime:list_115_entries")
-        return entries
+        return _clone_115_entries_payload(payload)
     except Exception as exc:
         mark_cookie_health_failure("115", exc, trigger="runtime:list_115_entries")
         raise
+
+
+def list_115_entries(
+    cookie: str,
+    cid: str = "0",
+    force_refresh: bool = False,
+    folders_only: bool = False,
+) -> List[Dict[str, Any]]:
+    payload = list_115_entries_payload(cookie, cid, force_refresh=force_refresh, folders_only=folders_only)
+    return _clone_115_entries(payload.get("entries", []))
 
 def create_115_folder(cookie: str, cid: str = "0", folder_name: str = "") -> Dict[str, Any]:
     cookie = str(cookie or "").strip()
@@ -205,7 +379,7 @@ def create_115_folder(cookie: str, cid: str = "0", folder_name: str = "") -> Dic
             return next((item for item in candidates if item and item != "0"), "")
 
         def find_existing_folder_id() -> str:
-            entries = list_115_entries(cookie, parent_cid, True)
+            entries = list_115_entries(cookie, parent_cid, True, folders_only=True)
             matched = next(
                 (
                     entry
@@ -263,7 +437,7 @@ def ensure_115_folder_id_by_path(cookie: str, relative_path: str) -> str:
         part = str(raw_part or "").strip()
         if not part:
             continue
-        entries = list_115_entries(cookie, current_cid)
+        entries = list_115_entries(cookie, current_cid, folders_only=True)
         matched = next(
             (
                 entry
@@ -288,7 +462,7 @@ def resolve_115_folder_id_by_path(cookie: str, relative_path: str) -> str:
     walked_parts: List[str] = []
     for part in [segment for segment in normalized_path.split("/") if segment]:
         walked_parts.append(part)
-        entries = list_115_entries(cookie, current_cid)
+        entries = list_115_entries(cookie, current_cid, folders_only=True)
         matched = next(
             (
                 entry
@@ -305,7 +479,7 @@ def resolve_115_folder_id_by_path(cookie: str, relative_path: str) -> str:
 def list_115_folders(cookie: str, cid: str = "0") -> List[Dict[str, str]]:
     return [
         {"id": str(entry.get("id", "")).strip(), "name": str(entry.get("name", "")).strip()}
-        for entry in list_115_entries(cookie, cid)
+        for entry in list_115_entries(cookie, cid, folders_only=True)
         if entry.get("is_dir")
     ]
 
@@ -377,6 +551,12 @@ def _throttle_115_share_snap_requests(rate_limit_seconds: float = 0.0) -> None:
         _share_snap_last_request_monotonic = time.monotonic()
 
 def _is_retryable_115_share_snap_error(exc: Exception) -> bool:
+    if isinstance(exc, requests.HTTPError):
+        response = getattr(exc, "response", None)
+        status_code = int(getattr(response, "status_code", 0) or 0)
+        return status_code in (405, 408, 409, 425, 429, 500, 502, 503, 504)
+    if isinstance(exc, requests.RequestException):
+        return True
     if isinstance(exc, urllib.error.HTTPError):
         return int(getattr(exc, "code", 0) or 0) in (405, 408, 409, 425, 429, 500, 502, 503, 504)
     if isinstance(exc, urllib.error.URLError):
@@ -654,12 +834,7 @@ def list_115_share_entries(
         request_timeout_value = max(5, int(request_timeout or 45))
         retry_total = max(0, int(max_request_retries or 0))
 
-        headers = {
-            "Cookie": cookie,
-            "Accept": "application/json, text/plain, */*",
-            "Referer": parsed.get("url", "https://115.com/"),
-            "User-Agent": "Mozilla/5.0 115-media-hub",
-        }
+        headers = _build_115_webapi_headers(cookie)
         entries: List[Dict[str, Any]] = []
         offset_cursor = start_offset
         total_count = 0
@@ -683,9 +858,9 @@ def list_115_share_entries(
             for attempt in range(0, retry_total + 1):
                 try:
                     _throttle_115_share_snap_requests(rate_limit_seconds=rate_limit_seconds)
-                    result = http_request_json(
+                    result = _request_115_webapi_json(
                         f"https://webapi.115.com/share/snap?{query}",
-                        extra_headers=headers,
+                        headers=headers,
                         timeout=request_timeout_value,
                     )
                     last_request_error = None

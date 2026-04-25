@@ -271,8 +271,8 @@ RESOURCE_CHANNEL_CACHE_GLOBAL_LIMIT = max(
     int(os.environ.get("RESOURCE_CHANNEL_CACHE_GLOBAL_LIMIT", 2000) or 2000),
 )
 SHARE_SNAP_RATE_LIMIT_SECONDS = max(
-    0.2,
-    min(5.0, float(os.environ.get("SHARE_SNAP_RATE_LIMIT_SECONDS", 1.0) or 1.0)),
+    0.05,
+    min(5.0, float(os.environ.get("SHARE_SNAP_RATE_LIMIT_SECONDS", 0.2) or 0.2)),
 )
 SHARE_SNAP_CACHE_TTL_SECONDS = max(
     10,
@@ -288,7 +288,7 @@ API_115_RATE_LIMIT_SECONDS = max(
 )
 API_115_LIST_CACHE_TTL_SECONDS = max(
     0,
-    min(3600, int(os.environ.get("API_115_LIST_CACHE_TTL_SECONDS", 8) or 8)),
+    min(3600, int(os.environ.get("API_115_LIST_CACHE_TTL_SECONDS", 60) or 60)),
 )
 API_115_DOWNLOAD_URL_CACHE_TTL_SECONDS = max(
     0,
@@ -3867,6 +3867,7 @@ from .providers.pan115 import (
     invalidate_115_entries_cache,
     is_115_share_receive_duplicate_response,
     list_115_entries,
+    list_115_entries_payload,
     list_115_folders,
     list_115_share_entries,
     load_115_share_page_cache,

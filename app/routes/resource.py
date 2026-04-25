@@ -12,7 +12,10 @@ from ..services.resource import cancel_resource_job, retry_resource_job, run_res
 router = APIRouter()
 resource_job_create_lock = asyncio.Lock()
 RESOURCE_SHARE_BROWSE_TIMEOUT_SECONDS = 30
-RESOURCE_SHARE_BROWSE_RATE_LIMIT_SECONDS = 0.25
+RESOURCE_SHARE_BROWSE_RATE_LIMIT_SECONDS = max(
+    0.0,
+    min(2.0, float(os.environ.get("RESOURCE_SHARE_BROWSE_RATE_LIMIT_SECONDS", 0.05) or 0.05)),
+)
 RESOURCE_SHARE_BROWSE_MAX_RETRIES = 1
 RESOURCE_BROWSE_WORKERS = max(2, min(8, int(os.environ.get("RESOURCE_BROWSE_WORKERS", 4) or 4)))
 resource_browse_executor = ThreadPoolExecutor(
@@ -97,6 +100,48 @@ def _build_resource_share_entries_response(
             "paged": paged,
             "folders_only": folders_only,
         },
+    }
+
+
+def _build_resource_folder_response(
+    cid: str,
+    entries: List[Dict[str, Any]],
+    summary: Dict[str, Any],
+    *,
+    folders_only: bool,
+    compact: bool,
+    entries_complete: bool,
+) -> Dict[str, Any]:
+    entries_all = entries if isinstance(entries, list) else []
+    folder_entries = [entry for entry in entries_all if entry.get("is_dir")]
+    normalized_summary = summary if isinstance(summary, dict) else {}
+    folder_count = parse_int(normalized_summary.get("folder_count", len(folder_entries)), default=len(folder_entries))
+    summary_payload = {
+        "folder_count": max(folder_count, len(folder_entries)),
+        "file_count": max(0, parse_int(normalized_summary.get("file_count", 0), default=0)),
+    }
+    response_entries = folder_entries if folders_only else entries_all
+    if compact:
+        return {
+            "ok": True,
+            "cid": cid,
+            "entries": _compact_resource_browser_entries(response_entries),
+            "summary": summary_payload,
+            "entries_complete": bool(entries_complete),
+        }
+    files = [] if folders_only else [entry for entry in entries_all if not entry.get("is_dir")]
+    folders = [
+        {"id": str(entry.get("id", "")).strip(), "name": str(entry.get("name", "")).strip()}
+        for entry in folder_entries
+    ]
+    return {
+        "ok": True,
+        "cid": cid,
+        "folders": folders,
+        "files": files,
+        "entries": response_entries,
+        "summary": summary_payload,
+        "entries_complete": bool(entries_complete),
     }
 
 
@@ -503,34 +548,21 @@ async def get_115_folders_endpoint(request: Request) -> Dict[str, Any]:
     compact = request.query_params.get("compact") == "1"
     force_refresh = request.query_params.get("force_refresh") == "1"
     try:
-        entries_all = await run_resource_browse_io(list_115_entries, cookie, cid, force_refresh)
-        folder_entries = [entry for entry in entries_all if entry.get("is_dir")]
-        file_count = max(0, len(entries_all) - len(folder_entries))
-        entries = folder_entries if folders_only else entries_all
-        summary = {
-            "folder_count": len(folder_entries),
-            "file_count": file_count,
-        }
-        if compact:
-            return {
-                "ok": True,
-                "cid": cid,
-                "entries": _compact_resource_browser_entries(entries),
-                "summary": summary,
-            }
-        files = [] if folders_only else [entry for entry in entries_all if not entry.get("is_dir")]
-        folders = [
-            {"id": str(entry.get("id", "")).strip(), "name": str(entry.get("name", "")).strip()}
-            for entry in folder_entries
-        ]
-        return {
-            "ok": True,
-            "cid": cid,
-            "folders": folders,
-            "files": files,
-            "entries": entries,
-            "summary": summary,
-        }
+        payload = await run_resource_browse_io(
+            list_115_entries_payload,
+            cookie,
+            cid,
+            force_refresh,
+            folders_only,
+        )
+        return _build_resource_folder_response(
+            cid,
+            payload.get("entries", []) if isinstance(payload, dict) else [],
+            payload.get("summary", {}) if isinstance(payload, dict) else {},
+            folders_only=folders_only,
+            compact=compact,
+            entries_complete=bool((payload if isinstance(payload, dict) else {}).get("entries_complete", not folders_only)),
+        )
     except Exception as exc:
         return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
 
@@ -666,34 +698,21 @@ async def get_quark_folders_endpoint(request: Request) -> Dict[str, Any]:
     try:
         payload = await run_resource_browse_io(list_quark_entries_payload, cookie, cid, folders_only)
         entries_all = payload.get("entries", []) if isinstance(payload.get("entries"), list) else []
-        folder_entries = [entry for entry in entries_all if entry.get("is_dir")]
-        entries = folder_entries if folders_only else entries_all
         summary = payload.get("summary", {}) if isinstance(payload.get("summary"), dict) else {}
         if not summary:
+            folder_entries = [entry for entry in entries_all if entry.get("is_dir")]
             summary = {
                 "folder_count": len(folder_entries),
                 "file_count": max(0, len(entries_all) - len(folder_entries)),
             }
-        if compact:
-            return {
-                "ok": True,
-                "cid": cid,
-                "entries": _compact_resource_browser_entries(entries),
-                "summary": summary,
-            }
-        files = [] if folders_only else [entry for entry in entries_all if not entry.get("is_dir")]
-        folders = [
-            {"id": str(entry.get("id", "")).strip(), "name": str(entry.get("name", "")).strip()}
-            for entry in folder_entries
-        ]
-        return {
-            "ok": True,
-            "cid": cid,
-            "folders": folders,
-            "files": files,
-            "entries": entries,
-            "summary": summary,
-        }
+        return _build_resource_folder_response(
+            cid,
+            entries_all,
+            summary,
+            folders_only=folders_only,
+            compact=compact,
+            entries_complete=not folders_only,
+        )
     except Exception as exc:
         return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
 

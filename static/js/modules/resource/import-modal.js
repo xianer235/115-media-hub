@@ -458,7 +458,7 @@
                 if (requestToken && requestToken !== resourceFolderRequestToken) return;
                 resourceFolderEntries = Array.isArray(cachedBranch.entries) ? cachedBranch.entries : [];
                 resourceFolderSummary = cachedBranch.summary || { folder_count: 0, file_count: 0 };
-                resourceFolderEntriesComplete = true;
+                resourceFolderEntriesComplete = cachedBranch.entries_complete !== false;
                 resourceFolderFilesLoading = false;
                 renderResourceFolderList();
                 return;
@@ -470,7 +470,7 @@
                 if (requestToken && requestToken !== resourceFolderRequestToken) return;
                 resourceFolderEntries = Array.isArray(result.entries) ? result.entries : [];
                 resourceFolderSummary = result.summary || { folder_count: 0, file_count: 0 };
-                resourceFolderEntriesComplete = true;
+                resourceFolderEntriesComplete = result.entries_complete !== false;
             } catch (e) {
                 if (requestToken && requestToken !== resourceFolderRequestToken) return;
                 if (!silent) {
@@ -498,18 +498,18 @@
             if (cachedBranch) {
                 resourceFolderEntries = Array.isArray(cachedBranch.entries) ? cachedBranch.entries : [];
                 resourceFolderSummary = cachedBranch.summary || { folder_count: 0, file_count: 0 };
-                resourceFolderEntriesComplete = true;
+                resourceFolderEntriesComplete = cachedBranch.entries_complete !== false;
                 resourceFolderLoading = false;
                 resourceFolderFilesLoading = false;
                 renderResourceFolderBreadcrumbs();
                 renderResourceFolderList();
-                return;
+                return true;
             }
 
             if (cachedFoldersOnlyBranch) {
                 resourceFolderEntries = Array.isArray(cachedFoldersOnlyBranch.entries) ? cachedFoldersOnlyBranch.entries : [];
                 resourceFolderSummary = cachedFoldersOnlyBranch.summary || { folder_count: 0, file_count: 0 };
-                resourceFolderEntriesComplete = Number(resourceFolderSummary?.file_count || 0) <= 0;
+                resourceFolderEntriesComplete = cachedFoldersOnlyBranch.entries_complete !== false;
                 resourceFolderLoading = false;
                 resourceFolderFilesLoading = !resourceFolderEntriesComplete;
             } else {
@@ -529,19 +529,30 @@
                 if (requestToken !== resourceFolderRequestToken) return;
                 resourceFolderEntries = Array.isArray(result.entries) ? result.entries : [];
                 resourceFolderSummary = result.summary || { folder_count: 0, file_count: 0 };
-                resourceFolderEntriesComplete = Number(resourceFolderSummary?.file_count || 0) <= 0;
+                resourceFolderEntriesComplete = result.entries_complete !== false;
+                return true;
             } catch (e) {
                 if (requestToken !== resourceFolderRequestToken) return;
                 resourceFolderEntries = [];
                 resourceFolderSummary = { folder_count: 0, file_count: 0 };
                 resourceFolderEntriesComplete = false;
                 showToast(`目录读取失败：${e.message || '请稍后重试'}`, { tone: 'error', duration: 3200 });
+                return false;
             } finally {
                 if (requestToken !== resourceFolderRequestToken) return;
                 resourceFolderLoading = false;
                 resourceFolderFilesLoading = false;
                 renderResourceFolderBreadcrumbs();
                 renderResourceFolderList();
+            }
+        }
+
+        async function refreshCurrentResourceFolder() {
+            if (resourceFolderLoading || resourceFolderFilesLoading) return;
+            const currentCid = resourceFolderTrail[resourceFolderTrail.length - 1]?.id || '0';
+            const refreshed = await loadResourceFolders(currentCid, { forceRefresh: true });
+            if (refreshed) {
+                showToast('已刷新当前目录', { tone: 'success', duration: 2200, placement: 'top-center' });
             }
         }
 
@@ -639,6 +650,7 @@
             copyResourceRecord,
             renderResourceFolderList,
             loadResourceFolderFiles,
+            refreshCurrentResourceFolder,
             openResourceFolderModal,
             closeResourceFolderModal,
             goResourceFolderBack,

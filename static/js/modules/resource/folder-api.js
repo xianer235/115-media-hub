@@ -61,7 +61,8 @@
             if (!cached) return null;
             return {
                 entries: cloneJsonValue(cached.entries, []),
-                summary: cloneJsonValue(cached.summary, { folder_count: 0, file_count: 0 })
+                summary: cloneJsonValue(cached.summary, { folder_count: 0, file_count: 0 }),
+                entries_complete: cached.entries_complete !== false
             };
         }
 
@@ -72,6 +73,7 @@
             resourceFolderBranchCache[cacheKey] = {
                 entries: cloneJsonValue(entries, []),
                 summary: cloneJsonValue(summary, { folder_count: 0, file_count: 0 }),
+                entries_complete: payload?.entries_complete !== false,
                 cached_at: Date.now()
             };
             pruneResourceFolderBranchCache();
@@ -100,14 +102,16 @@
                 summary: {
                     folder_count: Number(sourceSummary.folder_count || folderEntries.length),
                     file_count: Number(sourceSummary.file_count || 0)
-                }
+                },
+                entries_complete: false
             };
         }
 
         function setResourceFolderBranchCaches(cid = '0', payload = {}, { provider = '115' } = {}) {
             const fullPayload = {
                 entries: Array.isArray(payload?.entries) ? payload.entries : [],
-                summary: payload?.summary || buildResourceFolderSummaryFromEntries(payload?.entries || [])
+                summary: payload?.summary || buildResourceFolderSummaryFromEntries(payload?.entries || []),
+                entries_complete: payload?.entries_complete !== false
             };
             setResourceFolderBranchCache(cid, fullPayload, { provider, foldersOnly: false });
             setResourceFolderBranchCache(cid, buildResourceFoldersOnlyPayload(fullPayload), { provider, foldersOnly: true });
@@ -146,7 +150,8 @@
                 if (cached) {
                     return {
                         entries: Array.isArray(cached.entries) ? cached.entries : [],
-                        summary: cached.summary || { folder_count: 0, file_count: 0 }
+                        summary: cached.summary || { folder_count: 0, file_count: 0 },
+                        entries_complete: cached.entries_complete !== false
                     };
                 }
             }
@@ -159,7 +164,8 @@
                 const sharedPayload = await inFlight;
                 return {
                     entries: cloneJsonValue(sharedPayload.entries, []),
-                    summary: cloneJsonValue(sharedPayload.summary, { folder_count: 0, file_count: 0 })
+                    summary: cloneJsonValue(sharedPayload.summary, { folder_count: 0, file_count: 0 }),
+                    entries_complete: sharedPayload.entries_complete !== false
                 };
             }
             const requestPromise = (async () => {
@@ -178,7 +184,10 @@
                     summary: {
                         folder_count: Number(summary.folder_count || 0),
                         file_count: Number(summary.file_count || 0)
-                    }
+                    },
+                    entries_complete: typeof data.entries_complete === 'boolean'
+                        ? data.entries_complete
+                        : !normalizedFoldersOnly
                 };
                 if (normalizedFoldersOnly) {
                     setResourceFolderBranchCache(normalizedCid, payload, cacheOptions);
@@ -192,7 +201,8 @@
                 const payload = await requestPromise;
                 return {
                     entries: cloneJsonValue(payload.entries, []),
-                    summary: cloneJsonValue(payload.summary, { folder_count: 0, file_count: 0 })
+                    summary: cloneJsonValue(payload.summary, { folder_count: 0, file_count: 0 }),
+                    entries_complete: payload.entries_complete !== false
                 };
             } finally {
                 if (resourceFolderFetchInFlight[cacheKey] === requestPromise) {

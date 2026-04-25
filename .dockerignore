@@ -5,6 +5,7 @@ __pycache__/
 .Python
 .pytest_cache/
 .mypy_cache/
+.venv/
 logs/
 *.log
 strm/

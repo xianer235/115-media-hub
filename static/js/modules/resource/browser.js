@@ -128,14 +128,27 @@
     function renderResourceFolderList(ctx) {
         const container = document.getElementById('resource-folder-list');
         const summary = document.getElementById('resource-folder-summary');
+        const refreshBtn = document.getElementById('resource-folder-refresh-btn');
         if (!container) return;
         const providerLabel = ctx.getResourceProviderLabel(ctx.getCurrentResourceProvider());
+        if (refreshBtn) {
+            const refreshing = !!ctx.resourceFolderLoading;
+            const readingFiles = !!ctx.resourceFolderFilesLoading;
+            const busy = refreshing || readingFiles;
+            refreshBtn.disabled = busy;
+            refreshBtn.classList.toggle('btn-disabled', busy);
+            refreshBtn.innerText = refreshing ? '刷新中...' : (readingFiles ? '读取中...' : '刷新当前目录');
+        }
         if (summary) {
             const folderCount = Number(ctx.resourceFolderSummary?.folder_count || 0);
             const fileCount = Number(ctx.resourceFolderSummary?.file_count || 0);
-            summary.innerText = ctx.resourceFolderEntriesComplete
-                ? `当前目录下共有 ${folderCount} 个文件夹 / ${fileCount} 个文件。`
-                : `当前目录下共有 ${folderCount} 个文件夹 / ${fileCount} 个文件，默认优先加载文件夹以提升打开速度。`;
+            if (ctx.resourceFolderEntriesComplete) {
+                summary.innerText = `当前目录下共有 ${folderCount} 个文件夹 / ${fileCount} 个文件。`;
+            } else if (fileCount > 0) {
+                summary.innerText = `当前目录下共有 ${folderCount} 个文件夹 / ${fileCount} 个文件，默认优先加载文件夹以提升打开速度。`;
+            } else {
+                summary.innerText = `已优先加载 ${folderCount} 个文件夹，文件列表默认延后加载以提升打开速度。`;
+            }
         }
         if (ctx.resourceFolderLoading && !ctx.resourceFolderEntries.length) {
             container.innerHTML = `<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">正在读取${ctx.escapeHtml(providerLabel)}目录...</div>`;
@@ -155,13 +168,14 @@
         if (!ctx.resourceFolderEntriesComplete) {
             const lines = folders.map(entry => ctx.buildResourceEntryRow(entry, { showOpenButton: true }));
             const fileCount = Number(ctx.resourceFolderSummary?.file_count || 0);
-            if (ctx.resourceFolderFilesLoading && fileCount > 0) {
+            if (ctx.resourceFolderFilesLoading) {
                 lines.push('<div class="rounded-2xl border border-dashed border-slate-700 px-4 py-3 text-[12px] text-slate-400">目录已可操作，正在后台补充文件预览...</div>');
-            } else if (fileCount > 0) {
+            } else {
+                const fileCountLabel = fileCount > 0 ? `（共 ${ctx.escapeHtml(String(fileCount))} 个）` : '';
                 lines.push(
-                    `<div class="rounded-2xl border border-slate-700/60 bg-slate-900/40 px-4 py-3 text-[12px] text-slate-300">` +
+                    `<div class="resource-browser-hint-card rounded-2xl border border-slate-700/60 bg-slate-900/40 px-4 py-3 text-[12px] text-slate-300">` +
                     `为保证目录打开速度，文件列表默认延后加载。` +
-                    `<button type="button" data-resource-folder-action="load-files" class="ml-2 resource-entry-action">加载文件预览（共 ${ctx.escapeHtml(String(fileCount))} 个）</button>` +
+                    `<button type="button" data-resource-folder-action="load-files" class="ml-2 resource-entry-action">加载文件预览${fileCountLabel}</button>` +
                     `</div>`
                 );
             }
@@ -182,7 +196,7 @@
                 ? `显示全部文件（共 ${files.length} 个）`
                 : `仅显示前 ${ctx.RESOURCE_FOLDER_FILE_PREVIEW_LIMIT} 个文件`;
             lines.push(
-                `<div class="rounded-2xl border border-slate-700/60 bg-slate-900/40 px-4 py-3 text-[12px] text-slate-300">` +
+                `<div class="resource-browser-hint-card rounded-2xl border border-slate-700/60 bg-slate-900/40 px-4 py-3 text-[12px] text-slate-300">` +
                 `为保证目录打开速度，默认仅渲染前 ${ctx.RESOURCE_FOLDER_FILE_PREVIEW_LIMIT} 个文件。` +
                 `<button type="button" data-resource-folder-action="toggle-files" class="ml-2 resource-entry-action">${ctx.escapeHtml(label)}</button>` +
                 `</div>`
@@ -246,7 +260,7 @@
         const visibleEntries = folders.concat(files.slice(0, ctx.RESOURCE_FOLDER_FILE_PREVIEW_LIMIT));
         let html = visibleEntries.map(entry => ctx.buildResourceEntryRow(entry)).join('');
         if (files.length > ctx.RESOURCE_FOLDER_FILE_PREVIEW_LIMIT) {
-            html += `<div class="rounded-2xl border border-slate-700/60 bg-slate-900/40 px-4 py-3 text-[12px] text-slate-300">为保证加载速度，预览默认仅显示前 ${ctx.RESOURCE_FOLDER_FILE_PREVIEW_LIMIT} 个文件。</div>`;
+            html += `<div class="resource-browser-hint-card rounded-2xl border border-slate-700/60 bg-slate-900/40 px-4 py-3 text-[12px] text-slate-300">为保证加载速度，预览默认仅显示前 ${ctx.RESOURCE_FOLDER_FILE_PREVIEW_LIMIT} 个文件。</div>`;
         }
         listEl.innerHTML = html;
     }

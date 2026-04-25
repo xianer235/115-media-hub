@@ -7,6 +7,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .mypy_cache/
+.venv/
 
 # 忽略数据/临时文件
 strm/
@@ -32,5 +33,4 @@ preview-runtime/
 # local agent handoff context (not for repo)
 AGENTS.md
 doc/
-
 

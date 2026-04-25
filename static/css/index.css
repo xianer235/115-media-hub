@@ -3414,6 +3414,9 @@
             color: #94a3b8;
             font-size: 0.85rem;
         }
+        .resource-browser-hint-card {
+            line-height: 1.75;
+        }
         .resource-browser-load-more-row {
             display: flex;
             justify-content: center;
@@ -5748,6 +5751,12 @@
         html.theme-day .bg-slate-700,
         html.theme-day .bg-slate-700\/40,
         html.theme-day .bg-slate-600 { background: var(--surface-soft) !important; }
+        html.theme-day .resource-browser-hint-card {
+            background: linear-gradient(180deg, rgba(248, 250, 252, 0.98), rgba(239, 246, 255, 0.94)) !important;
+            border-color: rgba(148, 163, 184, 0.58) !important;
+            color: #334155 !important;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.74);
+        }
         html.theme-day #theme-toggle { color: #334155 !important; }
         html.theme-day .modal-card,
         html.theme-day #help-modal-body { background: #fff !important; border-color: var(--border) !important; }
