@@ -21,6 +21,85 @@ resource_browse_executor = ThreadPoolExecutor(
 )
 
 
+def _compact_resource_browser_entry(entry: Dict[str, Any], *, include_share_fields: bool = False) -> Dict[str, Any]:
+    item = entry if isinstance(entry, dict) else {}
+    is_dir = bool(item.get("is_dir"))
+    payload: Dict[str, Any] = {
+        "id": str(item.get("id", "") or "").strip(),
+        "name": str(item.get("name", "") or "").strip(),
+        "is_dir": is_dir,
+    }
+    if is_dir:
+        cid = str(item.get("cid", "") or item.get("id", "") or "").strip()
+        if cid:
+            payload["cid"] = cid
+    else:
+        payload["size"] = parse_int(item.get("size") or 0)
+    if include_share_fields:
+        payload["parent_id"] = str(item.get("parent_id", "") or "0").strip() or "0"
+        cid = str(item.get("cid", "") or "").strip()
+        fid = str(item.get("fid", "") or "").strip()
+        if cid:
+            payload["cid"] = cid
+        if fid:
+            payload["fid"] = fid
+    return payload
+
+
+def _compact_resource_browser_entries(
+    entries: List[Dict[str, Any]],
+    *,
+    include_share_fields: bool = False,
+) -> List[Dict[str, Any]]:
+    return [
+        compact
+        for compact in (
+            _compact_resource_browser_entry(entry, include_share_fields=include_share_fields)
+            for entry in (entries or [])
+        )
+        if compact.get("id") and compact.get("name")
+    ]
+
+
+def _build_resource_share_entries_response(
+    cid: str,
+    result: Dict[str, Any],
+    *,
+    offset: int,
+    paged: bool,
+    folders_only: bool,
+) -> Dict[str, Any]:
+    entries = result.get("entries", []) if isinstance(result, dict) else []
+    compact_entries = _compact_resource_browser_entries(entries, include_share_fields=True)
+    return {
+        "ok": True,
+        "cid": cid,
+        "entries": compact_entries,
+        "summary": (
+            result.get("summary", {"folder_count": 0, "file_count": 0})
+            if isinstance(result, dict)
+            else {"folder_count": 0, "file_count": 0}
+        ),
+        "share": {
+            "title": result.get("share_title", "") if isinstance(result, dict) else "",
+            "share_code": result.get("share_code", "") if isinstance(result, dict) else "",
+            "receive_code": result.get("receive_code", "") if isinstance(result, dict) else "",
+            "count": result.get("count", 0) if isinstance(result, dict) else 0,
+        },
+        "paging": {
+            "offset": result.get("offset", offset) if isinstance(result, dict) else offset,
+            "next_offset": (
+                result.get("next_offset", offset + len(compact_entries))
+                if isinstance(result, dict)
+                else offset + len(compact_entries)
+            ),
+            "has_more": bool(result.get("has_more", False)) if isinstance(result, dict) else False,
+            "paged": paged,
+            "folders_only": folders_only,
+        },
+    }
+
+
 async def run_resource_browse_io(func, *args, **kwargs):
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(resource_browse_executor, functools.partial(func, *args, **kwargs))
@@ -436,7 +515,7 @@ async def get_115_folders_endpoint(request: Request) -> Dict[str, Any]:
             return {
                 "ok": True,
                 "cid": cid,
-                "entries": entries,
+                "entries": _compact_resource_browser_entries(entries),
                 "summary": summary,
             }
         files = [] if folders_only else [entry for entry in entries_all if not entry.get("is_dir")]
@@ -516,25 +595,13 @@ async def get_115_share_entries_endpoint(request: Request) -> Dict[str, Any]:
             1 if paged else 0,
             folders_only,
         )
-        return {
-            "ok": True,
-            "cid": cid,
-            "entries": result.get("entries", []),
-            "summary": result.get("summary", {"folder_count": 0, "file_count": 0}),
-            "share": {
-                "title": result.get("share_title", ""),
-                "share_code": result.get("share_code", ""),
-                "receive_code": result.get("receive_code", ""),
-                "count": result.get("count", 0),
-            },
-            "paging": {
-                "offset": result.get("offset", offset),
-                "next_offset": result.get("next_offset", offset + len(result.get("entries", []))),
-                "has_more": bool(result.get("has_more", False)),
-                "paged": paged,
-                "folders_only": folders_only,
-            },
-        }
+        return _build_resource_share_entries_response(
+            cid,
+            result,
+            offset=offset,
+            paged=paged,
+            folders_only=folders_only,
+        )
     except Exception as exc:
         return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
 
@@ -576,25 +643,13 @@ async def preview_115_share_entries_endpoint(request: Request) -> Dict[str, Any]
             1 if paged else 0,
             folders_only,
         )
-        return {
-            "ok": True,
-            "cid": cid,
-            "entries": result.get("entries", []),
-            "summary": result.get("summary", {"folder_count": 0, "file_count": 0}),
-            "share": {
-                "title": result.get("share_title", ""),
-                "share_code": result.get("share_code", ""),
-                "receive_code": result.get("receive_code", ""),
-                "count": result.get("count", 0),
-            },
-            "paging": {
-                "offset": result.get("offset", offset),
-                "next_offset": result.get("next_offset", offset + len(result.get("entries", []))),
-                "has_more": bool(result.get("has_more", False)),
-                "paged": paged,
-                "folders_only": folders_only,
-            },
-        }
+        return _build_resource_share_entries_response(
+            cid,
+            result,
+            offset=offset,
+            paged=paged,
+            folders_only=folders_only,
+        )
     except Exception as exc:
         return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
 
@@ -609,19 +664,21 @@ async def get_quark_folders_endpoint(request: Request) -> Dict[str, Any]:
     folders_only = request.query_params.get("folders_only") == "1"
     compact = request.query_params.get("compact") == "1"
     try:
-        entries_all = await run_resource_browse_io(list_quark_entries, cookie, cid)
+        payload = await run_resource_browse_io(list_quark_entries_payload, cookie, cid, folders_only)
+        entries_all = payload.get("entries", []) if isinstance(payload.get("entries"), list) else []
         folder_entries = [entry for entry in entries_all if entry.get("is_dir")]
-        file_count = max(0, len(entries_all) - len(folder_entries))
         entries = folder_entries if folders_only else entries_all
-        summary = {
-            "folder_count": len(folder_entries),
-            "file_count": file_count,
-        }
+        summary = payload.get("summary", {}) if isinstance(payload.get("summary"), dict) else {}
+        if not summary:
+            summary = {
+                "folder_count": len(folder_entries),
+                "file_count": max(0, len(entries_all) - len(folder_entries)),
+            }
         if compact:
             return {
                 "ok": True,
                 "cid": cid,
-                "entries": entries,
+                "entries": _compact_resource_browser_entries(entries),
                 "summary": summary,
             }
         files = [] if folders_only else [entry for entry in entries_all if not entry.get("is_dir")]
@@ -700,25 +757,13 @@ async def get_quark_share_entries_endpoint(request: Request) -> Dict[str, Any]:
             max_pages,
             folders_only,
         )
-        return {
-            "ok": True,
-            "cid": cid,
-            "entries": result.get("entries", []),
-            "summary": result.get("summary", {"folder_count": 0, "file_count": 0}),
-            "share": {
-                "title": result.get("share_title", ""),
-                "share_code": result.get("share_code", ""),
-                "receive_code": result.get("receive_code", ""),
-                "count": result.get("count", 0),
-            },
-            "paging": {
-                "offset": result.get("offset", offset),
-                "next_offset": result.get("next_offset", offset + len(result.get("entries", []))),
-                "has_more": bool(result.get("has_more", False)),
-                "paged": paged,
-                "folders_only": folders_only,
-            },
-        }
+        return _build_resource_share_entries_response(
+            cid,
+            result,
+            offset=offset,
+            paged=paged,
+            folders_only=folders_only,
+        )
     except Exception as exc:
         return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
 
@@ -759,25 +804,13 @@ async def preview_quark_share_entries_endpoint(request: Request) -> Dict[str, An
             max_pages,
             folders_only,
         )
-        return {
-            "ok": True,
-            "cid": cid,
-            "entries": result.get("entries", []),
-            "summary": result.get("summary", {"folder_count": 0, "file_count": 0}),
-            "share": {
-                "title": result.get("share_title", ""),
-                "share_code": result.get("share_code", ""),
-                "receive_code": result.get("receive_code", ""),
-                "count": result.get("count", 0),
-            },
-            "paging": {
-                "offset": result.get("offset", offset),
-                "next_offset": result.get("next_offset", offset + len(result.get("entries", []))),
-                "has_more": bool(result.get("has_more", False)),
-                "paged": paged,
-                "folders_only": folders_only,
-            },
-        }
+        return _build_resource_share_entries_response(
+            cid,
+            result,
+            offset=offset,
+            paged=paged,
+            folders_only=folders_only,
+        )
     except Exception as exc:
         return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
 

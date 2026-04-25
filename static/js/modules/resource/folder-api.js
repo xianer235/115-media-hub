@@ -381,48 +381,87 @@
             const normalizedOffset = Math.max(0, Number(offset || 0));
             const normalizedLimit = Math.max(20, Math.min(Number(limit || RESOURCE_SHARE_BROWSE_PAGE_LIMIT), 400));
             const shareApiPrefix = getResourceShareApiPrefix(resourceModalLinkType);
-            let data;
-            if (Number(resourceId || 0) > 0) {
-                const params = new URLSearchParams({
-                    resource_id: String(resourceId || 0),
-                    cid: String(cid || '0')
-                });
-                if (receiveCode) params.set('receive_code', receiveCode);
-                if (paged) params.set('paged', '1');
-                params.set('offset', String(normalizedOffset));
-                params.set('limit', String(normalizedLimit));
-                data = await fetchResourceBrowserJson(`${shareApiPrefix}/share_entries?${params.toString()}`);
-            } else {
-                data = await fetchResourceBrowserJson(`${shareApiPrefix}/share_entries_preview`, {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        cid,
-                        link_url: String(selectedResourceItem?.link_url || '').trim(),
-                        raw_text: String(selectedResourceItem?.raw_text || '').trim(),
-                        receive_code: receiveCode,
-                        paged: !!paged,
-                        offset: normalizedOffset,
-                        limit: normalizedLimit
-                    })
+            const normalizedResourceId = Number(resourceId || 0);
+            const linkUrl = String(selectedResourceItem?.link_url || '').trim();
+            const rawText = String(selectedResourceItem?.raw_text || '').trim();
+            const requestKey = [
+                shareApiPrefix,
+                normalizedResourceId > 0 ? `id:${normalizedResourceId}` : `url:${linkUrl}`,
+                String(cid || '0').trim() || '0',
+                receiveCode || '-',
+                normalizedOffset,
+                normalizedLimit,
+                paged ? '1' : '0',
+                normalizedResourceId > 0 ? '' : rawText
+            ].join('|');
+            const inFlight = resourceShareFetchInFlight[requestKey];
+            if (inFlight) {
+                const sharedPayload = await inFlight;
+                return cloneJsonValue(sharedPayload, {
+                    entries: [],
+                    summary: { folder_count: 0, file_count: 0 },
+                    share: { title: '', share_code: '', receive_code: '', count: 0 },
+                    paging: { offset: normalizedOffset, next_offset: normalizedOffset, has_more: false }
                 });
             }
-            const entries = Array.isArray(data.entries) ? data.entries : [];
-            const paging = data.paging && typeof data.paging === 'object' ? data.paging : {};
-            const nextOffset = Math.max(
-                normalizedOffset + entries.length,
-                Number(paging.next_offset ?? (normalizedOffset + entries.length)) || (normalizedOffset + entries.length)
-            );
-            return {
-                entries,
-                summary: data.summary || { folder_count: 0, file_count: 0 },
-                share: data.share || { title: '', share_code: '', receive_code: '', count: 0 },
-                paging: {
-                    offset: Math.max(0, Number(paging.offset ?? normalizedOffset) || normalizedOffset),
-                    next_offset: nextOffset,
-                    has_more: !!paging.has_more
+            const requestPromise = (async () => {
+                let data;
+                if (normalizedResourceId > 0) {
+                    const params = new URLSearchParams({
+                        resource_id: String(normalizedResourceId),
+                        cid: String(cid || '0')
+                    });
+                    if (receiveCode) params.set('receive_code', receiveCode);
+                    if (paged) params.set('paged', '1');
+                    params.set('offset', String(normalizedOffset));
+                    params.set('limit', String(normalizedLimit));
+                    data = await fetchResourceBrowserJson(`${shareApiPrefix}/share_entries?${params.toString()}`);
+                } else {
+                    data = await fetchResourceBrowserJson(`${shareApiPrefix}/share_entries_preview`, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            cid,
+                            link_url: linkUrl,
+                            raw_text: rawText,
+                            receive_code: receiveCode,
+                            paged: !!paged,
+                            offset: normalizedOffset,
+                            limit: normalizedLimit
+                        })
+                    });
                 }
-            };
+                const entries = Array.isArray(data.entries) ? data.entries : [];
+                const paging = data.paging && typeof data.paging === 'object' ? data.paging : {};
+                const nextOffset = Math.max(
+                    normalizedOffset + entries.length,
+                    Number(paging.next_offset ?? (normalizedOffset + entries.length)) || (normalizedOffset + entries.length)
+                );
+                return {
+                    entries,
+                    summary: data.summary || { folder_count: 0, file_count: 0 },
+                    share: data.share || { title: '', share_code: '', receive_code: '', count: 0 },
+                    paging: {
+                        offset: Math.max(0, Number(paging.offset ?? normalizedOffset) || normalizedOffset),
+                        next_offset: nextOffset,
+                        has_more: !!paging.has_more
+                    }
+                };
+            })();
+            resourceShareFetchInFlight[requestKey] = requestPromise;
+            try {
+                const payload = await requestPromise;
+                return cloneJsonValue(payload, {
+                    entries: [],
+                    summary: { folder_count: 0, file_count: 0 },
+                    share: { title: '', share_code: '', receive_code: '', count: 0 },
+                    paging: { offset: normalizedOffset, next_offset: normalizedOffset, has_more: false }
+                });
+            } finally {
+                if (resourceShareFetchInFlight[requestKey] === requestPromise) {
+                    delete resourceShareFetchInFlight[requestKey];
+                }
+            }
         }
 
         function getResourceShareSelectedEntries() {
@@ -867,6 +906,33 @@
             } catch (e) {}
         }
 
+        function getResourceFolderMemoryProvider(provider = getCurrentResourceProvider()) {
+            return normalizeResourceProviderCacheKey(provider);
+        }
+
+        function getResourceFolderMemoryKey(provider = getCurrentResourceProvider()) {
+            return `${RESOURCE_FOLDER_MEMORY_KEY}:${getResourceFolderMemoryProvider(provider)}`;
+        }
+
+        function normalizeRememberedResourceFolderSelection(data = {}) {
+            const folderId = String(data?.folder_id || '').trim();
+            let trail = normalizeResourceFolderTrail(data?.trail || []);
+            let displayPath = normalizeRelativePathInput(data?.display_path || '');
+            if (!displayPath) displayPath = buildResourceFolderDisplayPathFromTrail(trail);
+            if (!folderId || folderId === '0' || !displayPath) return null;
+
+            const currentTrailLastId = String(trail[trail.length - 1]?.id || '0').trim() || '0';
+            if (currentTrailLastId !== folderId) {
+                const tailName = displayPath.split('/').filter(Boolean).pop() || '目录';
+                trail = normalizeResourceFolderTrail(trail.concat([{ id: folderId, name: tailName }]));
+            }
+            return {
+                folder_id: folderId,
+                display_path: displayPath,
+                trail
+            };
+        }
+
         function getRememberedResourceFolderSelection() {
             const fallback = {
                 folder_id: '0',
@@ -874,25 +940,15 @@
                 trail: [{ id: '0', name: '根目录' }]
             };
             try {
-                const raw = localStorage.getItem(RESOURCE_FOLDER_MEMORY_KEY);
+                const provider = getResourceFolderMemoryProvider();
+                const memoryKey = getResourceFolderMemoryKey(provider);
+                let raw = localStorage.getItem(memoryKey);
+                if (!raw && provider === '115') {
+                    raw = localStorage.getItem(RESOURCE_FOLDER_MEMORY_LEGACY_KEY);
+                }
                 if (!raw) return fallback;
                 const data = JSON.parse(raw || '{}');
-                const folderId = String(data?.folder_id || '').trim();
-                let trail = normalizeResourceFolderTrail(data?.trail || []);
-                let displayPath = normalizeRelativePathInput(data?.display_path || '');
-                if (!displayPath) displayPath = buildResourceFolderDisplayPathFromTrail(trail);
-                if (!folderId || folderId === '0' || !displayPath) return fallback;
-
-                const currentTrailLastId = String(trail[trail.length - 1]?.id || '0').trim() || '0';
-                if (currentTrailLastId !== folderId) {
-                    const tailName = displayPath.split('/').filter(Boolean).pop() || '目录';
-                    trail = normalizeResourceFolderTrail(trail.concat([{ id: folderId, name: tailName }]));
-                }
-                return {
-                    folder_id: folderId,
-                    display_path: displayPath,
-                    trail
-                };
+                return normalizeRememberedResourceFolderSelection(data) || fallback;
             } catch (e) {
                 return fallback;
             }
@@ -904,7 +960,9 @@
             if (!normalizedPath || normalizedFolderId === '0') return;
             const normalizedTrail = normalizeResourceFolderTrail(trail);
             try {
-                localStorage.setItem(RESOURCE_FOLDER_MEMORY_KEY, JSON.stringify({
+                const provider = getResourceFolderMemoryProvider();
+                localStorage.setItem(getResourceFolderMemoryKey(provider), JSON.stringify({
+                    provider,
                     folder_id: normalizedFolderId,
                     display_path: normalizedPath,
                     trail: normalizedTrail
@@ -922,7 +980,7 @@
             document.getElementById('resource_job_savepath').value = normalizedPath;
             syncResourceMonitorTaskOptions(normalizedPath);
             if (persist) rememberResourceFolderSelection(normalizedFolderId, normalizedPath, resolvedTrail);
-            if (loadPreview) loadResourceTargetPreview(normalizedFolderId || '0');
+            if (loadPreview && hasResourceTargetPreviewElements()) loadResourceTargetPreview(normalizedFolderId || '0');
         }
 
         async function resolveResourceFolderTrailByIds(trail = []) {
@@ -1016,7 +1074,9 @@
                     resourceFolderTrail = rootTrail;
                     setSelectedResourceFolder('0', '', { loadPreview: false, persist: false, trail: rootTrail });
                     try {
-                        localStorage.removeItem(RESOURCE_FOLDER_MEMORY_KEY);
+                        const provider = getResourceFolderMemoryProvider();
+                        localStorage.removeItem(getResourceFolderMemoryKey(provider));
+                        if (provider === '115') localStorage.removeItem(RESOURCE_FOLDER_MEMORY_LEGACY_KEY);
                     } catch (e) {}
                     showToast('上次选择的目录已不存在，请重新选择保存目录', { tone: 'warn', duration: 3200, placement: 'top-center' });
                     return false;
@@ -1048,7 +1108,12 @@
             window.ResourceBrowser?.renderResourceTargetPreview(getResourceBrowserContext());
         }
 
+        function hasResourceTargetPreviewElements() {
+            return !!document.getElementById('resource-target-preview-list');
+        }
+
         async function loadResourceTargetPreview(folderId = '0', { force = false } = {}) {
+            if (!hasResourceTargetPreviewElements()) return;
             const provider = getCurrentResourceProvider();
             const normalizedFolderId = String(folderId || '0').trim() || '0';
             if (!isProviderCookieConfigured(provider)) {

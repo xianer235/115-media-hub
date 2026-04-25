@@ -3886,6 +3886,7 @@ from .providers.quark import (
     ensure_quark_folder_id_by_path,
     http_request_json_payload,
     list_quark_entries,
+    list_quark_entries_payload,
     list_quark_share_entries,
     prepare_quark_share_save,
     resolve_quark_folder_id_by_path,

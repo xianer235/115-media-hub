@@ -539,16 +539,9 @@
             } finally {
                 if (requestToken !== resourceFolderRequestToken) return;
                 resourceFolderLoading = false;
-                resourceFolderFilesLoading = !resourceFolderEntriesComplete && Number(resourceFolderSummary?.file_count || 0) > 0;
+                resourceFolderFilesLoading = false;
                 renderResourceFolderBreadcrumbs();
                 renderResourceFolderList();
-            }
-            if (
-                requestToken === resourceFolderRequestToken
-                && !resourceFolderEntriesComplete
-                && Number(resourceFolderSummary?.file_count || 0) > 0
-            ) {
-                void loadResourceFolderFiles(targetCid, { forceRefresh, requestToken, silent: true });
             }
         }
 

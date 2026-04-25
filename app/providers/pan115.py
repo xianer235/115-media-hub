@@ -596,40 +596,60 @@ def list_115_share_entries(
         max_pages_limit = max(0, int(max_pages or 0))
         folder_only_mode = bool(folders_only)
         use_full_cache = start_offset == 0 and max_pages_limit <= 0 and not folder_only_mode
-        stale_full_cache: Dict[str, Any] = load_115_share_snap_cache(share_code, receive_code, current_cid, allow_expired=True)
-        stale_page_cache: Dict[str, Any] = load_115_share_page_cache(
-            share_code,
-            receive_code,
-            current_cid,
-            start_offset,
-            page_limit,
-            folder_only_mode,
-            allow_expired=True,
-        )
-        if not force_refresh:
-            fresh_full_cache = load_115_share_snap_cache(share_code, receive_code, current_cid, allow_expired=False)
-            if use_full_cache and fresh_full_cache:
-                return fresh_full_cache
-            if fresh_full_cache:
-                sliced_payload = _slice_115_share_cache_payload(
-                    fresh_full_cache,
-                    offset=start_offset,
-                    limit=page_limit,
-                    folders_only=folder_only_mode,
-                )
-                if sliced_payload:
-                    return sliced_payload
-            fresh_page_cache = load_115_share_page_cache(
+
+        def load_stale_cache_payload() -> Dict[str, Any]:
+            if use_full_cache:
+                stale_full_cache = load_115_share_snap_cache(share_code, receive_code, current_cid, allow_expired=True)
+                if stale_full_cache:
+                    return dict(stale_full_cache)
+            stale_page_cache = load_115_share_page_cache(
                 share_code,
                 receive_code,
                 current_cid,
                 start_offset,
                 page_limit,
                 folder_only_mode,
-                allow_expired=False,
+                allow_expired=True,
             )
-            if fresh_page_cache:
-                return fresh_page_cache
+            if stale_page_cache:
+                return dict(stale_page_cache)
+            stale_full_cache = load_115_share_snap_cache(share_code, receive_code, current_cid, allow_expired=True)
+            if stale_full_cache:
+                return _slice_115_share_cache_payload(
+                    stale_full_cache,
+                    offset=start_offset,
+                    limit=page_limit,
+                    folders_only=folder_only_mode,
+                )
+            return {}
+
+        if not force_refresh:
+            if use_full_cache:
+                fresh_full_cache = load_115_share_snap_cache(share_code, receive_code, current_cid, allow_expired=False)
+                if fresh_full_cache:
+                    return fresh_full_cache
+            else:
+                fresh_page_cache = load_115_share_page_cache(
+                    share_code,
+                    receive_code,
+                    current_cid,
+                    start_offset,
+                    page_limit,
+                    folder_only_mode,
+                    allow_expired=False,
+                )
+                if fresh_page_cache:
+                    return fresh_page_cache
+                fresh_full_cache = load_115_share_snap_cache(share_code, receive_code, current_cid, allow_expired=False)
+                if fresh_full_cache:
+                    sliced_payload = _slice_115_share_cache_payload(
+                        fresh_full_cache,
+                        offset=start_offset,
+                        limit=page_limit,
+                        folders_only=folder_only_mode,
+                    )
+                    if sliced_payload:
+                        return sliced_payload
 
         request_timeout_value = max(5, int(request_timeout or 45))
         retry_total = max(0, int(max_request_retries or 0))
@@ -676,18 +696,7 @@ def list_115_share_entries(
                         break
                     time.sleep(0.6 * (attempt + 1))
             if last_request_error is not None:
-                stale_payload = {}
-                if use_full_cache and stale_full_cache:
-                    stale_payload = dict(stale_full_cache)
-                elif stale_page_cache:
-                    stale_payload = dict(stale_page_cache)
-                elif stale_full_cache:
-                    stale_payload = _slice_115_share_cache_payload(
-                        stale_full_cache,
-                        offset=start_offset,
-                        limit=page_limit,
-                        folders_only=folder_only_mode,
-                    )
+                stale_payload = load_stale_cache_payload()
                 if stale_payload:
                     mark_cookie_health_failure("115", last_request_error, trigger="runtime:list_115_share_entries")
                     stale_payload["cache_stale"] = True
@@ -706,18 +715,7 @@ def list_115_share_entries(
                     or str(result.get("message", "")).strip()
                     or "读取 115 分享内容失败"
                 )
-                stale_payload = {}
-                if use_full_cache and stale_full_cache:
-                    stale_payload = dict(stale_full_cache)
-                elif stale_page_cache:
-                    stale_payload = dict(stale_page_cache)
-                elif stale_full_cache:
-                    stale_payload = _slice_115_share_cache_payload(
-                        stale_full_cache,
-                        offset=start_offset,
-                        limit=page_limit,
-                        folders_only=folder_only_mode,
-                    )
+                stale_payload = load_stale_cache_payload()
                 if stale_payload:
                     mark_cookie_health_failure("115", detail, trigger="runtime:list_115_share_entries")
                     stale_payload["cache_stale"] = True
@@ -777,7 +775,7 @@ def list_115_share_entries(
                     "has_more": not reached_end,
                     "pages_scanned": pages_scanned,
                 }
-                if use_full_cache:
+                if use_full_cache or (start_offset == 0 and reached_end and not folder_only_mode):
                     save_115_share_snap_cache(
                         share_code,
                         receive_code,

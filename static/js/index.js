@@ -90,6 +90,8 @@
         let resourceShareCurrentCid = '0';
         let resourceShareRequestToken = 0;
         let resourceShareBranchCache = {};
+        let resourceShareFetchInFlight = {};
+        let subscriptionShareFolderFetchInFlight = {};
         let resourceSectionCollapsed = {};
         let resourceSearchBusy = false;
         let resourceSyncBusy = false;
@@ -203,7 +205,8 @@
         const SIGN115_REFRESH_INTERVAL = 1000 * 60;
         const VERSION_FALLBACK_PROJECT_URL = 'https://github.com/xianer235/115-media-hub';
         const VERSION_FALLBACK_CHANGELOG_URL = 'https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md';
-        const RESOURCE_FOLDER_MEMORY_KEY = 'resource-folder-selection-v1';
+        const RESOURCE_FOLDER_MEMORY_LEGACY_KEY = 'resource-folder-selection-v1';
+        const RESOURCE_FOLDER_MEMORY_KEY = 'resource-folder-selection-v2';
         const RESOURCE_IMPORT_DELAY_MEMORY_KEY = 'resource-import-delay-seconds-v1';
         const RESOURCE_QUICK_LINKS_MEMORY_KEY = 'resource-quick-links-v1';
         const RESOURCE_QUICK_LINKS_LIMIT = 60;

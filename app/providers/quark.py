@@ -232,7 +232,7 @@ def _list_quark_folder_page(cookie: str, pdir_fid: str = "0", page: int = 1, pag
         "size": max(20, min(200, int(page_size or 200))),
     }
 
-def list_quark_entries(cookie: str, cid: str = "0") -> List[Dict[str, Any]]:
+def list_quark_entries_payload(cookie: str, cid: str = "0", folders_only: bool = False) -> Dict[str, Any]:
     normalized_cookie = str(cookie or "").strip()
     if not normalized_cookie:
         raise RuntimeError("Quark Cookie 未配置")
@@ -240,22 +240,56 @@ def list_quark_entries(cookie: str, cid: str = "0") -> List[Dict[str, Any]]:
         parent_id = str(cid or "0").strip() or "0"
         page = 1
         page_size = 200
+        folder_only_mode = bool(folders_only)
         entries: List[Dict[str, Any]] = []
+        total_count = 0
+        loaded_file_count = 0
+        pages_scanned = 0
         while True:
             page_payload = _list_quark_folder_page(normalized_cookie, pdir_fid=parent_id, page=page, page_size=page_size)
             current_entries = page_payload.get("entries", []) if isinstance(page_payload.get("entries"), list) else []
-            entries.extend(current_entries)
+            total_count = max(total_count, parse_int(page_payload.get("total"), default=0))
+            pages_scanned += 1
+            if folder_only_mode:
+                current_file_count = sum(1 for entry in current_entries if not entry.get("is_dir"))
+                loaded_file_count += current_file_count
+                entries.extend([entry for entry in current_entries if entry.get("is_dir")])
+                if current_file_count > 0:
+                    break
+            else:
+                entries.extend(current_entries)
             if not bool(page_payload.get("has_more", False)):
                 break
             if len(entries) >= 5000:
                 break
             page += 1
         entries.sort(key=lambda item: (0 if item.get("is_dir") else 1, str(item.get("name", "")).lower()))
+        folder_count = sum(1 for item in entries if item.get("is_dir"))
+        file_count = (
+            max(loaded_file_count, (total_count - folder_count) if total_count > 0 else 0)
+            if folder_only_mode
+            else sum(1 for item in entries if not item.get("is_dir"))
+        )
         mark_cookie_health_success("quark", trigger="runtime:list_quark_entries")
-        return entries
+        return {
+            "entries": entries,
+            "summary": {
+                "folder_count": folder_count,
+                "file_count": file_count,
+            },
+            "pages_scanned": pages_scanned,
+            "total": total_count or len(entries),
+            "folders_only": folder_only_mode,
+        }
     except Exception as exc:
         mark_cookie_health_failure("quark", exc, trigger="runtime:list_quark_entries")
         raise
+
+
+def list_quark_entries(cookie: str, cid: str = "0") -> List[Dict[str, Any]]:
+    payload = list_quark_entries_payload(cookie, cid, folders_only=False)
+    return payload.get("entries", []) if isinstance(payload.get("entries"), list) else []
+
 
 def create_quark_folder(cookie: str, cid: str = "0", folder_name: str = "") -> Dict[str, Any]:
     normalized_cookie = str(cookie or "").strip()

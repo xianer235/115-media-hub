@@ -229,35 +229,68 @@
             const payload = getSubscriptionShareLinkPayload();
             const normalizedOffset = Math.max(0, Number(offset || 0));
             const normalizedLimit = Math.max(20, Math.min(Number(limit || RESOURCE_SHARE_BROWSE_PAGE_LIMIT), 400));
-            const data = await fetchResourceBrowserJson('/resource/115/share_entries_preview', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    cid: String(cid || '0'),
-                    link_url: payload.link_url,
-                    raw_text: payload.raw_text,
-                    receive_code: payload.receive_code,
-                    paged: !!paged,
-                    offset: normalizedOffset,
-                    limit: normalizedLimit,
-                }),
-            });
-            const entries = Array.isArray(data.entries) ? data.entries : [];
-            const paging = data.paging && typeof data.paging === 'object' ? data.paging : {};
-            const nextOffset = Math.max(
-                normalizedOffset + entries.length,
-                Number(paging.next_offset ?? (normalizedOffset + entries.length)) || (normalizedOffset + entries.length)
-            );
-            return {
-                entries,
-                summary: data.summary || { folder_count: 0, file_count: 0 },
-                share: data.share || { title: '', share_code: '', receive_code: '', count: 0 },
-                paging: {
-                    offset: Math.max(0, Number(paging.offset ?? normalizedOffset) || normalizedOffset),
-                    next_offset: nextOffset,
-                    has_more: !!paging.has_more
+            const normalizedCid = String(cid || '0').trim() || '0';
+            const requestKey = [
+                payload.link_url,
+                payload.receive_code || '-',
+                normalizedCid,
+                normalizedOffset,
+                normalizedLimit,
+                paged ? '1' : '0'
+            ].join('|');
+            const inFlight = subscriptionShareFolderFetchInFlight[requestKey];
+            if (inFlight) {
+                return cloneJsonValue(await inFlight, {
+                    entries: [],
+                    summary: { folder_count: 0, file_count: 0 },
+                    share: { title: '', share_code: '', receive_code: '', count: 0 },
+                    paging: { offset: normalizedOffset, next_offset: normalizedOffset, has_more: false }
+                });
+            }
+            const requestPromise = (async () => {
+                const data = await fetchResourceBrowserJson('/resource/115/share_entries_preview', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        cid: normalizedCid,
+                        link_url: payload.link_url,
+                        raw_text: payload.raw_text,
+                        receive_code: payload.receive_code,
+                        paged: !!paged,
+                        offset: normalizedOffset,
+                        limit: normalizedLimit,
+                    }),
+                });
+                const entries = Array.isArray(data.entries) ? data.entries : [];
+                const paging = data.paging && typeof data.paging === 'object' ? data.paging : {};
+                const nextOffset = Math.max(
+                    normalizedOffset + entries.length,
+                    Number(paging.next_offset ?? (normalizedOffset + entries.length)) || (normalizedOffset + entries.length)
+                );
+                return {
+                    entries,
+                    summary: data.summary || { folder_count: 0, file_count: 0 },
+                    share: data.share || { title: '', share_code: '', receive_code: '', count: 0 },
+                    paging: {
+                        offset: Math.max(0, Number(paging.offset ?? normalizedOffset) || normalizedOffset),
+                        next_offset: nextOffset,
+                        has_more: !!paging.has_more
+                    }
+                };
+            })();
+            subscriptionShareFolderFetchInFlight[requestKey] = requestPromise;
+            try {
+                return cloneJsonValue(await requestPromise, {
+                    entries: [],
+                    summary: { folder_count: 0, file_count: 0 },
+                    share: { title: '', share_code: '', receive_code: '', count: 0 },
+                    paging: { offset: normalizedOffset, next_offset: normalizedOffset, has_more: false }
+                });
+            } finally {
+                if (subscriptionShareFolderFetchInFlight[requestKey] === requestPromise) {
+                    delete subscriptionShareFolderFetchInFlight[requestKey];
                 }
-            };
+            }
         }
 
         function renderSubscriptionShareFolderBreadcrumbs() {
