@@ -84,6 +84,19 @@ def _raise_quark_http_error(exc: Exception, fallback: str = "夸克网盘请求�
         raise RuntimeError(detail) from exc
     raise RuntimeError(str(fallback or "夸克网盘请求失败")) from exc
 
+def _is_quark_share_content_error(error: Any) -> bool:
+    detail = str(error or "").strip().lower()
+    if not detail:
+        return False
+    share_error_hints = (
+        "文件涉及违规内容",
+        "分享不存在",
+        "分享已失效",
+        "分享已取消",
+        "share not found",
+    )
+    return any(hint in detail for hint in share_error_hints) or ("http 404" in detail and "cookie" not in detail)
+
 def _request_quark_json(url: str, headers: Dict[str, str], timeout: int = 45, fallback: str = "夸克网盘请求失败") -> Dict[str, Any]:
     try:
         return http_request_json(url, extra_headers=headers, timeout=timeout)
@@ -582,7 +595,8 @@ def list_quark_share_entries(
         mark_cookie_health_success("quark", trigger="runtime:list_quark_share_entries")
         return result_payload
     except Exception as exc:
-        mark_cookie_health_failure("quark", exc, trigger="runtime:list_quark_share_entries")
+        if not _is_quark_share_content_error(exc):
+            mark_cookie_health_failure("quark", exc, trigger="runtime:list_quark_share_entries")
         raise
 
 def prepare_quark_share_save(
@@ -767,5 +781,6 @@ def submit_quark_share_save(
             "selection": prepared.get("selection", {}),
         }
     except Exception as exc:
-        mark_cookie_health_failure("quark", exc, trigger="runtime:submit_quark_share_save")
+        if not _is_quark_share_content_error(exc):
+            mark_cookie_health_failure("quark", exc, trigger="runtime:submit_quark_share_save")
         raise

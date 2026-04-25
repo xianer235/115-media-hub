@@ -230,6 +230,7 @@
             7: '周日'
         };
         const SUBSCRIPTION_DEFAULT_WEEKDAYS = [1, 2, 3, 4, 5, 6, 7];
+        const SUBSCRIPTION_DEFAULT_SCHEDULE_INTERVAL_MINUTES = 120;
         const TAB_RUNTIME_IMPORT_PATH = '/static/js/modules/tabs/runtime.js';
 
         function getWindowScrollTop() {

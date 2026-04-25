@@ -106,7 +106,11 @@
             const scheduleWeekdays = normalizeSubscriptionWeekdays(task?.schedule_weekdays || []);
             const scheduleStartTime = normalizeSubscriptionScheduleTime(task?.schedule_start_time || '00:00', '00:00');
             const scheduleEndTime = normalizeSubscriptionScheduleTime(task?.schedule_end_time || '23:59', '23:59');
-            const scheduleIntervalMinutes = Math.max(1, Number(task?.schedule_interval_minutes || task?.cron_minutes || 120) || 120);
+            const scheduleIntervalMinutes = Math.max(
+                1,
+                Number(task?.schedule_interval_minutes || task?.cron_minutes || SUBSCRIPTION_DEFAULT_SCHEDULE_INTERVAL_MINUTES)
+                    || SUBSCRIPTION_DEFAULT_SCHEDULE_INTERVAL_MINUTES
+            );
             const weekdayText = formatSubscriptionWeekdayText(scheduleWeekdays);
             const isCrossDayWindow = scheduleStartTime > scheduleEndTime;
             const windowText = isCrossDayWindow
@@ -182,6 +186,19 @@
 
         function getSubscriptionProviderLabel(provider) {
             return normalizeSubscriptionProvider(provider, '115') === 'quark' ? 'Quark' : '115';
+        }
+
+        function getSubscriptionProviderBadgeLabel(provider) {
+            return normalizeSubscriptionProvider(provider, '115') === 'quark' ? 'Quark' : '115';
+        }
+
+        function buildSubscriptionProviderBadge(provider) {
+            const normalized = normalizeSubscriptionProvider(provider, '115');
+            const label = getSubscriptionProviderBadgeLabel(normalized);
+            const className = normalized === 'quark'
+                ? 'bg-cyan-500/15 text-cyan-200 border-cyan-400/25'
+                : 'bg-sky-500/15 text-sky-200 border-sky-400/25';
+            return `<span class="shrink-0 text-[10px] px-2.5 py-1 rounded-full border ${className}">${escapeHtml(label)}</span>`;
         }
 
         function getCurrentSubscriptionProvider() {
@@ -804,7 +821,10 @@
             );
             const scheduleIntervalMinutes = Math.max(
                 1,
-                parseInt(document.getElementById('subscription_schedule_interval_minutes')?.value || '120', 10) || 120
+                parseInt(
+                    document.getElementById('subscription_schedule_interval_minutes')?.value || String(SUBSCRIPTION_DEFAULT_SCHEDULE_INTERVAL_MINUTES),
+                    10
+                ) || SUBSCRIPTION_DEFAULT_SCHEDULE_INTERVAL_MINUTES
             );
             const shareLinkRaw = String(document.getElementById('subscription_share_link_url')?.value || '').trim();
             const shareLinkType = detectResourceLinkTypeByUrl(shareLinkRaw);
@@ -883,7 +903,7 @@
             setSubscriptionWeekdaysToForm(SUBSCRIPTION_DEFAULT_WEEKDAYS);
             document.getElementById('subscription_schedule_start_time').value = '00:00';
             document.getElementById('subscription_schedule_end_time').value = '23:59';
-            document.getElementById('subscription_schedule_interval_minutes').value = 120;
+            document.getElementById('subscription_schedule_interval_minutes').value = SUBSCRIPTION_DEFAULT_SCHEDULE_INTERVAL_MINUTES;
             document.getElementById('subscription_min_score').value = 55;
             document.getElementById('subscription_quality_priority').value = 'ultra';
             document.getElementById('subscription_enabled').checked = true;
@@ -946,7 +966,7 @@
         function buildSubscriptionProviderTaskName(title, provider) {
             const normalizedTitle = String(title || '').trim();
             if (!normalizedTitle) return '';
-            const suffix = normalizeSubscriptionProvider(provider, '115') === 'quark' ? 'quark' : '115';
+            const suffix = getSubscriptionProviderBadgeLabel(provider);
             return `${normalizedTitle} (${suffix})`;
         }
 
@@ -1077,7 +1097,13 @@
             setSubscriptionWeekdaysToForm(task.schedule_weekdays || SUBSCRIPTION_DEFAULT_WEEKDAYS);
             document.getElementById('subscription_schedule_start_time').value = normalizeSubscriptionScheduleTime(task.schedule_start_time || '00:00', '00:00');
             document.getElementById('subscription_schedule_end_time').value = normalizeSubscriptionScheduleTime(task.schedule_end_time || '23:59', '23:59');
-            document.getElementById('subscription_schedule_interval_minutes').value = Math.max(1, parseInt(task.schedule_interval_minutes ?? task.cron_minutes ?? 120, 10) || 120);
+            document.getElementById('subscription_schedule_interval_minutes').value = Math.max(
+                1,
+                parseInt(
+                    task.schedule_interval_minutes ?? task.cron_minutes ?? SUBSCRIPTION_DEFAULT_SCHEDULE_INTERVAL_MINUTES,
+                    10
+                ) || SUBSCRIPTION_DEFAULT_SCHEDULE_INTERVAL_MINUTES
+            );
             document.getElementById('subscription_min_score').value = task.min_score ?? 55;
             document.getElementById('subscription_quality_priority').value = normalizeSubscriptionQualityPriority(task.quality_priority || 'balanced');
             document.getElementById('subscription_enabled').checked = task.enabled !== false;
@@ -1210,6 +1236,8 @@
             }
             container.innerHTML = tasks.map(task => {
                 const taskName = String(task.name || '').trim();
+                const displayTitle = String(task.title || taskName || '').trim() || taskName;
+                const providerBadgeHtml = buildSubscriptionProviderBadge(task.provider || '115');
                 const running = subscriptionState.running && subscriptionState.current_task === taskName;
                 const queued = (subscriptionState.queued || []).includes(taskName);
                 const status = running ? 'running' : (task.status || 'idle');
@@ -1257,7 +1285,10 @@
                                     aria-expanded="${introExpanded ? 'true' : 'false'}"
                                     class="min-w-0 flex-1 text-left rounded-lg border border-transparent hover:border-slate-700/75 focus:outline-none focus:ring-2 focus:ring-sky-500/45 px-1 py-0.5"
                                 >
-                                    <div class="text-lg font-black text-white break-all leading-tight">${escapeHtml(taskName)}</div>
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <span class="text-lg font-black text-white break-all leading-tight">${escapeHtml(displayTitle)}</span>
+                                        ${providerBadgeHtml}
+                                    </div>
                                 </button>
                                 <button
                                     type="button"

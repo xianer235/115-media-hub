@@ -167,6 +167,22 @@
             return !!resourceState?.cookie_configured || !!resourceState?.quark_cookie_configured;
         }
 
+        function isResourceShareContentCookieHealthNoise(item) {
+            const provider = normalizeSubscriptionProvider(item?.provider || '', '');
+            const trigger = String(item?.entry?.trigger || '').trim().toLowerCase();
+            const message = String(item?.entry?.message || '').trim().toLowerCase();
+            if (provider !== 'quark' || !message) return false;
+            if (!trigger.startsWith('runtime:list_quark_share_entries') && !trigger.startsWith('runtime:submit_quark_share_save')) {
+                return false;
+            }
+            return message.includes('文件涉及违规内容')
+                || message.includes('分享不存在')
+                || message.includes('分享已失效')
+                || message.includes('分享已取消')
+                || message.includes('share not found')
+                || (message.includes('http 404') && !message.includes('cookie'));
+        }
+
         function renderResourceCookieHint() {
             const hintEl = document.getElementById('resource-cookie-hint');
             if (!hintEl) return;
@@ -184,6 +200,7 @@
             const configuredAny = providerMeta.some((item) => item.entry.configured) || hasAnyResourceCookieConfigured();
             const riskyProviders = providerMeta.filter((item) => (
                 item.entry.configured && (item.entry.state === 'invalid' || item.entry.state === 'error')
+                && !isResourceShareContentCookieHealthNoise(item)
             ));
 
             let message = '';

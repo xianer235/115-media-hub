@@ -1103,7 +1103,7 @@ def normalize_subscription_task(task: Dict[str, Any]) -> Dict[str, Any]:
         provider_raw = "115"
     provider = normalize_subscription_provider(provider_raw, fallback="115")
     title = str(task.get("title", "")).strip()
-    name = title
+    name = str(task.get("name", "") or "").strip() or title
     aliases_raw = task.get("aliases", "")
     if isinstance(aliases_raw, list):
         aliases_joined = ",".join(str(item or "").strip() for item in aliases_raw)
