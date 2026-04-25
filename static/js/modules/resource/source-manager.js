@@ -903,6 +903,28 @@
             }
         }
 
+        async function deleteResourceChannelManage() {
+            const index = resourceChannelManageSourceIndex;
+            const sources = [...(resourceState.sources || [])];
+            if (index < 0 || index >= sources.length) {
+                showToast('频道不存在，无法删除', { tone: 'warn', duration: 2400, placement: 'top-center' });
+                return;
+            }
+            const source = sources[index] || {};
+            const channelId = getResourceSourceChannelId(source) || resourceChannelManageChannelId;
+            const displayName = String(source?.name || channelId || '未命名频道').trim() || '未命名频道';
+            const ok = confirm(`确定删除频道“${displayName}”吗？\n删除后会从资源中心频道列表移除，此操作不可恢复。`);
+            if (!ok) return;
+            sources.splice(index, 1);
+            try {
+                await persistResourceSources(sources);
+                closeResourceChannelManageModal();
+                showToast(`已删除频道：${displayName}`, { tone: 'success', duration: 2400, placement: 'top-center' });
+            } catch (e) {
+                showToast(`删除失败：${e.message || '未知错误'}`, { tone: 'error', duration: 3000, placement: 'top-center' });
+            }
+        }
+
         async function pinResourceChannelToTop() {
             const index = resourceChannelManageSourceIndex;
             const channelId = resourceChannelManageChannelId;

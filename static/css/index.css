@@ -1035,6 +1035,17 @@
             background: rgba(51, 65, 85, 0.82);
             color: #f8fafc;
         }
+        .resource-source-modal-action-btn-danger {
+            border: 1px solid rgba(239, 68, 68, 0.42);
+            background: rgba(127, 29, 29, 0.42);
+            color: #fecaca;
+            box-shadow: inset 0 1px 0 rgba(254, 202, 202, 0.08);
+        }
+        .resource-source-modal-action-btn-danger:hover {
+            border-color: rgba(248, 113, 113, 0.72);
+            background: rgba(153, 27, 27, 0.62);
+            color: #fff1f2;
+        }
         .resource-source-import-textarea {
             min-height: 240px;
             line-height: 1.65;
@@ -2749,6 +2760,8 @@
             background:
                 linear-gradient(160deg, rgba(56, 189, 248, 0.14), rgba(59, 130, 246, 0.06)),
                 linear-gradient(180deg, rgba(30, 41, 59, 0.9), rgba(15, 23, 42, 0.92));
+            transform: none;
+            transition: none;
         }
         .resource-card-title {
             font-size: 0.98rem;
@@ -2841,11 +2854,11 @@
             cursor: pointer;
             align-self: start;
         }
-        .resource-card-preview-trigger:hover .resource-poster {
+        .resource-card-preview-trigger:hover img.resource-poster {
             transform: translateY(-2px);
             box-shadow: 0 18px 30px rgba(30, 64, 175, 0.18);
         }
-        .resource-card-preview-trigger .resource-poster {
+        .resource-card-preview-trigger img.resource-poster {
             transition: transform 0.18s ease, box-shadow 0.18s ease;
         }
         .resource-preview-label {
@@ -4901,6 +4914,17 @@
             border-color: rgba(14, 165, 233, 0.4);
             background: linear-gradient(180deg, rgba(239, 246, 255, 0.98), rgba(224, 242, 254, 0.98));
             color: #075985;
+        }
+        html.theme-day .resource-source-modal-action-btn-danger {
+            border-color: rgba(220, 38, 38, 0.32);
+            background: linear-gradient(180deg, rgba(254, 242, 242, 0.98), rgba(254, 226, 226, 0.96));
+            color: #b91c1c;
+            box-shadow: 0 10px 24px rgba(127, 29, 29, 0.08);
+        }
+        html.theme-day .resource-source-modal-action-btn-danger:hover {
+            border-color: rgba(220, 38, 38, 0.46);
+            background: linear-gradient(180deg, rgba(254, 226, 226, 0.98), rgba(254, 202, 202, 0.96));
+            color: #991b1b;
         }
         html.theme-day .tree-row { background: var(--surface) !important; border-color: var(--border) !important; }
         html.theme-day .bg-slate-900,

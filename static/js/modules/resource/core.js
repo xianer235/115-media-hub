@@ -1678,13 +1678,20 @@
             `).join('');
         }
 
+        function setResourceBoardHtml(container, html) {
+            const nextHtml = String(html || '');
+            if (container.__resourceBoardHtml === nextHtml && container.innerHTML) return;
+            container.innerHTML = nextHtml;
+            container.__resourceBoardHtml = nextHtml;
+        }
+
         function renderResourceBoard() {
             const container = document.getElementById('resource-board');
             if (!container) return;
 
             if (!resourceStateHydrated) {
                 resourceBoardHintText = '';
-                container.innerHTML = '<div class="rounded-2xl border border-slate-700 p-8 text-center text-slate-400 text-sm">正在加载首页配置，请稍候...</div>';
+                setResourceBoardHtml(container, '<div class="rounded-2xl border border-slate-700 p-8 text-center text-slate-400 text-sm">正在加载首页配置，请稍候...</div>');
                 renderResourceBoardHint();
                 return;
             }
@@ -1699,26 +1706,26 @@
                 const searchErrors = Array.isArray(resourceState?.search_meta?.errors) ? resourceState.search_meta.errors : [];
                 resourceBoardHintText = `频道内搜索：关键词「${activeKeyword}」 / 命中 ${filteredCount} 条${searchedSources ? ` / 已检索 ${searchedSources} 个订阅源` : ''}${searchErrors.length ? ` / ${searchErrors.length} 个频道暂未返回` : ''}`;
                 if (!searchSections.length) {
-                    container.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">没有在已启用订阅频道里找到匹配内容。可以先同步频道，或直接粘贴 magnet / 常见网盘分享链接进入识别。</div>';
+                    setResourceBoardHtml(container, '<div class="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">没有在已启用订阅频道里找到匹配内容。可以先同步频道，或直接粘贴 magnet / 常见网盘分享链接进入识别。</div>');
                     renderResourceBoardHint();
                     return;
                 }
                 const errorNote = searchErrors.length
                     ? `<div class="rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-100">${escapeHtml(`以下频道本次未返回结果：${searchErrors.map(item => item?.name || item?.channel_id || '未命名频道').join('、')}`)}</div>`
                     : '';
-                container.innerHTML = `${errorNote}${errorNote ? '<div class="h-4"></div>' : ''}${searchSections.map(section => buildResourceSectionCard(section, { searchKeyword: activeKeyword })).join('')}`;
+                setResourceBoardHtml(container, `${errorNote}${errorNote ? '<div class="h-4"></div>' : ''}${searchSections.map(section => buildResourceSectionCard(section, { searchKeyword: activeKeyword })).join('')}`);
                 renderResourceBoardHint();
                 return;
             }
 
             resourceBoardHintText = '';
             if (!sections.length) {
-                container.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">还没有可展示的频道资源。先在“参数配置”里添加频道，并执行一次同步即可。</div>';
+                setResourceBoardHtml(container, '<div class="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">还没有可展示的频道资源。先在“参数配置”里添加频道，并执行一次同步即可。</div>');
                 renderResourceBoardHint();
                 return;
             }
 
-            container.innerHTML = sections.map(section => buildResourceSectionCard(section, { searchKeyword: '' })).join('');
+            setResourceBoardHtml(container, sections.map(section => buildResourceSectionCard(section, { searchKeyword: '' })).join(''));
             renderResourceBoardHint();
         }
 
