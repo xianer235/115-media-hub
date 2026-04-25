@@ -773,7 +773,7 @@
                 editingResourceSourceIndex = index;
                 document.getElementById('resource_source_name').value = source.name || '';
                 document.getElementById('resource_source_channel').value = getResourceSourceChannelId(source);
-                document.getElementById('resource_source_enabled').checked = !!source.enabled;
+                document.getElementById('resource_source_enabled').checked = source.enabled !== false;
             } else {
                 resetResourceSourceForm();
             }
@@ -818,6 +818,7 @@
                 return;
             }
             const displayName = String(source?.name || getResourceSourceChannelId(source) || '未命名频道').trim() || '未命名频道';
+            const keepLocalForm = resourceChannelManageModalOpen && resourceChannelManageDirty;
             if (titleEl) titleEl.innerText = `频道快捷管理 · ${displayName}`;
             if (orderEl) orderEl.innerText = `#${index + 1}`;
             if (pinBtn) {
@@ -826,8 +827,8 @@
                 pinBtn.classList.toggle('btn-disabled', alreadyTop);
                 pinBtn.innerText = alreadyTop ? '已在1号位' : '置顶（排序挪到1号）';
             }
-            if (enabledEl) enabledEl.checked = source?.enabled !== false;
-            if (nameEl && !nameEl.value.trim()) {
+            if (enabledEl && !keepLocalForm) enabledEl.checked = source?.enabled !== false;
+            if (nameEl && (!keepLocalForm || !nameEl.value.trim())) {
                 nameEl.value = displayName;
             }
         }
@@ -835,6 +836,7 @@
         function resetResourceChannelManageForm() {
             resourceChannelManageSourceIndex = -1;
             resourceChannelManageChannelId = '';
+            resourceChannelManageDirty = false;
             const nameEl = document.getElementById('resource-channel-manage-name');
             const enabledEl = document.getElementById('resource-channel-manage-enabled');
             if (nameEl) nameEl.value = '';
@@ -852,6 +854,7 @@
             const source = (resourceState.sources || [])[index] || {};
             resourceChannelManageSourceIndex = index;
             resourceChannelManageChannelId = normalized;
+            resourceChannelManageDirty = false;
             const nameEl = document.getElementById('resource-channel-manage-name');
             const enabledEl = document.getElementById('resource-channel-manage-enabled');
             if (nameEl) nameEl.value = String(source?.name || normalized).trim() || normalized;
@@ -891,6 +894,7 @@
             };
             try {
                 await persistResourceSources(sources);
+                resourceChannelManageDirty = false;
                 resourceChannelManageSourceIndex = getResourceSourceIndexByChannelId(channelId);
                 syncResourceChannelManageModalState();
                 showToast('频道设置已保存', { tone: 'success', duration: 2200, placement: 'top-center' });
@@ -1182,7 +1186,7 @@
             });
             const data = await res.json();
             if (!res.ok || !data.ok) throw new Error(data.msg || '保存频道源失败');
-            applyResourceState({ ...resourceState, sources: data.sources || [] });
+            applyResourceState({ sources: data.sources || [] });
         }
 
         async function moveResourceSource(index, offset) {

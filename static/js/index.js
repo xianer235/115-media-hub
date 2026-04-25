@@ -113,6 +113,7 @@
         let resourceChannelManageModalOpen = false;
         let resourceChannelManageSourceIndex = -1;
         let resourceChannelManageChannelId = '';
+        let resourceChannelManageDirty = false;
         let resourceQuickLinks = [];
         let resourceQuickLinksMigrationChecked = false;
         let editingResourceQuickLinkId = '';

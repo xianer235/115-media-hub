@@ -974,6 +974,32 @@
             }));
         }
 
+        function syncResourceSectionsWithSources(sections, sources) {
+            const sourceIndex = new Map();
+            (Array.isArray(sources) ? sources : []).forEach(source => {
+                const channelId = typeof getResourceSourceChannelId === 'function'
+                    ? getResourceSourceChannelId(source)
+                    : normalizeTelegramChannelIdInput(source?.channel_id || source?.channel || source?.id || source?.url || '');
+                if (!channelId || sourceIndex.has(channelId)) return;
+                sourceIndex.set(channelId, source);
+            });
+            if (!sourceIndex.size) return [];
+            return (Array.isArray(sections) ? sections : [])
+                .map(section => {
+                    const channelId = normalizeTelegramChannelIdInput(section?.channel_id || '');
+                    if (!channelId || !sourceIndex.has(channelId)) return null;
+                    const source = sourceIndex.get(channelId) || {};
+                    return {
+                        ...section,
+                        name: source.name || section?.name || channelId,
+                        channel_id: channelId,
+                        url: source.url || section?.url || '',
+                        enabled: source.enabled !== false
+                    };
+                })
+                .filter(Boolean);
+        }
+
         function dedupeResourceItems(items) {
             const seen = new Set();
             const result = [];
@@ -1726,14 +1752,20 @@
                 active_jobs: nextActiveJobs,
                 job_counts: nextJobCounts,
                 job_pagination: nextJobPagination,
-                channel_sections: hydrateResourceSections(Array.isArray(data.channel_sections) ? data.channel_sections : (resourceState.channel_sections || [])),
+                channel_sections: syncResourceSectionsWithSources(
+                    hydrateResourceSections(Array.isArray(data.channel_sections) ? data.channel_sections : (resourceState.channel_sections || [])),
+                    nextSources
+                ),
                 channel_profiles: data.channel_profiles && typeof data.channel_profiles === 'object'
                     ? data.channel_profiles
                     : (resourceState.channel_profiles || {}),
                 subscription_channel_support: data.subscription_channel_support && typeof data.subscription_channel_support === 'object'
                     ? data.subscription_channel_support
                     : (resourceState.subscription_channel_support || {}),
-                search_sections: hydrateResourceSections(Array.isArray(data.search_sections) ? data.search_sections : (resourceState.search_sections || [])),
+                search_sections: syncResourceSectionsWithSources(
+                    hydrateResourceSections(Array.isArray(data.search_sections) ? data.search_sections : (resourceState.search_sections || [])),
+                    nextSources
+                ),
                 last_syncs: data.last_syncs || resourceState.last_syncs || {},
                 monitor_tasks: Array.isArray(data.monitor_tasks) ? data.monitor_tasks : (resourceState.monitor_tasks || monitorState.tasks || []),
                 cookie_configured: !!(

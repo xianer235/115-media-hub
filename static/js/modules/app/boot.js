@@ -451,6 +451,12 @@
         document.getElementById('resource-channel-manage-modal')?.addEventListener('click', (e) => {
             if (e.target.id === 'resource-channel-manage-modal') closeResourceChannelManageModal();
         });
+        document.getElementById('resource-channel-manage-name')?.addEventListener('input', () => {
+            if (resourceChannelManageModalOpen) resourceChannelManageDirty = true;
+        });
+        document.getElementById('resource-channel-manage-enabled')?.addEventListener('change', () => {
+            if (resourceChannelManageModalOpen) resourceChannelManageDirty = true;
+        });
         document.getElementById('resource-source-import-modal')?.addEventListener('click', (e) => {
             if (e.target.id === 'resource-source-import-modal') closeResourceSourceImportModal();
         });
