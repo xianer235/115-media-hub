@@ -1341,7 +1341,7 @@
                             </div>
                             <div class="${actionGridClass}">
                                 <button type="button" data-subscription-action="toggle-run" data-subscription-run-action="${toggleRunAction}" data-task-name="${encodeURIComponent(taskName)}" class="px-4 py-2 rounded-xl text-sm font-bold ${toggleRunClass} ${toggleRunDisabled ? 'btn-disabled' : ''}" ${toggleRunDisabled ? 'disabled' : ''}>${toggleRunLabel}</button>
-                                <button type="button" data-subscription-action="search" data-task-name="${encodeURIComponent(taskName)}" class="px-4 py-2 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-200 text-sm font-bold">搜索</button>
+                                <button type="button" data-subscription-action="search" data-task-name="${encodeURIComponent(taskName)}" class="subscription-task-search-btn px-4 py-2 rounded-xl text-sm font-bold">搜索</button>
                                 <button type="button" data-subscription-action="edit" data-task-name="${encodeURIComponent(taskName)}" class="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">编辑</button>
                                 <button type="button" data-subscription-action="delete" data-task-name="${encodeURIComponent(taskName)}" class="px-4 py-2 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-300 text-sm font-bold">删除</button>
                                 ${rebuildButton}

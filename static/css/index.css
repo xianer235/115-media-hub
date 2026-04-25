@@ -5839,6 +5839,25 @@
             background: #334155 !important;
             color: #ffffff !important;
         }
+        #page-subscription .subscription-task-search-btn {
+            background: rgba(8, 145, 178, 0.16);
+            color: #a5f3fc;
+            border: 1px solid rgba(34, 211, 238, 0.24);
+        }
+        #page-subscription .subscription-task-search-btn:hover {
+            background: rgba(8, 145, 178, 0.24);
+            color: #cffafe;
+        }
+        html.theme-day #page-subscription .subscription-task-search-btn {
+            background: #0e7490 !important;
+            color: #ffffff !important;
+            border-color: #155e75 !important;
+            box-shadow: 0 1px 2px rgba(8, 47, 73, 0.16);
+        }
+        html.theme-day #page-subscription .subscription-task-search-btn:hover {
+            background: #155e75 !important;
+            color: #ffffff !important;
+        }
         html.theme-day #subscription-modal button.bg-slate-700,
         html.theme-day #subscription-tmdb-modal button.bg-slate-700,
         html.theme-day #subscription-share-folder-modal button.bg-slate-700,
