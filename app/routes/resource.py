@@ -26,7 +26,7 @@ async def run_resource_browse_io(func, *args, **kwargs):
     return await loop.run_in_executor(resource_browse_executor, functools.partial(func, *args, **kwargs))
 
 
-def _build_resource_jobs_state_snapshot(limit: int = 40, offset: int = 0, status_filter: str = "") -> Dict[str, Any]:
+def _build_resource_jobs_state_snapshot(limit: int = 20, offset: int = 0, status_filter: str = "") -> Dict[str, Any]:
     cfg = get_config()
     payload = build_resource_jobs_state_payload(limit=limit, cfg=cfg)
     normalized_filter = normalize_resource_job_status_filter(status_filter)
@@ -68,7 +68,7 @@ async def get_resource_state(request: Request) -> Dict[str, Any]:
 
 @router.get("/resource/jobs/state")
 async def get_resource_jobs_state(request: Request) -> Dict[str, Any]:
-    limit = max(1, min(int(request.query_params.get("limit", 40) or 40), 200))
+    limit = max(1, min(int(request.query_params.get("limit", 20) or 20), 200))
     offset = max(0, int(request.query_params.get("offset", 0) or 0))
     status_filter = str(request.query_params.get("status", "all") or "all").strip().lower()
     return await asyncio.to_thread(_build_resource_jobs_state_snapshot, limit, offset, status_filter)

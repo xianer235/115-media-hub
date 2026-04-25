@@ -103,7 +103,7 @@
                                 <div class="flex flex-wrap items-center gap-2">
                                     <div class="resource-job-card-title">${escapeHtml(job.title || `任务 #${job.id}`)}</div>
                                     ${buildResourceStatusBadge(job.status)}
-                                    <span class="text-[10px] px-3 py-1 rounded-full bg-sky-500/10 text-sky-200 border border-sky-500/20">${escapeHtml(linkTypeLabel)}</span>
+                                    <span class="${getResourceLinkTypeBadgeClass(job.link_type || '')}">${escapeHtml(linkTypeLabel)}</span>
                                     <span class="text-[10px] px-3 py-1 rounded-full bg-violet-500/10 text-violet-200 border border-violet-500/20">${escapeHtml(sourceLabel)}</span>
                                     <span class="text-[10px] px-3 py-1 rounded-full bg-slate-700 text-slate-100">#${job.id}</span>
                                 </div>
@@ -145,7 +145,7 @@
             const pagination = resourceState?.job_pagination && typeof resourceState.job_pagination === 'object'
                 ? resourceState.job_pagination
                 : {};
-            const loadedCount = Number(pagination.next_offset ?? visibleJobs.length) || visibleJobs.length;
+            const loadedCount = visibleJobs.length;
             const totalCount = Number(pagination.total ?? counts.total) || 0;
             const loadMoreHtml = pagination.has_more && pageStatus === normalizedFilter
                 ? `

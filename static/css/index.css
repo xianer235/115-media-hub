@@ -3646,69 +3646,6 @@
             background: linear-gradient(135deg, #d97706, #b45309);
             border-color: rgba(251, 191, 36, 0.45);
         }
-        #page-about .about-workflow-card {
-            border-radius: 1rem;
-            border: 1px solid rgba(100, 116, 139, 0.42);
-            background: linear-gradient(165deg, rgba(15, 23, 42, 0.62), rgba(15, 23, 42, 0.4));
-            padding: 1rem;
-        }
-        #page-about .about-workflow-title {
-            font-size: 0.94rem;
-            font-weight: 800;
-            color: #f8fafc;
-        }
-        #page-about .about-workflow-copy {
-            margin-top: 0.52rem;
-            font-size: 0.79rem;
-            line-height: 1.6;
-            color: #94a3b8;
-        }
-        #about-workflow-modal .about-workflow-modal-body {
-            margin-top: 1rem;
-            max-height: 82vh;
-            overflow: auto;
-            border-radius: 1rem;
-            border: 1px solid rgba(100, 116, 139, 0.4);
-            background: rgba(15, 23, 42, 0.46);
-            padding: 0.8rem;
-        }
-        #about-workflow-modal .about-workflow-modal-body img {
-            width: 100%;
-            min-width: 640px;
-            height: auto;
-            border-radius: 0.7rem;
-            border: 1px solid rgba(148, 163, 184, 0.3);
-            background: #fff;
-            display: none;
-        }
-        #about-workflow-modal .about-workflow-modal-body img:not(.hidden) {
-            display: block;
-        }
-        #about-workflow-modal .about-workflow-modal-loading,
-        #about-workflow-modal .about-workflow-modal-error {
-            min-height: 180px;
-            border-radius: 0.8rem;
-            border: 1px dashed rgba(148, 163, 184, 0.42);
-            background: rgba(15, 23, 42, 0.22);
-            display: none;
-            place-content: center;
-            text-align: center;
-            padding: 1rem;
-            line-height: 1.6;
-            font-size: 0.84rem;
-        }
-        #about-workflow-modal .about-workflow-modal-loading:not(.hidden),
-        #about-workflow-modal .about-workflow-modal-error:not(.hidden) {
-            display: grid;
-        }
-        #about-workflow-modal .about-workflow-modal-loading {
-            color: #cbd5e1;
-        }
-        #about-workflow-modal .about-workflow-modal-error {
-            color: #fca5a5;
-            border-color: rgba(248, 113, 113, 0.45);
-        }
-
         @media (max-width: 1024px) {
             #main-nav-actions { width: auto; justify-content: flex-end; }
             .footer-text { padding: 1rem 0 1rem; }
@@ -3854,9 +3791,6 @@
             #page-monitor .text-sm,
             #page-about .text-sm,
             #monitor-modal .text-sm { font-size: 0.95rem !important; }
-            #about-workflow-modal .about-workflow-modal-body img {
-                min-width: 560px;
-            }
             #page-monitor .monitor-task-actions {
                 grid-template-columns: repeat(4, minmax(0, 1fr));
             }
@@ -4922,32 +4856,6 @@
             border-color: rgba(16, 185, 129, 0.44);
             background: rgba(255, 255, 255, 0.82);
             color: #047857;
-        }
-        html.theme-day #page-about .about-workflow-card {
-            background: rgba(255, 255, 255, 0.94);
-            border-color: rgba(148, 163, 184, 0.38);
-        }
-        html.theme-day #page-about .about-workflow-title {
-            color: #0f172a;
-        }
-        html.theme-day #page-about .about-workflow-copy {
-            color: #475569;
-        }
-        html.theme-day #about-workflow-modal .about-workflow-modal-body {
-            background: rgba(241, 245, 249, 0.95);
-            border-color: rgba(148, 163, 184, 0.42);
-        }
-        html.theme-day #about-workflow-modal .about-workflow-modal-loading,
-        html.theme-day #about-workflow-modal .about-workflow-modal-error {
-            background: rgba(226, 232, 240, 0.72);
-            border-color: rgba(148, 163, 184, 0.52);
-        }
-        html.theme-day #about-workflow-modal .about-workflow-modal-loading {
-            color: #334155;
-        }
-        html.theme-day #about-workflow-modal .about-workflow-modal-error {
-            color: #b91c1c;
-            border-color: rgba(248, 113, 113, 0.55);
         }
         html.theme-day .resource-source-manager-select-btn-active {
             background: rgba(14, 165, 233, 0.14);
@@ -7574,27 +7482,37 @@
         }
 
         .resource-card-type-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            border-radius: 999px;
+            padding: 0.26rem 0.52rem;
+            font-size: 0.64rem;
+            font-weight: 800;
+            line-height: 1;
+            white-space: nowrap;
             border: 1px solid rgba(148, 163, 184, 0.28);
             background: rgba(51, 65, 85, 0.7);
             color: #e2e8f0;
         }
 
         .resource-card-type-badge-115share {
-            border-color: rgba(56, 189, 248, 0.48);
-            background: rgba(2, 132, 199, 0.24);
-            color: #bae6fd;
+            border-color: rgba(59, 130, 246, 0.58);
+            background: rgba(29, 78, 216, 0.28);
+            color: #bfdbfe;
         }
 
         .resource-card-type-badge-magnet {
-            border-color: rgba(251, 146, 60, 0.48);
-            background: rgba(234, 88, 12, 0.24);
-            color: #fed7aa;
+            border-color: rgba(245, 158, 11, 0.58);
+            background: rgba(180, 83, 9, 0.28);
+            color: #fde68a;
         }
 
         .resource-card-type-badge-quark {
-            border-color: rgba(34, 211, 238, 0.46);
-            background: rgba(8, 145, 178, 0.26);
-            color: #cffafe;
+            border-color: rgba(20, 184, 166, 0.58);
+            background: rgba(15, 118, 110, 0.3);
+            color: #ccfbf1;
         }
 
         .resource-card-type-badge-default {
@@ -8153,21 +8071,21 @@
         }
 
         html.theme-day .resource-card-type-badge-115share {
-            border-color: rgba(14, 165, 233, 0.4);
-            background: rgba(224, 242, 254, 0.98);
-            color: #0c4a6e;
+            border-color: rgba(37, 99, 235, 0.5);
+            background: #dbeafe;
+            color: #1e3a8a;
         }
 
         html.theme-day .resource-card-type-badge-magnet {
-            border-color: rgba(249, 115, 22, 0.38);
-            background: rgba(255, 237, 213, 0.98);
-            color: #9a3412;
+            border-color: rgba(217, 119, 6, 0.5);
+            background: #fef3c7;
+            color: #78350f;
         }
 
         html.theme-day .resource-card-type-badge-quark {
-            border-color: rgba(8, 145, 178, 0.38);
-            background: rgba(236, 254, 255, 0.98);
-            color: #155e75;
+            border-color: rgba(13, 148, 136, 0.55);
+            background: #ccfbf1;
+            color: #134e4a;
         }
 
         html.theme-day .resource-card-type-badge-default {

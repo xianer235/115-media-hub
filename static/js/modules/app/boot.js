@@ -445,9 +445,6 @@
         document.getElementById('help-modal')?.addEventListener('click', (e) => {
             if (e.target.id === 'help-modal') closeHelpModal();
         });
-        document.getElementById('about-workflow-modal')?.addEventListener('click', (e) => {
-            if (e.target.id === 'about-workflow-modal') closeAboutWorkflowModal();
-        });
         document.getElementById('resource-source-modal')?.addEventListener('click', (e) => {
             if (e.target.id === 'resource-source-modal') closeResourceSourceModal();
         });
@@ -578,11 +575,6 @@
             }
             if (e.key === 'Escape' && resourceJobClearMenuOpen) {
                 closeResourceJobClearMenu();
-                return;
-            }
-            const aboutWorkflowModal = document.getElementById('about-workflow-modal');
-            if (e.key === 'Escape' && aboutWorkflowModal && !aboutWorkflowModal.classList.contains('hidden')) {
-                closeAboutWorkflowModal();
                 return;
             }
             const subscriptionEpisodeModal = document.getElementById('subscription-episode-modal');

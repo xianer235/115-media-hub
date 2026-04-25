@@ -3180,7 +3180,7 @@ def build_ui_state_payload(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, An
     }
 
 
-def build_resource_jobs_state_payload(limit: int = 40, cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def build_resource_jobs_state_payload(limit: int = 20, cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     active_cfg = cfg or get_config()
     jobs_page = list_resource_jobs_page(limit=limit, offset=0, status_filter="")
     jobs = jobs_page.get("jobs", [])
@@ -3237,7 +3237,7 @@ def _build_resource_state_payload_snapshot(
     keyword = str(keyword or "").strip()
     items = search_meta.get("items", []) if keyword else []
     search_sections = search_meta.get("sections", []) if keyword else []
-    jobs_state = build_resource_jobs_state_payload(limit=40, cfg=cfg)
+    jobs_state = build_resource_jobs_state_payload(limit=20, cfg=cfg)
     jobs = jobs_state.get("jobs", [])
     active_jobs = jobs_state.get("active_jobs", [])
     job_counts = jobs_state.get("job_counts", {})

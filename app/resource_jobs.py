@@ -29,8 +29,8 @@ def _build_resource_job_filter_where(status_filter: str) -> Tuple[str, Tuple[Any
     return "1 = 1", ()
 
 
-def list_resource_jobs_page(limit: int = 40, offset: int = 0, status_filter: str = "") -> Dict[str, Any]:
-    page_limit = max(1, min(int(limit or 40), 200))
+def list_resource_jobs_page(limit: int = 20, offset: int = 0, status_filter: str = "") -> Dict[str, Any]:
+    page_limit = max(1, min(int(limit or 20), 200))
     page_offset = max(0, int(offset or 0))
     normalized_filter = normalize_resource_job_status_filter(status_filter)
     where_sql, where_params = _build_resource_job_filter_where(normalized_filter)

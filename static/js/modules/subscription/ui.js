@@ -196,9 +196,9 @@
             const normalized = normalizeSubscriptionProvider(provider, '115');
             const label = getSubscriptionProviderBadgeLabel(normalized);
             const className = normalized === 'quark'
-                ? 'bg-cyan-500/15 text-cyan-200 border-cyan-400/25'
-                : 'bg-sky-500/15 text-sky-200 border-sky-400/25';
-            return `<span class="shrink-0 text-[10px] px-2.5 py-1 rounded-full border ${className}">${escapeHtml(label)}</span>`;
+                ? 'resource-card-type-badge resource-card-type-badge-quark'
+                : 'resource-card-type-badge resource-card-type-badge-115share';
+            return `<span class="${className}">${escapeHtml(label)}</span>`;
         }
 
         function getCurrentSubscriptionProvider() {

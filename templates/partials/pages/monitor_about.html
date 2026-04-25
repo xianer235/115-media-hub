@@ -72,16 +72,4 @@
                 </div>
                 <div id="about-version-hint" class="text-xs text-slate-400 mt-4">提示：如果检测到新版本，顶部会出现轻提醒，并可直接跳转本页。</div>
             </div>
-
-            <div class="group-card">
-                <h3 class="group-title">导入与 STRM 生成流程</h3>
-                <div class="about-workflow-card">
-                    <div class="about-workflow-title">115 导入与容器内 STRM 生成链路图</div>
-                    <div class="about-workflow-copy">资源导入与 STRM 播放都在容器内完成：先用 115 Cookie 解析目录，再由 `/strm/proxy` 返回 302 到真实下载地址。流程图采用按需加载，避免影响页面首屏速度。</div>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mt-4">
-                        <button type="button" onclick="openAboutWorkflowModal()" class="about-action about-action-primary">查看流程图</button>
-                        <a href="/static/images/about-workflow-115-container.png" target="_blank" rel="noopener noreferrer" class="about-action about-action-secondary">新窗口打开</a>
-                    </div>
-                </div>
-            </div>
         </div>

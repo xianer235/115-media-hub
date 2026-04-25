@@ -166,8 +166,6 @@
         let tabRuntimeModulePromise = null;
         let shellMoreMenuOpen = false;
         let shellRailExpanded = false;
-        let aboutWorkflowImageLoaded = false;
-        let aboutWorkflowImageLoadingPromise = null;
         let modalScrollLockCount = 0;
         let modalScrollLockY = 0;
         let viewportMetricsRafId = 0;
@@ -205,7 +203,6 @@
         const SIGN115_REFRESH_INTERVAL = 1000 * 60;
         const VERSION_FALLBACK_PROJECT_URL = 'https://github.com/xianer235/115-media-hub';
         const VERSION_FALLBACK_CHANGELOG_URL = 'https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md';
-        const ABOUT_WORKFLOW_IMAGE_URL = '/static/images/about-workflow-115-container.png';
         const RESOURCE_FOLDER_MEMORY_KEY = 'resource-folder-selection-v1';
         const RESOURCE_IMPORT_DELAY_MEMORY_KEY = 'resource-import-delay-seconds-v1';
         const RESOURCE_QUICK_LINKS_MEMORY_KEY = 'resource-quick-links-v1';
@@ -219,7 +216,7 @@
         const RESOURCE_FOLDER_FILE_PREVIEW_LIMIT = 120;
         const RESOURCE_SHARE_BRANCH_CACHE_TTL_MS = 1000 * 60 * 10;
         const RESOURCE_SHARE_BROWSE_PAGE_LIMIT = 120;
-        const RESOURCE_JOB_PAGE_SIZE = 40;
+        const RESOURCE_JOB_PAGE_SIZE = 20;
         const SUBSCRIPTION_WEEKDAY_LABELS = {
             1: '周一',
             2: '周二',
@@ -1413,31 +1410,6 @@
 
         function closeHelpModal() {
             document.getElementById('help-modal').classList.add('hidden');
-        }
-
-        async function ensureAboutWorkflowImageLoaded() {
-            const aboutModule = await loadAboutTabModule();
-            if (!aboutModule?.ensureWorkflowImageLoaded) return false;
-            return aboutModule.ensureWorkflowImageLoaded({
-                loaded: aboutWorkflowImageLoaded,
-                loadingPromise: aboutWorkflowImageLoadingPromise,
-                defaultImageUrl: ABOUT_WORKFLOW_IMAGE_URL,
-                setLoaded: (value) => {
-                    aboutWorkflowImageLoaded = !!value;
-                },
-                setLoadingPromise: (promise) => {
-                    aboutWorkflowImageLoadingPromise = promise;
-                },
-            });
-        }
-
-        async function openAboutWorkflowModal() {
-            showLockedModal('about-workflow-modal');
-            await ensureAboutWorkflowImageLoaded();
-        }
-
-        function closeAboutWorkflowModal() {
-            hideLockedModal('about-workflow-modal');
         }
 
         function normalizeMountProviderInput(value) {
