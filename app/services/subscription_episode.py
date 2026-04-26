@@ -1,7 +1,7 @@
 import hashlib
 import os
 import re
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..core import *  # noqa: F401,F403
 
@@ -76,6 +76,14 @@ def _extract_subscription_season_from_name(name: str) -> int:
             return next(iter(season_values))
         if len(season_values) > 1:
             return 0
+    return 0
+
+
+def _extract_subscription_season_from_contexts(context_paths: Optional[List[str]] = None) -> int:
+    for context in context_paths or []:
+        context_season = _extract_subscription_season_from_name(str(context or "").strip())
+        if context_season > 0:
+            return context_season
     return 0
 
 
@@ -156,7 +164,12 @@ def _extract_numeric_episode_from_filename(file_name: str) -> int:
     return 0
 
 
-def _extract_task_episodes_from_file_entry(task: Dict[str, Any], file_name: str, parent_path: str = "") -> Set[int]:
+def _extract_task_episodes_from_file_entry(
+    task: Dict[str, Any],
+    file_name: str,
+    parent_path: str = "",
+    context_paths: Optional[List[str]] = None,
+) -> Set[int]:
     normalized_file_name = normalize_relative_path(str(file_name or "").strip())
     if not normalized_file_name:
         return set()
@@ -168,6 +181,8 @@ def _extract_task_episodes_from_file_entry(task: Dict[str, Any], file_name: str,
     inline_parent = normalize_relative_path("/".join(file_parts[:-1]))
     normalized_parent = normalize_relative_path(join_relative_path(str(parent_path or "").strip(), inline_parent))
     parent_season = _extract_subscription_season_from_name(normalized_parent)
+    context_season = _extract_subscription_season_from_contexts(context_paths)
+    effective_parent_season = parent_season or context_season
     multi_season_mode = is_subscription_multi_season_mode(task)
     if not multi_season_mode:
         target_season = max(1, int(task.get("season", 1) or 1))
@@ -178,18 +193,25 @@ def _extract_task_episodes_from_file_entry(task: Dict[str, Any], file_name: str,
         parsed = _extract_task_episodes_from_name(task, probe)
         if parsed:
             probe_season = _extract_subscription_season_from_name(probe)
-            if multi_season_mode and parent_season > 0 and probe_season <= 0:
-                return _convert_parent_season_episode_values(task, parent_season, parsed)
+            if probe_season <= 0 and effective_parent_season > 0:
+                if multi_season_mode:
+                    return _convert_parent_season_episode_values(task, effective_parent_season, parsed)
+                target_season = max(1, int(task.get("season", 1) or 1))
+                if effective_parent_season != target_season:
+                    return set()
             return parsed
 
     numeric_episode = _extract_numeric_episode_from_filename(file_leaf)
     if numeric_episode > 0:
         if multi_season_mode:
-            if parent_season > 0:
-                absolute_episode = convert_subscription_episode_to_absolute(task, parent_season, numeric_episode)
+            if effective_parent_season > 0:
+                absolute_episode = convert_subscription_episode_to_absolute(task, effective_parent_season, numeric_episode)
                 if absolute_episode > 0:
                     return {absolute_episode}
             return {numeric_episode}
+        target_season = max(1, int(task.get("season", 1) or 1))
+        if effective_parent_season > 0 and effective_parent_season != target_season:
+            return set()
         return {numeric_episode}
 
     if normalized_parent:
@@ -199,6 +221,14 @@ def _extract_task_episodes_from_file_entry(task: Dict[str, Any], file_name: str,
         # 仅在全路径能明确到单集时才回退使用。
         if len(full_path_values) == 1:
             return full_path_values
+    for context_path in context_paths or []:
+        normalized_context = normalize_relative_path(str(context_path or "").strip())
+        if not normalized_context:
+            continue
+        full_context_name = normalize_relative_path(join_relative_path(normalized_context, normalized_file_name))
+        context_values = _extract_task_episodes_from_name(task, full_context_name)
+        if len(context_values) == 1:
+            return context_values
     return set()
 
 
@@ -904,6 +934,7 @@ __all__ = [
     "_is_subscription_skipped_archive_file",
     "_extract_task_episodes_from_name",
     "_extract_numeric_episode_from_filename",
+    "_extract_subscription_season_from_contexts",
     "_extract_task_episodes_from_file_entry",
     "_candidate_episode_values",
     "_candidate_anchor_episode",

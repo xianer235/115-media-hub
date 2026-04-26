@@ -1,11 +1,11 @@
 {
-  "version": "0.2.9",
-  "buildDate": "2026-04-26T12:36:03+08:00",
+  "version": "0.2.10",
+  "buildDate": "2026-04-26T15:55:02+08:00",
   "notes": [
-    "Cookie 健康判断重构：115/Quark 分享链接读取与转存链路完全退出 Cookie 健康成功/失败更新。",
-    "Cookie 健康核心防线：分享链路 trigger 即使误调用健康更新函数，也会被核心层直接忽略。",
-    "资源首页告警修正：历史分享链路触发的 Cookie 健康状态按 trigger 过滤，不再依赖分享错误文案匹配。",
-    "保留真实 Cookie 检测边界：Cookie 健康仅由账号目录访问、建目录、离线任务、手动检测等账号级接口更新。"
+    "订阅候选召回修复：115/Quark 标题命中资源不再因标题季号差异在搜索阶段被提前丢弃。",
+    "分享内容精细识别增强：纯集数文件会结合父目录、分享根标题和资源标题中的季号判断目标集。",
+    "115 分享转存收紧：电视剧候选会先按文件级 selected_ids 精选目标剧集，再创建导入任务，避免整包跨季误导入。",
+    "多季合一集数对齐：S02E24 + 纯数字文件名可结合 TMDB 季集映射转为绝对集数。"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

@@ -8,6 +8,20 @@ from .subscription_episode import *  # noqa: F401,F403
 from .subscription_share_runtime import *  # noqa: F401,F403
 
 
+def _build_subscription_share_episode_context_paths(item: Dict[str, Any], share_root_title: str = "") -> List[str]:
+    payload = item if isinstance(item, dict) else {}
+    candidates: List[str] = []
+    for value in (
+        share_root_title,
+        payload.get("title", ""),
+        payload.get("raw_text", ""),
+    ):
+        normalized = normalize_relative_path(str(value or "").strip())
+        if normalized:
+            candidates.append(normalized)
+    return unique_preserve_order(candidates)
+
+
 def _normalize_subscription_share_dir_match_key(name: str, drop_digits: bool = False) -> str:
     normalized = normalize_relative_path(name)
     if not normalized:
@@ -901,6 +915,7 @@ async def _build_tv_share_selection_for_missing_episodes(
             scanned_dirs += 1
             if not share_root_title:
                 share_root_title = normalize_relative_path(str(branch.get("share_title", "") or ""))
+            episode_contexts = _build_subscription_share_episode_context_paths(item, share_root_title)
             entries = branch.get("entries", []) if isinstance(branch.get("entries"), list) else []
             for entry in entries:
                 if scanned_entries >= max_entries:
@@ -923,7 +938,12 @@ async def _build_tv_share_selection_for_missing_episodes(
                 if _is_subscription_skipped_archive_file(rel_name or entry_name):
                     skipped_archive_files += 1
                     continue
-                matched_episodes = _extract_task_episodes_from_file_entry(task, rel_name or entry_name, parent_path)
+                matched_episodes = _extract_task_episodes_from_file_entry(
+                    task,
+                    rel_name or entry_name,
+                    parent_path,
+                    context_paths=episode_contexts,
+                )
                 if not matched_episodes:
                     continue
                 episode_hit = matched_episodes.intersection(target_missing)
@@ -1103,6 +1123,7 @@ async def _scan_subscription_share_tree_snapshot(
             scanned_dirs += 1
             if not share_root_title:
                 share_root_title = normalize_relative_path(str(branch.get("share_title", "") or "").strip())
+            episode_contexts = _build_subscription_share_episode_context_paths(item, share_root_title)
             entries = branch.get("entries", []) if isinstance(branch.get("entries"), list) else []
             for entry in entries:
                 if scanned_entries >= max_entries:
@@ -1139,7 +1160,14 @@ async def _scan_subscription_share_tree_snapshot(
                 if _is_subscription_skipped_archive_file(rel_name or entry_name):
                     skipped_archive_files += 1
                     continue
-                matched_episodes = sorted(_extract_task_episodes_from_file_entry(task, rel_name or entry_name, parent_path))
+                matched_episodes = sorted(
+                    _extract_task_episodes_from_file_entry(
+                        task,
+                        rel_name or entry_name,
+                        parent_path,
+                        context_paths=episode_contexts,
+                    )
+                )
                 files.append(
                     {
                         "id": entry_id,
@@ -1472,6 +1500,7 @@ async def _scan_subscription_share_episode_manifest(
             scanned_dirs += 1
             if not share_root_title:
                 share_root_title = normalize_relative_path(str(branch.get("share_title", "") or "").strip())
+            episode_contexts = _build_subscription_share_episode_context_paths(item, share_root_title)
             entries = branch.get("entries", []) if isinstance(branch.get("entries"), list) else []
             for entry in entries:
                 if scanned_entries >= max_entries:
@@ -1494,7 +1523,14 @@ async def _scan_subscription_share_episode_manifest(
                 if _is_subscription_skipped_archive_file(rel_name or entry_name):
                     skipped_archive_files += 1
                     continue
-                matched_episodes = sorted(_extract_task_episodes_from_file_entry(task, rel_name or entry_name, parent_path))
+                matched_episodes = sorted(
+                    _extract_task_episodes_from_file_entry(
+                        task,
+                        rel_name or entry_name,
+                        parent_path,
+                        context_paths=episode_contexts,
+                    )
+                )
                 if not matched_episodes:
                     continue
                 entry_id = str(entry.get("id", "") or entry.get("fid", "") or "").strip()
@@ -1673,7 +1709,12 @@ def _split_tv_share_selection_by_season(
             file_name = entry_parts[-1] if entry_parts else entry_name
             parent_path = normalize_relative_path("/".join(entry_parts[:-1]))
             entry_episodes = _clamp_episode_values(
-                _extract_task_episodes_from_file_entry(task, file_name, parent_path)
+                _extract_task_episodes_from_file_entry(
+                    task,
+                    file_name,
+                    parent_path,
+                    context_paths=[str(normalized_selection.get("share_root_title", "") or "").strip()],
+                )
             )
 
         mapped_seasons: List[int] = []
@@ -1737,6 +1778,7 @@ __all__ = [
     "_extract_subscription_tmdbid_token",
     "_pick_unique_subscription_share_entry",
     "_sample_subscription_share_dir_names",
+    "_build_subscription_share_episode_context_paths",
     "_collect_subscription_task_share_dir_name_candidates",
     "_score_subscription_share_dir_for_task",
     "_refine_subscription_share_selection_for_task",

@@ -167,6 +167,11 @@ async def _run_subscription_task_quark(
             f"已保留 {int(search_stats.get('title_match_low_score_kept', search_stats.get('quark_low_score_kept', 0)) or 0)} 条低于阈值但标题命中的电视剧候选（召回优先）",
             "info",
         )
+    if int(search_stats.get("season_guard_deferred", 0) or 0) > 0:
+        await write_subscription_log(
+            f"已延后 {int(search_stats.get('season_guard_deferred', 0) or 0)} 条标题季号不一致候选，后续按分享内容文件级筛选判定",
+            "info",
+        )
     if bool(search_stats.get("incremental_search_enabled", False)):
         await write_subscription_log(
             (
@@ -447,6 +452,9 @@ async def _run_subscription_task_quark(
             candidate,
             episode_upper_bound=single_season_episode_upper_bound,
         )
+        candidate_season_mismatch_deferred = bool(candidate.get("season_mismatch_deferred", False))
+        if candidate_season_mismatch_deferred:
+            candidate_episode_values = set()
         candidate_has_range_hint = (
             max(0, int(candidate.get("range_start", 0) or 0)) > 0
             and max(0, int(candidate.get("range_end", 0) or 0)) > 0
@@ -512,11 +520,12 @@ async def _run_subscription_task_quark(
 
         candidate_savepath = effective_savepath
         if task["media_type"] == "tv":
+            savepath_season = max(1, int(task.get("season", 1) or 1)) if candidate_season_mismatch_deferred else candidate_season
             candidate_savepath = (
                 build_subscription_tv_savepath(
                     task,
                     base_savepath,
-                    season=candidate_season,
+                    season=savepath_season,
                     episode=episode,
                 )
                 or effective_savepath
@@ -1601,6 +1610,11 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                     ),
                     "warn",
                 )
+            if int(search_stats.get("season_guard_deferred", 0) or 0) > 0:
+                await write_subscription_log(
+                    f"已延后 {int(search_stats.get('season_guard_deferred', 0) or 0)} 条标题季号不一致候选，后续按分享内容文件级筛选判定",
+                    "info",
+                )
             if int(search_stats.get("title_match_media_relaxed_pass", 0) or 0) > 0:
                 await write_subscription_log(
                     f"已放行 {int(search_stats.get('title_match_media_relaxed_pass', 0) or 0)} 条“标题命中但无集数标记”候选，待后续精细扫描判定",
@@ -1939,6 +1953,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
         skipped_ledger_candidates = 0
         skipped_invalid_candidates = 0
         skipped_subdir_candidates = 0
+        skipped_precise_mismatch_candidates = 0
         last_failed_detail = ""
         selected_candidate: Dict[str, Any] = {}
         selected_item: Dict[str, Any] = {}
@@ -2043,6 +2058,9 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 candidate,
                 episode_upper_bound=single_season_episode_upper_bound,
             )
+            candidate_season_mismatch_deferred = bool(candidate.get("season_mismatch_deferred", False))
+            if candidate_season_mismatch_deferred:
+                candidate_episode_values = set()
             episode_label = _format_candidate_episode_label(candidate)
             candidate_link_url = _normalize_subscription_candidate_link(item.get("link_url", ""))
             candidate_link_type = resolve_resource_link_type(item.get("link_type", ""), candidate_link_url)
@@ -2053,10 +2071,11 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             )
             candidate_savepath = effective_savepath
             if task["media_type"] == "tv":
+                savepath_season = max(1, int(task.get("season", 1) or 1)) if candidate_season_mismatch_deferred else candidate_season
                 candidate_savepath = build_subscription_tv_savepath(
                     task,
                     base_savepath,
-                    season=candidate_season,
+                    season=savepath_season,
                     episode=episode,
                 ) or effective_savepath
             candidate_matched_monitor = match_monitor_task_for_savepath(cfg, candidate_savepath, provider=provider)
@@ -2583,6 +2602,114 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                                     f"候选资源 #{index} 固定链接模式未能在订阅子目录中识别目标剧集文件，"
                                     f"已跳过避免整包导入（目标 {covered_preview}，原因 {selection_reason_label}，"
                                     f"扫描目录 {scanned_dirs} 个，条目 {scanned_entries} 条）"
+                                ),
+                                "warn",
+                            )
+                            await maybe_wait_between_attempts()
+                            continue
+                if (
+                    task["media_type"] == "tv"
+                    and candidate_link_type == "115share"
+                    and (candidate_episode_values or candidate_season_mismatch_deferred)
+                    and (not forced_precise_selection_applied)
+                ):
+                    title_precise_episode_values: Set[int] = set(candidate_episode_values)
+                    if candidate_season_mismatch_deferred:
+                        target_upper = single_season_episode_upper_bound or known_total
+                        if target_upper > 0:
+                            title_precise_episode_values = set(range(1, target_upper + 1))
+                    if existing_episode_scan_ready and title_precise_episode_values:
+                        title_precise_episode_values = {
+                            episode_no
+                            for episode_no in title_precise_episode_values
+                            if episode_no not in existing_folder_episodes
+                        }
+                    if not title_precise_episode_values:
+                        if candidate_season_mismatch_deferred:
+                            skipped_precise_mismatch_candidates += 1
+                            await write_subscription_log(
+                                (
+                                    f"候选资源 #{index} 标题季号 S{candidate_season:02d} 与订阅季 "
+                                    f"S{int(task.get('season', 1) or 1):02d} 不一致，且无法确定目标季缺失集，"
+                                    "已跳过避免跨季整包导入"
+                                ),
+                                "warn",
+                            )
+                            await maybe_wait_between_attempts()
+                            continue
+                    else:
+                        if use_fixed_share_link and fixed_share_runtime_manifest:
+                            title_precise_selection, title_precise_stats = _build_tv_share_selection_from_manifest(
+                                fixed_share_runtime_manifest,
+                                title_precise_episode_values,
+                                task=task,
+                            )
+                        else:
+                            title_precise_selection, title_precise_stats = await _build_tv_share_selection_for_missing_episodes(
+                                cookie_115,
+                                task,
+                                item,
+                                title_precise_episode_values,
+                                share_subdir_selection=resolved_subdir_selection,
+                            )
+                        title_precise_ids = (
+                            title_precise_selection.get("selected_ids", [])
+                            if isinstance(title_precise_selection.get("selected_ids"), list)
+                            else []
+                        )
+                        if title_precise_ids:
+                            job_payload["share_selection"] = title_precise_selection
+                            forced_precise_selection_applied = True
+                            selected_share_episode_values = {
+                                max(0, int(value or 0))
+                                for value in (
+                                    title_precise_stats.get("covered_episodes", [])
+                                    if isinstance(title_precise_stats, dict)
+                                    else []
+                                )
+                                if max(0, int(value or 0)) > 0
+                            }
+                            selected_share_file_samples = [
+                                str(sample or "").strip()
+                                for sample in (
+                                    title_precise_stats.get("selected_file_samples", [])
+                                    if isinstance(title_precise_stats, dict)
+                                    else []
+                                )
+                                if str(sample or "").strip()
+                            ]
+                            dedupe_hits = int((title_precise_stats or {}).get("duplicate_bucket_hits", 0) or 0)
+                            dedupe_tail = f"，同集/同范围已优选 {dedupe_hits} 条重复版本" if dedupe_hits > 0 else ""
+                            if candidate_season_mismatch_deferred:
+                                await write_subscription_log(
+                                    (
+                                        f"候选资源 #{index} 标题季号与订阅季不同，已改按目标季内容精细筛选 "
+                                        f"{len(title_precise_ids)} 个文件后转存{dedupe_tail}"
+                                    ),
+                                    "info",
+                                )
+                            else:
+                                await write_subscription_log(
+                                    (
+                                        f"候选资源 #{index} 已按候选标题集数精细筛选 "
+                                        f"{len(title_precise_ids)} 个文件后转存（目标 {_format_episode_preview(title_precise_episode_values)}）"
+                                        f"{dedupe_tail}"
+                                    ),
+                                    "info",
+                                )
+                        else:
+                            skipped_precise_mismatch_candidates += 1
+                            selection_reason = str((title_precise_stats or {}).get("reason", "") or "").strip() or "unknown"
+                            selection_reason_label = _format_subscription_reason_chain(selection_reason)
+                            scanned_dirs = int((title_precise_stats or {}).get("scanned_dirs", 0) or 0)
+                            scanned_entries = int((title_precise_stats or {}).get("scanned_entries", 0) or 0)
+                            archive_skipped = int((title_precise_stats or {}).get("skipped_archive_files", 0) or 0)
+                            archive_tail = f"，已排除 zip/rar {archive_skipped} 个" if archive_skipped > 0 else ""
+                            await write_subscription_log(
+                                (
+                                    f"候选资源 #{index} 未能在分享内容中精细识别目标剧集文件，"
+                                    f"已跳过避免整包导入（目标 {_format_episode_preview(title_precise_episode_values)}，"
+                                    f"原因 {selection_reason_label}，扫描目录 {scanned_dirs} 个，条目 {scanned_entries} 条{archive_tail}）"
                                 ),
                                 "warn",
                             )
@@ -3276,6 +3403,8 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 detail = f"候选资源命中失效链接缓存（已跳过 {skipped_invalid_candidates} 条），等待新资源发布"
             elif skipped_subdir_candidates > 0 and attempted_candidates <= 0:
                 detail = f"候选资源未命中订阅子目录「{task_share_scope_label}」（已跳过 {skipped_subdir_candidates} 条），等待新资源发布"
+            elif skipped_precise_mismatch_candidates > 0 and attempted_candidates <= 0:
+                detail = f"候选资源未能精细识别目标季剧集文件（已跳过 {skipped_precise_mismatch_candidates} 条），等待新资源发布"
             elif skipped_existing_candidates > 0 and attempted_candidates <= 0:
                 detail = f"候选资源均已在目标目录存在（已跳过 {skipped_existing_candidates} 条），等待新集发布"
             elif skipped_ledger_candidates > 0 and attempted_candidates <= 0:
@@ -3296,6 +3425,8 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 detail += f"；子目录过滤跳过 {skipped_subdir_candidates} 条"
             if skipped_ledger_candidates > 0 and attempted_candidates > 0:
                 detail += f"；集数账本跳过 {skipped_ledger_candidates} 条"
+            if skipped_precise_mismatch_candidates > 0 and attempted_candidates > 0:
+                detail += f"；精细识别未命中 {skipped_precise_mismatch_candidates} 条"
             upsert_subscription_task_state(
                 task_name,
                 media_type=task.get("media_type", "movie"),
@@ -3323,6 +3454,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                     "skipped_ledger_candidates": skipped_ledger_candidates,
                     "skipped_invalid_candidates": skipped_invalid_candidates,
                     "skipped_subdir_candidates": skipped_subdir_candidates,
+                    "skipped_precise_mismatch_candidates": skipped_precise_mismatch_candidates,
                     "scanned_candidates": scanned_candidates,
                     "max_scan_candidates": max_scan_candidates,
                     "use_fixed_share_link": use_fixed_share_link,
@@ -3464,6 +3596,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 "skipped_ledger_candidates": skipped_ledger_candidates,
                 "skipped_invalid_candidates": skipped_invalid_candidates,
                 "skipped_subdir_candidates": skipped_subdir_candidates,
+                "skipped_precise_mismatch_candidates": skipped_precise_mismatch_candidates,
                 "scanned_candidates": scanned_candidates,
                 "max_scan_candidates": max_scan_candidates,
                 "existing_episode_count": existing_episode_count,

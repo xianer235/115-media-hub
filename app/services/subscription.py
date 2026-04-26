@@ -1073,6 +1073,7 @@ async def find_subscription_task_match_candidate_by_search(
     title_blocked_candidates = 0
     title_match_low_score_kept = 0
     title_match_media_relaxed_pass = 0
+    season_guard_deferred = 0
     seen_quark_scored_keys: Set[str] = set()
     for item in persisted_items:
         link_url = str(item.get("link_url", "") or "").strip()
@@ -1121,8 +1122,14 @@ async def find_subscription_task_match_candidate_by_search(
         if single_season_tv:
             candidate_season = max(0, int(scored.get("season", 0) or 0))
             if candidate_season > 0 and candidate_season != target_season:
-                season_guard_filtered += 1
-                continue
+                if title_first_search_enabled:
+                    # 标题优先召回阶段只确认剧名命中；显式季号差异交给执行阶段的文件级精选再判定。
+                    season_guard_deferred += 1
+                    scored["season_mismatch_deferred"] = True
+                    scored["target_season"] = target_season
+                else:
+                    season_guard_filtered += 1
+                    continue
         if matched_before:
             # 电影保持“同资源仅命中一次”；电视剧允许历史命中资源再次进入候选，
             # 后续由目录缺失判定决定是否需要重导（覆盖手动删档、补档场景）。
@@ -1221,6 +1228,7 @@ async def find_subscription_task_match_candidate_by_search(
             "media_guard_filtered": media_guard_filtered,
             "media_guard_reasons": media_guard_reasons,
             "season_guard_filtered": season_guard_filtered,
+            "season_guard_deferred": season_guard_deferred,
             "target_season": target_season if single_season_tv else 0,
             "scored_items": len(scored_candidates),
             "scored_candidates": len(candidates),
@@ -1350,6 +1358,7 @@ def merge_subscription_search_results(
         "unsupported_items",
         "media_guard_filtered",
         "season_guard_filtered",
+        "season_guard_deferred",
         "scored_items",
         "scored_candidates",
         "relaxed_candidates",
