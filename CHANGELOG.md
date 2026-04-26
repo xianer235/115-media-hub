@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-04-26
+- Cookie 健康判断重构：115/Quark 分享链接读取与转存链路完全退出 Cookie 健康成功/失败更新，分享失效、过期、提取码错误等内容侧异常不再影响 Cookie 状态。
+- Cookie 健康核心防线：分享链路 trigger 即使误调用健康更新函数，也会被核心层直接忽略。
+- 资源首页告警修正：历史分享链路触发的 Cookie 健康状态按 trigger 过滤，不再依赖分享错误文案匹配。
+- 保留真实 Cookie 检测边界：Cookie 健康仅由账号目录访问、建目录、离线任务、手动检测等账号级接口更新。
+
 ## [0.2.8] - 2026-04-26
 - 修复 115 分享链接失效误报：分享失效、链接不存在、访问码/提取码错误等内容侧异常不再写入 Cookie 健康失败，资源首页也会过滤旧的分享内容类 Cookie 告警。
 - 频道同步状态补全：后台频道同步新增 submitted/running/finished/last_result 状态，并通过 SSE 与资源状态接口返回给前端。

@@ -1,11 +1,11 @@
 {
-  "version": "0.2.8",
-  "buildDate": "2026-04-26T11:03:53+08:00",
+  "version": "0.2.9",
+  "buildDate": "2026-04-26T12:36:03+08:00",
   "notes": [
-    "修复 115 分享链接失效误报：分享失效、链接不存在、访问码/提取码错误等内容侧异常不再写入 Cookie 健康失败。",
-    "频道同步状态补全：后台频道同步新增 submitted/running/finished/last_result 状态，并通过 SSE 与资源状态接口返回给前端。",
-    "频道同步完成自动刷新：前端在同步运行期间切换到 3 秒短轮询，完成后自动刷新资源中心数据并更新 TG 状态卡。",
-    "频道同步总耗时展示：后端记录 duration_ms，前端在刷新完成结果中展示真实后台同步耗时。"
+    "Cookie 健康判断重构：115/Quark 分享链接读取与转存链路完全退出 Cookie 健康成功/失败更新。",
+    "Cookie 健康核心防线：分享链路 trigger 即使误调用健康更新函数，也会被核心层直接忽略。",
+    "资源首页告警修正：历史分享链路触发的 Cookie 健康状态按 trigger 过滤，不再依赖分享错误文案匹配。",
+    "保留真实 Cookie 检测边界：Cookie 健康仅由账号目录访问、建目录、离线任务、手动检测等账号级接口更新。"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"
