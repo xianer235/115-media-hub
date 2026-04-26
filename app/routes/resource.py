@@ -2,6 +2,7 @@ import asyncio
 import functools
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Request
@@ -35,8 +36,46 @@ resource_channel_sync_submitted = False
 
 async def _run_resource_channel_sync(force: bool, limit_per_channel: int) -> Dict[str, Any]:
     global resource_channel_sync_submitted
+    started_ts = time.time()
+    set_resource_channel_sync_status(
+        submitted=False,
+        running=True,
+        started_at=now_text(),
+        started_ts=started_ts,
+        finished_at="",
+        finished_ts=0.0,
+        duration_ms=0,
+        last_result={},
+        last_error="",
+    )
     try:
-        return await sync_telegram_channels(force=force, limit_per_channel=limit_per_channel)
+        result = await sync_telegram_channels(force=force, limit_per_channel=limit_per_channel)
+        finished_ts = time.time()
+        duration_ms = max(1, int(round((finished_ts - started_ts) * 1000)))
+        result_payload = dict(result) if isinstance(result, dict) else {}
+        result_payload["duration_ms"] = duration_ms
+        set_resource_channel_sync_status(
+            submitted=False,
+            running=False,
+            finished_at=now_text(),
+            finished_ts=finished_ts,
+            duration_ms=duration_ms,
+            last_result=result_payload,
+            last_error="",
+        )
+        return result
+    except Exception as exc:
+        finished_ts = time.time()
+        set_resource_channel_sync_status(
+            submitted=False,
+            running=False,
+            finished_at=now_text(),
+            finished_ts=finished_ts,
+            duration_ms=max(1, int(round((finished_ts - started_ts) * 1000))),
+            last_result={},
+            last_error=str(exc),
+        )
+        raise
     finally:
         with resource_channel_sync_submit_lock:
             resource_channel_sync_submitted = False
@@ -50,6 +89,17 @@ def submit_resource_channel_sync(force: bool, limit_per_channel: int) -> bool:
             schedule_ui_state_push(0)
             return False
         resource_channel_sync_submitted = True
+    set_resource_channel_sync_status(
+        submitted=True,
+        running=False,
+        started_at="",
+        started_ts=0.0,
+        finished_at="",
+        finished_ts=0.0,
+        duration_ms=0,
+        last_result={},
+        last_error="",
+    )
     try:
         submit_background(
             _run_resource_channel_sync,
@@ -60,6 +110,14 @@ def submit_resource_channel_sync(force: bool, limit_per_channel: int) -> bool:
     except Exception:
         with resource_channel_sync_submit_lock:
             resource_channel_sync_submitted = False
+        set_resource_channel_sync_status(
+            submitted=False,
+            running=False,
+            finished_at=now_text(),
+            finished_ts=time.time(),
+            duration_ms=0,
+            last_error="频道同步任务提交失败",
+        )
         raise
     schedule_ui_state_push(0)
     return True
@@ -289,6 +347,7 @@ async def sync_resource_channels_endpoint(request: Request) -> Dict[str, Any]:
         "errors": [],
         "cache_pruned": 0,
         "cache_prune_detail": {},
+        "channel_sync": build_resource_channel_sync_payload(),
     }
 
 

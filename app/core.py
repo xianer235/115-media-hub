@@ -2690,6 +2690,19 @@ resource_channel_last_sync: Dict[str, float] = {}
 resource_channel_last_error: Dict[str, str] = {}
 resource_channel_syncing: Set[str] = set()
 resource_channel_profiles: Dict[str, Dict[str, Any]] = {}
+resource_channel_sync_status_lock = threading.Lock()
+resource_channel_sync_status: Dict[str, Any] = {
+    "submitted": False,
+    "running": False,
+    "started_at": "",
+    "started_ts": 0.0,
+    "finished_at": "",
+    "finished_ts": 0.0,
+    "duration_ms": 0,
+    "last_updated_at": "",
+    "last_result": {},
+    "last_error": "",
+}
 RESOURCE_JOB_RECOVERY_INTERVAL_SECONDS = max(
     5,
     min(300, int(os.environ.get("RESOURCE_JOB_RECOVERY_INTERVAL_SECONDS", 20) or 20)),
@@ -3178,7 +3191,27 @@ def build_ui_state_payload(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, An
         "subscription": build_subscription_status_payload(active_cfg),
         "sign115": build_sign115_status_payload(active_cfg),
         "cookie_health": build_cookie_health_payload(active_cfg),
+        "resource_channel_sync": build_resource_channel_sync_payload(),
     }
+
+
+def set_resource_channel_sync_status(**fields: Any) -> None:
+    changed = False
+    with resource_channel_sync_status_lock:
+        for key, value in fields.items():
+            if resource_channel_sync_status.get(key) == value:
+                continue
+            resource_channel_sync_status[key] = clone_jsonable(value)
+            changed = True
+        if changed and "last_updated_at" not in fields:
+            resource_channel_sync_status["last_updated_at"] = now_text()
+    if changed:
+        schedule_ui_state_push(0)
+
+
+def build_resource_channel_sync_payload() -> Dict[str, Any]:
+    with resource_channel_sync_status_lock:
+        return clone_jsonable(resource_channel_sync_status)
 
 
 def build_resource_jobs_state_payload(limit: int = 20, cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -3294,6 +3327,7 @@ def _build_resource_state_payload_snapshot(
         "subscription_channel_support": clone_jsonable(subscription_channel_support),
         "search_sections": clone_jsonable(search_sections),
         "last_syncs": clone_jsonable(resource_channel_last_sync),
+        "channel_sync": build_resource_channel_sync_payload(),
         "search_meta": clone_jsonable(
             {
                 "errors": search_meta.get("errors", []),

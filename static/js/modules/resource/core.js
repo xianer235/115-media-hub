@@ -171,16 +171,36 @@
             const provider = normalizeSubscriptionProvider(item?.provider || '', '');
             const trigger = String(item?.entry?.trigger || '').trim().toLowerCase();
             const message = String(item?.entry?.message || '').trim().toLowerCase();
-            if (provider !== 'quark' || !message) return false;
-            if (!trigger.startsWith('runtime:list_quark_share_entries') && !trigger.startsWith('runtime:submit_quark_share_save')) {
-                return false;
+            if (!message) return false;
+            if (provider === 'quark') {
+                if (!trigger.startsWith('runtime:list_quark_share_entries') && !trigger.startsWith('runtime:submit_quark_share_save')) {
+                    return false;
+                }
+                return message.includes('文件涉及违规内容')
+                    || message.includes('分享不存在')
+                    || message.includes('分享已失效')
+                    || message.includes('分享已取消')
+                    || message.includes('share not found')
+                    || (message.includes('http 404') && !message.includes('cookie'));
             }
-            return message.includes('文件涉及违规内容')
-                || message.includes('分享不存在')
-                || message.includes('分享已失效')
-                || message.includes('分享已取消')
-                || message.includes('share not found')
-                || (message.includes('http 404') && !message.includes('cookie'));
+            if (provider === '115') {
+                if (!trigger.startsWith('runtime:list_115_share_entries') && !trigger.startsWith('runtime:submit_115_share_receive')) {
+                    return false;
+                }
+                return message.includes('分享不存在')
+                    || message.includes('分享已失效')
+                    || message.includes('分享已取消')
+                    || message.includes('分享已过期')
+                    || message.includes('链接不存在')
+                    || message.includes('链接失效')
+                    || message.includes('链接已失效')
+                    || message.includes('访问码错误')
+                    || message.includes('提取码错误')
+                    || message.includes('分享码错误')
+                    || message.includes('share not found')
+                    || (message.includes('http 404') && !message.includes('cookie'));
+            }
+            return false;
         }
 
         function renderResourceCookieHint() {
@@ -1779,6 +1799,7 @@
         function applyResourceState(data, options = {}) {
             if (!data) return;
             const deferHeavyRender = !!options.deferHeavyRender;
+            const previousChannelSync = resourceState.channel_sync || {};
             const nextSources = Array.isArray(data.sources) ? data.sources : (resourceState.sources || []);
             const nextQuickLinks = Array.isArray(data.quick_links) ? data.quick_links : (resourceState.quick_links || []);
             const nextItems = hydrateResourceItems(Array.isArray(data.items) ? data.items : (resourceState.items || []));
@@ -1822,6 +1843,9 @@
                     nextSources
                 ),
                 last_syncs: data.last_syncs || resourceState.last_syncs || {},
+                channel_sync: data.channel_sync && typeof data.channel_sync === 'object'
+                    ? data.channel_sync
+                    : (resourceState.channel_sync || {}),
                 monitor_tasks: Array.isArray(data.monitor_tasks) ? data.monitor_tasks : (resourceState.monitor_tasks || monitorState.tasks || []),
                 cookie_configured: !!(
                     typeof data.cookie_configured === 'boolean'
@@ -1847,6 +1871,9 @@
                 applyCookieHealthState(data.cookie_health);
             } else {
                 renderResourceCookieHint();
+            }
+            if (typeof handleResourceChannelSyncStateChange === 'function') {
+                handleResourceChannelSyncStateChange(previousChannelSync, resourceState.channel_sync, { refreshOnComplete: false });
             }
             normalizeResourceSourceBulkSelections();
             syncResourceChannelPagingState();
@@ -2244,6 +2271,9 @@
                 if (!data?.queued) {
                     await refreshResourceState();
                 } else if (typeof scheduleResourcePolling === 'function') {
+                    if (data.channel_sync && typeof applyResourceChannelSyncState === 'function') {
+                        applyResourceChannelSyncState(data.channel_sync);
+                    }
                     scheduleResourcePolling(3000);
                 }
                 if (!silent) {

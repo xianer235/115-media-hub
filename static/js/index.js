@@ -20,7 +20,7 @@
             quark: { configured: false, state: 'missing', message: '未配置 Quark Cookie', last_checked_at: '', last_success_at: '', trigger: '', fail_count: 0 }
         };
         let cookieHealthCheckBusy = false;
-        let resourceState = { sources: [], quick_links: [], items: [], jobs: [], active_jobs: [], job_counts: {}, job_pagination: {}, channel_sections: [], channel_profiles: {}, subscription_channel_support: {}, search_sections: [], last_syncs: {}, monitor_tasks: [], stats: { source_count: 0, item_count: 0, filtered_item_count: 0, completed_job_count: 0 }, cookie_configured: false, quark_cookie_configured: false, cookie_health: null, setup_status: null, search: '', search_meta: {} };
+        let resourceState = { sources: [], quick_links: [], items: [], jobs: [], active_jobs: [], job_counts: {}, job_pagination: {}, channel_sections: [], channel_profiles: {}, subscription_channel_support: {}, search_sections: [], last_syncs: {}, channel_sync: {}, monitor_tasks: [], stats: { source_count: 0, item_count: 0, filtered_item_count: 0, completed_job_count: 0 }, cookie_configured: false, quark_cookie_configured: false, cookie_health: null, setup_status: null, search: '', search_meta: {} };
         let editingMonitorName = null;
         let editingSubscriptionName = null;
         let editingResourceSourceIndex = null;
@@ -154,6 +154,7 @@
         let statusFallbackTimer = null;
         let resourcePollTimer = null;
         let resourcePollInFlight = false;
+        let lastResourceChannelSyncFinishNotifiedAt = '';
         let sensitiveConfigMeta = {};
         const monitorActionLocks = new Set();
         let versionInfo = { local: null, latest: null, has_update: false, checked_at: 0, error: '', source: '' };
@@ -207,6 +208,7 @@
             'tmdb_api_key',
         ]);
         const STATUS_FALLBACK_INTERVAL = 15000;
+        const RESOURCE_SYNC_POLL_INTERVAL = 3000;
         const RESOURCE_POLL_ACTIVE_INTERVAL = 15000;
         const RESOURCE_POLL_SSE_INTERVAL = 30000;
         const RESOURCE_POLL_IDLE_INTERVAL = 60000;
@@ -1311,8 +1313,76 @@
             statusFallbackTimer = null;
         }
 
+        function normalizeResourceChannelSyncState(value) {
+            const source = value && typeof value === 'object' ? value : {};
+            return {
+                submitted: !!source.submitted,
+                running: !!source.running,
+                started_at: String(source.started_at || ''),
+                started_ts: Number(source.started_ts || 0) || 0,
+                finished_at: String(source.finished_at || ''),
+                finished_ts: Number(source.finished_ts || 0) || 0,
+                duration_ms: Math.max(0, Number(source.duration_ms || source.last_result?.duration_ms || 0) || 0),
+                last_updated_at: String(source.last_updated_at || ''),
+                last_result: source.last_result && typeof source.last_result === 'object' ? source.last_result : {},
+                last_error: String(source.last_error || '')
+            };
+        }
+
+        function isResourceChannelSyncActive(state = resourceState.channel_sync) {
+            const syncState = normalizeResourceChannelSyncState(state);
+            return !!syncState.submitted || !!syncState.running;
+        }
+
+        function handleResourceChannelSyncStateChange(previousState, nextState, { refreshOnComplete = true } = {}) {
+            const prev = normalizeResourceChannelSyncState(previousState);
+            const next = normalizeResourceChannelSyncState(nextState);
+            const wasActive = !!prev.submitted || !!prev.running;
+            const isActive = !!next.submitted || !!next.running;
+            if (isActive) {
+                if (currentTab === 'resource' && !document.hidden) {
+                    scheduleResourcePolling(RESOURCE_SYNC_POLL_INTERVAL);
+                }
+                return;
+            }
+            if (!wasActive || !next.finished_at || next.finished_at === lastResourceChannelSyncFinishNotifiedAt) return;
+            lastResourceChannelSyncFinishNotifiedAt = next.finished_at;
+
+            const result = next.last_result && typeof next.last_result === 'object' ? next.last_result : {};
+            const durationMs = Math.max(0, Number(next.duration_ms || result.duration_ms || 0) || 0);
+            if (next.last_error) {
+                setResourceTgHealthResult({
+                    tone: 'error',
+                    title: 'TG 刷新异常',
+                    detail: next.last_error,
+                    durationMs,
+                });
+            } else {
+                applyResourceTgHealthFromSyncResult({ ...result, queued: false }, durationMs, resourceTgLastLatencyMs);
+            }
+            if (
+                refreshOnComplete
+                && currentTab === 'resource'
+                && !document.hidden
+                && typeof refreshResourceState === 'function'
+            ) {
+                void refreshResourceState({ allowSearch: false });
+            }
+        }
+
+        function applyResourceChannelSyncState(payload, options = {}) {
+            if (!payload || typeof payload !== 'object') return;
+            const previous = resourceState.channel_sync || {};
+            const next = normalizeResourceChannelSyncState(payload);
+            resourceState = { ...resourceState, channel_sync: next };
+            handleResourceChannelSyncStateChange(previous, next, options);
+        }
+
         function getResourcePollingDelay() {
             const resourceTabVisible = currentTab === 'resource' && !document.hidden;
+            if (resourceTabVisible && isResourceChannelSyncActive()) {
+                return RESOURCE_SYNC_POLL_INTERVAL;
+            }
             if (resourceTabVisible) {
                 return statusStreamHealthy ? RESOURCE_POLL_SSE_INTERVAL : RESOURCE_POLL_ACTIVE_INTERVAL;
             }
@@ -1332,7 +1402,9 @@
                 const keyword = String(document.getElementById('resource-search-input')?.value || resourceState.search || '').trim();
                 const resourceTabVisible = currentTab === 'resource' && !document.hidden;
                 if (resourceTabVisible) {
-                    if (keyword && !isDirectImportInput(keyword)) {
+                    if (isResourceChannelSyncActive()) {
+                        await refreshResourceState({ allowSearch: false });
+                    } else if (keyword && !isDirectImportInput(keyword)) {
                         await refreshResourceJobsOnly();
                     } else {
                         await refreshResourceState();
@@ -1379,6 +1451,7 @@
                     applySubscriptionState(payload.subscription);
                     applySign115State(payload.sign115);
                     applyCookieHealthState(payload.cookie_health);
+                    applyResourceChannelSyncState(payload.resource_channel_sync);
                 } catch (err) {
                     console.warn('Status stream parse failed', err);
                 }
