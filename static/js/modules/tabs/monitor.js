@@ -54,9 +54,7 @@ export function applyMonitorState(data, {
 
 export async function refreshMonitorState({ applyMonitorState } = {}) {
     try {
-        const res = await fetch('/monitor/status');
-        if (!res.ok) return;
-        const data = await res.json();
+        const data = await window.MediaHubApi.getJson('/monitor/status');
         if (typeof applyMonitorState === 'function') applyMonitorState(data);
     } catch (e) {}
 }
@@ -65,8 +63,7 @@ export async function clearMonitorLogs({
     setLastMonitorLogSignature,
     refreshMonitorState,
 } = {}) {
-    const res = await fetch('/monitor/logs/clear', { method: 'POST' });
-    if (!res.ok) return;
+    await window.MediaHubApi.postJson('/monitor/logs/clear');
     if (typeof setLastMonitorLogSignature === 'function') setLastMonitorLogSignature('');
     if (typeof refreshMonitorState === 'function') {
         await refreshMonitorState();

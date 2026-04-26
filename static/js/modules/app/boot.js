@@ -78,9 +78,7 @@
 
         async function init() {
             try {
-                const res = await fetch('/get_settings');
-                if (!res.ok) return;
-                const cfg = await res.json();
+                const cfg = await window.MediaHubApi.getJson('/get_settings');
                 const sensitiveMeta = normalizeSensitiveConfigMeta(cfg.sensitive_configured || {});
 
                 Object.keys(cfg).forEach(k => {
@@ -245,18 +243,19 @@
             const action = btn.dataset.resourceSourceAction || '';
             const index = parseInt(btn.dataset.resourceSourceIndex || '-1', 10);
             if (index < 0) return;
-            if (action === 'move-up') await moveResourceSource(index, -1);
-            if (action === 'move-down') await moveResourceSource(index, 1);
+            if (action === 'move-up') void moveResourceSource(index, -1);
+            if (action === 'move-down') void moveResourceSource(index, 1);
             if (action === 'edit') editResourceSource(index);
-            if (action === 'delete') await deleteResourceSource(index);
+            if (action === 'delete') void deleteResourceSource(index);
         });
         document.getElementById('resource-source-list')?.addEventListener('change', async (e) => {
             const toggle = e.target.closest('[data-resource-source-toggle]');
             if (!toggle) return;
             const index = parseInt(toggle.dataset.resourceSourceIndex || '-1', 10);
             if (index < 0) return;
-            const ok = await toggleResourceSourceEnabled(index, !!toggle.checked);
-            if (!ok) toggle.checked = !toggle.checked;
+            void toggleResourceSourceEnabled(index, !!toggle.checked).then(ok => {
+                if (!ok) toggle.checked = !toggle.checked;
+            });
         });
         document.getElementById('resource-source-manager-type-filters')?.addEventListener('click', (e) => {
             const btn = e.target.closest('[data-resource-source-manager-filter="type"]');
@@ -309,8 +308,7 @@
             }
             if (action === 'toggle') {
                 const enabled = String(btn.dataset.enabled || '0') === '1';
-                await toggleResourceSourceEnabled(index, !enabled);
-                renderResourceSourceManagerModal();
+                void toggleResourceSourceEnabled(index, !enabled);
                 return;
             }
             if (action === 'delete') {
@@ -318,9 +316,9 @@
                 const name = source?.name || getResourceSourceChannelId(source) || '该频道';
                 const ok = confirm(`将删除“${name}”，此操作不可恢复，确定继续吗？`);
                 if (!ok) return;
-                await deleteResourceSource(index);
-                showToast(`已删除频道：${name}`, { tone: 'success', duration: 2400, placement: 'top-center' });
-                renderResourceSourceManagerModal();
+                void deleteResourceSource(index, { confirm: false }).then(deleted => {
+                    if (deleted) showToast(`已删除频道：${name}`, { tone: 'success', duration: 2400, placement: 'top-center' });
+                });
             }
         });
         window.addEventListener('resize', () => {

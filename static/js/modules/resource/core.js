@@ -425,13 +425,7 @@
         async function persistResourceQuickLinksToBackend(nextLinks, { silent = false, clearLocalOnSuccess = false } = {}) {
             const payload = serializeResourceQuickLinks(nextLinks);
             try {
-                const res = await fetch('/resource/quick_links/save', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ quick_links: payload })
-                });
-                const data = await res.json();
-                if (!res.ok || !data.ok) throw new Error(data.msg || '保存常用网盘链接失败');
+                const data = await window.MediaHubApi.postJson('/resource/quick_links/save', { quick_links: payload });
                 setResourceQuickLinks(Array.isArray(data.quick_links) ? data.quick_links : payload, { render: true });
                 if (clearLocalOnSuccess) clearResourceQuickLinksStorage();
                 return true;
@@ -1492,18 +1486,12 @@
             renderResourceBoard();
 
             try {
-                const res = await fetch('/resource/channels/more', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        channel_id: normalizedChannelId,
-                        before,
-                        limit: 10,
-                        query: keyword
-                    })
+                const data = await window.MediaHubApi.postJson('/resource/channels/more', {
+                    channel_id: normalizedChannelId,
+                    before,
+                    limit: 10,
+                    query: keyword
                 });
-                const data = await res.json();
-                if (!res.ok || !data.ok) throw new Error(data.msg || '获取更多资源失败');
 
                 const incomingItems = hydrateResourceItems(Array.isArray(data.items) ? data.items : []);
                 const mergedItems = dedupeResourceItems([
@@ -1729,8 +1717,68 @@
             renderResourceBoardHint();
         }
 
-        function applyResourceState(data) {
+        function renderHeavyResourceSurfaces() {
+            renderResourceBoard();
+            renderResourceJobs();
+            syncResourceJobModalTrigger();
+            syncResourceSearchInputActions();
+            syncResourceActionButtons();
+            renderResourceTgHealthStatus();
+            if (selectedResourceItem) renderResourceModalLayout(selectedResourceItem);
+            renderResourceShareBrowser();
+            renderResourceTargetPreview();
+        }
+
+        function scheduleResourceHeavyRender(defer = false) {
+            if (defer && window.requestAnimationFrame) {
+                if (resourceHeavyRenderRafId !== null && window.cancelAnimationFrame) {
+                    window.cancelAnimationFrame(resourceHeavyRenderRafId);
+                }
+                resourceHeavyRenderRafId = window.requestAnimationFrame(() => {
+                    resourceHeavyRenderRafId = null;
+                    renderHeavyResourceSurfaces();
+                });
+                return;
+            }
+            if (resourceHeavyRenderRafId !== null && window.cancelAnimationFrame) {
+                window.cancelAnimationFrame(resourceHeavyRenderRafId);
+                resourceHeavyRenderRafId = null;
+            }
+            renderHeavyResourceSurfaces();
+        }
+
+        function applyResourceSourcesLocal(sources, options = {}) {
+            const nextSources = Array.isArray(sources) ? sources : [];
+            resourceState = {
+                ...resourceState,
+                sources: nextSources,
+                stats: {
+                    ...(resourceState.stats || {}),
+                    source_count: nextSources.length,
+                },
+                channel_sections: syncResourceSectionsWithSources(resourceState.channel_sections || [], nextSources),
+                search_sections: syncResourceSectionsWithSources(resourceState.search_sections || [], nextSources),
+            };
+
+            normalizeResourceSourceBulkSelections();
+            syncResourceChannelPagingState();
+            const sourceCountEl = document.getElementById('resource-source-count');
+            if (sourceCountEl) sourceCountEl.innerText = String(nextSources.length);
+            syncResourceSourceSelect();
+            renderResourceOnboardingCard();
+            renderResourceSources();
+            if (resourceChannelManageModalOpen) {
+                const nextIndex = getResourceSourceIndexByChannelId(resourceChannelManageChannelId);
+                resourceChannelManageSourceIndex = nextIndex;
+                if (nextIndex < 0) closeResourceChannelManageModal();
+                else syncResourceChannelManageModalState();
+            }
+            scheduleResourceHeavyRender(!!options.deferHeavyRender);
+        }
+
+        function applyResourceState(data, options = {}) {
             if (!data) return;
+            const deferHeavyRender = !!options.deferHeavyRender;
             const nextSources = Array.isArray(data.sources) ? data.sources : (resourceState.sources || []);
             const nextQuickLinks = Array.isArray(data.quick_links) ? data.quick_links : (resourceState.quick_links || []);
             const nextItems = hydrateResourceItems(Array.isArray(data.items) ? data.items : (resourceState.items || []));
@@ -1828,15 +1876,7 @@
                 if (nextIndex < 0) closeResourceChannelManageModal();
                 else syncResourceChannelManageModalState();
             }
-            renderResourceBoard();
-            renderResourceJobs();
-            syncResourceJobModalTrigger();
-            syncResourceSearchInputActions();
-            syncResourceActionButtons();
-            renderResourceTgHealthStatus();
-            if (selectedResourceItem) renderResourceModalLayout(selectedResourceItem);
-            renderResourceShareBrowser();
-            renderResourceTargetPreview();
+            scheduleResourceHeavyRender(deferHeavyRender);
 
         }
 
@@ -1925,9 +1965,7 @@
                 const params = new URLSearchParams();
                 if (shouldSearchChannels) params.set('q', activeKeyword);
                 const endpoint = params.toString() ? `/resource/state?${params.toString()}` : '/resource/state';
-                const res = await fetch(endpoint);
-                if (!res.ok) return null;
-                const data = await res.json();
+                const data = await window.MediaHubApi.getJson(endpoint);
                 resourceStateHydrated = true;
                 applyResourceState(data);
                 return data;
@@ -1983,13 +2021,11 @@
                 renderResourceJobs();
             }
             try {
-                const res = await fetch(buildResourceJobsStateUrl({
+                const data = await window.MediaHubApi.getJson(buildResourceJobsStateUrl({
                     status: normalizedStatus,
                     offset: normalizedOffset,
                     limit: RESOURCE_JOB_PAGE_SIZE,
                 }));
-                if (!res.ok) return null;
-                const data = await res.json();
                 if (append) {
                     data.jobs = mergeResourceJobPages(resourceState.jobs || [], data.jobs || []);
                 }
@@ -2081,13 +2117,11 @@
                 });
             }
             try {
-                const res = await fetch(buildResourceJobsStateUrl({
+                const data = await window.MediaHubApi.getJson(buildResourceJobsStateUrl({
                     status: resourceJobFilter,
                     offset: 0,
                     limit: RESOURCE_JOB_PAGE_SIZE,
                 }));
-                if (!res.ok) return null;
-                const data = await res.json();
                 applyResourceJobsState(data);
                 return data;
             } catch (e) {
@@ -2109,17 +2143,9 @@
         }
 
         async function parseResourceInputFromSearch(rawText) {
-            const res = await fetch('/resource/items/preview_text', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    raw_text: rawText
-                })
+            const data = await window.MediaHubApi.postJson('/resource/items/preview_text', {
+                raw_text: rawText
             });
-            const data = await res.json();
-            if (!res.ok || !data.ok) {
-                throw new Error(data.msg || '链接解析失败');
-            }
             const items = Array.isArray(data.items) ? data.items : [];
             const importableItems = items
                 .filter(item => canOpenResourceImport(item))
@@ -2214,13 +2240,7 @@
             if (!silent) latencyProbePromise = probeResourceTgLatency();
             syncResourceActionButtons();
             try {
-                const res = await fetch('/resource/channels/sync', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ force, limit: 10 })
-                });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.msg || '同步失败');
+                const data = await window.MediaHubApi.postJson('/resource/channels/sync', { force, limit: 10 });
                 await refreshResourceState();
                 if (!silent) {
                     const latencyMs = await resolveResourceTgLatencyMs(latencyProbePromise);
@@ -2280,13 +2300,12 @@
                 return;
             }
             if (!confirm(meta.confirmText)) return;
-            const res = await fetch('/resource/jobs/clear', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ scope: meta.scope })
-            });
-            const data = await res.json();
-            if (!res.ok || !data.ok) return alert(`❌ ${data.msg || '清空失败'}`);
+            let data = {};
+            try {
+                data = await window.MediaHubApi.postJson('/resource/jobs/clear', { scope: meta.scope });
+            } catch (error) {
+                return alert(`❌ ${error?.message || '清空失败'}`);
+            }
             await refreshResourceState();
             await fetchResourceJobsPage({ status: resourceJobFilter, offset: 0 });
             const deleted = Number(data.deleted || 0);

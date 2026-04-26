@@ -11,6 +11,7 @@ from ..services.resource import cancel_resource_job, retry_resource_job, run_res
 
 router = APIRouter()
 resource_job_create_lock = asyncio.Lock()
+resource_sources_save_lock = asyncio.Lock()
 RESOURCE_SHARE_BROWSE_TIMEOUT_SECONDS = 30
 RESOURCE_SHARE_BROWSE_RATE_LIMIT_SECONDS = max(
     0.0,
@@ -202,11 +203,8 @@ async def get_resource_jobs_state(request: Request) -> Dict[str, Any]:
     return await asyncio.to_thread(_build_resource_jobs_state_snapshot, limit, offset, status_filter)
 
 
-@router.post("/resource/sources/save")
-async def save_resource_sources(request: Request) -> Dict[str, Any]:
-    data = await request.json()
+def _save_resource_sources_payload(incoming: Any) -> List[Dict[str, Any]]:
     cfg = get_config()
-    incoming = data.get("sources", [])
     normalized = []
     seen = set()
     for raw_source in incoming if isinstance(incoming, list) else []:
@@ -218,6 +216,14 @@ async def save_resource_sources(request: Request) -> Dict[str, Any]:
         normalized.append(source)
     cfg["resource_sources"] = normalized
     save_config(cfg)
+    return normalized
+
+
+@router.post("/resource/sources/save")
+async def save_resource_sources(request: Request) -> Dict[str, Any]:
+    data = await request.json()
+    async with resource_sources_save_lock:
+        normalized = await asyncio.to_thread(_save_resource_sources_payload, data.get("sources", []))
     return {"ok": True, "sources": normalized}
 
 
@@ -480,23 +486,9 @@ async def create_resource_job_endpoint(request: Request) -> Dict[str, Any]:
         if link_type != "quark":
             matched_monitor = match_monitor_task_for_savepath(cfg, savepath, provider="115")
             monitor_task_name = matched_monitor.get("task_name", "")
+        # 路径解析会访问网盘上游，远端容器网络慢时不应阻塞点击请求。
+        # 这里仅记录用户意图，具体 folder_id 由后台导入任务解析并写回。
         folder_id = provided_folder_id
-        if not folder_id or folder_id == "0":
-            try:
-                if link_type == "quark":
-                    folder_id = await asyncio.to_thread(
-                        resolve_quark_folder_id_by_path,
-                        str(cfg.get("cookie_quark", "")).strip(),
-                        savepath,
-                    )
-                else:
-                    folder_id = await asyncio.to_thread(
-                        resolve_115_folder_id_by_path,
-                        str(cfg.get("cookie_115", "")).strip(),
-                        savepath,
-                    )
-            except Exception as exc:
-                return JSONResponse(status_code=400, content={"ok": False, "msg": f"保存路径无效：{exc}"})
 
         payload = {
             "folder_id": folder_id,

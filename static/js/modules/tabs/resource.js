@@ -25,9 +25,14 @@ export async function refreshResourceState({
         const params = new URLSearchParams();
         if (shouldSearchChannels) params.set('q', activeKeyword);
         const endpoint = params.toString() ? `/resource/state?${params.toString()}` : '/resource/state';
-        const res = await fetch(endpoint);
-        if (!res.ok) return null;
-        const data = await res.json();
+        const data = window.MediaHubApi?.getJson
+            ? await window.MediaHubApi.getJson(endpoint)
+            : await (async () => {
+                const res = await fetch(endpoint);
+                if (!res.ok) return null;
+                return res.json();
+            })();
+        if (!data) return null;
         if (typeof setResourceStateHydrated === 'function') setResourceStateHydrated(true);
         if (typeof applyResourceState === 'function') applyResourceState(data);
         return data;
@@ -105,9 +110,14 @@ export async function refreshResourceJobsOnly({ applyResourceJobsState, buildRes
         const endpoint = typeof buildResourceJobsStateUrl === 'function'
             ? buildResourceJobsStateUrl()
             : '/resource/jobs/state';
-        const res = await fetch(endpoint);
-        if (!res.ok) return null;
-        const data = await res.json();
+        const data = window.MediaHubApi?.getJson
+            ? await window.MediaHubApi.getJson(endpoint)
+            : await (async () => {
+                const res = await fetch(endpoint);
+                if (!res.ok) return null;
+                return res.json();
+            })();
+        if (!data) return null;
         if (typeof applyResourceJobsState === 'function') applyResourceJobsState(data);
         return data;
     } catch (e) {

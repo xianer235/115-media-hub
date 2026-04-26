@@ -630,10 +630,8 @@
             try {
                 const qs = new URLSearchParams({ q: query, media_type: mediaType });
                 if (year) qs.set('year', year);
-                const res = await fetch(`/tmdb/search?${qs.toString()}`);
-                const data = await res.json();
+                const data = await window.MediaHubApi.getJson(`/tmdb/search?${qs.toString()}`);
                 if (requestToken !== subscriptionTmdbSearchToken) return;
-                if (!res.ok || !data.ok) throw new Error(data.msg || 'TMDB 搜索失败');
                 subscriptionTmdbResults = Array.isArray(data.items) ? data.items : [];
                 renderSubscriptionTmdbResults();
                 if (hintEl) {
@@ -664,9 +662,7 @@
                     tmdb_id: String(target.id || 0),
                     media_type: normalizeTmdbMediaType(target.media_type, mediaType) || mediaType
                 });
-                const res = await fetch(`/tmdb/detail?${qs.toString()}`);
-                const data = await res.json();
-                if (!res.ok || !data.ok) throw new Error(data.msg || '读取 TMDB 详情失败');
+                const data = await window.MediaHubApi.getJson(`/tmdb/detail?${qs.toString()}`);
                 const binding = data.task_binding || {};
                 const bindingMediaType = normalizeTmdbMediaType(binding.tmdb_media_type, mediaType);
                 if (bindingMediaType && bindingMediaType !== mediaType) {
@@ -953,13 +949,7 @@
         }
 
         async function persistSubscriptionTasks(tasks) {
-            const res = await fetch('/subscription/save', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ tasks })
-            });
-            const data = await res.json();
-            if (!res.ok || !data.ok) throw new Error(data.msg || '保存订阅任务失败');
+            const data = await window.MediaHubApi.postJson('/subscription/save', { tasks });
             applySubscriptionState({ ...subscriptionState, tasks: data.tasks || [] }, { forceRender: true });
         }
 
@@ -1126,28 +1116,21 @@
 
         async function deleteSubscriptionTask(name) {
             if (!confirm(`确定删除订阅任务“${name}”吗？`)) return;
-            const res = await fetch('/subscription/delete', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name })
-            });
-            const data = await res.json();
-            if (!res.ok || !data.ok) {
-                return alert(`❌ ${data.msg || '删除失败'}`);
+            try {
+                await window.MediaHubApi.postJson('/subscription/delete', { name });
+            } catch (error) {
+                return alert(`❌ ${error?.message || '删除失败'}`);
             }
             await refreshSubscriptionState();
             if (editingSubscriptionName === name) resetSubscriptionForm();
         }
 
         async function startSubscriptionTask(name) {
-            const res = await fetch('/subscription/start', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name })
-            });
-            const data = await res.json();
-            if (!res.ok || !data.ok) {
-                return alert(`❌ ${data.msg || '启动失败'}`);
+            let data = {};
+            try {
+                data = await window.MediaHubApi.postJson('/subscription/start', { name });
+            } catch (error) {
+                return alert(`❌ ${error?.message || '启动失败'}`);
             }
             if (data.status === 'queued') {
                 const queued = Array.isArray(subscriptionState.queued) ? [...subscriptionState.queued] : [];
@@ -1165,12 +1148,7 @@
         }
 
         async function stopSubscriptionTask(name) {
-            const res = await fetch('/subscription/stop', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name })
-            });
-            const data = await res.json();
+            const data = await window.MediaHubApi.postJson('/subscription/stop', { name }).catch(() => ({ ok: false }));
             if (!data.ok) {
                 alert('当前没有这个订阅任务在运行');
                 return;
@@ -1187,13 +1165,7 @@
             if (!normalizedName) return;
             if (!confirm(`按当前保存目录重建“${normalizedName}”的追更进度和集数账本吗？`)) return;
             try {
-                const res = await fetch('/subscription/rebuild', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: normalizedName })
-                });
-                const data = await res.json();
-                if (!res.ok || !data.ok) throw new Error(data.msg || '重建失败');
+                const data = await window.MediaHubApi.postJson('/subscription/rebuild', { name: normalizedName });
                 const episodeView = data.episode_view && typeof data.episode_view === 'object' ? data.episode_view : null;
                 if (episodeView) {
                     subscriptionEpisodeViewCache[normalizedName] = {
@@ -1424,9 +1396,7 @@
 
             subscriptionIntroEpisodeLookupLoading[normalizedName] = true;
             try {
-                const res = await fetch(`/subscription/episodes?name=${encodeURIComponent(normalizedName)}`);
-                const data = await res.json();
-                if (!res.ok || !data.ok) throw new Error(data.msg || '读取集数失败');
+                const data = await window.MediaHubApi.getJson(`/subscription/episodes?name=${encodeURIComponent(normalizedName)}`);
                 subscriptionEpisodeViewCache[normalizedName] = {
                     fetched_at: Date.now(),
                     data,
@@ -1661,9 +1631,7 @@
 
             const requestedTaskName = taskName;
             try {
-                const res = await fetch(`/subscription/episodes?name=${encodeURIComponent(requestedTaskName)}`);
-                const data = await res.json();
-                if (!res.ok || !data.ok) throw new Error(data.msg || '读取集数视图失败');
+                const data = await window.MediaHubApi.getJson(`/subscription/episodes?name=${encodeURIComponent(requestedTaskName)}`);
                 if (subscriptionEpisodeViewTaskName !== requestedTaskName) return;
                 subscriptionEpisodeViewData = data;
                 subscriptionEpisodeViewCache[requestedTaskName] = {
@@ -1717,9 +1685,7 @@
                 return;
             }
             try {
-                const res = await fetch('/subscription/status');
-                if (!res.ok) return;
-                applySubscriptionState(await res.json());
+                applySubscriptionState(await window.MediaHubApi.getJson('/subscription/status'));
             } catch (e) {}
         }
 
@@ -1734,9 +1700,9 @@
                 });
                 return;
             }
-            const res = await fetch('/subscription/logs/clear', { method: 'POST' });
-            if (res.ok) {
+            try {
+                await window.MediaHubApi.postJson('/subscription/logs/clear');
                 lastSubscriptionLogSignature = '';
                 await refreshSubscriptionState();
-            }
+            } catch (e) {}
         }

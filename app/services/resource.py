@@ -207,6 +207,41 @@ async def run_resource_job(job_id: int) -> None:
             raise RuntimeError("请先在参数配置中填写 Quark Cookie")
 
         provider_label = "夸克" if link_type == "quark" else "115"
+        folder_id = str(job.get("folder_id", "") or "").strip()
+        if not folder_id or folder_id == "0":
+            update_resource_job(
+                job_id,
+                status="running",
+                status_detail=f"正在解析{provider_label}保存路径",
+                started_at=now_text(),
+            )
+            try:
+                if link_type == "quark":
+                    folder_id = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            resolve_quark_folder_id_by_path,
+                            cookie_quark,
+                            str(job.get("savepath", "") or "").strip(),
+                        ),
+                        timeout=min(import_timeout_seconds, 60),
+                    )
+                else:
+                    folder_id = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            resolve_115_folder_id_by_path,
+                            cookie_115,
+                            str(job.get("savepath", "") or "").strip(),
+                        ),
+                        timeout=min(import_timeout_seconds, 60),
+                    )
+            except asyncio.TimeoutError as exc:
+                raise RuntimeError(f"保存路径解析超时（>{min(import_timeout_seconds, 60)} 秒）") from exc
+            except Exception as exc:
+                raise RuntimeError(f"保存路径无效：{exc}") from exc
+            folder_id = str(folder_id or "").strip() or "0"
+            job["folder_id"] = folder_id
+            update_resource_job(job_id, folder_id=folder_id)
+
         update_resource_job(
             job_id,
             status="running",

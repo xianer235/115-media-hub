@@ -124,8 +124,16 @@
         let resourceSourceSortMode = 'recent';
         let resourceSourceBulkSelected = {};
         let resourceSourceManagerMobilePanel = 'list';
+        let resourceSourcePersistToken = 0;
+        let resourceSourcePersistTimer = null;
+        let resourceSourcePersistInFlight = false;
+        let resourceSourcePersistQueuedSources = null;
+        let resourceSourcePersistQueuedToken = 0;
+        let resourceSourcePersistPending = [];
+        let resourceSourcePersistRollbackSources = null;
         let resourceSourceTestBusy = false;
         let resourceSourceTestResult = { total: 0, done: 0, success: 0, failed: 0, running: false, last_name: '', error: '' };
+        let resourceHeavyRenderRafId = null;
         let resourceSubmitBusy = false;
         let resourceJobFilter = 'all';
         let resourceImportLastFeedback = null;
@@ -1488,12 +1496,8 @@
                 return;
             }
             if (isRunning) return;
-            const res = await fetch('/start', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({use_local: local, force_full: full})
-            });
-            if ((await res.json()).status === 'started') updateButtonState(true);
+            const data = await window.MediaHubApi.postJson('/start', { use_local: local, force_full: full }).catch(() => null);
+            if (data?.status === 'started') updateButtonState(true);
         }
 
         function updateButtonState(running) {
@@ -1578,13 +1582,7 @@
 
         async function probeResourceTgLatency() {
             try {
-                const res = await fetch('/settings/tg_proxy/test', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(getCurrentTgProxyConfig())
-                });
-                const data = await res.json();
-                if (!res.ok || !data.ok) return { ok: false, latency_ms: 0 };
+                const data = await window.MediaHubApi.postJson('/settings/tg_proxy/test', getCurrentTgProxyConfig());
                 const latencyMs = Number(data.latency_ms || 0);
                 if (Number.isFinite(latencyMs) && latencyMs > 0) {
                     resourceTgLastLatencyMs = Math.max(1, Math.round(latencyMs));
@@ -1880,11 +1878,11 @@
                 });
                 return;
             }
-            const res = await fetch('/logs/clear', { method: 'POST' });
-            if (res.ok) {
+            try {
+                await window.MediaHubApi.postJson('/logs/clear');
                 lastLogSignature = '';
                 await refreshMainLogs();
-            }
+            } catch (e) {}
         }
 
         async function clearMonitorLogs() {
@@ -1898,11 +1896,11 @@
                 });
                 return;
             }
-            const res = await fetch('/monitor/logs/clear', { method: 'POST' });
-            if (res.ok) {
+            try {
+                await window.MediaHubApi.postJson('/monitor/logs/clear');
                 lastMonitorLogSignature = '';
                 await refreshMonitorState();
-            }
+            } catch (e) {}
         }
 
         function currentMonitorFormData() {
@@ -1960,15 +1958,7 @@
         }
 
         async function persistMonitorTasks(tasks) {
-            const res = await fetch('/monitor/save', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ tasks })
-            });
-            const data = await res.json();
-            if (!res.ok || !data.ok) {
-                throw new Error(data.msg || '保存监控任务失败');
-            }
+            const data = await window.MediaHubApi.postJson('/monitor/save', { tasks });
             applyMonitorState({ ...monitorState, tasks: data.tasks || [] }, { forceRender: true });
         }
 
@@ -2024,15 +2014,7 @@
             if (isMonitorActionLocked('delete', name)) return;
             setMonitorActionLock('delete', name, true);
             try {
-                const res = await fetch('/monitor/delete', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ name })
-                });
-                const data = await res.json();
-                if (!res.ok || !data.ok) {
-                    return alert(`❌ ${data.msg || '删除失败'}`);
-                }
+                await window.MediaHubApi.postJson('/monitor/delete', { name });
                 applyMonitorState({
                     ...monitorState,
                     tasks: (monitorState.tasks || []).filter(item => item.name !== name),
@@ -2040,6 +2022,8 @@
                     next_runs: Object.fromEntries(Object.entries(monitorState.next_runs || {}).filter(([taskName]) => taskName !== name))
                 }, { forceRender: true });
                 if (editingMonitorName === name) resetMonitorForm();
+            } catch (error) {
+                alert(`❌ ${error?.message || '删除失败'}`);
             } finally {
                 setMonitorActionLock('delete', name, false);
             }
@@ -2049,15 +2033,7 @@
             if (isMonitorActionLocked('start', name)) return;
             setMonitorActionLock('start', name, true);
             try {
-                const res = await fetch('/monitor/start', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ name })
-                });
-                const data = await res.json();
-                if (!res.ok || !data.ok) {
-                    return alert(`❌ ${data.msg || '启动失败'}`);
-                }
+                const data = await window.MediaHubApi.postJson('/monitor/start', { name });
 
                 const queued = Array.isArray(monitorState.queued) ? [...monitorState.queued] : [];
                 if (data.status === 'queued') {
@@ -2073,6 +2049,8 @@
                     }, { forceRender: true });
                 }
                 await refreshMonitorState();
+            } catch (error) {
+                alert(`❌ ${error?.message || '启动失败'}`);
             } finally {
                 setMonitorActionLock('start', name, false);
             }
@@ -2082,12 +2060,7 @@
             if (isMonitorActionLocked('stop', name)) return;
             setMonitorActionLock('stop', name, true);
             try {
-                const res = await fetch('/monitor/stop', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ name })
-                });
-                const data = await res.json();
+                const data = await window.MediaHubApi.postJson('/monitor/stop', { name }).catch(() => ({ ok: false }));
                 if (!data.ok) {
                     alert('当前没有这个任务在运行');
                     return;
@@ -2200,9 +2173,7 @@
                 return;
             }
             try {
-                const res = await fetch('/logs');
-                if (!res.ok) return;
-                applyMainState(await res.json());
+                applyMainState(await window.MediaHubApi.getJson('/logs'));
             } catch (e) {}
         }
 
@@ -2215,8 +2186,6 @@
                 return;
             }
             try {
-                const res = await fetch('/monitor/status');
-                if (!res.ok) return;
-                applyMonitorState(await res.json());
+                applyMonitorState(await window.MediaHubApi.getJson('/monitor/status'));
             } catch (e) {}
         }

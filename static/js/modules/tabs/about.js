@@ -180,9 +180,7 @@ export async function refreshVersionInfo({
     const current = typeof getVersionInfo === 'function' ? (getVersionInfo() || {}) : {};
     try {
         const endpoint = force ? '/version?refresh=1' : '/version';
-        const res = await fetch(endpoint);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
+        const data = await window.MediaHubApi.getJson(endpoint);
         const nextVersionInfo = {
             ...current,
             ...data,

@@ -434,11 +434,12 @@
                 return { ...source, enabled: !!enabled };
             });
             try {
-                await persistResourceSources(nextSources);
+                const saveTask = persistResourceSources(nextSources);
                 renderResourceSourceManagerModal();
-                alert(`✅ 已${enabled ? '启用' : '停用'} ${selectedIds.length} 个频道`);
+                showToast(`已${enabled ? '启用' : '停用'} ${selectedIds.length} 个频道`, { tone: 'success', duration: 2400, placement: 'top-center' });
+                reportResourceSourcePersistFailure(saveTask, enabled ? '启用' : '停用');
             } catch (e) {
-                alert(`❌ ${e.message}`);
+                showToast(`操作失败：${e.message}`, { tone: 'error', duration: 3200, placement: 'top-center' });
             }
         }
 
@@ -461,7 +462,7 @@
             const selectedSet = new Set(selectedIds);
             const nextSources = (resourceState.sources || []).filter(source => !selectedSet.has(getResourceSourceChannelId(source)));
             try {
-                await persistResourceSources(nextSources);
+                const saveTask = persistResourceSources(nextSources);
                 const nextSelected = { ...resourceSourceBulkSelected };
                 selectedIds.forEach(channelId => {
                     delete nextSelected[channelId];
@@ -469,6 +470,7 @@
                 resourceSourceBulkSelected = nextSelected;
                 renderResourceSourceManagerModal();
                 showToast(`已删除 ${selectedIds.length} 个频道`, { tone: 'success', duration: 2600, placement: 'top-center' });
+                reportResourceSourcePersistFailure(saveTask, '删除');
             } catch (e) {
                 showToast(`删除失败：${e.message}`, { tone: 'error', duration: 3200, placement: 'top-center' });
             }
@@ -685,16 +687,10 @@
                         };
                         renderResourceSourceManagerModal();
                         try {
-                            const res = await fetch('/resource/channels/classify', {
-                                method: 'POST',
-                                headers: {'Content-Type': 'application/json'},
-                                body: JSON.stringify({
-                                    channel_id: item.channel_id,
-                                    sample_size: 20,
-                                }),
+                            const data = await window.MediaHubApi.postJson('/resource/channels/classify', {
+                                channel_id: item.channel_id,
+                                sample_size: 20,
                             });
-                            const data = await res.json();
-                            if (!res.ok || !data.ok) throw new Error(data.msg || '分类测试失败');
                             const profile = data.profile && typeof data.profile === 'object' ? data.profile : {};
                             nextProfiles[item.channel_id] = profile;
                             resourceSourceTestResult = {
@@ -893,11 +889,12 @@
                 enabled: !!enabledEl?.checked,
             };
             try {
-                await persistResourceSources(sources);
+                const saveTask = persistResourceSources(sources);
                 resourceChannelManageDirty = false;
                 resourceChannelManageSourceIndex = getResourceSourceIndexByChannelId(channelId);
                 syncResourceChannelManageModalState();
-                showToast('频道设置已保存', { tone: 'success', duration: 2200, placement: 'top-center' });
+                showToast('频道设置已更新', { tone: 'success', duration: 2200, placement: 'top-center' });
+                reportResourceSourcePersistFailure(saveTask, '保存');
             } catch (e) {
                 showToast(`保存失败：${e.message || '未知错误'}`, { tone: 'error', duration: 3000, placement: 'top-center' });
             }
@@ -917,9 +914,10 @@
             if (!ok) return;
             sources.splice(index, 1);
             try {
-                await persistResourceSources(sources);
+                const saveTask = persistResourceSources(sources);
                 closeResourceChannelManageModal();
                 showToast(`已删除频道：${displayName}`, { tone: 'success', duration: 2400, placement: 'top-center' });
+                reportResourceSourcePersistFailure(saveTask, '删除');
             } catch (e) {
                 showToast(`删除失败：${e.message || '未知错误'}`, { tone: 'error', duration: 3000, placement: 'top-center' });
             }
@@ -934,10 +932,11 @@
             sources.splice(index, 1);
             sources.unshift(source);
             try {
-                await persistResourceSources(sources);
+                const saveTask = persistResourceSources(sources);
                 resourceChannelManageSourceIndex = getResourceSourceIndexByChannelId(channelId);
                 syncResourceChannelManageModalState();
                 showToast('已置顶到1号位', { tone: 'success', duration: 2200, placement: 'top-center' });
+                reportResourceSourcePersistFailure(saveTask, '置顶');
             } catch (e) {
                 showToast(`置顶失败：${e.message || '未知错误'}`, { tone: 'error', duration: 3000, placement: 'top-center' });
             }
@@ -1183,32 +1182,114 @@
 
             setResourceSourceImportBusy(true);
             try {
-                await persistResourceSources(nextSources);
+                const saveTask = persistResourceSources(nextSources, { immediate: true });
                 closeResourceSourceImportModal();
                 const notes = [
-                    `✅ 已导入 ${parsed.sources.length} 个频道`,
+                    `已导入 ${parsed.sources.length} 个频道`,
                 ];
                 if (replaceExisting) notes.push('已覆盖旧配置');
                 else notes.push(`当前频道总数 ${nextSources.length}`);
                 if (parsed.duplicateCount > 0) notes.push(`导入数据内重复 ${parsed.duplicateCount} 项已自动去重`);
                 if (parsed.invalidReasons.length > 0) notes.push(`无效数据 ${parsed.invalidReasons.length} 项已跳过`);
-                alert(notes.join('，'));
+                showToast(notes.join('，'), { tone: 'success', duration: 3200, placement: 'top-center' });
+                reportResourceSourcePersistFailure(saveTask, '导入');
             } catch (e) {
-                alert(`❌ ${e.message}`);
+                showToast(`导入失败：${e.message}`, { tone: 'error', duration: 3200, placement: 'top-center' });
             } finally {
                 setResourceSourceImportBusy(false);
             }
         }
 
-        async function persistResourceSources(sources) {
-            const res = await fetch('/resource/sources/save', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ sources })
+        const RESOURCE_SOURCE_SAVE_DEBOUNCE_MS = 120;
+
+        function settleResourceSourcePersistPromises(token, error, payload) {
+            const ready = [];
+            const pending = [];
+            (resourceSourcePersistPending || []).forEach(entry => {
+                if (Number(entry?.token || 0) <= token) ready.push(entry);
+                else pending.push(entry);
             });
-            const data = await res.json();
-            if (!res.ok || !data.ok) throw new Error(data.msg || '保存频道源失败');
-            applyResourceState({ sources: data.sources || [] });
+            resourceSourcePersistPending = pending;
+            ready.forEach(entry => {
+                if (error) entry.reject(error);
+                else entry.resolve(payload);
+            });
+        }
+
+        function scheduleResourceSourcePersistFlush(delayMs = RESOURCE_SOURCE_SAVE_DEBOUNCE_MS) {
+            if (resourceSourcePersistTimer) {
+                window.clearTimeout(resourceSourcePersistTimer);
+                resourceSourcePersistTimer = null;
+            }
+            resourceSourcePersistTimer = window.setTimeout(() => {
+                resourceSourcePersistTimer = null;
+                void flushResourceSourcePersistQueue();
+            }, Math.max(0, delayMs));
+        }
+
+        async function flushResourceSourcePersistQueue() {
+            if (resourceSourcePersistInFlight || !resourceSourcePersistQueuedSources) return;
+            const sourcesToSave = cloneJsonValue(resourceSourcePersistQueuedSources, []);
+            const token = Number(resourceSourcePersistQueuedToken || 0);
+            resourceSourcePersistQueuedSources = null;
+            resourceSourcePersistQueuedToken = 0;
+            resourceSourcePersistInFlight = true;
+            try {
+                const data = await window.MediaHubApi.postJson('/resource/sources/save', { sources: sourcesToSave });
+                const committedSources = cloneJsonValue(data.sources || sourcesToSave, sourcesToSave);
+                settleResourceSourcePersistPromises(token, null, data);
+                if (token === resourceSourcePersistToken) {
+                    resourceSourcePersistRollbackSources = null;
+                    applyResourceSourcesLocal(committedSources, { deferHeavyRender: true });
+                } else {
+                    resourceSourcePersistRollbackSources = committedSources;
+                }
+            } catch (error) {
+                if (token === resourceSourcePersistToken) {
+                    settleResourceSourcePersistPromises(token, error);
+                    const rollbackSources = cloneJsonValue(resourceSourcePersistRollbackSources || [], []);
+                    resourceSourcePersistRollbackSources = null;
+                    applyResourceSourcesLocal(rollbackSources, { deferHeavyRender: true });
+                } else {
+                    settleResourceSourcePersistPromises(token, null, { ok: false, stale: true });
+                }
+            } finally {
+                resourceSourcePersistInFlight = false;
+                if (resourceSourcePersistQueuedSources) {
+                    scheduleResourceSourcePersistFlush(0);
+                }
+            }
+        }
+
+        function queueResourceSourcePersist(nextSources, rollbackSources, options = {}) {
+            const token = Number(options.token || resourceSourcePersistToken || 0);
+            if (!resourceSourcePersistRollbackSources) {
+                resourceSourcePersistRollbackSources = cloneJsonValue(rollbackSources || [], []);
+            }
+            resourceSourcePersistQueuedSources = cloneJsonValue(nextSources, []);
+            resourceSourcePersistQueuedToken = token;
+            const promise = new Promise((resolve, reject) => {
+                resourceSourcePersistPending.push({ token, resolve, reject });
+            });
+            scheduleResourceSourcePersistFlush(options.immediate ? 0 : RESOURCE_SOURCE_SAVE_DEBOUNCE_MS);
+            return promise;
+        }
+
+        function persistResourceSources(sources, options = {}) {
+            const nextSources = cloneJsonValue(Array.isArray(sources) ? sources : [], []);
+            const previousSources = cloneJsonValue(resourceState.sources || [], []);
+            const persistToken = ++resourceSourcePersistToken;
+            applyResourceSourcesLocal(nextSources, { deferHeavyRender: true });
+            return queueResourceSourcePersist(nextSources, previousSources, {
+                token: persistToken,
+                immediate: !!options.immediate,
+            });
+        }
+
+        function reportResourceSourcePersistFailure(saveTask, actionLabel = '保存') {
+            void Promise.resolve(saveTask).catch(error => {
+                showToast(`${actionLabel}失败：${error?.message || '未知错误'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
+            });
         }
 
         async function moveResourceSource(index, offset) {
@@ -1217,9 +1298,10 @@
             if (index < 0 || nextIndex < 0 || nextIndex >= sources.length) return;
             [sources[index], sources[nextIndex]] = [sources[nextIndex], sources[index]];
             try {
-                await persistResourceSources(sources);
+                const saveTask = persistResourceSources(sources);
+                reportResourceSourcePersistFailure(saveTask, '排序');
             } catch (e) {
-                alert(`❌ ${e.message}`);
+                showToast(`排序失败：${e.message}`, { tone: 'error', duration: 3200, placement: 'top-center' });
             }
         }
 
@@ -1231,10 +1313,11 @@
                 enabled: !!enabled
             };
             try {
-                await persistResourceSources(sources);
+                const saveTask = persistResourceSources(sources);
+                reportResourceSourcePersistFailure(saveTask, enabled ? '启用' : '停用');
                 return true;
             } catch (e) {
-                alert(`❌ ${e.message}`);
+                showToast(`操作失败：${e.message}`, { tone: 'error', duration: 3200, placement: 'top-center' });
                 return false;
             }
         }
@@ -1251,11 +1334,12 @@
             if (editingResourceSourceIndex !== null && editingResourceSourceIndex >= 0) sources[editingResourceSourceIndex] = source;
             else sources.push(source);
             try {
-                await persistResourceSources(sources);
+                const saveTask = persistResourceSources(sources, { immediate: true });
                 closeResourceSourceModal();
-                alert(isEditing ? '✅ 频道订阅已更新' : '✅ 频道订阅已添加');
+                showToast(isEditing ? '频道订阅已更新' : '频道订阅已添加', { tone: 'success', duration: 2400, placement: 'top-center' });
+                reportResourceSourcePersistFailure(saveTask, isEditing ? '更新' : '添加');
             } catch (e) {
-                alert(`❌ ${e.message}`);
+                showToast(`保存失败：${e.message}`, { tone: 'error', duration: 3200, placement: 'top-center' });
             }
         }
 
@@ -1263,18 +1347,22 @@
             openResourceSourceModal(index);
         }
 
-        async function deleteResourceSource(index) {
+        async function deleteResourceSource(index, options = {}) {
             const source = (resourceState.sources || [])[index];
             if (!source) return;
             const channelId = getResourceSourceChannelId(source);
-            if (!confirm(`确定删除频道源“${source.name || channelId || '未命名频道'}”吗？`)) return;
+            const shouldConfirm = options.confirm !== false;
+            if (shouldConfirm && !confirm(`确定删除频道源“${source.name || channelId || '未命名频道'}”吗？`)) return false;
             const sources = [...(resourceState.sources || [])];
             sources.splice(index, 1);
             try {
-                await persistResourceSources(sources);
+                const saveTask = persistResourceSources(sources);
                 if (editingResourceSourceIndex === index) closeResourceSourceModal();
+                reportResourceSourcePersistFailure(saveTask, '删除');
+                return true;
             } catch (e) {
-                alert(`❌ ${e.message}`);
+                showToast(`删除失败：${e.message}`, { tone: 'error', duration: 3200, placement: 'top-center' });
+                return false;
             }
         }
 

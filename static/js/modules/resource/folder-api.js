@@ -6,31 +6,14 @@
             }
         }
 
-        const RESOURCE_BROWSER_FETCH_TIMEOUT_MS = 18000;
-
-        async function fetchResourceBrowserJson(url, options = {}, timeoutMs = RESOURCE_BROWSER_FETCH_TIMEOUT_MS) {
-            const controller = new AbortController();
-            const timer = window.setTimeout(() => controller.abort(), Math.max(3000, Number(timeoutMs || RESOURCE_BROWSER_FETCH_TIMEOUT_MS)));
-            try {
-                const res = await fetch(url, {
-                    ...options,
-                    signal: controller.signal,
-                });
-                let data = {};
-                try {
-                    data = await res.json();
-                } catch (e) {
-                    if (!res.ok) throw new Error(`请求失败（HTTP ${res.status}）`);
-                    throw e;
-                }
-                if (!res.ok || !data.ok) throw new Error(data.msg || `请求失败（HTTP ${res.status}）`);
-                return data;
-            } catch (e) {
-                if (e?.name === 'AbortError') throw new Error('请求超时，请稍后重试');
-                throw e;
-            } finally {
-                window.clearTimeout(timer);
+        async function fetchResourceBrowserJson(url, options = {}) {
+            if (window.MediaHubApi?.requestJson) {
+                return window.MediaHubApi.requestJson(url, options);
             }
+            const res = await fetch(url, options);
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || !data.ok) throw new Error(data.msg || `请求失败（HTTP ${res.status}）`);
+            return data;
         }
 
         function normalizeResourceProviderCacheKey(provider = '115') {
@@ -213,6 +196,12 @@
 
         async function createResourceFolder(cid = '0', name = '', { provider = '115' } = {}) {
             const apiPrefix = getResourceFolderApiPrefix(provider);
+            if (window.MediaHubApi?.postJson) {
+                return window.MediaHubApi.postJson(`${apiPrefix}/folders/create`, {
+                    cid: String(cid || '0'),
+                    name: String(name || '')
+                });
+            }
             const res = await fetch(`${apiPrefix}/folders/create`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},

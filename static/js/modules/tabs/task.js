@@ -26,12 +26,7 @@ export async function triggerTask({
     setIsRunning,
 } = {}) {
     if (isRunning) return false;
-    const res = await fetch('/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ use_local: !!local, force_full: !!full })
-    });
-    const data = await res.json().catch(() => null);
+    const data = await window.MediaHubApi.postJson('/start', { use_local: !!local, force_full: !!full }).catch(() => null);
     if (data?.status === 'started') {
         updateButtonState({ running: true, btnTexts, setIsRunning });
         return true;
@@ -93,9 +88,7 @@ export function applyMainState(data, {
 
 export async function refreshMainLogs({ applyMainState } = {}) {
     try {
-        const res = await fetch('/logs');
-        if (!res.ok) return;
-        const data = await res.json();
+        const data = await window.MediaHubApi.getJson('/logs');
         if (typeof applyMainState === 'function') {
             await applyMainState(data);
         }
@@ -106,8 +99,7 @@ export async function clearMainLogs({
     setLastLogSignature,
     refreshMainLogs,
 } = {}) {
-    const res = await fetch('/logs/clear', { method: 'POST' });
-    if (!res.ok) return;
+    await window.MediaHubApi.postJson('/logs/clear');
     if (typeof setLastLogSignature === 'function') setLastLogSignature('');
     if (typeof refreshMainLogs === 'function') {
         await refreshMainLogs();

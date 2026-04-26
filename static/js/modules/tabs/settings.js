@@ -167,13 +167,10 @@ export async function testTgProxyLatency({
     }
     if (typeof renderTgProxyTestStatus === 'function') renderTgProxyTestStatus();
     try {
-        const res = await fetch('/settings/tg_proxy/test', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(typeof getCurrentTgProxyConfig === 'function' ? getCurrentTgProxyConfig() : {})
-        });
-        const data = await res.json();
-        if (!res.ok || !data.ok) throw new Error(data.msg || 'TG 延迟测试失败');
+        const data = await window.MediaHubApi.postJson(
+            '/settings/tg_proxy/test',
+            typeof getCurrentTgProxyConfig === 'function' ? getCurrentTgProxyConfig() : {}
+        );
         if (typeof setTgProxyTestState === 'function') {
             setTgProxyTestState({
                 loading: false,
@@ -267,13 +264,10 @@ export async function testNotifyPush({
     }
     if (typeof renderNotifyTestStatus === 'function') renderNotifyTestStatus();
     try {
-        const res = await fetch('/settings/notify/test', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(typeof getCurrentNotifyConfig === 'function' ? getCurrentNotifyConfig() : {})
-        });
-        const data = await res.json();
-        if (!res.ok || !data.ok) throw new Error(data.msg || '测试消息发送失败');
+        const data = await window.MediaHubApi.postJson(
+            '/settings/notify/test',
+            typeof getCurrentNotifyConfig === 'function' ? getCurrentNotifyConfig() : {}
+        );
         if (typeof setNotifyTestState === 'function') {
             setNotifyTestState({
                 loading: false,
@@ -307,9 +301,7 @@ export async function refreshCookieHealthStatus({
 } = {}) {
     try {
         const endpoint = force ? '/settings/cookies/status?refresh=1' : '/settings/cookies/status';
-        const res = await fetch(endpoint);
-        if (!res.ok) return;
-        const data = await res.json();
+        const data = await window.MediaHubApi.getJson(endpoint);
         if (data?.cookie_health && typeof applyCookieHealthState === 'function') {
             applyCookieHealthState(data.cookie_health);
         }
@@ -330,16 +322,10 @@ export async function checkCookiesNow({
     if (typeof setBusy === 'function') setBusy(true);
     if (typeof renderCookieHealthCards === 'function') renderCookieHealthCards();
     try {
-        const res = await fetch('/settings/cookies/check', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                providers: ['115', 'quark'],
-                force: !!force
-            })
+        const data = await window.MediaHubApi.postJson('/settings/cookies/check', {
+            providers: ['115', 'quark'],
+            force: !!force
         });
-        const data = await res.json();
-        if (!res.ok || !data?.ok) throw new Error(data?.msg || '检测失败');
         if (data?.cookie_health && typeof applyCookieHealthState === 'function') {
             applyCookieHealthState(data.cookie_health);
         }
@@ -362,9 +348,7 @@ export async function refreshSign115Status({
 } = {}) {
     try {
         const endpoint = force ? '/settings/115/sign/status?refresh=1' : '/settings/115/sign/status';
-        const res = await fetch(endpoint);
-        if (!res.ok) return;
-        const data = await res.json();
+        const data = await window.MediaHubApi.getJson(endpoint);
         if (typeof applySign115State === 'function') applySign115State(data);
     } catch (err) {
         console.warn('Sign115 status refresh failed', err);
@@ -379,9 +363,8 @@ export async function manualSign115({
 } = {}) {
     if (sign115State?.running) return;
     try {
-        const res = await fetch('/settings/115/sign/run', { method: 'POST' });
-        const data = await res.json();
-        if (!res.ok || !data.ok) {
+        const data = await window.MediaHubApi.postJson('/settings/115/sign/run');
+        if (!data.ok) {
             if (data?.state && typeof applySign115State === 'function') applySign115State(data.state);
             if (notify && typeof showToast === 'function') {
                 showToast(`签到失败：${data?.msg || '请稍后重试'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
@@ -394,6 +377,7 @@ export async function manualSign115({
             showToast(message, { tone: 'success', duration: 3000, placement: 'top-center' });
         }
     } catch (err) {
+        if (err?.payload?.state && typeof applySign115State === 'function') applySign115State(err.payload.state);
         if (notify && typeof showToast === 'function') {
             showToast(`签到失败：${err?.message || '请稍后重试'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
         }
@@ -424,17 +408,15 @@ export async function saveSettings({
         sensitiveSettingFields,
         getMonitorTasks,
     });
-    const res = await fetch('/save_settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(cfg)
-    });
     let data = null;
     try {
-        data = await res.json();
-    } catch (_) {}
+        data = await window.MediaHubApi.postJson('/save_settings', cfg);
+    } catch (error) {
+        window.alert(`❌ ${error?.message || '保存失败'}`);
+        return false;
+    }
 
-    if (res.ok && data?.ok) {
+    if (data?.ok) {
         if (data?.cookie_health && typeof applyCookieHealthState === 'function') {
             applyCookieHealthState(data.cookie_health);
         }

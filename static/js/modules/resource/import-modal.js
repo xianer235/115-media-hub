@@ -266,40 +266,30 @@
                             resource: serializeTransientResourceForJob(batchItem)
                         };
                         if (folderId && folderId !== '0') payload.folder_id = folderId;
-                        let res;
+                        let data = {};
                         try {
-                            res = await fetch('/resource/jobs/create', {
-                                method: 'POST',
-                                headers: {'Content-Type': 'application/json'},
-                                body: JSON.stringify(payload)
-                            });
+                            data = await window.MediaHubApi.postJson('/resource/jobs/create', payload);
                         } catch (e) {
+                            if (Number(e?.status || 0) === 409) {
+                                duplicatedCount += 1;
+                                continue;
+                            }
                             failedCount += 1;
                             if (!firstFailedMsg) {
                                 firstFailedMsg = String(e?.message || '网络请求失败').trim() || '请稍后重试';
                             }
                             continue;
                         }
-                        let data = {};
-                        try {
-                            data = await res.json();
-                        } catch (e) {
-                            data = {};
-                        }
-                        if (res.ok && data.ok) {
+                        if (data?.ok) {
                             createdJobIds.push(Number(data.job_id || 0));
                             const currentTaskName = String(data.monitor_task_name || '').trim();
                             if (!matchedTaskName && currentTaskName) matchedTaskName = currentTaskName;
                             if (currentTaskName && data.auto_refresh) autoRefreshMatched = true;
                             continue;
                         }
-                        if (res.status === 409) {
-                            duplicatedCount += 1;
-                            continue;
-                        }
                         failedCount += 1;
                         if (!firstFailedMsg) {
-                            firstFailedMsg = String(data.msg || `HTTP ${res.status}`).trim() || '请稍后重试';
+                            firstFailedMsg = String(data.msg || '创建任务失败').trim() || '请稍后重试';
                         }
                     }
 
@@ -371,20 +361,14 @@
                     payload.share_selection = selectionState;
                     if (receiveCode) payload.receive_code = receiveCode;
                 }
-                let res;
                 let data = {};
                 try {
-                    res = await fetch('/resource/jobs/create', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify(payload)
-                    });
-                    data = await res.json();
+                    data = await window.MediaHubApi.postJson('/resource/jobs/create', payload);
                 } catch (e) {
                     showToast(`提交失败：${e?.message || '网络请求失败'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
                     return;
                 }
-                if (!res.ok || !data.ok) {
+                if (!data.ok) {
                     showToast(`提交失败：${data.msg || '请稍后重试'}`, { tone: 'error', duration: 3000, placement: 'top-center' });
                     return;
                 }

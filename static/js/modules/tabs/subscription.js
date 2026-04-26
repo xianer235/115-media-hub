@@ -52,9 +52,7 @@ export function applySubscriptionState(data, {
 
 export async function refreshSubscriptionState({ applySubscriptionState } = {}) {
     try {
-        const res = await fetch('/subscription/status');
-        if (!res.ok) return;
-        const data = await res.json();
+        const data = await window.MediaHubApi.getJson('/subscription/status');
         if (typeof applySubscriptionState === 'function') applySubscriptionState(data);
     } catch (e) {}
 }
@@ -63,8 +61,7 @@ export async function clearSubscriptionLogs({
     setLastSubscriptionLogSignature,
     refreshSubscriptionState,
 } = {}) {
-    const res = await fetch('/subscription/logs/clear', { method: 'POST' });
-    if (!res.ok) return;
+    await window.MediaHubApi.postJson('/subscription/logs/clear');
     if (typeof setLastSubscriptionLogSignature === 'function') setLastSubscriptionLogSignature('');
     if (typeof refreshSubscriptionState === 'function') {
         await refreshSubscriptionState();

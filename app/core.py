@@ -4056,8 +4056,11 @@ async def list_remote_dir(
     last_error = None
     for attempt in range(1, retries + 1):
         try:
-            cid = resolve_115_folder_id_by_path(cookie, normalized_rel) if normalized_rel else "0"
-            entries = await asyncio.to_thread(list_115_entries, cookie, cid, bool(refresh))
+            def load_entries() -> List[Dict[str, Any]]:
+                cid = resolve_115_folder_id_by_path(cookie, normalized_rel) if normalized_rel else "0"
+                return list_115_entries(cookie, cid, bool(refresh))
+
+            entries = await asyncio.to_thread(load_entries)
             items: List[Dict[str, Any]] = []
             modified = ""
             for entry in entries:
