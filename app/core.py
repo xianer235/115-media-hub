@@ -229,6 +229,10 @@ SUBSCRIPTION_SEARCH_KEYWORD_CONCURRENCY = max(
         int(os.environ.get("SUBSCRIPTION_SEARCH_KEYWORD_CONCURRENCY", SUBSCRIPTION_SEARCH_KEYWORD_LIMIT) or SUBSCRIPTION_SEARCH_KEYWORD_LIMIT),
     ),
 )
+SUBSCRIPTION_CHANNEL_WATERMARK_OVERLAP_POSTS = max(
+    0,
+    min(500, int(os.environ.get("SUBSCRIPTION_CHANNEL_WATERMARK_OVERLAP_POSTS", 30) or 30)),
+)
 SUBSCRIPTION_MAX_CRON_MINUTES = 24 * 60
 SUBSCRIPTION_MAX_SCHEDULE_INTERVAL_MINUTES = SUBSCRIPTION_MAX_CRON_MINUTES
 SUBSCRIPTION_ATTEMPT_INTERVAL_SECONDS = max(
@@ -910,6 +914,25 @@ def get_subscription_tmdb_season_total_episodes(task: Dict[str, Any], season: in
     return max(0, int(season_map.get(str(target_season), 0) or 0))
 
 
+def resolve_subscription_tmdb_expected_total(task: Dict[str, Any]) -> int:
+    payload = task if isinstance(task, dict) else {}
+    media_type = str(payload.get("media_type", "movie") or "movie").strip().lower()
+    if media_type != "tv" or max(0, int(payload.get("tmdb_id", 0) or 0)) <= 0:
+        return 0
+
+    season_total = get_subscription_tmdb_season_total_episodes(payload)
+    tmdb_total = max(0, int(payload.get("tmdb_total_episodes", 0) or 0))
+    tmdb_total_seasons = max(0, int(payload.get("tmdb_total_seasons", 0) or 0))
+
+    if is_subscription_multi_season_mode(payload):
+        return tmdb_total
+    if season_total > 0:
+        return season_total
+    if tmdb_total_seasons <= 1:
+        return tmdb_total
+    return 0
+
+
 def resolve_subscription_tv_total_episodes(task: Dict[str, Any], state_total: int = 0) -> int:
     payload = task if isinstance(task, dict) else {}
     media_type = str(payload.get("media_type", "movie") or "movie").strip().lower()
@@ -1052,8 +1075,6 @@ def resolve_subscription_tv_base_savepath(task: Dict[str, Any], base_savepath: s
     payload = task if isinstance(task, dict) else {}
     if str(payload.get("media_type", "movie") or "movie").strip().lower() != "tv":
         return normalized_base
-    if not is_subscription_multi_season_mode(payload):
-        return normalized_base
 
     parts = [part for part in normalized_base.split("/") if part]
     if len(parts) <= 1:
@@ -1063,6 +1084,18 @@ def resolve_subscription_tv_base_savepath(task: Dict[str, Any], base_savepath: s
 
     parent_path = "/".join(parts[:-1]).strip("/")
     return parent_path or normalized_base
+
+
+def resolve_subscription_tv_scan_savepath(task: Dict[str, Any], base_savepath: str) -> str:
+    normalized_base = normalize_relative_path(base_savepath)
+    if not normalized_base:
+        return ""
+    payload = task if isinstance(task, dict) else {}
+    if str(payload.get("media_type", "movie") or "movie").strip().lower() != "tv":
+        return normalized_base
+    if is_subscription_multi_season_mode(payload):
+        return resolve_subscription_tv_base_savepath(payload, normalized_base) or normalized_base
+    return normalized_base
 
 
 def is_subscription_anime_compatible_task(task: Dict[str, Any]) -> bool:
@@ -3808,12 +3841,49 @@ def format_subscription_trigger(trigger: str) -> str:
     return labels.get(trigger, trigger or "未知触发")
 
 
+def format_subscription_media_type_label(media_type: Any) -> str:
+    normalized = str(media_type or "movie").strip().lower()
+    return "电视剧" if normalized == "tv" else "电影"
+
+
+def format_subscription_provider_label(provider: Any) -> str:
+    normalized = normalize_subscription_provider(provider, fallback="115")
+    return "夸克" if normalized == "quark" else "115"
+
+
+def format_resource_link_type_label(link_type: Any, link_url: Any = "") -> str:
+    normalized = resolve_resource_link_type(str(link_type or "").strip(), str(link_url or "").strip())
+    labels = {
+        "115share": "115 分享",
+        "quark": "夸克分享",
+        "magnet": "磁力",
+        "aliyun": "阿里云盘",
+        "baidu": "百度网盘",
+        "xunlei": "迅雷网盘",
+        "uc": "UC 网盘",
+        "123pan": "123 网盘",
+        "tianyi": "天翼云盘",
+        "pikpak": "PikPak",
+        "lanzou": "蓝奏云",
+        "google_drive": "Google Drive",
+        "onedrive": "OneDrive",
+        "mega": "MEGA",
+    }
+    if normalized:
+        return labels.get(normalized, normalized)
+    return "未知链接"
+
+
 def format_monitor_bool(enabled: bool) -> str:
     return "开启" if enabled else "关闭"
 
 
 async def write_monitor_section(title: str) -> None:
     await write_monitor_log(f"·· {title} ··", "section-divider")
+
+
+async def write_subscription_section(title: str) -> None:
+    await write_subscription_log(f"·· {title} ··", "section-divider")
 
 
 async def write_monitor_task_header(task: Dict[str, Any], trigger: str, payload: Optional[Dict[str, Any]] = None) -> None:
@@ -3924,6 +3994,7 @@ from .resource_jobs import (
     update_resource_job,
 )
 from .providers.tmdb import (
+    build_tmdb_task_binding,
     build_tmdb_aliases,
     build_tmdb_cache_key,
     build_tmdb_image_url,

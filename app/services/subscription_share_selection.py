@@ -577,35 +577,43 @@ async def _build_subscription_share_subdir_selection(
 
         if anchor_branch:
             stats["scanned_dirs"] = int(stats.get("scanned_dirs", 0) or 0) + 1
+            anchor_entries = anchor_branch.get("entries", []) if isinstance(anchor_branch.get("entries"), list) else []
+            stats["anchor_entry_count"] = len(anchor_entries)
             share_root_title = normalize_relative_path(str(anchor_branch.get("share_title", "") or ""))
             stats["share_root_title"] = share_root_title
-            resolved_subdir = requested_subdir or normalize_relative_path(f"cid-{requested_subdir_cid}")
-            stats["resolved_subdir"] = resolved_subdir
-            stats["resolved_subdir_cid"] = requested_subdir_cid
-            stats["matched_depth"] = len([part for part in resolved_subdir.split("/") if part]) if resolved_subdir else 0
-            stats["reason"] = "ok_cid_anchor"
-            selection = normalize_share_selection_meta(
-                {
-                    "selected_ids": [requested_subdir_cid],
-                    "selected_entries": [
-                        {
-                            "id": requested_subdir_cid,
-                            "name": resolved_subdir,
-                            "is_dir": True,
-                            "parent_id": "0",
-                            "cid": requested_subdir_cid,
-                            "fid": "",
-                        }
-                    ],
-                    "refresh_target_type": "folder",
-                    "share_root_title": share_root_title,
-                    "auto_sharetitle": resolved_subdir,
-                }
-            )
-            if not (selection.get("selected_ids", []) if isinstance(selection.get("selected_ids"), list) else []):
-                stats["reason"] = "subdir_selection_empty"
-                return {}, stats
-            return selection, stats
+            if not anchor_entries and requested_subdir:
+                stats["anchor_empty_fallback"] = bool(allow_fallback)
+                if not allow_fallback:
+                    stats["reason"] = "share_anchor_empty"
+                    return {}, stats
+            else:
+                resolved_subdir = requested_subdir or normalize_relative_path(f"cid-{requested_subdir_cid}")
+                stats["resolved_subdir"] = resolved_subdir
+                stats["resolved_subdir_cid"] = requested_subdir_cid
+                stats["matched_depth"] = len([part for part in resolved_subdir.split("/") if part]) if resolved_subdir else 0
+                stats["reason"] = "ok_cid_anchor"
+                selection = normalize_share_selection_meta(
+                    {
+                        "selected_ids": [requested_subdir_cid],
+                        "selected_entries": [
+                            {
+                                "id": requested_subdir_cid,
+                                "name": resolved_subdir,
+                                "is_dir": True,
+                                "parent_id": "0",
+                                "cid": requested_subdir_cid,
+                                "fid": "",
+                            }
+                        ],
+                        "refresh_target_type": "folder",
+                        "share_root_title": share_root_title,
+                        "auto_sharetitle": resolved_subdir,
+                    }
+                )
+                if not (selection.get("selected_ids", []) if isinstance(selection.get("selected_ids"), list) else []):
+                    stats["reason"] = "subdir_selection_empty"
+                    return {}, stats
+                return selection, stats
 
         if not requested_subdir:
             stats["reason"] = "share_anchor_unreachable"

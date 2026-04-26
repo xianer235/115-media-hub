@@ -31,6 +31,19 @@ async def _write_subscription_search_diagnostics(search_stats: Dict[str, Any], l
             ),
             "info",
         )
+    cached_items = int(payload.get("channel_cached_items", payload.get("cached_items", 0)) or 0)
+    cache_queries = int(payload.get("channel_cache_queries", payload.get("cache_queries", 0)) or 0)
+    cache_errors = int(payload.get("channel_cache_errors", payload.get("cache_errors", 0)) or 0)
+    if cached_items > 0:
+        await write_subscription_log(
+            f"{label}本地缓存召回：命中 {cached_items} 条历史频道资源（查询 {cache_queries or '--'} 组关键词）",
+            "info",
+        )
+    if cache_errors > 0:
+        await write_subscription_log(
+            f"{label}本地缓存召回有 {cache_errors} 次查询异常，已忽略并继续执行",
+            "warn",
+        )
     slow_channels = payload.get("slow_channels", [])
     if not isinstance(slow_channels, list) or not slow_channels:
         return
@@ -48,6 +61,137 @@ async def _write_subscription_search_diagnostics(search_stats: Dict[str, Any], l
         await write_subscription_log(f"{label}慢频道 Top：{'；'.join(fragments)}", "info")
 
 
+async def _write_subscription_task_overview(
+    task: Dict[str, Any],
+    trigger: str,
+    subscription_run_id: str,
+    batch_refresh_enabled: bool,
+) -> None:
+    provider_label = format_subscription_provider_label(task.get("provider", "115"))
+    media_label = format_subscription_media_type_label(task.get("media_type", "movie"))
+    batch_refresh_label = "开启（内置固定）"
+    if normalize_subscription_provider(task.get("provider", "115"), fallback="115") == "quark":
+        batch_refresh_label = "关闭（夸克独立链路）"
+    elif not batch_refresh_enabled:
+        batch_refresh_label = "关闭"
+
+    await write_subscription_section("任务信息")
+    await write_subscription_log(
+        (
+            f"订阅: {str(task.get('title', '') or task.get('name', '') or '--').strip()} | "
+            f"类型: {media_label} | 网盘: {provider_label} | 触发: {format_subscription_trigger(trigger)}"
+        ),
+        "info",
+    )
+    await write_subscription_log(
+        f"保存路径: {str(task.get('savepath', '') or '--').strip()} | 执行批次: {subscription_run_id}",
+        "info",
+    )
+    await write_subscription_log(f"批次收口刷新: {batch_refresh_label}", "info")
+
+    if int(task.get("tmdb_id", 0) or 0) > 0:
+        tmdb_label = str(task.get("tmdb_title", "") or task.get("title", "") or "--").strip()
+        tmdb_year = normalize_tmdb_year(task.get("tmdb_year", ""))
+        tmdb_tail = f" ({tmdb_year})" if tmdb_year else ""
+        await write_subscription_log(
+            f"TMDB 绑定: {tmdb_label}{tmdb_tail} | ID: {int(task.get('tmdb_id', 0) or 0)}",
+            "info",
+        )
+
+    if str(task.get("media_type", "movie") or "movie").strip().lower() == "tv":
+        configured_total = resolve_subscription_tv_total_episodes(task, state_total=0)
+        tv_mode_text = "多季合一" if is_subscription_multi_season_mode(task) else "单季订阅"
+        if is_subscription_anime_compatible_task(task):
+            tv_mode_text += " / 动漫兼容"
+        season_label = "全季" if is_subscription_multi_season_mode(task) else f"S{int(task.get('season', 1) or 1):02d}"
+        await write_subscription_log(
+            f"追更设置: {season_label} | 总集数: {configured_total or '自动识别'} | 模式: {tv_mode_text}",
+            "info",
+        )
+
+
+async def _write_subscription_notify_result_log(
+    notify_result: Dict[str, Any],
+    task: Dict[str, Any],
+    item: Dict[str, Any],
+) -> None:
+    channel = str(notify_result.get("channel", "") or "").strip().lower()
+    channel_label = "企业微信应用 API" if channel == "wecom_app" else "企业微信群机器人"
+    provider_label = str(notify_result.get("provider_label", "") or "").strip() or format_subscription_provider_label(
+        task.get("provider", "115")
+    )
+    link_type_label = str(notify_result.get("link_type_label", "") or "").strip() or format_resource_link_type_label(
+        item.get("link_type", ""),
+        item.get("link_url", ""),
+    )
+    episode_summary = str(notify_result.get("episode_summary", "") or "").strip()
+    if episode_summary:
+        await write_subscription_log(
+            f"更新通知已推送到{channel_label} | 网盘: {provider_label} | 方式: {link_type_label} | 新增: {episode_summary}",
+            "info",
+        )
+    else:
+        await write_subscription_log(
+            f"更新通知已推送到{channel_label} | 网盘: {provider_label} | 方式: {link_type_label}",
+            "info",
+        )
+
+
+async def _refresh_subscription_task_tmdb_before_run(
+    cfg: Dict[str, Any],
+    task: Dict[str, Any],
+    task_name: str,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    normalized_task = normalize_subscription_task(task or {})
+    if str(normalized_task.get("media_type", "movie") or "movie").strip().lower() != "tv":
+        return cfg, normalized_task
+    if max(0, int(normalized_task.get("tmdb_id", 0) or 0)) <= 0:
+        return cfg, normalized_task
+
+    tmdb_config_error = validate_tmdb_runtime_config(cfg)
+    if tmdb_config_error:
+        await write_subscription_log(f"TMDB 绑定已配置，但本次无法刷新最新集数：{tmdb_config_error}", "warn")
+        return cfg, normalized_task
+
+    upsert_subscription_task_state(task_name, status="running", progress=8, detail="正在刷新 TMDB 最新集数")
+    try:
+        refresh_result = await asyncio.to_thread(
+            refresh_subscription_task_tmdb_binding,
+            task_name,
+            normalized_task,
+            cfg,
+            True,
+        )
+    except Exception as exc:
+        await write_subscription_log(f"刷新 TMDB 最新集数失败，将继续使用本地缓存配置：{exc}", "warn")
+        return cfg, normalized_task
+
+    refreshed_task = normalize_subscription_task(refresh_result.get("task", normalized_task))
+    refreshed_cfg = normalize_config(refresh_result.get("cfg", cfg))
+    if not refreshed_task:
+        return cfg, normalized_task
+
+    previous_total = max(0, int(refresh_result.get("previous_expected_total", 0) or 0))
+    current_total = max(0, int(refresh_result.get("current_expected_total", 0) or 0))
+    if bool(refresh_result.get("changed", False)):
+        detail_parts: List[str] = []
+        if previous_total != current_total and current_total > 0:
+            detail_parts.append(f"集数 {previous_total or '--'} -> {current_total}")
+        if bool(refresh_result.get("total_synced", False)):
+            detail_parts.append("任务总集数已跟随 TMDB 同步")
+        elif bool(refresh_result.get("total_override_preserved", False)):
+            detail_parts.append("保留了任务里手动覆盖的总集数")
+        detail_text = "；".join(detail_parts) if detail_parts else "任务绑定信息已更新"
+        await write_subscription_log(f"TMDB 最新信息已刷新：{detail_text}", "info")
+    else:
+        stable_total = current_total or previous_total
+        if stable_total > 0:
+            await write_subscription_log(f"TMDB 最新集数已确认：当前任务按 {stable_total} 集计算", "info")
+        else:
+            await write_subscription_log("TMDB 最新信息已确认：当前任务绑定未变化", "info")
+    return refreshed_cfg, refreshed_task
+
+
 async def _run_subscription_task_quark(
     cfg: Dict[str, Any],
     task: Dict[str, Any],
@@ -57,33 +201,8 @@ async def _run_subscription_task_quark(
     batch_refresh_enabled: bool,
     stage_timer: Optional[Dict[str, Any]] = None,
 ) -> None:
-    await write_subscription_log("网盘提供方：夸克（独立评分与导入链路）", "info")
-    await write_subscription_log(
-        f"类型: {'电影' if task['media_type'] == 'movie' else '电视剧'} | 标题: {task['title']} | 保存路径: {task['savepath']}",
-        "info",
-    )
-    await write_subscription_log(
-        f"执行批次: {subscription_run_id} | 批次收口刷新: {'开启' if batch_refresh_enabled else '关闭（夸克独立链路）'}",
-        "info",
-    )
-    if int(task.get("tmdb_id", 0) or 0) > 0:
-        tmdb_label = str(task.get("tmdb_title", "") or task.get("title", "") or "--").strip()
-        tmdb_year = normalize_tmdb_year(task.get("tmdb_year", ""))
-        tmdb_tail = f" ({tmdb_year})" if tmdb_year else ""
-        await write_subscription_log(
-            f"TMDB 绑定: {tmdb_label}{tmdb_tail} | ID: {int(task.get('tmdb_id', 0) or 0)}",
-            "info",
-        )
-    if task["media_type"] == "tv":
-        configured_total = resolve_subscription_tv_total_episodes(task, state_total=0)
-        tv_mode_text = "多季合一" if is_subscription_multi_season_mode(task) else "单季订阅"
-        if is_subscription_anime_compatible_task(task):
-            tv_mode_text += " / 动漫兼容"
-        season_label = "全季" if is_subscription_multi_season_mode(task) else f"S{int(task.get('season', 1) or 1):02d}"
-        await write_subscription_log(
-            f"季: {season_label} | 总集数: {configured_total or '自动识别'} | 模式: {tv_mode_text}",
-            "info",
-        )
+    await write_subscription_section("执行链路")
+    await write_subscription_log("网盘链路: 夸克分享（独立评分与导入链路）", "info")
     check_subscription_cancelled()
 
     state = load_subscription_task_state(task_name, task.get("media_type", "movie"))
@@ -134,6 +253,7 @@ async def _run_subscription_task_quark(
     deduped_items = int(search_stats.get("deduped_items", 0) or 0)
     supported_items = int(search_stats.get("supported_items", 0) or 0)
     unsupported_items = int(search_stats.get("unsupported_items", 0) or 0)
+    await write_subscription_section("搜索结果")
     await write_subscription_log(
         f"夸克搜索关键词: " + " / ".join(search_keywords or [str(task.get("title", "")).strip() or "--"]),
         "info",
@@ -173,12 +293,15 @@ async def _run_subscription_task_quark(
             "info",
         )
     if bool(search_stats.get("incremental_search_enabled", False)):
+        watermark_overlap_posts = int(search_stats.get("incremental_watermark_overlap_posts", 0) or 0)
+        watermark_overlap_tail = f"，软回看 {watermark_overlap_posts} 个消息位" if watermark_overlap_posts > 0 else ""
         await write_subscription_log(
             (
                 f"频道增量搜索已启用：加载水位 {int(search_stats.get('incremental_channel_watermarks_loaded', 0) or 0)} 个，"
                 f"命中增量边界 {int(search_stats.get('incremental_stop_channels', 0) or 0)} 个频道，"
                 f"推进水位 {int(search_stats.get('incremental_channel_watermarks_advanced', 0) or 0)} 个频道，"
                 f"异常未推进 {int(search_stats.get('incremental_channel_watermarks_error_channels', 0) or 0)} 个频道"
+                f"{watermark_overlap_tail}"
             ),
             "info",
         )
@@ -262,7 +385,7 @@ async def _run_subscription_task_quark(
         )
         effective_savepath = join_relative_path(base_savepath, movie_folder)
     elif task["media_type"] == "tv":
-        effective_savepath = resolve_subscription_tv_base_savepath(task, base_savepath) or base_savepath
+        effective_savepath = resolve_subscription_tv_scan_savepath(task, base_savepath) or base_savepath
     check_subscription_cancelled()
 
     _subscription_stage_timer_enter(stage_timer, "calibrate")
@@ -541,6 +664,7 @@ async def _run_subscription_task_quark(
                 and last_episode > 0
                 and max(candidate_episode_values) <= last_episode
                 and (not existing_episode_scan_ready)
+                and (not completed_locked)
             ):
                 skipped_existing_candidates += 1
                 await write_subscription_log(
@@ -1133,6 +1257,7 @@ async def _run_subscription_task_quark(
     successful_count = len(normalized_successful_job_ids) if normalized_successful_job_ids else (1 if job_id > 0 else 0)
     imported_episode_list = sorted(imported_episodes)
     matched_display_title = pick_subscription_display_title(task, item, fallback=f"资源#{resource_id}")
+    import_type_label = format_resource_link_type_label(item.get("link_type", ""), item.get("link_url", ""))
 
     next_episode = last_episode
     if task["media_type"] == "tv" and imported_episode_list:
@@ -1145,12 +1270,12 @@ async def _run_subscription_task_quark(
 
     if successful_count > 1:
         detail = (
-            f"命中「{matched_display_title}」（评分 {score}），本轮已执行 {successful_count} 个夸克导入任务"
+            f"命中「{matched_display_title}」（评分 {score}，方式 {import_type_label}），本轮已执行 {successful_count} 个夸克导入任务"
             f"（首个 #{job_id}），保存到 {selected_job_savepath}；夸克链路不触发监控刷新"
         )
     else:
         detail = (
-            f"命中「{matched_display_title}」（评分 {score}），已创建并执行夸克导入任务 #{job_id}，"
+            f"命中「{matched_display_title}」（评分 {score}，方式 {import_type_label}），已创建并执行夸克导入任务 #{job_id}，"
             f"保存到 {selected_job_savepath}；夸克链路不触发监控刷新"
         )
     upsert_subscription_task_state(
@@ -1211,20 +1336,7 @@ async def _run_subscription_task_quark(
             next_episode=next_episode,
         )
         if bool(notify_result.get("pushed", False)):
-            channel = str(notify_result.get("channel", "") or "").strip().lower()
-            channel_label = "企业微信应用 API" if channel == "wecom_app" else "企业微信群机器人"
-            notified_episodes = (
-                notify_result.get("episodes", [])
-                if isinstance(notify_result.get("episodes"), list)
-                else []
-            )
-            if notified_episodes:
-                await write_subscription_log(
-                    f"更新通知已推送到{channel_label}（新增 {len(notified_episodes)} 集）",
-                    "info",
-                )
-            else:
-                await write_subscription_log(f"更新通知已推送到{channel_label}", "info")
+            await _write_subscription_notify_result_log(notify_result, task, item)
     except Exception as notify_exc:
         await write_subscription_log(f"订阅成功通知推送失败：{notify_exc}", "warn")
     update_subscription_summary("执行成功", detail)
@@ -1309,9 +1421,12 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             f"━━━━━━━━━━【订阅开始 | {task_name} | {format_subscription_trigger(trigger)}】━━━━━━━━━━",
             "task-divider",
         )
-        await write_subscription_log(
-            f"类型: {'电影' if task['media_type'] == 'movie' else '电视剧'} | 标题: {task['title']} | 保存路径: {task['savepath']}",
-            "info",
+        cfg, task = await _refresh_subscription_task_tmdb_before_run(cfg, task, task_name)
+        await _write_subscription_task_overview(
+            task=task,
+            trigger=trigger,
+            subscription_run_id=subscription_run_id,
+            batch_refresh_enabled=batch_refresh_enabled,
         )
         if provider == "quark":
             await _run_subscription_task_quark(
@@ -1324,10 +1439,8 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 stage_timer=stage_timer,
             )
             return
-        await write_subscription_log(
-            f"网盘提供方：115（频道搜索与导入链路） | 类型: {'电影' if task['media_type'] == 'movie' else '电视剧'}",
-            "info",
-        )
+        await write_subscription_section("执行链路")
+        await write_subscription_log("网盘链路: 115（频道搜索与导入链路）", "info")
         task_share_subdir = normalize_relative_path(str(task.get("share_subdir", "") or "").strip())
         task_share_subdir_cid = _normalize_subscription_share_subdir_cid(task.get("share_subdir_cid", ""))
         task_share_link_url = str(task.get("share_link_url", "") or "").strip()
@@ -1358,28 +1471,6 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
         if task_share_scope_enabled:
             await write_subscription_log(
                 f"115 分享子目录已启用：{task_share_scope_label}（仅在该目录内扫描和转存）",
-                "info",
-            )
-        await write_subscription_log(
-            f"执行批次: {subscription_run_id} | 批次收口刷新: 开启（内置固定）",
-            "info",
-        )
-        if int(task.get("tmdb_id", 0) or 0) > 0:
-            tmdb_label = str(task.get("tmdb_title", "") or task.get("title", "") or "--").strip()
-            tmdb_year = normalize_tmdb_year(task.get("tmdb_year", ""))
-            tmdb_tail = f" ({tmdb_year})" if tmdb_year else ""
-            await write_subscription_log(
-                f"TMDB 绑定: {tmdb_label}{tmdb_tail} | ID: {int(task.get('tmdb_id', 0) or 0)}",
-                "info",
-            )
-        if task["media_type"] == "tv":
-            configured_total = resolve_subscription_tv_total_episodes(task, state_total=0)
-            tv_mode_text = "多季合一" if is_subscription_multi_season_mode(task) else "单季订阅"
-            if is_subscription_anime_compatible_task(task):
-                tv_mode_text += " / 动漫兼容"
-            season_label = "全季" if is_subscription_multi_season_mode(task) else f"S{int(task.get('season', 1) or 1):02d}"
-            await write_subscription_log(
-                f"季: {season_label} | 总集数: {configured_total or '自动识别'} | 模式: {tv_mode_text}",
                 "info",
             )
         check_subscription_cancelled()
@@ -1511,6 +1602,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 await write_subscription_log("固定链接提取码已生效", "info")
         if (not use_fixed_share_link) or fixed_link_channel_search_enabled:
             search_label = "频道补搜" if (use_fixed_share_link and fixed_link_channel_search_enabled) else "主动搜索"
+            await write_subscription_section("搜索结果")
             searched_sources = int(
                 (
                     search_stats.get("channel_searched_sources", search_stats.get("searched_sources", 0))
@@ -1634,12 +1726,15 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                     "warn",
                 )
             if bool(search_stats.get("incremental_search_enabled", False)):
+                watermark_overlap_posts = int(search_stats.get("incremental_watermark_overlap_posts", 0) or 0)
+                watermark_overlap_tail = f"，软回看 {watermark_overlap_posts} 个消息位" if watermark_overlap_posts > 0 else ""
                 await write_subscription_log(
                     (
                         f"频道增量搜索已启用：加载水位 {int(search_stats.get('incremental_channel_watermarks_loaded', 0) or 0)} 个，"
                         f"命中增量边界 {int(search_stats.get('incremental_stop_channels', 0) or 0)} 个频道，"
                         f"推进水位 {int(search_stats.get('incremental_channel_watermarks_advanced', 0) or 0)} 个频道，"
                         f"异常未推进 {int(search_stats.get('incremental_channel_watermarks_error_channels', 0) or 0)} 个频道"
+                        f"{watermark_overlap_tail}"
                     ),
                     "info",
                 )
@@ -1732,7 +1827,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             )
             effective_savepath = join_relative_path(base_savepath, movie_folder)
         elif task["media_type"] == "tv":
-            effective_savepath = resolve_subscription_tv_base_savepath(task, base_savepath) or base_savepath
+            effective_savepath = resolve_subscription_tv_scan_savepath(task, base_savepath) or base_savepath
         check_subscription_cancelled()
         _subscription_stage_timer_enter(stage_timer, "calibrate")
         upsert_subscription_task_state(task_name, status="running", progress=45, detail="正在准备目标目录")
@@ -2064,11 +2159,25 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             episode_label = _format_candidate_episode_label(candidate)
             candidate_link_url = _normalize_subscription_candidate_link(item.get("link_url", ""))
             candidate_link_type = resolve_resource_link_type(item.get("link_type", ""), candidate_link_url)
-            candidate_share_subdir_cid = task_share_subdir_cid if use_fixed_share_link else ""
+            fixed_share_seed_candidate = (
+                use_fixed_share_link
+                and resource_id <= 0
+                and candidate_link_type == "115share"
+            )
+            candidate_share_subdir = task_share_subdir if ((not use_fixed_share_link) or fixed_share_seed_candidate) else ""
+            candidate_share_subdir_cid = task_share_subdir_cid if fixed_share_seed_candidate else ""
+            candidate_share_scope_enabled = bool(candidate_share_subdir or candidate_share_subdir_cid)
             candidate_share_scope_label = _format_subscription_share_scope_label(
-                task_share_subdir,
+                candidate_share_subdir,
                 candidate_share_subdir_cid,
             )
+            candidate_share_task = task
+            if task_share_scope_enabled and use_fixed_share_link and not fixed_share_seed_candidate:
+                candidate_share_task = {
+                    **task,
+                    "share_subdir": "",
+                    "share_subdir_cid": "",
+                }
             candidate_savepath = effective_savepath
             if task["media_type"] == "tv":
                 savepath_season = max(1, int(task.get("season", 1) or 1)) if candidate_season_mismatch_deferred else candidate_season
@@ -2098,11 +2207,6 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 continue
 
             cached_invalid_meta = invalid_link_cache.get(candidate_link_url) if candidate_link_url else None
-            fixed_share_seed_candidate = (
-                use_fixed_share_link
-                and resource_id <= 0
-                and candidate_link_type == "115share"
-            )
             if cached_invalid_meta and (not fixed_share_seed_candidate):
                 skipped_invalid_candidates += 1
                 cache_reason = str(cached_invalid_meta.get("reason", "") or "").strip()
@@ -2186,10 +2290,9 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             resolved_subdir_selection: Dict[str, Any] = {}
             subdir_stats: Dict[str, Any] = {}
             if (
-                use_fixed_share_link
+                fixed_share_seed_candidate
                 and task["media_type"] == "tv"
-                and candidate_link_type == "115share"
-                and (task_share_subdir or candidate_share_subdir_cid)
+                and candidate_share_scope_enabled
                 and (not fixed_share_runtime_initialized)
             ):
                 fixed_share_runtime_initialized = True
@@ -2197,10 +2300,10 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 fixed_share_runtime_selection, fixed_share_runtime_subdir_stats = await _build_subscription_share_subdir_selection(
                     cookie_115,
                     item,
-                    task_share_subdir,
+                    candidate_share_subdir,
                     share_subdir_cid=candidate_share_subdir_cid,
                     force_refresh=True,
-                    allow_fallback=False,
+                    allow_fallback=True,
                 )
                 runtime_subdir_elapsed_seconds = max(0.0, time.perf_counter() - runtime_subdir_started_at)
                 fixed_share_runtime_selection = normalize_share_selection_meta(fixed_share_runtime_selection)
@@ -2228,10 +2331,15 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                     if runtime_subdir_reason_code and runtime_subdir_reason_code != "--"
                     else "--"
                 )
+                runtime_subdir_fallback_tail = (
+                    "（CID 空目录已回退路径匹配）"
+                    if bool((fixed_share_runtime_subdir_stats or {}).get("anchor_empty_fallback", False))
+                    else ""
+                )
                 await write_subscription_log(
                     (
                         f"固定链接运行期缓存已刷新：定位子目录 {_format_elapsed_seconds(runtime_subdir_elapsed_seconds)}，"
-                        f"识别目录 {runtime_subdir_reason_label}，"
+                        f"识别目录 {runtime_subdir_reason_label}{runtime_subdir_fallback_tail}，"
                         f"扫描目录 {int(fixed_share_runtime_manifest.get('scanned_dirs', 0) or 0)} 个，"
                         f"条目 {int(fixed_share_runtime_manifest.get('scanned_entries', 0) or 0)} 条，"
                         f"可识别剧集文件 {int(fixed_share_runtime_manifest.get('file_count', 0) or 0)} 个，"
@@ -2241,12 +2349,12 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                     ),
                     "info",
                 )
-            if candidate_link_type == "115share" and (task_share_subdir or candidate_share_subdir_cid):
-                if use_fixed_share_link and fixed_share_runtime_initialized:
+            if candidate_link_type == "115share" and candidate_share_scope_enabled:
+                if fixed_share_seed_candidate and fixed_share_runtime_initialized:
                     resolved_subdir_selection = fixed_share_runtime_selection
                     subdir_stats = fixed_share_runtime_subdir_stats
                 else:
-                    subdir_cache_key = f"{candidate_link_url or f'resource:{resource_id}'}|{task_share_subdir}|{candidate_share_subdir_cid}"
+                    subdir_cache_key = f"{candidate_link_url or f'resource:{resource_id}'}|{candidate_share_subdir}|{candidate_share_subdir_cid}"
                     if subdir_cache_key in share_subdir_selection_cache:
                         resolved_subdir_selection = share_subdir_selection_cache.get(subdir_cache_key, {})
                         subdir_stats = share_subdir_selection_stats_cache.get(subdir_cache_key, {})
@@ -2254,7 +2362,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                         resolved_subdir_selection, subdir_stats = await _build_subscription_share_subdir_selection(
                             cookie_115,
                             item,
-                            task_share_subdir,
+                            candidate_share_subdir,
                             share_subdir_cid=candidate_share_subdir_cid,
                         )
                         share_subdir_selection_cache[subdir_cache_key] = resolved_subdir_selection
@@ -2397,13 +2505,13 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             selected_share_episode_values: Set[int] = set()
             selected_share_file_samples: List[str] = []
             candidate_success_records: List[Dict[str, Any]] = []
-            if existing and use_fixed_share_link and candidate_link_type == "115share":
+            if existing and fixed_share_seed_candidate:
                 existing = {}
                 await write_subscription_log(
                     f"候选资源 #{index} 为固定分享链接模式，本次强制重新导入以捕捉目录更新",
                     "info",
                 )
-            if existing and candidate_link_type == "115share" and (task_share_subdir or candidate_share_subdir_cid):
+            if existing and candidate_link_type == "115share" and candidate_share_scope_enabled:
                 existing_extra = existing.get("extra") if isinstance(existing.get("extra"), dict) else {}
                 existing_share_subdir = normalize_relative_path(
                     str(existing_extra.get("subscription_share_subdir", "") or "").strip()
@@ -2411,7 +2519,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 existing_share_subdir_cid = _normalize_subscription_share_subdir_cid(
                     existing_extra.get("subscription_share_subdir_cid", "")
                 )
-                if existing_share_subdir != task_share_subdir or existing_share_subdir_cid != candidate_share_subdir_cid:
+                if existing_share_subdir != candidate_share_subdir or existing_share_subdir_cid != candidate_share_subdir_cid:
                     existing = {}
                     await write_subscription_log(
                         (
@@ -2444,7 +2552,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 if existing_status == "failed":
                     failed_attempts += 1
                     last_failed_detail = str(existing.get("status_detail", "") or f"任务 #{job_id} 失败").strip()
-                    if (not use_fixed_share_link) and candidate_link_url and _is_subscription_invalid_link_error(last_failed_detail, candidate_link_type):
+                    if (not fixed_share_seed_candidate) and candidate_link_url and _is_subscription_invalid_link_error(last_failed_detail, candidate_link_type):
                         cache_meta = _record_subscription_invalid_link_cache(candidate_link_url, candidate_link_type, last_failed_detail)
                         if cache_meta:
                             invalid_link_cache[candidate_link_url] = cache_meta
@@ -2494,11 +2602,11 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                         "subscription_run_id": subscription_run_id,
                     },
                 }
-                if task_share_subdir:
-                    job_payload["extra"]["subscription_share_subdir"] = task_share_subdir
+                if candidate_share_subdir:
+                    job_payload["extra"]["subscription_share_subdir"] = candidate_share_subdir
                 if candidate_share_subdir_cid:
                     job_payload["extra"]["subscription_share_subdir_cid"] = candidate_share_subdir_cid
-                if use_fixed_share_link and candidate_link_type == "115share":
+                if fixed_share_seed_candidate:
                     job_payload["extra"]["subscription_share_link_url"] = task_share_link_url
                     if task_share_link_receive_code:
                         job_payload["receive_code"] = task_share_link_receive_code
@@ -2513,10 +2621,9 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                     job_payload["share_selection"] = resolved_subdir_selection
                 forced_precise_selection_applied = False
                 if (
-                    use_fixed_share_link
-                    and candidate_link_type == "115share"
+                    fixed_share_seed_candidate
                     and task.get("media_type") == "tv"
-                    and (task_share_subdir or candidate_share_subdir_cid)
+                    and candidate_share_scope_enabled
                 ):
                     precise_missing_episode_values: Set[int] = set()
                     if known_total > 0:
@@ -2540,16 +2647,16 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                         await maybe_wait_between_attempts()
                         continue
                     if precise_missing_episode_values:
-                        if use_fixed_share_link and fixed_share_runtime_manifest:
+                        if fixed_share_seed_candidate and fixed_share_runtime_manifest:
                             precise_selection, precise_stats = _build_tv_share_selection_from_manifest(
                                 fixed_share_runtime_manifest,
                                 precise_missing_episode_values,
-                                task=task,
+                                task=candidate_share_task,
                             )
                         else:
                             precise_selection, precise_stats = await _build_tv_share_selection_for_missing_episodes(
                                 cookie_115,
-                                task,
+                                candidate_share_task,
                                 item,
                                 precise_missing_episode_values,
                                 share_subdir_selection=resolved_subdir_selection,
@@ -2638,16 +2745,16 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                             await maybe_wait_between_attempts()
                             continue
                     else:
-                        if use_fixed_share_link and fixed_share_runtime_manifest:
+                        if fixed_share_seed_candidate and fixed_share_runtime_manifest:
                             title_precise_selection, title_precise_stats = _build_tv_share_selection_from_manifest(
                                 fixed_share_runtime_manifest,
                                 title_precise_episode_values,
-                                task=task,
+                                task=candidate_share_task,
                             )
                         else:
                             title_precise_selection, title_precise_stats = await _build_tv_share_selection_for_missing_episodes(
                                 cookie_115,
-                                task,
+                                candidate_share_task,
                                 item,
                                 title_precise_episode_values,
                                 share_subdir_selection=resolved_subdir_selection,
@@ -2730,16 +2837,16 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                     )
                     skip_due_overlap_fallback = False
                     if overlap_existing and missing_for_candidate:
-                        if use_fixed_share_link and fixed_share_runtime_manifest:
+                        if fixed_share_seed_candidate and fixed_share_runtime_manifest:
                             share_selection, selection_stats = _build_tv_share_selection_from_manifest(
                                 fixed_share_runtime_manifest,
                                 missing_for_candidate,
-                                task=task,
+                                task=candidate_share_task,
                             )
                         else:
                             share_selection, selection_stats = await _build_tv_share_selection_for_missing_episodes(
                                 cookie_115,
-                                task,
+                                candidate_share_task,
                                 item,
                                 missing_for_candidate,
                                 share_subdir_selection=resolved_subdir_selection,
@@ -2809,7 +2916,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                     split_groups, split_stats = _split_tv_share_selection_by_season(
                         task,
                         normalized_job_selection,
-                        fixed_share_runtime_manifest,
+                        fixed_share_runtime_manifest if fixed_share_seed_candidate else {},
                     )
                     if split_groups:
                         split_labels: List[str] = []
@@ -2985,7 +3092,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                     if latest_status == "failed":
                         failed_attempts += 1
                         last_failed_detail = str((latest_job or {}).get("status_detail", "") or "资源导入失败").strip()
-                        if (not use_fixed_share_link) and candidate_link_url and _is_subscription_invalid_link_error(last_failed_detail, candidate_link_type):
+                        if (not fixed_share_seed_candidate) and candidate_link_url and _is_subscription_invalid_link_error(last_failed_detail, candidate_link_type):
                             cache_meta = _record_subscription_invalid_link_cache(
                                 candidate_link_url,
                                 candidate_link_type,
@@ -3483,6 +3590,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             auto_refresh = True
         imported_episode_list = sorted(imported_episodes)
         matched_display_title = pick_subscription_display_title(task, item, fallback=f"资源#{resource_id}")
+        import_type_label = format_resource_link_type_label(item.get("link_type", ""), item.get("link_url", ""))
 
         next_episode = last_episode
         if task["media_type"] == "tv" and imported_episode_list:
@@ -3517,12 +3625,12 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
             detail = (
                 f"{batch_prefix}{batch_tail}；"
                 f"最新命中「{matched_display_title}」"
-                f"（评分 {score}），{action_text} #{job_id}，保存到 {selected_job_savepath}"
+                f"（评分 {score}，方式 {import_type_label}），{action_text} #{job_id}，保存到 {selected_job_savepath}"
             )
         else:
             detail = (
                 f"命中「{matched_display_title}」"
-                f"（评分 {score}），{action_text} #{job_id}，保存到 {selected_job_savepath}"
+                f"（评分 {score}，方式 {import_type_label}），{action_text} #{job_id}，保存到 {selected_job_savepath}"
             )
         if selected_auto_refresh:
             if batch_refresh_enabled:
@@ -3623,20 +3731,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 next_episode=next_episode,
             )
             if bool(notify_result.get("pushed", False)):
-                channel = str(notify_result.get("channel", "") or "").strip().lower()
-                channel_label = "企业微信应用 API" if channel == "wecom_app" else "企业微信群机器人"
-                notified_episodes = (
-                    notify_result.get("episodes", [])
-                    if isinstance(notify_result.get("episodes"), list)
-                    else []
-                )
-                if notified_episodes:
-                    await write_subscription_log(
-                        f"更新通知已推送到{channel_label}（新增 {len(notified_episodes)} 集）",
-                        "info",
-                    )
-                else:
-                    await write_subscription_log(f"更新通知已推送到{channel_label}", "info")
+                await _write_subscription_notify_result_log(notify_result, task, item)
         except Exception as notify_exc:
             await write_subscription_log(f"订阅成功通知推送失败：{notify_exc}", "warn")
         update_subscription_summary("执行成功", detail)

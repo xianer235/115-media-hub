@@ -1554,6 +1554,7 @@
             const sectionItems = getResourceSectionItems(section, keyword);
             const pagingMeta = getResourceSectionPagingMeta(section, keyword);
             const normalizedChannelId = normalizeTelegramChannelIdInput(section?.channel_id || '');
+            const canManageSection = !!normalizedChannelId;
             const shownCount = sectionItems.length;
             const primaryBadge = isSearchSection
                 ? `命中 ${shownCount}`
@@ -1588,7 +1589,7 @@
                             <div class="resource-section-subtle">${subtleText}</div>
                         </button>
                         <div class="resource-section-actions">
-                            ${!isSearchSection ? `<button type="button" data-resource-section-manage="${escapeHtml(section.channel_id || '')}" class="resource-section-manage-btn">管理</button>` : ''}
+                            ${canManageSection ? `<button type="button" data-resource-section-manage="${escapeHtml(normalizedChannelId)}" class="resource-section-manage-btn">管理</button>` : ''}
                             <a href="${escapeHtml(section.url || '#')}" target="_blank" rel="noopener noreferrer" class="resource-section-link">打开频道</a>
                             <button type="button" data-resource-section-toggle="${escapeHtml(section.channel_id || '')}" class="resource-section-toggle bg-transparent border-none p-0" aria-label="展开或收起频道">⌄</button>
                         </div>

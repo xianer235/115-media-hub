@@ -165,6 +165,52 @@ def _expand_subscription_quark_item_variants(item: Dict[str, Any]) -> List[Dict[
     return variants
 
 
+def _expand_subscription_115_item_variants(item: Dict[str, Any]) -> List[Dict[str, Any]]:
+    payload = item if isinstance(item, dict) else {}
+    if not payload:
+        return []
+    raw_text = str(payload.get("raw_text", "") or "")
+    extra_payload = payload.get("extra") if isinstance(payload.get("extra"), dict) else safe_json_loads(payload.get("extra_json"), {})
+    default_receive_code = normalize_receive_code(payload.get("receive_code", "")) or normalize_receive_code(
+        (extra_payload or {}).get("receive_code", "")
+    )
+    variants: List[Dict[str, Any]] = []
+    seen_variant_keys: Set[str] = set()
+    for raw_link in _collect_subscription_item_all_links(payload):
+        normalized_link = _normalize_subscription_candidate_link(raw_link)
+        if not normalized_link:
+            continue
+        link_type = detect_resource_link_type(normalized_link)
+        if link_type not in {"115share", "magnet"}:
+            continue
+        normalized_url = normalized_link
+        resolved_receive_code = ""
+        variant_extra = extra_payload.copy() if isinstance(extra_payload, dict) else {}
+        if link_type == "115share":
+            parsed = parse_115_share_payload(normalized_link, raw_text, default_receive_code)
+            normalized_url = _normalize_subscription_candidate_link(parsed.get("url", "") or normalized_link)
+            resolved_receive_code = normalize_receive_code(parsed.get("receive_code", "")) or default_receive_code
+            share_code = str(parsed.get("share_code", "") or "").strip()
+            if share_code:
+                variant_extra["share_code"] = share_code
+            if resolved_receive_code:
+                variant_extra["receive_code"] = resolved_receive_code
+        dedupe_key = f"{link_type}:{normalized_url.lower()}|{resolved_receive_code.lower()}"
+        if dedupe_key in seen_variant_keys:
+            continue
+        seen_variant_keys.add(dedupe_key)
+        variants.append(
+            {
+                **payload,
+                "link_url": normalized_url,
+                "link_type": link_type,
+                "receive_code": resolved_receive_code,
+                "extra": variant_extra,
+            }
+        )
+    return variants
+
+
 _subscription_share_entry_runtime_cache_var: contextvars.ContextVar[Optional[Dict[str, Dict[str, Any]]]] = (
     contextvars.ContextVar("subscription_share_entry_runtime_cache", default=None)
 )
@@ -427,6 +473,7 @@ __all__ = [
     "_build_subscription_quark_share_dedupe_key",
     "_collect_subscription_item_all_links",
     "_expand_subscription_quark_item_variants",
+    "_expand_subscription_115_item_variants",
     "_build_subscription_share_entry_runtime_key",
     "_fetch_subscription_share_entries",
     "_ensure_subscription_invalid_link_cache_table",

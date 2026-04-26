@@ -369,6 +369,19 @@ def _compact_text(value: Any, limit: int = 140) -> str:
     return text
 
 
+def _build_notify_source_label(item: Dict[str, Any]) -> str:
+    payload = item if isinstance(item, dict) else {}
+    source_values = unique_preserve_order(
+        [
+            str(payload.get("source_name", "") or "").strip(),
+            str(payload.get("channel_name", "") or "").strip(),
+        ]
+    )
+    if not source_values:
+        return "--"
+    return " / ".join(source_values[:2])
+
+
 def _build_subscription_success_markdown(
     task: Dict[str, Any],
     item: Dict[str, Any],
@@ -380,8 +393,14 @@ def _build_subscription_success_markdown(
 ) -> str:
     media_type = str(task.get("media_type", "movie") or "movie").strip().lower()
     media_label = "电视剧" if media_type == "tv" else "电影"
+    provider_label = format_subscription_provider_label(task.get("provider", "115"))
+    link_type_label = format_resource_link_type_label(item.get("link_type", ""), item.get("link_url", ""))
     task_label = _compact_text(task.get("title", "") or task.get("name", "") or "未命名任务", 64)
-    resource_title = _compact_text(pick_subscription_display_title(task, item), 96)
+    resource_title = _compact_text(
+        str(item.get("title", "") or "").strip() or pick_subscription_display_title(task, item),
+        96,
+    )
+    source_label = _compact_text(_build_notify_source_label(item), 96)
     savepath_label = _compact_text(normalize_relative_path(savepath) or "--", 128)
     now_label = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -389,12 +408,17 @@ def _build_subscription_success_markdown(
         "### 订阅更新成功",
         f"> 时间：{now_label}",
         f"> 任务：{task_label}（{media_label}）",
+        f"> 网盘：{provider_label} | 导入方式：{link_type_label}",
     ]
     if media_type == "tv":
         episode_summary = _format_notify_episode_summary(notify_episodes)
+        total_episodes = resolve_subscription_tv_total_episodes(task, state_total=0)
+        progress_label = f"E{int(next_episode)}" if int(next_episode or 0) > 0 else "--"
+        if total_episodes > 0 and int(next_episode or 0) > 0:
+            progress_label = f"{progress_label} / {total_episodes}"
         lines.append(f"> 概览：新增 {episode_summary or '--'}（共 {len(notify_episodes)} 集）")
-        if int(next_episode or 0) > 0:
-            lines.append(f"> 当前进度：E{int(next_episode)}")
+        if int(next_episode or 0) > 0 or total_episodes > 0:
+            lines.append(f"> 当前进度：{progress_label}")
     else:
         lines.append("> 概览：电影资源已成功入库")
     lines.extend(
@@ -402,6 +426,7 @@ def _build_subscription_success_markdown(
             ">",
             "> 入库详情：",
             f"> - 命中资源：{resource_title}",
+            f"> - 来源渠道：{source_label}",
             f"> - 保存路径：`{savepath_label}`",
         ]
     )
@@ -499,6 +524,9 @@ async def push_subscription_success_notification(
         return {"pushed": False, "reason": "disabled"}
 
     channel = _validate_notify_runtime_config(runtime_cfg)
+    provider_label = format_subscription_provider_label(task.get("provider", "115"))
+    link_type = resolve_resource_link_type(item.get("link_type", ""), item.get("link_url", ""))
+    link_type_label = format_resource_link_type_label(link_type, item.get("link_url", ""))
 
     media_type = str(task.get("media_type", "movie") or "movie").strip().lower()
     if media_type == "tv":
@@ -559,7 +587,12 @@ async def push_subscription_success_notification(
         "pushed": True,
         "reason": "",
         "episodes": fresh_episode_values,
+        "episode_summary": _format_notify_episode_summary(fresh_episode_values) if media_type == "tv" else "",
         "channel": channel,
+        "provider": normalize_subscription_provider(task.get("provider", "115"), fallback="115"),
+        "provider_label": provider_label,
+        "link_type": link_type,
+        "link_type_label": link_type_label,
     }
 
 

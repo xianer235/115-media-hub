@@ -294,7 +294,34 @@ def infer_tmdb_episode_mode(detail: Dict[str, Any]) -> str:
         return "absolute"
     return "seasonal"
 
-def get_tmdb_media_detail(tmdb_id: int, media_type: str, cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def build_tmdb_task_binding(detail: Dict[str, Any], media_type: str = "") -> Dict[str, Any]:
+    normalized_media_type = normalize_tmdb_media_type(detail.get("media_type", ""), fallback=media_type)
+    task_binding = {
+        "tmdb_id": int(detail.get("id", 0) or 0),
+        "tmdb_media_type": normalized_media_type,
+        "tmdb_title": str(detail.get("title", "") or "").strip(),
+        "tmdb_original_title": str(detail.get("original_title", "") or "").strip(),
+        "tmdb_year": normalize_tmdb_year(detail.get("year", "")),
+        "tmdb_aliases": detail.get("aliases", []) if isinstance(detail.get("aliases"), list) else [],
+        "tmdb_total_episodes": max(0, parse_int(detail.get("total_episodes", 0) or 0, 0)),
+        "tmdb_total_seasons": max(0, parse_int(detail.get("total_seasons", 0) or 0, 0)),
+        "tmdb_season_episode_map": detail.get("season_episode_map", {}) if isinstance(detail.get("season_episode_map"), dict) else {},
+        "tmdb_episode_mode": normalize_tmdb_episode_mode(detail.get("episode_mode", "seasonal")),
+    }
+    if normalized_media_type != "tv":
+        task_binding["tmdb_total_episodes"] = 0
+        task_binding["tmdb_total_seasons"] = 0
+        task_binding["tmdb_season_episode_map"] = {}
+        task_binding["tmdb_episode_mode"] = "seasonal"
+    return task_binding
+
+
+def get_tmdb_media_detail(
+    tmdb_id: int,
+    media_type: str,
+    cfg: Optional[Dict[str, Any]] = None,
+    force_refresh: bool = False,
+) -> Dict[str, Any]:
     normalized_media_type = normalize_tmdb_media_type(media_type, fallback="")
     if normalized_media_type not in ("movie", "tv"):
         raise RuntimeError("TMDB 影视类型仅支持 movie 或 tv")
@@ -306,6 +333,7 @@ def get_tmdb_media_detail(tmdb_id: int, media_type: str, cfg: Optional[Dict[str,
         f"/{normalized_media_type}/{normalized_tmdb_id}",
         params={"append_to_response": "alternative_titles,translations"},
         cfg=cfg,
+        force_refresh=force_refresh,
     )
     normalized = normalize_tmdb_result_item(detail, normalized_media_type)
     if not normalized:

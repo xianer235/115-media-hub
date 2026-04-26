@@ -10,11 +10,11 @@ RESOURCE_MAGNET_HASH_REGEX = re.compile(r"xt=urn:btih:([A-Za-z0-9]{32,40})", re.
 RESOURCE_ED2K_REGEX = re.compile(r"ed2k://[^\s<>'\"]+", re.IGNORECASE)
 RESOURCE_URL_REGEX = re.compile(r"https?://[^\s<>'\"]+", re.IGNORECASE)
 RESOURCE_115_SHARE_URL_REGEX = re.compile(
-    r"(?:https?://)?(?:115cdn|115|anxia)\.com/s/[A-Za-z0-9]+(?:\?[^\s<>'\"]*)?",
+    r"(?:https?://)?(?:115cdn|115|anxia)\.com/s/[A-Za-z0-9]+(?:\?[^\s<>'\"#]*)?(?:#[A-Za-z0-9]{1,16})?",
     re.IGNORECASE,
 )
 RESOURCE_115_SHARE_BARE_URL_REGEX = re.compile(
-    r"(?:115cdn|115|anxia)\.com/s/[A-Za-z0-9]+(?:\?[^\s<>'\"]*)?",
+    r"(?:115cdn|115|anxia)\.com/s/[A-Za-z0-9]+(?:\?[^\s<>'\"#]*)?(?:#[A-Za-z0-9]{1,16})?",
     re.IGNORECASE,
 )
 RESOURCE_QUARK_SHARE_URL_REGEX = re.compile(
@@ -315,6 +315,8 @@ def parse_115_share_payload(url: str, raw_text: str = "", receive_code: str = ""
                 receive_code_from_url = normalize_receive_code(values[0])
                 if receive_code_from_url:
                     break
+            if not receive_code_from_url:
+                receive_code_from_url = normalize_receive_code(urllib.parse.unquote(parsed_url.fragment or ""))
             base_url = f"{parsed_url.scheme or 'https'}://{parsed_url.netloc}/s/{share_code}"
             normalized = f"{base_url}?{parsed_url.query}" if parsed_url.query else base_url
 

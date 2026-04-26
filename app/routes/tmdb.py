@@ -53,22 +53,6 @@ async def get_tmdb_detail_endpoint(request: Request) -> Dict[str, Any]:
     except Exception as exc:
         return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
 
-    task_binding = {
-        "tmdb_id": int(detail.get("id", 0) or 0),
-        "tmdb_media_type": normalize_tmdb_media_type(detail.get("media_type", ""), fallback=media_type),
-        "tmdb_title": str(detail.get("title", "") or "").strip(),
-        "tmdb_original_title": str(detail.get("original_title", "") or "").strip(),
-        "tmdb_year": normalize_tmdb_year(detail.get("year", "")),
-        "tmdb_aliases": detail.get("aliases", []) if isinstance(detail.get("aliases"), list) else [],
-        "tmdb_total_episodes": max(0, parse_int(detail.get("total_episodes", 0) or 0, 0)),
-        "tmdb_total_seasons": max(0, parse_int(detail.get("total_seasons", 0) or 0, 0)),
-        "tmdb_season_episode_map": detail.get("season_episode_map", {}) if isinstance(detail.get("season_episode_map"), dict) else {},
-        "tmdb_episode_mode": normalize_tmdb_episode_mode(detail.get("episode_mode", "seasonal")),
-    }
-    if media_type != "tv":
-        task_binding["tmdb_total_episodes"] = 0
-        task_binding["tmdb_total_seasons"] = 0
-        task_binding["tmdb_season_episode_map"] = {}
-        task_binding["tmdb_episode_mode"] = "seasonal"
+    task_binding = build_tmdb_task_binding(detail, media_type=media_type)
 
     return {"ok": True, "detail": detail, "task_binding": task_binding}

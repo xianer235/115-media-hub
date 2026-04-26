@@ -61,6 +61,7 @@ SUBSCRIPTION_REASON_CODE_LABELS: Dict[str, str] = {
     "target_is_share_root": "目标子目录等于分享根目录",
     "share_root_unreachable": "分享根目录不可访问",
     "share_anchor_unreachable": "锚点目录不可访问",
+    "share_anchor_empty": "锚点目录为空",
     "share_root_wrapper_unreachable": "分享根目录包装层不可访问",
     "subdir_entry_invalid": "子目录条目无效",
     "subdir_cid_missing": "子目录 CID 缺失",
@@ -499,7 +500,7 @@ def _scan_subscription_task_episode_view_payload(task_name: str) -> Dict[str, An
     if not base_savepath:
         raise RuntimeError("任务未配置保存路径")
 
-    scan_savepath = resolve_subscription_tv_base_savepath(task, base_savepath) or base_savepath
+    scan_savepath = resolve_subscription_tv_scan_savepath(task, base_savepath) or base_savepath
     folder_id = ""
     scan_result: Dict[str, Any] = {}
     if provider == "quark":
@@ -721,6 +722,111 @@ def _sync_task_total_episodes(task_name: str, total_episodes: int) -> None:
         save_config(cfg)
 
 
+def refresh_subscription_task_tmdb_binding(
+    task_name: str,
+    task: Optional[Dict[str, Any]] = None,
+    cfg: Optional[Dict[str, Any]] = None,
+    force_refresh: bool = False,
+) -> Dict[str, Any]:
+    active_cfg = normalize_config(cfg or get_config())
+    normalized_task = normalize_subscription_task(task or _load_subscription_task(active_cfg, task_name))
+    if not normalized_task:
+        return {
+            "task": {},
+            "cfg": active_cfg,
+            "changed": False,
+            "reason": "task_not_found",
+        }
+
+    if str(normalized_task.get("media_type", "movie") or "movie").strip().lower() != "tv":
+        return {
+            "task": normalized_task,
+            "cfg": active_cfg,
+            "changed": False,
+            "reason": "non_tv_task",
+        }
+
+    tmdb_id = max(0, int(normalized_task.get("tmdb_id", 0) or 0))
+    if tmdb_id <= 0:
+        return {
+            "task": normalized_task,
+            "cfg": active_cfg,
+            "changed": False,
+            "reason": "no_tmdb_binding",
+        }
+
+    tmdb_media_type = normalize_tmdb_media_type(
+        normalized_task.get("tmdb_media_type", ""),
+        fallback=normalized_task.get("media_type", "tv"),
+    )
+    detail = get_tmdb_media_detail(
+        tmdb_id,
+        tmdb_media_type,
+        active_cfg,
+        force_refresh=force_refresh,
+    )
+    task_binding = build_tmdb_task_binding(detail, media_type=tmdb_media_type)
+    previous_expected_total = resolve_subscription_tmdb_expected_total(normalized_task)
+
+    merged_task = normalize_subscription_task(
+        {
+            **normalized_task,
+            **task_binding,
+        }
+    )
+    current_expected_total = resolve_subscription_tmdb_expected_total(merged_task)
+    current_total = max(0, int(normalized_task.get("total_episodes", 0) or 0))
+    total_synced = False
+    total_override_preserved = False
+    if current_total > 0 and current_expected_total > 0:
+        previous_expected_candidates = {
+            previous_expected_total,
+            max(0, int(normalized_task.get("tmdb_total_episodes", 0) or 0)),
+            get_subscription_tmdb_season_total_episodes(normalized_task),
+        }
+        previous_expected_candidates.discard(0)
+        if current_total in previous_expected_candidates:
+            if current_total != current_expected_total:
+                merged_task["total_episodes"] = current_expected_total
+                total_synced = True
+        else:
+            total_override_preserved = True
+    merged_task = normalize_subscription_task(merged_task)
+
+    changed = merged_task != normalized_task
+    updated_cfg = active_cfg
+    if changed:
+        tasks = active_cfg.get("subscription_tasks", []) if isinstance(active_cfg.get("subscription_tasks"), list) else []
+        updated_tasks: List[Dict[str, Any]] = []
+        updated_row = False
+        for raw_task in tasks:
+            current_task = normalize_subscription_task(raw_task or {})
+            if current_task.get("name") == normalized_task.get("name"):
+                updated_tasks.append(dict(merged_task))
+                updated_row = True
+            else:
+                updated_tasks.append(current_task)
+        if updated_row:
+            updated_cfg = dict(active_cfg)
+            updated_cfg["subscription_tasks"] = updated_tasks
+            save_config(updated_cfg)
+            updated_cfg = get_config()
+            merged_task = _load_subscription_task(updated_cfg, normalized_task.get("name", ""))
+
+    return {
+        "task": merged_task,
+        "cfg": updated_cfg,
+        "changed": changed,
+        "reason": "ok",
+        "detail": detail,
+        "task_binding": task_binding,
+        "previous_expected_total": previous_expected_total,
+        "current_expected_total": current_expected_total,
+        "total_synced": total_synced,
+        "total_override_preserved": total_override_preserved,
+    }
+
+
 def _build_subscription_search_keywords(task: Dict[str, Any], limit: int = 4) -> List[str]:
     title = re.sub(r"\s+", " ", str(task.get("title", "") or "").strip())
     aliases = task.get("aliases", []) if isinstance(task.get("aliases"), list) else []
@@ -794,6 +900,83 @@ def _merge_subscription_search_errors(errors: List[Dict[str, Any]]) -> List[Dict
     return merged
 
 
+def _load_subscription_cached_search_items(
+    task: Dict[str, Any],
+    keywords: List[str],
+    identity_mode: str,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    provider = normalize_subscription_provider(task.get("provider", "115"), fallback="115")
+    if provider not in {"115", "quark"}:
+        return [], {"cached_items": 0, "cache_queries": 0, "cache_errors": 0}
+
+    cfg = get_config()
+    sources = [normalize_resource_source(source or {}) for source in cfg.get("resource_sources", []) if source.get("enabled")]
+    enabled_channel_ids = list_enabled_resource_channel_ids(sources)
+    search_terms: List[str] = []
+    search_terms.extend([str(keyword or "").strip() for keyword in keywords if str(keyword or "").strip()])
+    for value in [
+        task.get("title", ""),
+        task.get("tmdb_title", ""),
+        task.get("tmdb_original_title", ""),
+    ]:
+        text = re.sub(r"\s+", " ", str(value or "").strip())
+        if text:
+            search_terms.append(text)
+    for field in ("tmdb_aliases", "aliases"):
+        raw_values = task.get(field, [])
+        if not isinstance(raw_values, list):
+            continue
+        for value in raw_values[:8]:
+            text = re.sub(r"\s+", " ", str(value or "").strip())
+            if text:
+                search_terms.append(text)
+    search_terms = unique_preserve_order(search_terms)
+
+    normalized_identity_mode = normalize_resource_identity_mode(identity_mode, fallback="message")
+    per_keyword_limit = (
+        int(SUBSCRIPTION_QUARK_SEARCH_CANDIDATE_LIMIT)
+        if provider == "quark"
+        else int(SUBSCRIPTION_115_SEARCH_CANDIDATE_LIMIT)
+    )
+    per_keyword_limit = max(80, min(500, per_keyword_limit * 4))
+    cached_items: List[Dict[str, Any]] = []
+    seen_keys: Set[str] = set()
+    cache_errors = 0
+
+    for term in search_terms:
+        try:
+            rows = list_resource_items(search=term, limit=per_keyword_limit)
+        except Exception:
+            cache_errors += 1
+            continue
+        for row in rows:
+            item = row if isinstance(row, dict) else {}
+            if not item:
+                continue
+            source_type = str(item.get("source_type", "") or "").strip().lower()
+            if source_type == "tg":
+                channel_id = normalize_telegram_channel_id_from_input(
+                    item.get("channel_name", "") or item.get("source_name", "")
+                )
+                if not channel_id or channel_id not in enabled_channel_ids:
+                    continue
+            if not resource_item_matches_search(item, term):
+                continue
+            item_id = max(0, int(item.get("id", 0) or 0))
+            identity = build_resource_item_identity_by_mode(item, identity_mode=normalized_identity_mode)
+            cache_key = f"id:{item_id}" if item_id > 0 else identity
+            if not cache_key or cache_key in seen_keys:
+                continue
+            seen_keys.add(cache_key)
+            cached_items.append(item)
+
+    return cached_items, {
+        "cached_items": len(cached_items),
+        "cache_queries": len(search_terms),
+        "cache_errors": cache_errors,
+    }
+
+
 
 
 async def find_subscription_task_match_candidate_by_search(
@@ -812,11 +995,25 @@ async def find_subscription_task_match_candidate_by_search(
         if (incremental_search_enabled and task_name)
         else {}
     )
-    incremental_since_cursor_by_channel: Dict[str, int] = {
-        normalize_telegram_channel_id_from_input(channel_id): max(0, int((payload or {}).get("last_post_cursor", 0) or 0))
-        for channel_id, payload in (baseline_channel_watermarks.items() if isinstance(baseline_channel_watermarks, dict) else [])
-        if normalize_telegram_channel_id_from_input(channel_id)
-    }
+    incremental_watermark_overlap_posts = (
+        max(0, int(SUBSCRIPTION_CHANNEL_WATERMARK_OVERLAP_POSTS or 0))
+        if incremental_search_enabled
+        else 0
+    )
+    incremental_since_cursor_by_channel: Dict[str, int] = {}
+    if isinstance(baseline_channel_watermarks, dict):
+        for raw_channel_id, payload in baseline_channel_watermarks.items():
+            channel_id = normalize_telegram_channel_id_from_input(raw_channel_id)
+            if not channel_id or not isinstance(payload, dict):
+                continue
+            last_cursor = max(0, int(payload.get("last_post_cursor", 0) or 0))
+            if last_cursor <= 0:
+                continue
+            # 定时任务用软水位提速，但保留一小段回看窗口，避免频道乱序/补发/解析抖动造成漏候选。
+            incremental_since_cursor_by_channel[channel_id] = max(
+                0,
+                last_cursor - incremental_watermark_overlap_posts,
+            )
     observed_channel_watermarks: Dict[str, Dict[str, Any]] = {}
     incremental_error_channels: Set[str] = set()
     incremental_stop_channels = 0
@@ -959,6 +1156,15 @@ async def find_subscription_task_match_candidate_by_search(
                     incremental_error_channels.add(channel_id)
     keyword_search_elapsed_seconds = max(0.0, time.perf_counter() - keyword_search_started_at)
 
+    live_raw_items = len(all_items)
+    cached_items, cache_stats = _load_subscription_cached_search_items(
+        task,
+        keywords,
+        search_identity_mode,
+    )
+    if cached_items:
+        all_items.extend(cached_items)
+
     deduped_items = dedupe_resource_item_dicts(all_items, identity_mode=search_identity_mode)
     deduped_items.sort(key=get_resource_item_sort_key, reverse=True)
     if provider == "quark":
@@ -966,6 +1172,12 @@ async def find_subscription_task_match_candidate_by_search(
         for raw_item in deduped_items:
             expanded_quark_items.extend(_expand_subscription_quark_item_variants(raw_item))
         deduped_items = dedupe_resource_item_dicts(expanded_quark_items, identity_mode="link")
+        deduped_items.sort(key=get_resource_item_sort_key, reverse=True)
+    elif provider == "115":
+        expanded_115_items: List[Dict[str, Any]] = []
+        for raw_item in deduped_items:
+            expanded_115_items.extend(_expand_subscription_115_item_variants(raw_item))
+        deduped_items = dedupe_resource_item_dicts(expanded_115_items, identity_mode="link")
         deduped_items.sort(key=get_resource_item_sort_key, reverse=True)
     merged_errors = _merge_subscription_search_errors(all_errors)
     incremental_channels_advanced = 0
@@ -1221,6 +1433,10 @@ async def find_subscription_task_match_candidate_by_search(
             "matched_channels": matched_channels,
             "pages_scanned": pages_scanned,
             "raw_items": len(all_items),
+            "live_raw_items": live_raw_items,
+            "cached_items": int(cache_stats.get("cached_items", 0) or 0),
+            "cache_queries": int(cache_stats.get("cache_queries", 0) or 0),
+            "cache_errors": int(cache_stats.get("cache_errors", 0) or 0),
             "deduped_items": len(deduped_items),
             "persisted_items": len(persisted_items),
             "supported_items": supported_items,
@@ -1244,6 +1460,7 @@ async def find_subscription_task_match_candidate_by_search(
             "quark_low_score_kept": title_match_low_score_kept if provider == "quark" else 0,
             "quark_media_relaxed_pass": title_match_media_relaxed_pass if provider == "quark" else 0,
             "incremental_search_enabled": incremental_search_enabled,
+            "incremental_watermark_overlap_posts": incremental_watermark_overlap_posts,
             "incremental_stop_channels": incremental_stop_channels,
             "incremental_channel_watermarks_loaded": len(incremental_since_cursor_by_channel),
             "incremental_channel_watermarks_observed": len(observed_channel_watermarks),
@@ -1352,6 +1569,10 @@ def merge_subscription_search_results(
         "matched_channels",
         "pages_scanned",
         "raw_items",
+        "live_raw_items",
+        "cached_items",
+        "cache_queries",
+        "cache_errors",
         "deduped_items",
         "persisted_items",
         "supported_items",
@@ -1400,6 +1621,10 @@ def merge_subscription_search_results(
     merged_stats["incremental_search_enabled"] = bool(
         fixed_stats.get("incremental_search_enabled", False) or channel_stats.get("incremental_search_enabled", False)
     )
+    merged_stats["incremental_watermark_overlap_posts"] = max(
+        int(fixed_stats.get("incremental_watermark_overlap_posts", 0) or 0),
+        int(channel_stats.get("incremental_watermark_overlap_posts", 0) or 0),
+    )
     merged_stats["best_score"] = max(
         int(fixed_stats.get("best_score", 0) or 0),
         int(channel_stats.get("best_score", 0) or 0),
@@ -1410,6 +1635,10 @@ def merge_subscription_search_results(
     merged_stats["channel_matched_channels"] = int(channel_stats.get("matched_channels", 0) or 0)
     merged_stats["channel_pages_scanned"] = int(channel_stats.get("pages_scanned", 0) or 0)
     merged_stats["channel_raw_items"] = int(channel_stats.get("raw_items", 0) or 0)
+    merged_stats["channel_live_raw_items"] = int(channel_stats.get("live_raw_items", 0) or 0)
+    merged_stats["channel_cached_items"] = int(channel_stats.get("cached_items", 0) or 0)
+    merged_stats["channel_cache_queries"] = int(channel_stats.get("cache_queries", 0) or 0)
+    merged_stats["channel_cache_errors"] = int(channel_stats.get("cache_errors", 0) or 0)
     merged_stats["channel_deduped_items"] = int(channel_stats.get("deduped_items", 0) or 0)
     merged_stats["channel_supported_items"] = int(channel_stats.get("supported_items", 0) or 0)
     merged_stats["channel_unsupported_items"] = int(channel_stats.get("unsupported_items", 0) or 0)
