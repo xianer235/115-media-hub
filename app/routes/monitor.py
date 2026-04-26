@@ -8,6 +8,7 @@ import urllib.parse
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from ..background import submit_background
 from ..core import *  # noqa: F401,F403
 from ..services.monitor import queue_monitor_job
 from ..services.resource import run_resource_job
@@ -293,15 +294,10 @@ async def webhook(task_name: str, request: Request) -> JSONResponse:
                 },
             )
 
-        try:
-            folder_id = await asyncio.to_thread(resolve_115_folder_id_by_path, cookie_115, savepath)
-        except Exception as exc:
-            return JSONResponse(status_code=400, content={"ok": False, "msg": f"保存路径无效：{exc}"})
-
         job_id = create_resource_job(
             resource,
             {
-                "folder_id": folder_id,
+                "folder_id": "",
                 "savepath": savepath,
                 "sharetitle": sharetitle,
                 "monitor_task_name": task_name,
@@ -314,7 +310,7 @@ async def webhook(task_name: str, request: Request) -> JSONResponse:
                 },
             },
         )
-        asyncio.create_task(run_resource_job(job_id))
+        submit_background(run_resource_job, job_id, label="resource-webhook-magnet")
         await write_monitor_log(
             f"Webhook 磁力任务已创建: {task_name} | job=#{job_id} | savepath={savepath} | delay={refresh_delay_seconds}s",
             "info",

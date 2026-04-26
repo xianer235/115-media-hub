@@ -1810,6 +1810,17 @@
             const inserted = Number(data?.items || 0);
             const pruned = Number(data?.cache_pruned || 0);
 
+            if (data?.queued) {
+                setResourceTgHealthResult({
+                    tone: data.accepted === false ? 'warning' : 'success',
+                    title: data.accepted === false ? 'TG 刷新已在执行' : 'TG 刷新已提交',
+                    detail: data.accepted === false ? '后台已有同步任务' : '后台同步中',
+                    durationMs,
+                    latencyMs,
+                });
+                return;
+            }
+
             if (!errors.length) {
                 setResourceTgHealthResult({
                     tone: 'success',

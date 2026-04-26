@@ -1,5 +1,4 @@
-import asyncio
-
+from ..background import submit_background
 from ..core import safe_json_dumps, schedule_ui_state_push, subscription_queue, subscription_status
 
 
@@ -14,11 +13,11 @@ async def start_next_subscription_job() -> None:
 
     from .subscription import run_subscription_task
 
-    asyncio.create_task(
-        run_subscription_task(
-            next_job["task_name"],
-            trigger=next_job.get("trigger", "queued"),
-        )
+    submit_background(
+        run_subscription_task,
+        next_job["task_name"],
+        trigger=next_job.get("trigger", "queued"),
+        label="subscription-job",
     )
 
 
@@ -38,7 +37,7 @@ def queue_subscription_job(task_name: str, trigger: str) -> str:
     schedule_ui_state_push(0)
     if subscription_status["running"]:
         return "queued"
-    asyncio.create_task(start_next_subscription_job())
+    submit_background(start_next_subscription_job, label="subscription-next")
     return "started"
 
 

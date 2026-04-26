@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from html import unescape
 from typing import Any, AsyncIterator, Dict, List, Optional, Set, Tuple
 
-from fastapi import BackgroundTasks, FastAPI, Request
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
@@ -2680,6 +2680,7 @@ cookie_health_runtime: Dict[str, Dict[str, float]] = {
 }
 tmdb_cache_entries: Dict[str, Dict[str, Any]] = {}
 ui_event_subscribers: Set[asyncio.Queue[str]] = set()
+ui_event_loop: Optional[asyncio.AbstractEventLoop] = None
 ui_push_pending = False
 ui_push_task: Optional[asyncio.Task] = None
 resource_job_running: Set[int] = set()
@@ -3494,16 +3495,39 @@ async def flush_ui_state_updates(delay: float) -> None:
         ui_push_task = None
 
 
+def bind_ui_event_loop(loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
+    global ui_event_loop
+    try:
+        ui_event_loop = loop or asyncio.get_running_loop()
+    except RuntimeError:
+        ui_event_loop = None
+
+
 def schedule_ui_state_push(delay: float = UI_PUSH_DEBOUNCE_SECONDS) -> None:
     global ui_push_pending, ui_push_task
     ui_push_pending = True
+    target_loop = ui_event_loop
     try:
-        loop = asyncio.get_running_loop()
+        current_loop = asyncio.get_running_loop()
     except RuntimeError:
+        current_loop = None
+    if target_loop is None:
+        if threading.current_thread().name == "media-hub-background":
+            return
+        target_loop = current_loop
+    if target_loop is None or target_loop.is_closed():
         return
-    if ui_push_task is not None and not ui_push_task.done():
+
+    def ensure_push_task() -> None:
+        global ui_push_task
+        if ui_push_task is not None and not ui_push_task.done():
+            return
+        ui_push_task = target_loop.create_task(flush_ui_state_updates(delay))
+
+    if current_loop is target_loop:
+        ensure_push_task()
         return
-    ui_push_task = loop.create_task(flush_ui_state_updates(delay))
+    target_loop.call_soon_threadsafe(ensure_push_task)
 
 
 def is_subpath(path: str, root: str) -> bool:

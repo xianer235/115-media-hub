@@ -4,6 +4,7 @@ import time
 from datetime import datetime
 
 from .core import *  # noqa: F401,F403
+from .background import start_background_runtime, stop_background_runtime, submit_background
 from .services.monitor import queue_monitor_job
 from .services.resource import schedule_resource_job_refresh
 from .services.sign115 import refresh_sign115_status, run_sign115_job
@@ -13,14 +14,16 @@ from .services.tree import run_sync
 
 @app.on_event("startup")
 async def startup() -> None:
+    bind_ui_event_loop()
+    start_background_runtime()
     ensure_db()
     os.makedirs(LOG_DIR, exist_ok=True)
     restore_runtime_logs_from_files()
 
     for job in list_resource_jobs(limit=200):
         if job.get("status") == "submitted" and job.get("auto_refresh") and not str(job.get("last_triggered_at", "")).strip():
-            asyncio.create_task(schedule_resource_job_refresh(int(job["id"])))
-    asyncio.create_task(refresh_sign115_status(force_remote=False, trigger="startup"))
+            submit_background(schedule_resource_job_refresh, int(job["id"]), label="resource-refresh-recover")
+    submit_background(refresh_sign115_status, force_remote=False, trigger="startup", label="sign115-startup-status")
 
     async def scheduler() -> None:
         await asyncio.sleep(5)
@@ -40,7 +43,7 @@ async def startup() -> None:
                 task_status["next_run"] = datetime.fromtimestamp(next_ts).strftime("%H:%M:%S")
                 if time.time() >= next_ts and not task_status["running"]:
                     last_run = time.time()
-                    asyncio.create_task(run_sync())
+                    submit_background(run_sync, label="tree-cron-sync")
             else:
                 task_status["next_run"] = None
                 # 关闭期间重置参考时间，避免重新启用后立刻连发
@@ -171,10 +174,15 @@ async def startup() -> None:
             if enabled and str(cfg.get("cookie_115", "")).strip():
                 if sign115_runtime.get("last_auto_date", "") != today and now >= scheduled_today:
                     sign115_runtime["last_auto_date"] = today
-                    asyncio.create_task(run_sign115_job("cron"))
+                    submit_background(run_sign115_job, "cron", label="sign115-cron")
             await asyncio.sleep(20)
 
     asyncio.create_task(scheduler())
     asyncio.create_task(monitor_scheduler())
     asyncio.create_task(subscription_scheduler())
     asyncio.create_task(sign115_scheduler())
+
+
+@app.on_event("shutdown")
+async def shutdown_background_runtime() -> None:
+    stop_background_runtime()

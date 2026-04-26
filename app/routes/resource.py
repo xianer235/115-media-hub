@@ -1,11 +1,13 @@
 import asyncio
 import functools
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
+from ..background import submit_background
 from ..core import *  # noqa: F401,F403
 from ..services.resource import cancel_resource_job, retry_resource_job, run_resource_job, trigger_resource_job_refresh
 
@@ -27,6 +29,40 @@ resource_browse_executor = ThreadPoolExecutor(
     max_workers=RESOURCE_BROWSE_WORKERS,
     thread_name_prefix="resource-browse",
 )
+resource_channel_sync_submit_lock = threading.Lock()
+resource_channel_sync_submitted = False
+
+
+async def _run_resource_channel_sync(force: bool, limit_per_channel: int) -> Dict[str, Any]:
+    global resource_channel_sync_submitted
+    try:
+        return await sync_telegram_channels(force=force, limit_per_channel=limit_per_channel)
+    finally:
+        with resource_channel_sync_submit_lock:
+            resource_channel_sync_submitted = False
+        schedule_ui_state_push(0)
+
+
+def submit_resource_channel_sync(force: bool, limit_per_channel: int) -> bool:
+    global resource_channel_sync_submitted
+    with resource_channel_sync_submit_lock:
+        if resource_channel_sync_submitted:
+            schedule_ui_state_push(0)
+            return False
+        resource_channel_sync_submitted = True
+    try:
+        submit_background(
+            _run_resource_channel_sync,
+            force,
+            limit_per_channel,
+            label="resource-channel-sync",
+        )
+    except Exception:
+        with resource_channel_sync_submit_lock:
+            resource_channel_sync_submitted = False
+        raise
+    schedule_ui_state_push(0)
+    return True
 
 
 def _compact_resource_browser_entry(entry: Dict[str, Any], *, include_share_fields: bool = False) -> Dict[str, Any]:
@@ -191,7 +227,7 @@ async def get_resource_state(request: Request) -> Dict[str, Any]:
     search = str(request.query_params.get("q", "") or "").strip()
     sync_channels = request.query_params.get("sync") == "1"
     if sync_channels:
-        await sync_telegram_channels(force=False, limit_per_channel=10)
+        submit_resource_channel_sync(force=False, limit_per_channel=10)
     return await build_resource_state_payload(search=search)
 
 
@@ -242,7 +278,18 @@ async def sync_resource_channels_endpoint(request: Request) -> Dict[str, Any]:
     data = await request.json()
     force = bool(data.get("force", False))
     limit_per_channel = max(1, min(int(data.get("limit", 10) or 10), 30))
-    return await sync_telegram_channels(force=force, limit_per_channel=limit_per_channel)
+    accepted = submit_resource_channel_sync(force=force, limit_per_channel=limit_per_channel)
+    return {
+        "ok": True,
+        "queued": True,
+        "accepted": accepted,
+        "synced": 0,
+        "items": 0,
+        "skipped": len(resource_channel_syncing),
+        "errors": [],
+        "cache_pruned": 0,
+        "cache_prune_detail": {},
+    }
 
 
 @router.post("/resource/channels/classify")
@@ -507,7 +554,7 @@ async def create_resource_job_endpoint(request: Request) -> Dict[str, Any]:
                 payload["receive_code"] = receive_code
         job_id = create_resource_job(resource, payload)
 
-    asyncio.create_task(run_resource_job(job_id))
+    submit_background(run_resource_job, job_id, label="resource-job")
     return {
         "ok": True,
         "job_id": job_id,

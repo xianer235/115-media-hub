@@ -1,7 +1,8 @@
 import asyncio
 
-from fastapi import APIRouter, BackgroundTasks, Request
+from fastapi import APIRouter, Request
 
+from ..background import submit_background
 from ..core import *  # noqa: F401,F403
 from ..services.tree import run_sync
 
@@ -9,10 +10,15 @@ router = APIRouter()
 
 
 @router.post("/start")
-async def start_sync(request: Request, bt: BackgroundTasks) -> Dict[str, str]:
+async def start_sync(request: Request) -> Dict[str, str]:
     data = await request.json()
     if not task_status["running"]:
-        bt.add_task(run_sync, use_local=data.get("use_local", False), force_full=data.get("force_full", False))
+        submit_background(
+            run_sync,
+            use_local=data.get("use_local", False),
+            force_full=data.get("force_full", False),
+            label="tree-manual-sync",
+        )
         return {"status": "started"}
     return {"status": "busy"}
 

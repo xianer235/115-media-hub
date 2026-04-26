@@ -3,6 +3,7 @@ import asyncio
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from ..background import submit_background
 from ..config_runtime import build_public_settings_payload, merge_settings_preserve_sensitive
 from ..core import *  # noqa: F401,F403
 from ..services.notify import send_notify_test_message
@@ -66,7 +67,7 @@ async def save_settings_endpoint(request: Request) -> Dict[str, Any]:
         mark_cookie_health_checking("quark", trigger="settings_save")
     cookie_health = build_cookie_health_payload(saved_cfg)
     schedule_ui_state_push(0)
-    asyncio.create_task(_run_postsave_health_checks())
+    submit_background(_run_postsave_health_checks, label="postsave-health-checks")
     return {"ok": True, "cookie_health": cookie_health, "checks_queued": True}
 
 
@@ -151,8 +152,12 @@ async def get_sign115_status(request: Request) -> Dict[str, Any]:
 
 @router.post("/settings/115/sign/run")
 async def run_sign115(request: Request) -> JSONResponse:
-    result = await run_sign115_job("manual")
-    if not result.get("ok", False):
-        message = str(result.get("message", "") or result.get("msg", "") or "签到失败").strip() or "签到失败"
-        return JSONResponse(status_code=400, content={"ok": False, "msg": message, "state": result})
-    return JSONResponse(content={"ok": True, "state": result})
+    cfg = get_config()
+    if not str(cfg.get("cookie_115", "")).strip():
+        state = build_sign115_status_payload(cfg)
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "请先配置 115 Cookie", "state": state})
+    if sign115_runtime.get("running"):
+        return JSONResponse(content={"ok": True, "queued": True, "state": build_sign115_status_payload(cfg)})
+    set_sign115_status(state="checking", message="签到任务已提交，正在后台执行...", last_trigger="manual")
+    submit_background(run_sign115_job, "manual", label="sign115-manual")
+    return JSONResponse(content={"ok": True, "queued": True, "state": build_sign115_status_payload(cfg)})

@@ -1,3 +1,4 @@
+from ..background import submit_background
 from ..core import *  # noqa: F401,F403
 from .notify import push_monitor_success_notification
 
@@ -411,13 +412,13 @@ async def start_next_monitor_job() -> None:
     next_job = monitor_queue.pop(0)
     monitor_status["queued"] = [item["task_name"] for item in monitor_queue]
     schedule_ui_state_push(0)
-    asyncio.create_task(
-        run_monitor_task(
-            next_job["task_name"],
-            trigger=next_job.get("trigger", "queued"),
-            payload=next_job.get("payload"),
-            merged_count=max(0, int(next_job.get("merge_count", 0) or 0)),
-        )
+    submit_background(
+        run_monitor_task,
+        next_job["task_name"],
+        trigger=next_job.get("trigger", "queued"),
+        payload=next_job.get("payload"),
+        merged_count=max(0, int(next_job.get("merge_count", 0) or 0)),
+        label="monitor-job",
     )
 
 
@@ -539,5 +540,5 @@ def queue_monitor_job(task_name: str, trigger: str, payload: Optional[Dict[str, 
     schedule_ui_state_push(0)
     if monitor_status["running"]:
         return "queued"
-    asyncio.create_task(start_next_monitor_job())
+    submit_background(start_next_monitor_job, label="monitor-next")
     return "started"

@@ -2241,7 +2241,11 @@
             syncResourceActionButtons();
             try {
                 const data = await window.MediaHubApi.postJson('/resource/channels/sync', { force, limit: 10 });
-                await refreshResourceState();
+                if (!data?.queued) {
+                    await refreshResourceState();
+                } else if (typeof scheduleResourcePolling === 'function') {
+                    scheduleResourcePolling(3000);
+                }
                 if (!silent) {
                     const latencyMs = await resolveResourceTgLatencyMs(latencyProbePromise);
                     applyResourceTgHealthFromSyncResult(data, getActionElapsedMs(startedAt), latencyMs);

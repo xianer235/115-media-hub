@@ -1,3 +1,4 @@
+from ..background import submit_background
 from ..core import *  # noqa: F401,F403
 from .monitor import queue_monitor_job
 
@@ -107,7 +108,7 @@ async def retry_resource_job(job_id: int, reason: str = "manual") -> Dict[str, A
     if status == "failed":
         update_resource_job(job_id, status_detail=f"已创建重试任务 #{new_job_id}（{reason}）")
     resource_job_cancel_requested.discard(new_job_id)
-    asyncio.create_task(run_resource_job(new_job_id))
+    submit_background(run_resource_job, new_job_id, label="resource-job-retry")
     return {"ok": True, "job_id": new_job_id}
 
 
@@ -402,7 +403,7 @@ async def run_resource_job(job_id: int) -> None:
             and bool(job.get("auto_refresh"))
             and str(job.get("monitor_task_name", "")).strip()
         ):
-            asyncio.create_task(schedule_resource_job_refresh(job_id))
+            submit_background(schedule_resource_job_refresh, job_id, label="resource-auto-refresh")
     except ResourceJobCancelledError:
         pass
     except Exception as exc:
