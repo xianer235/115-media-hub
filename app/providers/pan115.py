@@ -44,30 +44,6 @@ def _build_115_webapi_headers(cookie: str, referer: str = "") -> Dict[str, str]:
     }
 
 
-def _is_115_share_content_error(error: Any) -> bool:
-    detail = str(error or "").strip().lower()
-    if not detail:
-        return False
-    share_error_hints = (
-        "分享不存在",
-        "分享已失效",
-        "分享已取消",
-        "分享已过期",
-        "链接不存在",
-        "链接失效",
-        "链接已失效",
-        "访问码错误",
-        "提取码错误",
-        "分享码错误",
-        "分享文件不存在",
-        "share not found",
-        "share is not found",
-        "invalid share",
-        "not exist",
-    )
-    return any(hint in detail for hint in share_error_hints) or ("http 404" in detail and "cookie" not in detail)
-
-
 def _request_115_webapi_json(url: str, headers: Dict[str, str], timeout: int = 30) -> Dict[str, Any]:
     response = _get_115_webapi_session().get(
         normalize_http_url(url),
@@ -897,8 +873,6 @@ def list_115_share_entries(
             if last_request_error is not None:
                 stale_payload = load_stale_cache_payload()
                 if stale_payload:
-                    if not _is_115_share_content_error(last_request_error):
-                        mark_cookie_health_failure("115", last_request_error, trigger="runtime:list_115_share_entries")
                     stale_payload["cache_stale"] = True
                     stale_payload["cache_error"] = str(last_request_error or "").strip()[:180]
                     stale_payload["cache_cid"] = current_cid
@@ -917,8 +891,6 @@ def list_115_share_entries(
                 )
                 stale_payload = load_stale_cache_payload()
                 if stale_payload:
-                    if not _is_115_share_content_error(detail):
-                        mark_cookie_health_failure("115", detail, trigger="runtime:list_115_share_entries")
                     stale_payload["cache_stale"] = True
                     stale_payload["cache_error"] = detail[:180]
                     stale_payload["cache_cid"] = current_cid
@@ -995,12 +967,9 @@ def list_115_share_entries(
                         result_payload,
                         ttl_seconds=SHARE_SNAP_CACHE_TTL_SECONDS,
                     )
-                mark_cookie_health_success("115", trigger="runtime:list_115_share_entries")
                 return result_payload
             offset_cursor = next_offset
-    except Exception as exc:
-        if not _is_115_share_content_error(exc):
-            mark_cookie_health_failure("115", exc, trigger="runtime:list_115_share_entries")
+    except Exception:
         raise
 
 def prepare_115_share_receive(
@@ -1116,13 +1085,10 @@ def submit_115_share_receive(
                 or "115 网盘转存失败"
             )
             raise RuntimeError(detail)
-        mark_cookie_health_success("115", trigger="runtime:submit_115_share_receive")
         return {
             "response": response,
             "selection": prepared.get("selection", {}),
             "duplicate_receive": is_115_share_receive_duplicate_response(response),
         }
-    except Exception as exc:
-        if not _is_115_share_content_error(exc):
-            mark_cookie_health_failure("115", exc, trigger="runtime:submit_115_share_receive")
+    except Exception:
         raise

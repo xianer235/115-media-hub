@@ -168,39 +168,11 @@
         }
 
         function isResourceShareContentCookieHealthNoise(item) {
-            const provider = normalizeSubscriptionProvider(item?.provider || '', '');
             const trigger = String(item?.entry?.trigger || '').trim().toLowerCase();
-            const message = String(item?.entry?.message || '').trim().toLowerCase();
-            if (!message) return false;
-            if (provider === 'quark') {
-                if (!trigger.startsWith('runtime:list_quark_share_entries') && !trigger.startsWith('runtime:submit_quark_share_save')) {
-                    return false;
-                }
-                return message.includes('文件涉及违规内容')
-                    || message.includes('分享不存在')
-                    || message.includes('分享已失效')
-                    || message.includes('分享已取消')
-                    || message.includes('share not found')
-                    || (message.includes('http 404') && !message.includes('cookie'));
-            }
-            if (provider === '115') {
-                if (!trigger.startsWith('runtime:list_115_share_entries') && !trigger.startsWith('runtime:submit_115_share_receive')) {
-                    return false;
-                }
-                return message.includes('分享不存在')
-                    || message.includes('分享已失效')
-                    || message.includes('分享已取消')
-                    || message.includes('分享已过期')
-                    || message.includes('链接不存在')
-                    || message.includes('链接失效')
-                    || message.includes('链接已失效')
-                    || message.includes('访问码错误')
-                    || message.includes('提取码错误')
-                    || message.includes('分享码错误')
-                    || message.includes('share not found')
-                    || (message.includes('http 404') && !message.includes('cookie'));
-            }
-            return false;
+            return trigger.startsWith('runtime:list_115_share_entries')
+                || trigger.startsWith('runtime:submit_115_share_receive')
+                || trigger.startsWith('runtime:list_quark_share_entries')
+                || trigger.startsWith('runtime:submit_quark_share_save');
         }
 
         function renderResourceCookieHint() {

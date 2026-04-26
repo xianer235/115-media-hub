@@ -307,6 +307,12 @@ COOKIE_HEALTH_SUCCESS_UPDATE_INTERVAL_SECONDS = max(
     10,
     min(3600, int(os.environ.get("COOKIE_HEALTH_SUCCESS_UPDATE_INTERVAL_SECONDS", 90) or 90)),
 )
+COOKIE_HEALTH_SHARE_TRIGGER_PREFIXES: Tuple[str, ...] = (
+    "runtime:list_115_share_entries",
+    "runtime:submit_115_share_receive",
+    "runtime:list_quark_share_entries",
+    "runtime:submit_quark_share_save",
+)
 COOKIE_HEALTH_INVALID_MESSAGE_HINTS: Tuple[str, ...] = (
     "cookie invalid",
     "invalid cookie",
@@ -2720,6 +2726,11 @@ def normalize_cookie_health_provider(value: Any) -> str:
     return ""
 
 
+def is_cookie_health_share_trigger(trigger: Any) -> bool:
+    token = str(trigger or "").strip().lower()
+    return any(token.startswith(prefix) for prefix in COOKIE_HEALTH_SHARE_TRIGGER_PREFIXES)
+
+
 def _cookie_health_provider_label(provider: str) -> str:
     return "Quark" if normalize_cookie_health_provider(provider) == "quark" else "115"
 
@@ -2836,6 +2847,8 @@ def mark_cookie_health_checking(provider: str, trigger: str = "manual_check") ->
     provider_key = normalize_cookie_health_provider(provider)
     if not provider_key:
         return
+    if is_cookie_health_share_trigger(trigger):
+        return
     cfg = get_config()
     configured = bool(_cookie_health_cookie_value(cfg, provider_key))
     changed = False
@@ -2870,6 +2883,8 @@ def mark_cookie_health_success(
 ) -> None:
     provider_key = normalize_cookie_health_provider(provider)
     if not provider_key:
+        return
+    if is_cookie_health_share_trigger(trigger):
         return
     cfg = get_config()
     configured = bool(_cookie_health_cookie_value(cfg, provider_key))
@@ -2925,6 +2940,8 @@ def mark_cookie_health_failure(
 ) -> None:
     provider_key = normalize_cookie_health_provider(provider)
     if not provider_key:
+        return
+    if is_cookie_health_share_trigger(trigger):
         return
     cfg = get_config()
     configured = bool(_cookie_health_cookie_value(cfg, provider_key))
