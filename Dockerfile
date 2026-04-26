@@ -1,4 +1,4 @@
-ARG PYTHON_IMAGE=python:3.12-slim-bookworm
+ARG PYTHON_IMAGE=python:3.12.13-slim-bookworm
 FROM ${PYTHON_IMAGE}
 
 ARG APP_VERSION=dev
@@ -22,9 +22,11 @@ RUN pip install --prefer-binary -r requirements.txt
 COPY app ./app
 COPY static ./static
 COPY templates ./templates
-COPY main.py version.json 115-magnet-helper-webhook.user.js ./
+COPY main.py 115-magnet-helper-webhook.user.js ./
 
 RUN python -m compileall -q app main.py
+
+COPY version.json ./
 
 EXPOSE 18080
 
