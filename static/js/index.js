@@ -90,6 +90,8 @@
         let resourceShareError = '';
         let resourceShareRootLoaded = false;
         let resourceShareInfo = { title: '', count: 0, share_code: '', receive_code: '' };
+        let resourceShareDiagnosticsByParent = {};
+        let resourceShareSearchKeyword = '';
         let resourceShareReceiveCode = '';
         let resourceShareTrail = [{ cid: '0', name: '分享根目录' }];
         let resourceShareCurrentCid = '0';
@@ -710,6 +712,172 @@
                 removeToast();
             });
         }
+
+        function ensureAppDialogModal() {
+            let modal = document.getElementById('app-dialog-modal');
+            if (modal) return modal;
+            modal = document.createElement('div');
+            modal.id = 'app-dialog-modal';
+            modal.className = 'app-dialog-modal hidden';
+            modal.innerHTML = `
+                <div class="app-dialog-shell" role="dialog" aria-modal="true" aria-labelledby="app-dialog-title">
+                    <div class="app-dialog-header">
+                        <div>
+                            <div id="app-dialog-eyebrow" class="app-dialog-eyebrow">提示</div>
+                            <div id="app-dialog-title" class="app-dialog-title">提示</div>
+                        </div>
+                        <button id="app-dialog-close" type="button" class="app-dialog-close" aria-label="关闭">关闭</button>
+                    </div>
+                    <div class="app-dialog-body">
+                        <div id="app-dialog-message" class="app-dialog-message"></div>
+                        <textarea id="app-dialog-text" class="app-dialog-text hidden" readonly></textarea>
+                    </div>
+                    <div class="app-dialog-footer">
+                        <button id="app-dialog-copy" type="button" class="app-dialog-btn app-dialog-btn-secondary hidden">复制内容</button>
+                        <button id="app-dialog-cancel" type="button" class="app-dialog-btn app-dialog-btn-secondary hidden">取消</button>
+                        <button id="app-dialog-confirm" type="button" class="app-dialog-btn app-dialog-btn-primary">确定</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+            return modal;
+        }
+
+        function showAppDialog({
+            title = '提示',
+            message = '',
+            eyebrow = '提示',
+            tone = 'info',
+            confirmText = '确定',
+            cancelText = '取消',
+            showCancel = false,
+            text = '',
+            copyText = '',
+        } = {}) {
+            return new Promise((resolve) => {
+                const modal = ensureAppDialogModal();
+                const shell = modal.querySelector('.app-dialog-shell');
+                const eyebrowEl = modal.querySelector('#app-dialog-eyebrow');
+                const titleEl = modal.querySelector('#app-dialog-title');
+                const messageEl = modal.querySelector('#app-dialog-message');
+                const textEl = modal.querySelector('#app-dialog-text');
+                const closeBtn = modal.querySelector('#app-dialog-close');
+                const copyBtn = modal.querySelector('#app-dialog-copy');
+                const cancelBtn = modal.querySelector('#app-dialog-cancel');
+                const confirmBtn = modal.querySelector('#app-dialog-confirm');
+                const normalizedTone = ['success', 'error', 'warn', 'info'].includes(String(tone || '').toLowerCase())
+                    ? String(tone || '').toLowerCase()
+                    : 'info';
+                shell.className = `app-dialog-shell app-dialog-${normalizedTone}`;
+                eyebrowEl.textContent = String(eyebrow || '提示');
+                titleEl.textContent = String(title || '提示');
+                messageEl.textContent = String(message || '');
+                const displayText = String(text || copyText || '');
+                textEl.value = displayText;
+                textEl.classList.toggle('hidden', !displayText);
+                copyBtn.classList.toggle('hidden', !displayText);
+                cancelBtn.classList.toggle('hidden', !showCancel);
+                confirmBtn.textContent = String(confirmText || '确定');
+                cancelBtn.textContent = String(cancelText || '取消');
+
+                let settled = false;
+                const cleanup = (value) => {
+                    if (settled) return;
+                    settled = true;
+                    modal.classList.add('hidden');
+                    unlockPageScroll();
+                    confirmBtn.removeEventListener('click', onConfirm);
+                    cancelBtn.removeEventListener('click', onCancel);
+                    closeBtn.removeEventListener('click', onCancel);
+                    copyBtn.removeEventListener('click', onCopy);
+                    modal.removeEventListener('click', onBackdrop);
+                    document.removeEventListener('keydown', onKeydown);
+                    resolve(value);
+                };
+                const onConfirm = () => cleanup(true);
+                const onCancel = () => cleanup(false);
+                const onCopy = async () => {
+                    try {
+                        await navigator.clipboard.writeText(displayText);
+                        showToast('内容已复制', { tone: 'success', duration: 1800, placement: 'top-center' });
+                    } catch (e) {
+                        showToast('复制失败，请手动选中文本复制', { tone: 'warn', duration: 2400, placement: 'top-center' });
+                        textEl.focus();
+                        textEl.select();
+                    }
+                };
+                const onBackdrop = (event) => {
+                    if (event.target === modal) cleanup(false);
+                };
+                const onKeydown = (event) => {
+                    if (event.key === 'Escape') cleanup(false);
+                    if (event.key === 'Enter' && !event.shiftKey && document.activeElement !== textEl) cleanup(true);
+                };
+
+                confirmBtn.addEventListener('click', onConfirm);
+                cancelBtn.addEventListener('click', onCancel);
+                closeBtn.addEventListener('click', onCancel);
+                copyBtn.addEventListener('click', onCopy);
+                modal.addEventListener('click', onBackdrop);
+                document.addEventListener('keydown', onKeydown);
+                modal.classList.remove('hidden');
+                lockPageScroll();
+                window.setTimeout(() => confirmBtn.focus(), 30);
+            });
+        }
+
+        function showAppAlert(message, options = {}) {
+            const text = String(message || '').trim();
+            return showAppDialog({
+                title: options.title || (text.startsWith('❌') ? '操作失败' : text.startsWith('✅') ? '操作成功' : '提示'),
+                message: text,
+                eyebrow: options.eyebrow || 'Message',
+                tone: options.tone || (text.startsWith('❌') ? 'error' : text.startsWith('✅') ? 'success' : 'info'),
+                confirmText: options.confirmText || '知道了',
+            });
+        }
+
+        function showAppConfirm(message, options = {}) {
+            return showAppDialog({
+                title: options.title || '确认操作',
+                message,
+                eyebrow: options.eyebrow || 'Confirm',
+                tone: options.tone || 'warn',
+                showCancel: true,
+                confirmText: options.confirmText || '确认',
+                cancelText: options.cancelText || '取消',
+            });
+        }
+
+        function showAppPrompt(message, defaultValue = '', options = {}) {
+            return showAppDialog({
+                title: options.title || '请手动复制',
+                message,
+                eyebrow: options.eyebrow || 'Copy',
+                tone: options.tone || 'info',
+                text: defaultValue,
+                copyText: defaultValue,
+                confirmText: options.confirmText || '关闭',
+            });
+        }
+
+        window.showToast = showToast;
+        window.showAppDialog = showAppDialog;
+        window.showAppAlert = showAppAlert;
+        window.showAppConfirm = showAppConfirm;
+        window.showAppPrompt = showAppPrompt;
+
+        window.alert = (message) => {
+            void showAppAlert(message);
+        };
+        window.confirm = (message) => {
+            void showAppConfirm(message);
+            return false;
+        };
+        window.prompt = (message, defaultValue = '') => {
+            void showAppPrompt(message, defaultValue);
+            return '';
+        };
 
         function escapeHtml(str) {
             return String(str || '')
@@ -1580,8 +1748,8 @@
             container.appendChild(row);
         }
 
-        function resetExtensions() {
-            if (confirm("确定要恢复默认扫描后缀名吗？\n(恢复后请手动点击下方的保存全部配置)")) {
+        async function resetExtensions() {
+            if (await showAppConfirm("确定要恢复默认扫描后缀名吗？\n(恢复后请手动点击下方的保存全部配置)")) {
                 document.getElementById('extensions').value = DEFAULT_EXTENSIONS;
             }
         }
@@ -1979,6 +2147,7 @@
                     refreshResourceState,
                     refreshSign115Status,
                     getMonitorTasks: () => monitorState.tasks || [],
+                    showToast,
                 });
             }
         }
@@ -2278,19 +2447,19 @@
 
         async function saveMonitorTask() {
             const task = currentMonitorFormData();
-            if (!task.name) return alert('任务名不能为空');
-            if (!task.scan_path) return alert('扫描路径不能为空');
-            if (!task.target_path) return alert('目标路径不能为空');
+            if (!task.name) return showToast('任务名不能为空', { tone: 'warn', duration: 2600, placement: 'top-center' });
+            if (!task.scan_path) return showToast('扫描路径不能为空', { tone: 'warn', duration: 2600, placement: 'top-center' });
+            if (!task.target_path) return showToast('目标路径不能为空', { tone: 'warn', duration: 2600, placement: 'top-center' });
             const mountPrefix = getMonitorMountPrefix();
             if (task.scan_path !== mountPrefix && !task.scan_path.startsWith(`${mountPrefix}/`)) {
-                return alert(`扫描路径必须位于 ${mountPrefix} 下`);
+                return showToast(`扫描路径必须位于 ${mountPrefix} 下`, { tone: 'warn', duration: 3200, placement: 'top-center' });
             }
-            if (task.retries < 1 || task.retries > 5) return alert('读取失败尝试次数只能在 1 到 5 之间');
-            if (task.cron_minutes < 0) return alert('定时执行分钟不能小于 0');
+            if (task.retries < 1 || task.retries > 5) return showToast('读取失败尝试次数只能在 1 到 5 之间', { tone: 'warn', duration: 2600, placement: 'top-center' });
+            if (task.cron_minutes < 0) return showToast('定时执行分钟不能小于 0', { tone: 'warn', duration: 2600, placement: 'top-center' });
 
             const tasks = [...(monitorState.tasks || [])];
             const dup = tasks.find(item => item.name === task.name && item.name !== editingMonitorName);
-            if (dup) return alert('任务名重复，请修改后再保存');
+            if (dup) return showToast('任务名重复，请修改后再保存', { tone: 'warn', duration: 2800, placement: 'top-center' });
 
             const idx = tasks.findIndex(item => item.name === editingMonitorName);
             if (idx >= 0) tasks[idx] = task;
@@ -2300,9 +2469,9 @@
                 await persistMonitorTasks(tasks);
                 resetMonitorForm();
                 closeMonitorModal();
-                alert('✅ 监控任务已保存');
+                showToast('监控任务已保存', { tone: 'success', duration: 2400, placement: 'top-center' });
             } catch (e) {
-                alert(`❌ ${e.message}`);
+                showToast(`保存失败：${e.message || '未知错误'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
             }
         }
 
@@ -2333,7 +2502,7 @@
         }
 
         async function deleteMonitorTask(name) {
-            if (!confirm(`确定删除监控任务“${name}”吗？`)) return;
+            if (!(await showAppConfirm(`确定删除监控任务“${name}”吗？`))) return;
             if (isMonitorActionLocked('delete', name)) return;
             setMonitorActionLock('delete', name, true);
             try {
@@ -2346,7 +2515,7 @@
                 }, { forceRender: true });
                 if (editingMonitorName === name) resetMonitorForm();
             } catch (error) {
-                alert(`❌ ${error?.message || '删除失败'}`);
+                showToast(`删除失败：${error?.message || '请稍后重试'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
             } finally {
                 setMonitorActionLock('delete', name, false);
             }
@@ -2373,7 +2542,7 @@
                 }
                 await refreshMonitorState();
             } catch (error) {
-                alert(`❌ ${error?.message || '启动失败'}`);
+                showToast(`启动失败：${error?.message || '请稍后重试'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
             } finally {
                 setMonitorActionLock('start', name, false);
             }
@@ -2385,7 +2554,7 @@
             try {
                 const data = await window.MediaHubApi.postJson('/monitor/stop', { name }).catch(() => ({ ok: false }));
                 if (!data.ok) {
-                    alert('当前没有这个任务在运行');
+                    showToast('当前没有这个任务在运行', { tone: 'warn', duration: 2600, placement: 'top-center' });
                     return;
                 }
                 const clearedCount = Math.max(0, Number(data.cleared || 0));

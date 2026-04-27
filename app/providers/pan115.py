@@ -1,4 +1,5 @@
 import threading
+import logging
 
 import requests
 
@@ -22,6 +23,28 @@ _CLOUD115_WEBAPI_USER_AGENT = (
     "MicroMessenger/6.8.0(0x16080000) NetType/WIFI MiniProgramEnv/Mac "
     "MacWechat/WMPF MacWechat/3.8.9(0x13080910) XWEB/1227"
 )
+
+
+def _build_115_timing_mark(last_mono: float) -> Tuple[int, float]:
+    now_mono = time.monotonic()
+    return int((now_mono - last_mono) * 1000), now_mono
+
+
+def _log_115_share_timing(share_code: str, cid: str, timings: List[Dict[str, Any]], total_ms: int) -> None:
+    safe_share_code = str(share_code or "").strip()
+    safe_cid = str(cid or "0").strip() or "0"
+    stage_text = " / ".join(
+        f"{str(item.get('label', '') or item.get('stage', '')).strip()}: {int(item.get('ms', 0) or 0)}ms"
+        for item in (timings or [])
+        if int(item.get("ms", 0) or 0) >= 0
+    )
+    logging.info(
+        "115 share timing share_code=%s cid=%s total=%sms%s",
+        f"{safe_share_code[:6]}***" if len(safe_share_code) > 6 else safe_share_code,
+        safe_cid,
+        total_ms,
+        f" stages=[{stage_text}]" if stage_text else "",
+    )
 
 
 def _get_115_webapi_session() -> requests.Session:
@@ -746,6 +769,8 @@ def _slice_115_share_cache_payload(
         "has_more": next_offset < filtered_total,
         "pages_scanned": int(payload.get("pages_scanned", 0) or 0),
         "cache_derived": True,
+        "elapsed_ms": int(payload.get("elapsed_ms", 0) or 0),
+        "timings": payload.get("timings", []) if isinstance(payload.get("timings"), list) else [],
     }
 
 def list_115_share_entries(
@@ -767,7 +792,12 @@ def list_115_share_entries(
     if not cookie:
         raise RuntimeError("115 Cookie 未配置")
     try:
+        started_mono = time.monotonic()
+        last_mono = started_mono
+        timings: List[Dict[str, Any]] = []
         parsed = resolve_115_share_payload(cookie, share_url, raw_text, receive_code)
+        elapsed_ms, last_mono = _build_115_timing_mark(last_mono)
+        timings.append({"stage": "parse", "label": "链接", "ms": elapsed_ms})
         share_code = str(parsed.get("share_code", "") or "").strip()
         receive_code = str(parsed.get("receive_code", "") or "").strip()
         current_cid = str(cid or "0").strip() or "0"
@@ -857,12 +887,16 @@ def list_115_share_entries(
             last_request_error: Optional[Exception] = None
             for attempt in range(0, retry_total + 1):
                 try:
+                    request_started_mono = time.monotonic()
                     _throttle_115_share_snap_requests(rate_limit_seconds=rate_limit_seconds)
                     result = _request_115_webapi_json(
                         f"https://webapi.115.com/share/snap?{query}",
                         headers=headers,
                         timeout=request_timeout_value,
                     )
+                    elapsed_ms = int((time.monotonic() - request_started_mono) * 1000)
+                    last_mono = time.monotonic()
+                    timings.append({"stage": f"snap_page_{pages_scanned + 1}", "label": f"目录P{pages_scanned + 1}", "ms": elapsed_ms})
                     last_request_error = None
                     break
                 except Exception as exc:
@@ -947,7 +981,10 @@ def list_115_share_entries(
                     "next_offset": next_offset,
                     "has_more": not reached_end,
                     "pages_scanned": pages_scanned,
+                    "elapsed_ms": int((time.monotonic() - started_mono) * 1000),
+                    "timings": timings,
                 }
+                _log_115_share_timing(share_code, current_cid, timings, int(result_payload.get("elapsed_ms", 0) or 0))
                 if use_full_cache or (start_offset == 0 and reached_end and not folder_only_mode):
                     save_115_share_snap_cache(
                         share_code,

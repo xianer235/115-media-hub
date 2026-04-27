@@ -11,6 +11,82 @@ globals().update(
 )
 
 
+def _build_manual_quark_subscription_search_result(
+    task: Dict[str, Any],
+    task_name: str,
+    manual_candidate: Dict[str, Any],
+) -> Dict[str, Any]:
+    link_url = str(manual_candidate.get("link_url", "") or "").strip()
+    raw_text = str(manual_candidate.get("raw_text", "") or link_url).strip()
+    receive_code = normalize_receive_code(manual_candidate.get("receive_code", ""))
+    title = str(task.get("title", "") or task_name or "指定夸克链接").strip() or "指定夸克链接"
+    resource_item = {
+        "source_type": "subscription_manual_link",
+        "source_name": "订阅指定链接",
+        "channel_name": "",
+        "title": title,
+        "normalized_title": title.lower(),
+        "raw_text": raw_text or link_url,
+        "link_url": link_url,
+        "link_type": "quark",
+        "message_url": "",
+        "quality": "",
+        "year": str(task.get("year", "") or "").strip(),
+        "published_at": now_text(),
+        "receive_code": receive_code,
+        "extra": {
+            "receive_code": receive_code,
+            "subscription_task_name": task_name,
+            "manual_subscription_link": True,
+        },
+    }
+    ensure_db()
+    conn = open_db()
+    try:
+        resource_id, _ = upsert_resource_item(conn, resource_item, identity_mode="link")
+        conn.commit()
+    finally:
+        conn.close()
+    persisted_item = {**resource_item, "id": resource_id}
+    fixed_candidate = {
+        "item": persisted_item,
+        "score": 100,
+        "episode": 0,
+        "season": 0,
+        "total": 0,
+        "range_start": 0,
+        "range_end": 0,
+        "resolution": 0,
+        "token_hits": 0,
+        "title_match_forced": True,
+    }
+    return {
+        "candidate": fixed_candidate,
+        "candidates": [fixed_candidate],
+        "keywords": ["manual-quark-link"],
+        "errors": [],
+        "stats": {
+            "search_keywords": 0,
+            "searched_sources": 0,
+            "matched_channels": 0,
+            "pages_scanned": 0,
+            "raw_items": 1,
+            "deduped_items": 1,
+            "persisted_items": 1,
+            "supported_items": 1,
+            "unsupported_items": 0,
+            "manual_link_candidate_count": 1,
+            "scored_items": 1,
+            "scored_candidates": 1,
+            "relaxed_score_mode": False,
+            "relaxed_candidates": 0,
+            "search_errors": 0,
+            "best_score": 100,
+            "provider": "quark",
+        },
+    }
+
+
 async def _write_subscription_search_diagnostics(search_stats: Dict[str, Any], label: str) -> None:
     payload = search_stats if isinstance(search_stats, dict) else {}
     keyword_limit = int(payload.get("search_keyword_limit", 0) or 0)
@@ -200,6 +276,7 @@ async def _run_subscription_task_quark(
     subscription_run_id: str,
     batch_refresh_enabled: bool,
     stage_timer: Optional[Dict[str, Any]] = None,
+    manual_candidate: Optional[Dict[str, Any]] = None,
 ) -> None:
     await write_subscription_section("执行链路")
     await write_subscription_log("网盘链路: 夸克分享（独立评分与导入链路）", "info")
@@ -234,15 +311,25 @@ async def _run_subscription_task_quark(
             "warn",
         )
 
-    upsert_subscription_task_state(task_name, status="running", progress=15, detail="正在主动搜索夸克资源")
+    manual_link_enabled = isinstance(manual_candidate, dict) and bool(str(manual_candidate.get("link_url", "") or "").strip())
+    upsert_subscription_task_state(
+        task_name,
+        status="running",
+        progress=15,
+        detail="正在准备指定夸克链接候选" if manual_link_enabled else "正在主动搜索夸克资源",
+    )
     check_subscription_cancelled()
     _subscription_stage_timer_enter(stage_timer, "search")
     search_started_at = time.perf_counter()
-    search_result = await find_subscription_task_match_candidate_by_search(
-        task,
-        last_episode=last_episode,
-        trigger=trigger,
-    )
+    if manual_link_enabled:
+        search_result = _build_manual_quark_subscription_search_result(task, task_name, manual_candidate or {})
+        await write_subscription_log("指定夸克链接模式已启用：跳过频道搜索，直接作为高优先级候选进入订阅扫描", "info")
+    else:
+        search_result = await find_subscription_task_match_candidate_by_search(
+            task,
+            last_episode=last_episode,
+            trigger=trigger,
+        )
     search_duration_seconds = max(0.0, time.perf_counter() - search_started_at)
     search_stats = search_result.get("stats", {}) if isinstance(search_result.get("stats"), dict) else {}
     search_errors = search_result.get("errors", []) if isinstance(search_result.get("errors"), list) else []
@@ -1341,7 +1428,11 @@ async def _run_subscription_task_quark(
         await write_subscription_log(f"订阅成功通知推送失败：{notify_exc}", "warn")
     update_subscription_summary("执行成功", detail)
 
-async def run_subscription_task(task_name: str, trigger: str = "manual") -> None:
+async def run_subscription_task(
+    task_name: str,
+    trigger: str = "manual",
+    manual_candidate: Optional[Dict[str, Any]] = None,
+) -> None:
     cfg = get_config()
     task = _load_subscription_task(cfg, task_name)
     if not task:
@@ -1437,6 +1528,7 @@ async def run_subscription_task(task_name: str, trigger: str = "manual") -> None
                 subscription_run_id=subscription_run_id,
                 batch_refresh_enabled=batch_refresh_enabled,
                 stage_timer=stage_timer,
+                manual_candidate=manual_candidate,
             )
             return
         await write_subscription_section("执行链路")

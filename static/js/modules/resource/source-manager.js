@@ -424,7 +424,7 @@
         async function bulkEnableResourceSources(enabled) {
             const selectedIds = getSelectedResourceSourceIdsInFiltered();
             if (!selectedIds.length) {
-                alert('请先在当前筛选结果中勾选要操作的频道');
+                showToast('请先在当前筛选结果中勾选要操作的频道', { tone: 'warn', duration: 2600, placement: 'top-center' });
                 return;
             }
             const selectedSet = new Set(selectedIds);
@@ -446,7 +446,7 @@
         async function bulkDeleteResourceSources() {
             const selectedIds = getSelectedResourceSourceIdsInFiltered();
             if (!selectedIds.length) {
-                alert('请先在当前筛选结果中勾选要删除的频道');
+                showToast('请先在当前筛选结果中勾选要删除的频道', { tone: 'warn', duration: 2600, placement: 'top-center' });
                 return;
             }
             const sampleNames = (resourceState.sources || [])
@@ -457,7 +457,7 @@
             const summary = sampleNames.length
                 ? `将删除 ${selectedIds.length} 个频道（如：${sampleNames.join('、')}）\n此操作不可恢复，确定继续吗？`
                 : `将删除 ${selectedIds.length} 个频道，此操作不可恢复，确定继续吗？`;
-            const ok = confirm(summary);
+            const ok = await showAppConfirm(summary);
             if (!ok) return;
             const selectedSet = new Set(selectedIds);
             const nextSources = (resourceState.sources || []).filter(source => !selectedSet.has(getResourceSourceChannelId(source)));
@@ -655,7 +655,7 @@
                 })
                 .filter(item => item.channel_id);
             if (!sourceEntries.length) {
-                alert('当前没有可测试的频道');
+                showToast('当前没有可测试的频道', { tone: 'warn', duration: 2600, placement: 'top-center' });
                 return;
             }
 
@@ -910,7 +910,7 @@
             const source = sources[index] || {};
             const channelId = getResourceSourceChannelId(source) || resourceChannelManageChannelId;
             const displayName = String(source?.name || channelId || '未命名频道').trim() || '未命名频道';
-            const ok = confirm(`确定删除频道“${displayName}”吗？\n删除后会从资源中心频道列表移除，此操作不可恢复。`);
+            const ok = await showAppConfirm(`确定删除频道“${displayName}”吗？\n删除后会从资源中心频道列表移除，此操作不可恢复。`);
             if (!ok) return;
             sources.splice(index, 1);
             try {
@@ -979,7 +979,7 @@
         async function exportResourceSources() {
             const payload = buildResourceSourceExportPayload(resourceState.sources || []);
             if (!payload.length) {
-                alert('当前没有可导出的频道源');
+                showToast('当前没有可导出的频道源', { tone: 'warn', duration: 2600, placement: 'top-center' });
                 return;
             }
             const text = JSON.stringify(payload, null, 2);
@@ -989,19 +989,19 @@
                 await navigator.clipboard.writeText(text);
                 copied = true;
             } catch (e) {
-                window.prompt('复制失败，请手动复制下面的频道源 JSON：', text);
+                void showAppPrompt('复制失败，请手动复制下面的频道源 JSON：', text);
             }
             const downloaded = downloadResourceSourceExportFile(text);
             if (copied && downloaded) {
-                alert(`✅ 已导出 ${payload.length} 个频道（已复制到剪贴板，并下载 JSON 文件）`);
+                showToast(`已导出 ${payload.length} 个频道，已复制并下载 JSON 文件`, { tone: 'success', duration: 3200, placement: 'top-center' });
                 return;
             }
             if (copied) {
-                alert(`✅ 已导出 ${payload.length} 个频道（已复制到剪贴板）`);
+                showToast(`已导出 ${payload.length} 个频道，已复制到剪贴板`, { tone: 'success', duration: 3000, placement: 'top-center' });
                 return;
             }
             if (downloaded) {
-                alert(`✅ 已导出 ${payload.length} 个频道（已下载 JSON 文件）`);
+                showToast(`已导出 ${payload.length} 个频道，已下载 JSON 文件`, { tone: 'success', duration: 3000, placement: 'top-center' });
             }
         }
 
@@ -1158,21 +1158,21 @@
             try {
                 parsed = parseResourceSourceImportText(input.value);
             } catch (e) {
-                alert(`❌ ${e.message}`);
+                void showAppAlert(e.message || '导入内容解析失败', { title: '导入失败', tone: 'error' });
                 return;
             }
 
             if (!parsed.sources.length) {
                 const firstReasons = parsed.invalidReasons.slice(0, 5).join('\n');
                 const reasonHint = firstReasons ? `\n\n示例问题：\n${firstReasons}` : '';
-                alert(`❌ 没有识别到可导入的频道 ID${reasonHint}`);
+                void showAppAlert(`没有识别到可导入的频道 ID${reasonHint}`, { title: '导入失败', tone: 'error' });
                 return;
             }
 
             const currentSources = Array.isArray(resourceState.sources) ? resourceState.sources : [];
             const replaceExisting = !!replaceEl?.checked;
             if (replaceExisting && currentSources.length) {
-                const ok = confirm(`将覆盖当前 ${currentSources.length} 个频道源，继续导入吗？`);
+                const ok = await showAppConfirm(`将覆盖当前 ${currentSources.length} 个频道源，继续导入吗？`);
                 if (!ok) return;
             }
 
@@ -1325,10 +1325,10 @@
         async function saveResourceSource() {
             const source = currentResourceSourceFormData();
             const isEditing = editingResourceSourceIndex !== null && editingResourceSourceIndex >= 0;
-            if (!source.name && !source.channel_id) return alert('请至少填写频道名称或频道 ID');
-            if (!source.channel_id) return alert('频道 ID 不能为空，例如 QukanMovie');
+            if (!source.name && !source.channel_id) return showToast('请至少填写频道名称或频道 ID', { tone: 'warn', duration: 2600, placement: 'top-center' });
+            if (!source.channel_id) return showToast('频道 ID 不能为空，例如 QukanMovie', { tone: 'warn', duration: 2600, placement: 'top-center' });
             if (!isLikelyTelegramChannelId(source.channel_id)) {
-                return alert('频道 ID 看起来不是有效的公开频道用户名。请填写 t.me 后面的公开频道标识，例如 QukanMovie，而不是备注名或过短的编号。');
+                return showToast('频道 ID 看起来不是有效的公开频道用户名，请填写 t.me 后面的标识', { tone: 'warn', duration: 3800, placement: 'top-center' });
             }
             const sources = [...(resourceState.sources || [])];
             if (editingResourceSourceIndex !== null && editingResourceSourceIndex >= 0) sources[editingResourceSourceIndex] = source;
@@ -1352,7 +1352,7 @@
             if (!source) return;
             const channelId = getResourceSourceChannelId(source);
             const shouldConfirm = options.confirm !== false;
-            if (shouldConfirm && !confirm(`确定删除频道源“${source.name || channelId || '未命名频道'}”吗？`)) return false;
+            if (shouldConfirm && !(await showAppConfirm(`确定删除频道源“${source.name || channelId || '未命名频道'}”吗？`))) return false;
             const sources = [...(resourceState.sources || [])];
             sources.splice(index, 1);
             try {

@@ -327,6 +327,97 @@
         }, tone === 'error' ? 3400 : 2300);
     }
 
+    function showPageDialog({
+        title = '提示',
+        message = '',
+        tone = 'info',
+        confirmText = '确定',
+        cancelText = '取消',
+        showCancel = false
+    } = {}) {
+        return new Promise((resolve) => {
+            const existed = document.getElementById('mh-core-dialog-overlay');
+            if (existed && existed.parentNode) existed.parentNode.removeChild(existed);
+
+            const overlay = document.createElement('div');
+            overlay.id = 'mh-core-dialog-overlay';
+            overlay.style.cssText = [
+                'position:fixed',
+                'inset:0',
+                'z-index:2147483647',
+                'background:rgba(2,6,23,.72)',
+                'backdrop-filter:blur(2px)',
+                'display:flex',
+                'align-items:center',
+                'justify-content:center',
+                'padding:14px'
+            ].join(';');
+            const accent = tone === 'warn' ? '#f59e0b' : (tone === 'error' ? '#ef4444' : '#2777F8');
+            overlay.innerHTML = `
+                <div style="width:min(420px, calc(100vw - 24px));background:#020617;border:1px solid #334155;border-radius:14px;box-shadow:0 26px 60px rgba(0,0,0,.45);color:#e2e8f0;font:13px/1.55 Arial,sans-serif;overflow:hidden;">
+                    <div style="padding:13px 14px;border-bottom:1px solid #334155;">
+                        <div style="font-size:11px;font-weight:800;color:${accent};text-transform:uppercase;">Message</div>
+                        <div style="margin-top:2px;font-size:16px;font-weight:800;color:#f8fafc;">${escapeHtml(title)}</div>
+                    </div>
+                    <div style="padding:14px;color:#cbd5e1;white-space:pre-wrap;word-break:break-word;">${escapeHtml(message)}</div>
+                    <div style="padding:12px 14px;border-top:1px solid #334155;display:flex;justify-content:flex-end;gap:8px;background:#0b1220;">
+                        ${showCancel ? `<button type="button" data-mh-dialog-action="cancel" style="padding:7px 12px;border-radius:9px;border:1px solid #475569;background:#1e293b;color:#e2e8f0;cursor:pointer;">${escapeHtml(cancelText)}</button>` : ''}
+                        <button type="button" data-mh-dialog-action="confirm" style="padding:7px 12px;border-radius:9px;border:1px solid ${accent};background:${accent};color:#fff;cursor:pointer;font-weight:700;">${escapeHtml(confirmText)}</button>
+                    </div>
+                </div>
+            `;
+
+            const done = (value) => {
+                document.removeEventListener('keydown', onKeydown, true);
+                if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+                resolve(value);
+            };
+            const onKeydown = (event) => {
+                if (event.key === 'Escape') {
+                    event.preventDefault();
+                    done(false);
+                }
+                if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    done(true);
+                }
+            };
+
+            document.addEventListener('keydown', onKeydown, true);
+            overlay.addEventListener('click', (event) => {
+                if (event.target === overlay) {
+                    done(false);
+                    return;
+                }
+                const btn = event.target.closest('[data-mh-dialog-action]');
+                if (!btn) return;
+                done(String(btn.dataset.mhDialogAction || '') === 'confirm');
+            });
+            document.body.appendChild(overlay);
+            window.setTimeout(() => overlay.querySelector('[data-mh-dialog-action="confirm"]')?.focus(), 30);
+        });
+    }
+
+    function showPageAlert(message, options = {}) {
+        return showPageDialog({
+            title: options.title || '提示',
+            message,
+            tone: options.tone || 'info',
+            confirmText: options.confirmText || '知道了'
+        });
+    }
+
+    function showPageConfirm(message, options = {}) {
+        return showPageDialog({
+            title: options.title || '确认操作',
+            message,
+            tone: options.tone || 'warn',
+            showCancel: true,
+            confirmText: options.confirmText || '确认',
+            cancelText: options.cancelText || '取消'
+        });
+    }
+
     function escapeHtml(value) {
         return String(value || '')
             .replace(/&/g, '&amp;')
@@ -737,7 +828,7 @@
     async function pushMagnet(task, sourceLink, button) {
         const secret = getSecret();
         if (!secret) {
-            window.alert('请先配置签名密钥');
+            await showPageAlert('请先配置签名密钥', { title: '需要配置' });
             setButtonState(button, 'idle');
             return;
         }
@@ -791,7 +882,7 @@
             if (button.disabled) return;
             const list = activeTasks();
             if (!list.length) {
-                window.alert('没有可用任务，请先通过菜单配置任务并启用');
+                await showPageAlert('没有可用任务，请先通过菜单配置任务并启用', { title: '暂无可用任务' });
                 return;
             }
             const task = await chooseTask(list, source);
@@ -1147,7 +1238,7 @@
             });
         }
         if (els.list) {
-            els.list.addEventListener('click', (event) => {
+            els.list.addEventListener('click', async (event) => {
                 const btn = event.target.closest('[data-mh-action]');
                 if (!btn) return;
                 const action = String(btn.dataset.mhAction || '').trim();
@@ -1221,7 +1312,7 @@
                     return;
                 }
                 if (action === 'delete') {
-                    if (!window.confirm(`确认删除任务“${task.name}”？`)) return;
+                    if (!(await showPageConfirm(`确认删除任务“${task.name}”？`))) return;
                     saveTasks(tasks.filter((item) => item.id !== task.id));
                     if (isTaskEditorOpened(task.id)) resetManagerEditorState();
                     renderManagerTaskList();

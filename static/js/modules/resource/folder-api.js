@@ -242,6 +242,7 @@
                 entriesByParent: cloneJsonValue(resourceShareEntriesByParent, { '0': [] }),
                 nextOffsetByParent: cloneJsonValue(resourceShareNextOffsetByParent, { '0': 0 }),
                 hasMoreByParent: cloneJsonValue(resourceShareHasMoreByParent, {}),
+                diagnosticsByParent: cloneJsonValue(resourceShareDiagnosticsByParent, {}),
                 info: cloneJsonValue(resourceShareInfo, { title: '', count: 0, share_code: '', receive_code: '' }),
                 rootLoaded: !!resourceShareRootLoaded,
                 cached_at: Date.now()
@@ -259,6 +260,7 @@
             resourceShareEntriesByParent = cloneJsonValue(cached.entriesByParent, { '0': [] }) || { '0': [] };
             resourceShareNextOffsetByParent = cloneJsonValue(cached.nextOffsetByParent, { '0': 0 }) || { '0': 0 };
             resourceShareHasMoreByParent = cloneJsonValue(cached.hasMoreByParent, {}) || {};
+            resourceShareDiagnosticsByParent = cloneJsonValue(cached.diagnosticsByParent, {}) || {};
             resourceShareInfo = cloneJsonValue(
                 cached.info,
                 { title: '', count: 0, share_code: '', receive_code: '' }
@@ -282,6 +284,7 @@
             resourceShareLoadingMoreParents = {};
             resourceShareLoading = false;
             resourceShareError = '';
+            resourceShareSearchKeyword = '';
             resourceShareCurrentCid = '0';
             resourceShareTrail = [{ cid: '0', name: resourceShareInfo?.title || '分享根目录' }];
             resourceShareSelected = {};
@@ -299,11 +302,13 @@
             resourceShareLoadingMoreParents = {};
             resourceShareNextOffsetByParent = { '0': 0 };
             resourceShareHasMoreByParent = {};
+            resourceShareDiagnosticsByParent = {};
             resourceShareSelected = {};
             resourceShareLoading = false;
             resourceShareError = '';
             resourceShareRootLoaded = false;
             resourceShareInfo = { title: '', count: 0, share_code: '', receive_code: '' };
+            resourceShareSearchKeyword = '';
             resourceShareReceiveCode = '';
             resourceShareTrail = [{ cid: '0', name: '分享根目录' }];
             resourceShareCurrentCid = '0';
@@ -353,7 +358,7 @@
             const rawCode = String(inputEl?.value || '').trim();
             const normalizedCode = normalizeReceiveCodeInput(rawCode);
             if (rawCode && !normalizedCode) {
-                alert('提取码格式不正确，请输入 1-16 位字母或数字');
+                showToast('提取码格式不正确，请输入 1-16 位字母或数字', { tone: 'warn', duration: 3000, placement: 'top-center' });
                 return;
             }
             resourceShareReceiveCode = normalizedCode;
@@ -400,11 +405,13 @@
                     entries: [],
                     summary: { folder_count: 0, file_count: 0 },
                     share: { title: '', share_code: '', receive_code: '', count: 0 },
+                    diagnostics: {},
                     paging: { offset: normalizedOffset, next_offset: normalizedOffset, has_more: false }
                 });
             }
             const requestPromise = (async () => {
                 let data;
+                const clientStartedAt = performance.now();
                 if (normalizedResourceId > 0) {
                     const params = new URLSearchParams({
                         resource_id: String(normalizedResourceId),
@@ -430,16 +437,26 @@
                         })
                     });
                 }
+                const clientElapsedMs = Math.max(0, Math.round(performance.now() - clientStartedAt));
                 const entries = Array.isArray(data.entries) ? data.entries : [];
                 const paging = data.paging && typeof data.paging === 'object' ? data.paging : {};
                 const nextOffset = Math.max(
                     normalizedOffset + entries.length,
                     Number(paging.next_offset ?? (normalizedOffset + entries.length)) || (normalizedOffset + entries.length)
                 );
+                const diagnostics = data.diagnostics && typeof data.diagnostics === 'object' ? cloneJsonValue(data.diagnostics, {}) : {};
+                const backendElapsedMs = Number(diagnostics?.elapsed_ms || 0);
+                const backendRouteMs = Number(diagnostics?.backend_route_ms || 0);
+                diagnostics.client_elapsed_ms = clientElapsedMs;
+                diagnostics.client_overhead_ms = Math.max(
+                    0,
+                    clientElapsedMs - Math.max(0, Math.round(backendRouteMs || backendElapsedMs || 0))
+                );
                 return {
                     entries,
                     summary: data.summary || { folder_count: 0, file_count: 0 },
                     share: data.share || { title: '', share_code: '', receive_code: '', count: 0 },
+                    diagnostics,
                     paging: {
                         offset: Math.max(0, Number(paging.offset ?? normalizedOffset) || normalizedOffset),
                         next_offset: nextOffset,
@@ -454,6 +471,7 @@
                     entries: [],
                     summary: { folder_count: 0, file_count: 0 },
                     share: { title: '', share_code: '', receive_code: '', count: 0 },
+                    diagnostics: {},
                     paging: { offset: normalizedOffset, next_offset: normalizedOffset, has_more: false }
                 });
             } finally {
@@ -515,6 +533,33 @@
 
         function getCurrentResourceShareEntries() {
             return Array.isArray(resourceShareEntriesByParent?.[resourceShareCurrentCid]) ? resourceShareEntriesByParent[resourceShareCurrentCid] : [];
+        }
+
+        function getFilteredCurrentResourceShareEntries() {
+            const entries = getCurrentResourceShareEntries();
+            const keyword = String(resourceShareSearchKeyword || '').trim().toLowerCase();
+            if (!keyword) return entries;
+            const tokens = keyword.split(/\s+/).filter(Boolean);
+            if (!tokens.length) return entries;
+            return entries.filter(entry => {
+                const name = String(entry?.name || '').toLowerCase();
+                return tokens.every(token => name.includes(token));
+            });
+        }
+
+        function setResourceShareSearchKeyword(value = '') {
+            resourceShareSearchKeyword = String(value || '').trim();
+            renderResourceShareBrowser();
+        }
+
+        function clearResourceShareSearch() {
+            resourceShareSearchKeyword = '';
+            const input = document.getElementById('resource-share-search-input');
+            if (input) {
+                input.value = '';
+                input.focus();
+            }
+            renderResourceShareBrowser();
         }
 
         function isResourceShareEntryEffectivelySelected(entry) {
@@ -643,6 +688,7 @@
                     resourceShareLoadingMoreParents = {};
                     resourceShareNextOffsetByParent = { '0': 0 };
                     resourceShareHasMoreByParent = {};
+                    resourceShareDiagnosticsByParent = {};
                     resourceShareSelected = {};
                 }
                 if (!appendMode) {
@@ -692,6 +738,9 @@
                 );
                 resourceShareNextOffsetByParent[branchId] = nextOffset;
                 resourceShareHasMoreByParent[branchId] = !!result?.paging?.has_more;
+                resourceShareDiagnosticsByParent[branchId] = result?.diagnostics && typeof result.diagnostics === 'object'
+                    ? cloneJsonValue(result.diagnostics, {})
+                    : {};
                 if (isRoot) {
                     if (!appendMode) {
                         resourceShareRootLoaded = true;
@@ -727,7 +776,7 @@
                     resourceShareError = e.message || '读取分享内容失败';
                     syncResourceSharetitleFromSelection({ force: true });
                 } else {
-                    alert(`❌ ${e.message || '读取子目录失败'}`);
+                    showToast(`读取子目录失败：${e.message || '请稍后重试'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
                 }
             } finally {
                 if (appendMode) delete resourceShareLoadingMoreParents[branchId];
@@ -821,6 +870,8 @@
                 get resourceShareLoadingParents() { return resourceShareLoadingParents || {}; },
                 get resourceShareLoadingMoreParents() { return resourceShareLoadingMoreParents || {}; },
                 get resourceShareHasMoreByParent() { return resourceShareHasMoreByParent || {}; },
+                get resourceShareDiagnosticsByParent() { return resourceShareDiagnosticsByParent || {}; },
+                get resourceShareSearchKeyword() { return resourceShareSearchKeyword || ''; },
                 get resourceFolderEntries() { return resourceFolderEntries || []; },
                 get resourceFolderSummary() { return resourceFolderSummary || {}; },
                 get resourceFolderLoading() { return resourceFolderLoading; },
@@ -839,6 +890,7 @@
                 buildResourceShareSelectableEntry,
                 getResourceShareCoveredAncestor,
                 getCurrentResourceShareEntries,
+                getFilteredCurrentResourceShareEntries,
                 isResourceShareEntryEffectivelySelected,
                 isCurrentResource115Share,
                 getResourceProviderLabel,
@@ -1161,6 +1213,8 @@
             isCurrentResource115Share,
             applyResourceShareReceiveCode,
             getResourceShareSelectionState,
+            setResourceShareSearchKeyword,
+            clearResourceShareSearch,
             clearResourceShareSelection,
             setCurrentResourceShareEntriesChecked,
             loadResourceShareBranch,

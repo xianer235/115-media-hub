@@ -410,7 +410,7 @@ USERSCRIPT_MAGNET_HELPER_PATH = os.path.join(BASE_DIR, "115-magnet-helper-webhoo
 RESOURCE_SEASON_EPISODE_REGEX = re.compile(r"\bS(?:0|O)?(\d{1,2})\s*[-_. ]?\s*E(?:0|O)?(\d{1,3})\b", re.IGNORECASE)
 RESOURCE_EPISODE_ONLY_REGEX = re.compile(r"(?:第\s*)(\d{1,3})\s*(?:集|話|话)\b", re.IGNORECASE)
 RESOURCE_EPISODE_ONLY_CN_REGEX = re.compile(r"(?:第\s*)([零〇一二三四五六七八九十两兩]{1,4})\s*(?:集|話|话)\b", re.IGNORECASE)
-RESOURCE_EPISODE_CODE_REGEX = re.compile(r"\b(?:EP|E)\s*[-_. ]?\s*(\d{1,3})\b", re.IGNORECASE)
+RESOURCE_EPISODE_CODE_REGEX = re.compile(r"(?<!\d)(?:EP|E)\s*[-_. ]?\s*(\d{1,3})\b", re.IGNORECASE)
 RESOURCE_EPISODE_RANGE_REGEXES = [
     re.compile(
         r"(?:第?\s*)([零〇一二三四五六七八九十两兩\d]{1,4})\s*[-~～—–－至到]\s*([零〇一二三四五六七八九十两兩\d]{1,4})\s*(?:集|話|话)?\b",
@@ -3835,6 +3835,7 @@ def format_monitor_trigger(trigger: str) -> str:
 def format_subscription_trigger(trigger: str) -> str:
     labels = {
         "manual": "手动触发",
+        "manual_link": "指定链接触发",
         "cron": "时段定时触发",
         "queued": "队列触发",
     }
@@ -4037,6 +4038,7 @@ from .providers.quark import (
     list_quark_share_entries,
     list_quark_share_entries_fast,
     prepare_quark_share_save,
+    probe_quark_connectivity,
     resolve_quark_folder_id_by_path,
     resolve_quark_share_payload,
     submit_quark_share_save,

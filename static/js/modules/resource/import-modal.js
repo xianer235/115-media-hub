@@ -202,12 +202,40 @@
             hideLockedModal('resource-import-modal');
         }
 
+        function shouldConfirmDuplicateShareJob(error) {
+            if (Number(error?.status || 0) !== 409) return false;
+            const linkType = String(error?.payload?.link_type || resourceModalLinkType || '').trim().toLowerCase();
+            if (!['115share', 'quark'].includes(linkType)) return false;
+            return Boolean(error?.payload?.duplicate_confirm_required ?? true);
+        }
+
+        async function createResourceJobWithDuplicateConfirm(payload, { providerLabel = '网盘' } = {}) {
+            try {
+                return await window.MediaHubApi.postJson('/resource/jobs/create', payload);
+            } catch (error) {
+                if (!shouldConfirmDuplicateShareJob(error)) throw error;
+                const message = String(error?.message || error?.payload?.msg || '该链接在当前保存路径已有导入记录。').trim();
+                const jobId = Number(error?.payload?.job_id || 0);
+                const status = String(error?.payload?.status || '').trim();
+                const detail = [
+                    message,
+                    jobId ? `已有任务：#${jobId}${status ? `（${status}）` : ''}` : '',
+                    `如果你这次是从同一个${providerLabel}分享链接里选择不同文件，可以继续创建新任务。是否继续？`
+                ].filter(Boolean).join('\n\n');
+                if (!(await showAppConfirm(detail))) return { ok: false, cancelled: true };
+                return window.MediaHubApi.postJson('/resource/jobs/create', {
+                    ...payload,
+                    allow_duplicate: true
+                });
+            }
+        }
+
         async function submitResourceJob() {
             if (resourceSubmitBusy) {
                 showToast('正在提交中，请勿重复点击', { tone: 'info', duration: 2200, placement: 'top-center' });
                 return;
             }
-            if (!selectedResourceItem) return alert('未选择资源');
+            if (!selectedResourceItem) return showToast('未选择资源', { tone: 'warn', duration: 2400, placement: 'top-center' });
             resourceSubmitBusy = true;
             renderResourceModalLayout(selectedResourceItem);
             try {
@@ -218,14 +246,14 @@
                 const selectionState = getResourceShareSelectionState();
                 const hasLoadedShareSelectableOption = Object.keys(resourceShareEntryIndex || {}).length > 0;
                 if (!batchMode && isCurrentResource115Share() && resourceShareRootLoaded && !selectionState.selected_ids.length && hasLoadedShareSelectableOption) {
-                    return alert('请先至少勾选一个要转存的条目');
+                    return showToast('请先至少勾选一个要转存的条目', { tone: 'warn', duration: 2800, placement: 'top-center' });
                 }
                 let receiveCode = '';
                 if (!batchMode && isCurrentResource115Share()) {
                     const rawReceiveCode = String(document.getElementById('resource_share_receive_code')?.value || resourceShareReceiveCode || '').trim();
                     receiveCode = normalizeReceiveCodeInput(rawReceiveCode);
                     if (rawReceiveCode && !receiveCode) {
-                        return alert('提取码格式不正确，请输入 1-16 位字母或数字');
+                        return showToast('提取码格式不正确，请输入 1-16 位字母或数字', { tone: 'warn', duration: 3000, placement: 'top-center' });
                     }
                     resourceShareReceiveCode = receiveCode;
                 }
@@ -233,7 +261,7 @@
                 if (!folderSelectionValid) return;
                 const savepath = normalizeRelativePathInput(document.getElementById('resource_job_savepath').value.trim());
                 if (!savepath) {
-                    return alert(`请先选择一个非根目录的${currentProviderLabel}保存目录`);
+                    return showToast(`请先选择一个非根目录的${currentProviderLabel}保存目录`, { tone: 'warn', duration: 3000, placement: 'top-center' });
                 }
                 const folderId = String(document.getElementById('resource_job_folder_id')?.value || '').trim();
                 const refreshDelaySeconds = normalizeResourceRefreshDelaySeconds(
@@ -346,11 +374,12 @@
                 }
                 let data = {};
                 try {
-                    data = await window.MediaHubApi.postJson('/resource/jobs/create', payload);
+                    data = await createResourceJobWithDuplicateConfirm(payload, { providerLabel: currentProviderLabel });
                 } catch (e) {
                     showToast(`提交失败：${e?.message || '网络请求失败'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
                     return;
                 }
+                if (data?.cancelled) return;
                 if (!data.ok) {
                     showToast(`提交失败：${data.msg || '请稍后重试'}`, { tone: 'error', duration: 3000, placement: 'top-center' });
                     return;
@@ -379,13 +408,13 @@
             const item = findResourceItem(resourceId) || (selectedResourceItem && Number(selectedResourceItem?.id || 0) === Number(resourceId || 0) ? selectedResourceItem : null);
             if (!item) return;
             const text = getResourceCopyText(item);
-            if (!text) return alert('这条资源没有可复制的内容');
+            if (!text) return showToast('这条资源没有可复制的内容', { tone: 'warn', duration: 2400, placement: 'top-center' });
             try {
                 if (!navigator.clipboard?.writeText) throw new Error('当前浏览器不支持剪贴板接口');
                 await navigator.clipboard.writeText(text);
-                alert('✅ 已复制到剪贴板');
+                showToast('已复制到剪贴板', { tone: 'success', duration: 2200, placement: 'top-center' });
             } catch (e) {
-                window.prompt('复制失败，请手动复制下面的内容：', text);
+                void showAppPrompt('复制失败，请手动复制下面的内容：', text);
             }
         }
 

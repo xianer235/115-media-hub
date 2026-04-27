@@ -71,6 +71,11 @@
                                 </div>
                                 <div class="resource-browser-toolbar mt-3">
                                     <div id="resource-share-root-title" class="resource-browser-breadcrumbs">--</div>
+                                    <div id="resource-share-stage-timing" class="resource-share-stage-timing hidden"></div>
+                                </div>
+                                <div class="resource-share-filter-row">
+                                    <input id="resource-share-search-input" class="resource-share-search-input" placeholder="搜索当前目录文件名 / 集数，例如 135 或 4K" oninput="setResourceShareSearchKeyword(this.value)">
+                                    <button type="button" onclick="clearResourceShareSearch()" class="resource-share-search-clear">清空</button>
                                 </div>
                                 <div class="resource-browser-table mt-3">
                                     <div class="resource-browser-header">

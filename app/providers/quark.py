@@ -1,4 +1,5 @@
 import threading
+import logging
 
 import requests
 
@@ -35,6 +36,29 @@ _quark_share_page_cache_lock = threading.Lock()
 _quark_share_result_cache_lock = threading.Lock()
 _quark_share_singleflight: Dict[str, Dict[str, Any]] = {}
 _quark_share_singleflight_lock = threading.Lock()
+
+
+def _build_quark_timing_mark(started_mono: float, last_mono: float) -> Tuple[int, float]:
+    now_mono = time.monotonic()
+    return int((now_mono - last_mono) * 1000), now_mono
+
+
+def _log_quark_share_timing(mode: str, pwd_id: str, cid: str, timings: List[Dict[str, Any]], total_ms: int) -> None:
+    safe_pwd_id = str(pwd_id or "").strip()
+    safe_cid = str(cid or "0").strip() or "0"
+    stage_text = " / ".join(
+        f"{str(item.get('label', '') or item.get('stage', '')).strip()}: {int(item.get('ms', 0) or 0)}ms"
+        for item in (timings or [])
+        if int(item.get("ms", 0) or 0) >= 0
+    )
+    logging.info(
+        "Quark share %s timing pwd_id=%s cid=%s total=%sms%s",
+        str(mode or "read").strip() or "read",
+        f"{safe_pwd_id[:6]}***" if len(safe_pwd_id) > 6 else safe_pwd_id,
+        safe_cid,
+        total_ms,
+        f" stages=[{stage_text}]" if stage_text else "",
+    )
 
 
 def _get_quark_http_session() -> requests.Session:
@@ -86,6 +110,16 @@ def _clone_quark_share_result_payload(payload: Dict[str, Any]) -> Dict[str, Any]
     for key in ("elapsed_ms",):
         if key in source:
             cloned[key] = int(source.get(key, 0) or 0)
+    if isinstance(source.get("timings"), list):
+        cloned["timings"] = [
+            {
+                "stage": str(item.get("stage", "") or "").strip(),
+                "label": str(item.get("label", "") or "").strip(),
+                "ms": int(item.get("ms", 0) or 0),
+            }
+            for item in source.get("timings", [])
+            if isinstance(item, dict)
+        ]
     for key in ("cache_error", "cache_cid"):
         if key in source:
             cloned[key] = str(source.get(key, "") or "").strip()
@@ -411,6 +445,44 @@ def resolve_quark_share_payload(cookie: str, share_url: str, raw_text: str = "",
     if not parsed.get("pwd_id"):
         raise RuntimeError("未能识别夸克分享链接")
     return parsed
+
+
+def probe_quark_connectivity(cookie: str = "", timeout: float = 5.0) -> Dict[str, Any]:
+    request_timeout = max(1.0, min(15.0, float(timeout or 5.0)))
+    headers = _build_quark_headers(str(cookie or "").strip(), referer="https://pan.quark.cn/")
+    probes: List[Dict[str, Any]] = []
+    started = time.monotonic()
+    for label, url in (
+        ("分享页", "https://pan.quark.cn"),
+        ("接口", "https://drive-h.quark.cn"),
+        ("网盘", "https://drive-pc.quark.cn"),
+    ):
+        item_started = time.monotonic()
+        row: Dict[str, Any] = {"label": label, "url": url, "ok": False, "status": 0, "elapsed_ms": 0, "error": ""}
+        try:
+            response = _get_quark_http_session().get(
+                url,
+                headers=headers,
+                timeout=(min(2.0, request_timeout), request_timeout),
+            )
+            row["status"] = int(response.status_code or 0)
+            row["ok"] = int(response.status_code or 0) < 500
+        except Exception as exc:
+            row["error"] = str(exc or "请求失败").strip()[:240]
+        finally:
+            row["elapsed_ms"] = int((time.monotonic() - item_started) * 1000)
+            probes.append(row)
+    total_ms = int((time.monotonic() - started) * 1000)
+    logging.info(
+        "Quark connectivity probe total=%sms probes=%s",
+        total_ms,
+        " / ".join(f"{item['label']}:{item['elapsed_ms']}ms:{item.get('status') or item.get('error')}" for item in probes),
+    )
+    return {
+        "ok": any(bool(item.get("ok")) for item in probes),
+        "elapsed_ms": total_ms,
+        "probes": probes,
+    }
 
 def _build_quark_api_url(path: str, query: Optional[Dict[str, Any]] = None, host: str = "https://drive-pc.quark.cn") -> str:
     normalized_path = str(path or "").strip()
@@ -1041,6 +1113,8 @@ def list_quark_share_entries_fast(
     deadline_seconds = max(1.0, min(8.0, float(request_timeout or _QUARK_SHARE_FAST_DEADLINE_SECONDS)))
     deadline_ts = time.monotonic() + deadline_seconds
     started_mono = time.monotonic()
+    last_mono = started_mono
+    timings: List[Dict[str, Any]] = []
     result_cache_key = _build_quark_share_cache_key(
         "fast_result",
         normalized_cookie,
@@ -1060,6 +1134,7 @@ def list_quark_share_entries_fast(
             return cached_result
 
     def request_result() -> Dict[str, Any]:
+        nonlocal last_mono
         if not force_refresh:
             cached_inner = _get_quark_memory_cache_payload(
                 _quark_share_result_cache,
@@ -1077,6 +1152,9 @@ def list_quark_share_entries_fast(
             force_refresh=force_refresh,
             deadline_ts=deadline_ts,
         )
+        elapsed_ms, next_last_mono = _build_quark_timing_mark(started_mono, last_mono)
+        timings.append({"stage": "token", "label": "令牌", "ms": elapsed_ms})
+        last_mono = next_last_mono
         page_payload = _list_quark_share_page_fast(
             normalized_cookie,
             pwd_id,
@@ -1087,6 +1165,9 @@ def list_quark_share_entries_fast(
             force_refresh=force_refresh,
             deadline_ts=deadline_ts,
         )
+        elapsed_ms, next_last_mono = _build_quark_timing_mark(started_mono, last_mono)
+        timings.append({"stage": "detail", "label": "目录", "ms": elapsed_ms})
+        last_mono = next_last_mono
         page_entries = page_payload.get("entries", []) if isinstance(page_payload.get("entries"), list) else []
         if skip_in_page > 0:
             page_entries = page_entries[skip_in_page:]
@@ -1113,7 +1194,9 @@ def list_quark_share_entries_fast(
             "stoken": stoken,
             "fast_path": True,
             "elapsed_ms": int((time.monotonic() - started_mono) * 1000),
+            "timings": timings,
         }
+        _log_quark_share_timing("fast", pwd_id, current_cid, timings, int(result_payload.get("elapsed_ms", 0) or 0))
         _set_quark_memory_cache_payload(
             _quark_share_result_cache,
             _quark_share_result_cache_lock,
@@ -1212,7 +1295,13 @@ def list_quark_share_entries(
     if not normalized_cookie:
         raise RuntimeError("Quark Cookie 未配置")
     try:
+        started_mono = time.monotonic()
+        last_mono = started_mono
+        timings: List[Dict[str, Any]] = []
         parsed = resolve_quark_share_payload(normalized_cookie, share_url, raw_text, receive_code)
+        elapsed_ms, next_last_mono = _build_quark_timing_mark(started_mono, last_mono)
+        timings.append({"stage": "parse", "label": "链接", "ms": elapsed_ms})
+        last_mono = next_last_mono
         pwd_id = str(parsed.get("pwd_id", "") or parsed.get("share_code", "")).strip()
         if not pwd_id:
             raise RuntimeError("未能识别夸克分享链接")
@@ -1249,6 +1338,9 @@ def list_quark_share_entries(
             force_refresh=force_refresh,
             timeout=request_timeout_value,
         )
+        elapsed_ms, next_last_mono = _build_quark_timing_mark(started_mono, last_mono)
+        timings.append({"stage": "token", "label": "令牌", "ms": elapsed_ms})
+        last_mono = next_last_mono
         entries: List[Dict[str, Any]] = []
         total_count = 0
         pages_scanned = 0
@@ -1267,6 +1359,9 @@ def list_quark_share_entries(
                     force_refresh=force_refresh,
                     timeout=request_timeout_value,
                 )
+                elapsed_ms, next_last_mono = _build_quark_timing_mark(started_mono, last_mono)
+                timings.append({"stage": f"detail_page_{page_no}", "label": f"目录P{page_no}", "ms": elapsed_ms})
+                last_mono = next_last_mono
                 page_entries = page_payload.get("entries", []) if isinstance(page_payload.get("entries"), list) else []
                 if folder_only_mode:
                     page_entries = [entry for entry in page_entries if entry.get("is_dir")]
@@ -1296,6 +1391,9 @@ def list_quark_share_entries(
                 force_refresh=force_refresh,
                 timeout=request_timeout_value,
             )
+            elapsed_ms, next_last_mono = _build_quark_timing_mark(started_mono, last_mono)
+            timings.append({"stage": f"detail_page_{page_no}", "label": f"目录P{page_no}", "ms": elapsed_ms})
+            last_mono = next_last_mono
             page_entries = page_payload.get("entries", []) if isinstance(page_payload.get("entries"), list) else []
             if skip_in_page > 0:
                 page_entries = page_entries[skip_in_page:]
@@ -1328,7 +1426,10 @@ def list_quark_share_entries(
             "has_more": bool(has_more),
             "pages_scanned": pages_scanned,
             "stoken": stoken,
+            "elapsed_ms": int((time.monotonic() - started_mono) * 1000),
+            "timings": timings,
         }
+        _log_quark_share_timing("full", pwd_id, current_cid, timings, int(result_payload.get("elapsed_ms", 0) or 0))
         _set_quark_memory_cache_payload(
             _quark_share_result_cache,
             _quark_share_result_cache_lock,

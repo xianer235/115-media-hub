@@ -403,6 +403,7 @@ export async function saveSettings({
     refreshResourceState,
     refreshSign115Status,
     getMonitorTasks,
+    showToast,
 } = {}) {
     const cfg = collectSettingsPayload({
         sensitiveSettingFields,
@@ -412,7 +413,9 @@ export async function saveSettings({
     try {
         data = await window.MediaHubApi.postJson('/save_settings', cfg);
     } catch (error) {
-        window.alert(`❌ ${error?.message || '保存失败'}`);
+        if (typeof showToast === 'function') {
+            showToast(`保存失败：${error?.message || '请稍后重试'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
+        }
         return false;
     }
 
@@ -430,12 +433,16 @@ export async function saveSettings({
         if (typeof applySensitiveConfigMeta === 'function') {
             applySensitiveConfigMeta(nextSensitiveMeta);
         }
-        window.alert('✅ 配置已保存');
+        if (typeof showToast === 'function') {
+            showToast('配置已保存', { tone: 'success', duration: 2400, placement: 'top-center' });
+        }
         if (typeof refreshResourceState === 'function') void refreshResourceState({ allowSearch: false });
         if (typeof refreshSign115Status === 'function') void refreshSign115Status(false);
         return true;
     }
 
-    window.alert(`❌ ${data?.msg || '保存失败'}`);
+    if (typeof showToast === 'function') {
+        showToast(`保存失败：${data?.msg || '请稍后重试'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
+    }
     return false;
 }

@@ -241,6 +241,32 @@
             </div>
         </div>
 
+        <div id="subscription-link-scan-modal" class="hidden fixed inset-0 bg-black/65 backdrop-blur-sm z-[58] p-4">
+            <div class="subscription-link-scan-shell group-card modal-card">
+                <div class="subscription-link-scan-header">
+                    <div class="min-w-0">
+                        <div class="subscription-link-scan-eyebrow">Quark Link Scan</div>
+                        <h3 class="subscription-link-scan-title">指定夸克链接扫描</h3>
+                        <div id="subscription-link-scan-task-label" class="subscription-link-scan-subtitle">选择一个夸克订阅任务后粘贴分享链接。</div>
+                    </div>
+                    <button type="button" onclick="closeSubscriptionLinkScanModal()" class="subscription-link-scan-close" aria-label="关闭指定夸克链接扫描弹窗">关闭</button>
+                </div>
+                <div class="subscription-link-scan-body">
+                    <input id="subscription-link-scan-task-name" type="hidden" value="">
+                    <label class="block">
+                        <span class="subscription-link-scan-label">夸克分享链接或完整分享文本</span>
+                        <textarea id="subscription-link-scan-text" class="subscription-link-scan-input" rows="6" placeholder="粘贴 https://pan.quark.cn/s/xxxxxx，或包含链接与提取码的整段分享文本"></textarea>
+                    </label>
+                    <div id="subscription-link-scan-error" class="subscription-link-scan-error hidden"></div>
+                    <div class="subscription-link-scan-note">提交后会跳过频道搜索，把这个链接当作已命中标题的候选资源，继续走订阅的集数识别、缺失判断和导入流程。</div>
+                </div>
+                <div class="subscription-link-scan-footer">
+                    <button type="button" onclick="closeSubscriptionLinkScanModal()" class="subscription-link-scan-btn subscription-link-scan-btn-secondary">取消</button>
+                    <button id="subscription-link-scan-submit-btn" type="button" onclick="submitSubscriptionLinkScan()" class="subscription-link-scan-btn subscription-link-scan-btn-primary">开始扫描</button>
+                </div>
+            </div>
+        </div>
+
         <div id="subscription-tmdb-modal" class="hidden fixed inset-0 bg-black/60 z-[57] p-4">
             <div class="w-full max-w-3xl mx-auto mt-[6vh] max-h-[88vh] overflow-y-auto group-card modal-card">
                 <div class="flex items-center justify-between">

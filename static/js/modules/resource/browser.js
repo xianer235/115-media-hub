@@ -40,9 +40,17 @@
         const card = document.getElementById('resource-share-browser-card');
         const treeEl = document.getElementById('resource-share-tree');
         const rootTitleEl = document.getElementById('resource-share-root-title');
+        const timingEl = document.getElementById('resource-share-stage-timing');
+        const searchInputEl = document.getElementById('resource-share-search-input');
         const currentCheckAllEl = document.getElementById('resource-share-current-check-all');
         const selectedCountEl = document.getElementById('resource-share-selected-count');
         if (!card || !treeEl || !rootTitleEl) return;
+        const formatTimingMs = (value) => {
+            const ms = Math.max(0, Math.round(Number(value || 0)));
+            if (ms >= 10000) return `${(ms / 1000).toFixed(1)}s`;
+            if (ms >= 1000) return `${(ms / 1000).toFixed(2)}s`;
+            return `${ms}ms`;
+        };
 
         const importMode = ctx.resourceModalMode === 'import';
         const isShare = ctx.isCurrentResource115Share();
@@ -78,6 +86,8 @@
         }
 
         const currentEntries = ctx.getCurrentResourceShareEntries();
+        const filteredEntries = ctx.getFilteredCurrentResourceShareEntries();
+        const searchKeyword = String(ctx.resourceShareSearchKeyword || '').trim();
         const currentFolderLoading = !!ctx.resourceShareLoadingParents[ctx.resourceShareCurrentCid];
         const currentFolderLoadingMore = !!ctx.resourceShareLoadingMoreParents[ctx.resourceShareCurrentCid];
         const currentFolderHasMore = !!ctx.resourceShareHasMoreByParent[ctx.resourceShareCurrentCid];
@@ -97,6 +107,29 @@
             })
         ].join(' ');
         rootTitleEl.innerHTML = breadcrumbHtml;
+        if (searchInputEl && searchInputEl.value !== searchKeyword) searchInputEl.value = searchKeyword;
+
+        if (timingEl) {
+            const diagnostics = ctx.resourceShareDiagnosticsByParent?.[ctx.resourceShareCurrentCid] || {};
+            const totalMs = Number(diagnostics?.elapsed_ms || 0);
+            const clientMs = Number(diagnostics?.client_elapsed_ms || 0);
+            const overheadMs = Number(diagnostics?.client_overhead_ms || 0);
+            const backendQueueMs = Number(diagnostics?.backend_queue_ms || 0);
+            const timings = Array.isArray(diagnostics?.timings) ? diagnostics.timings : [];
+            if (clientMs > 0 || totalMs > 0 || timings.length) {
+                const cacheText = diagnostics?.cache_derived ? ' · 缓存' : '';
+                const summaryParts = [];
+                if (clientMs > 0) summaryParts.push(`总 ${ctx.escapeHtml(formatTimingMs(clientMs))}`);
+                if (backendQueueMs > 20) summaryParts.push(`排队 ${ctx.escapeHtml(formatTimingMs(backendQueueMs))}`);
+                if (totalMs > 0) summaryParts.push(`解析 ${ctx.escapeHtml(formatTimingMs(totalMs))}`);
+                if (overheadMs > 20) summaryParts.push(`传输 ${ctx.escapeHtml(formatTimingMs(overheadMs))}`);
+                timingEl.classList.remove('hidden');
+                timingEl.innerHTML = `${summaryParts.join(' · ')}${cacheText}`;
+            } else {
+                timingEl.classList.add('hidden');
+                timingEl.innerHTML = '';
+            }
+        }
 
         if (ctx.resourceShareLoading || currentFolderLoading) {
             treeEl.innerHTML = `<div class="resource-browser-empty">正在读取${ctx.escapeHtml(providerLabel)}分享目录，请稍候...</div>`;
@@ -108,6 +141,8 @@
             treeEl.innerHTML = '<div class="resource-browser-empty">这里会显示分享里的目录和文件列表，你可以进入文件夹后再勾选具体内容。</div>';
         } else if (!currentEntries.length) {
             treeEl.innerHTML = '<div class="resource-browser-empty">这个目录下暂时没有可转存的内容。</div>';
+        } else if (!filteredEntries.length) {
+            treeEl.innerHTML = `<div class="resource-browser-empty">当前已加载的 ${ctx.escapeHtml(String(currentEntries.length))} 个条目中没有匹配“${ctx.escapeHtml(searchKeyword)}”。</div>`;
         } else {
             const loadMoreHtml = currentFolderHasMore
                 ? `
@@ -121,7 +156,10 @@
                     </div>
                 `
                 : '';
-            treeEl.innerHTML = `${buildResourceShareRows(ctx, currentEntries)}${loadMoreHtml}`;
+            const filterNoteHtml = searchKeyword
+                ? `<div class="resource-browser-filter-note">已过滤 ${ctx.escapeHtml(String(filteredEntries.length))} / ${ctx.escapeHtml(String(currentEntries.length))} 个当前目录条目</div>`
+                : '';
+            treeEl.innerHTML = `${filterNoteHtml}${buildResourceShareRows(ctx, filteredEntries)}${loadMoreHtml}`;
         }
 
         const selectedInCurrentCount = currentEntries.filter(entry => ctx.isResourceShareEntryEffectivelySelected(entry)).length;

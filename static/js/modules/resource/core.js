@@ -665,7 +665,7 @@
                 touchResourceQuickLink(item.id);
                 showToast('链接已复制到剪贴板', { tone: 'success', duration: 2200, placement: 'top-center' });
             } catch (e) {
-                window.prompt('复制失败，请手动复制以下链接：', item.url);
+                void showAppPrompt('复制失败，请手动复制以下链接：', item.url);
             }
         }
 
@@ -762,7 +762,7 @@
         async function deleteResourceQuickLink(linkId) {
             const item = getResourceQuickLinkById(linkId);
             if (!item) return;
-            if (!confirm(`确认删除常用链接「${item.name || '未命名链接'}」吗？`)) return;
+            if (!(await showAppConfirm(`确认删除常用链接「${item.name || '未命名链接'}」吗？`))) return;
             const targetId = String(item.id || '').trim();
             const nextLinks = (resourceQuickLinks || []).filter(link => String(link?.id || '').trim() !== targetId);
             const saved = await persistResourceQuickLinksToBackend(nextLinks);
@@ -1506,7 +1506,7 @@
                 renderResourceBoard();
                 return data;
             } catch (e) {
-                alert(`❌ ${e.message || '获取更多资源失败'}`);
+                showToast(`获取更多资源失败：${e.message || '请稍后重试'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
                 return null;
             } finally {
                 resourceChannelLoadingMore = {
@@ -2191,7 +2191,7 @@
                     const latencyMs = await resolveResourceTgLatencyMs(latencyProbePromise);
                     applyResourceTgHealthFailure('search', getActionElapsedMs(startedAt), latencyMs);
                 }
-                alert(`❌ ${e.message || '搜索失败'}`);
+                showToast(`搜索失败：${e.message || '请稍后重试'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
                 return null;
             } finally {
                 resourceSearchBusy = false;
@@ -2272,23 +2272,24 @@
             const meta = getResourceJobClearMeta(scope);
             closeResourceJobClearMenu();
             if (meta.count <= 0) {
-                alert(meta.emptyText);
+                showToast(meta.emptyText, { tone: 'warn', duration: 2600, placement: 'top-center' });
                 return;
             }
-            if (!confirm(meta.confirmText)) return;
+            if (!(await showAppConfirm(meta.confirmText))) return;
             let data = {};
             try {
                 data = await window.MediaHubApi.postJson('/resource/jobs/clear', { scope: meta.scope });
             } catch (error) {
-                return alert(`❌ ${error?.message || '清空失败'}`);
+                showToast(`清空失败：${error?.message || '请稍后重试'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
+                return;
             }
             await refreshResourceState();
             await fetchResourceJobsPage({ status: resourceJobFilter, offset: 0 });
             const deleted = Number(data.deleted || 0);
             if (deleted > 0) {
-                alert(`✅ 已清空 ${deleted} 条${meta.label}导入记录`);
+                showToast(`已清空 ${deleted} 条${meta.label}导入记录`, { tone: 'success', duration: 2600, placement: 'top-center' });
             } else {
-                alert(`✅ ${meta.emptyText}`);
+                showToast(meta.emptyText, { tone: 'info', duration: 2600, placement: 'top-center' });
             }
         }
 

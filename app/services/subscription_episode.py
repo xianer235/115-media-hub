@@ -44,6 +44,71 @@ def _is_subscription_skipped_archive_file(name: str) -> bool:
     return normalized_name.rsplit(".", 1)[-1].lower() in {"zip", "rar"}
 
 
+def _is_subscription_numeric_episode_quality_suffix(suffix: str) -> bool:
+    normalized_suffix = str(suffix or "").strip().lower()
+    if not normalized_suffix:
+        return False
+
+    tokens = re.findall(r"[a-z0-9]+", normalized_suffix)
+    if not tokens:
+        return False
+
+    quality_tokens = {
+        "4k",
+        "uhd",
+        "2160p",
+        "1080p",
+        "720p",
+        "480p",
+        "360p",
+        "hdr",
+        "hdr10",
+        "dv",
+        "remux",
+        "bluray",
+        "bdrip",
+        "web",
+        "webdl",
+        "dl",
+        "webrip",
+    }
+    allowed_tokens = quality_tokens.union(
+        {
+            "x264",
+            "x265",
+            "h264",
+            "h265",
+            "hevc",
+            "avc",
+            "aac",
+            "ddp",
+            "dd",
+            "atmos",
+            "truehd",
+            "flac",
+            "10bit",
+            "8bit",
+        }
+    )
+    has_quality_signal = False
+    for token in tokens:
+        if token in quality_tokens:
+            has_quality_signal = True
+            continue
+        if token in allowed_tokens:
+            continue
+        if re.fullmatch(r"\d{3,4}p", token):
+            has_quality_signal = True
+            continue
+        if re.fullmatch(r"\d+k", token):
+            has_quality_signal = True
+            continue
+        if re.fullmatch(r"v\d{1,2}", token):
+            continue
+        return False
+    return has_quality_signal
+
+
 def _extract_subscription_season_values_from_segment(segment: str) -> Set[int]:
     normalized_segment = str(segment or "").strip()
     if not normalized_segment:
@@ -159,6 +224,16 @@ def _extract_numeric_episode_from_filename(file_name: str) -> int:
         if not matched:
             continue
         value = max(0, int(matched.group(1) or 0))
+        if 0 < value <= 5000:
+            return value
+
+    quality_tail_match = re.match(
+        r"^(?:第\s*)?0*(\d{1,3})(?:\s*(?:集|话|話))?(?P<suffix>[\s._\-+(){}\[\]<>【】（）「」《》]+.+)$",
+        stem_tail_numeric,
+        re.IGNORECASE,
+    )
+    if quality_tail_match and _is_subscription_numeric_episode_quality_suffix(quality_tail_match.group("suffix")):
+        value = max(0, int(quality_tail_match.group(1) or 0))
         if 0 < value <= 5000:
             return value
     return 0

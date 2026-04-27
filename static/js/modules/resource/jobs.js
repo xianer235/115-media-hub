@@ -4,14 +4,15 @@
         try {
             data = await window.MediaHubApi.postJson('/resource/jobs/refresh', { job_id: jobId });
         } catch (error) {
-            return alert(`❌ ${error?.message || '触发刷新失败'}`);
+            ctx.showToast(`触发刷新失败：${error?.message || '请稍后重试'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
+            return;
         }
         await ctx.refreshResourceState();
-        alert('✅ 已触发文件夹监控任务');
+        ctx.showToast('已触发文件夹监控任务', { tone: 'success', duration: 2600, placement: 'top-center' });
     }
 
     async function triggerCancel(ctx, jobId) {
-        if (!confirm('确定要取消这个导入任务吗？')) return;
+        if (!(await window.showAppConfirm('确定要取消这个导入任务吗？'))) return;
         try {
             await window.MediaHubApi.postJson('/resource/jobs/cancel', { job_id: jobId });
         } catch (error) {

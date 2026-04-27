@@ -34,8 +34,28 @@
             </button>
         </form>
     </div>
+    <div id="login-alert-modal" class="hidden fixed inset-0 z-50 bg-black/65 backdrop-blur-sm p-4 flex items-center justify-center">
+        <div class="w-full max-w-sm rounded-3xl border border-slate-700 bg-slate-800 shadow-2xl overflow-hidden">
+            <div class="px-5 py-4 border-b border-slate-700">
+                <div class="text-[11px] font-black uppercase text-sky-300">Message</div>
+                <div id="login-alert-title" class="text-lg font-black text-white mt-1">提示</div>
+            </div>
+            <div id="login-alert-message" class="px-5 py-4 text-sm leading-7 text-slate-200"></div>
+            <div class="px-5 py-4 border-t border-slate-700 flex justify-end">
+                <button type="button" onclick="closeLoginAlert()" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">知道了</button>
+            </div>
+        </div>
+    </div>
 
     <script>
+        function showLoginAlert(message, title = '提示') {
+            document.getElementById('login-alert-title').innerText = title;
+            document.getElementById('login-alert-message').innerText = message;
+            document.getElementById('login-alert-modal').classList.remove('hidden');
+        }
+        function closeLoginAlert() {
+            document.getElementById('login-alert-modal').classList.add('hidden');
+        }
         document.getElementById('loginForm').onsubmit = async (e) => {
             e.preventDefault(); // 阻止表单原生跳转
             
@@ -60,12 +80,12 @@
                     // 登录成功，JS 控制页面跳转
                     window.location.href = '/';
                 } else {
-                    alert('登录失败：' + (result.msg || '账号或密码错误'));
+                    showLoginAlert('登录失败：' + (result.msg || '账号或密码错误'), '登录失败');
                     btn.disabled = false;
                     btn.innerText = '进入管理后台';
                 }
             } catch (err) {
-                alert('网络错误，请检查服务器是否运行');
+                showLoginAlert('网络错误，请检查服务器是否运行', '网络错误');
                 btn.disabled = false;
                 btn.innerText = '进入管理后台';
             }

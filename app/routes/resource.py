@@ -26,9 +26,19 @@ RESOURCE_QUARK_SHARE_FAST_DEADLINE_SECONDS = max(
     min(8.0, float(os.environ.get("QUARK_SHARE_FAST_DEADLINE_SECONDS", 3.0) or 3.0)),
 )
 RESOURCE_BROWSE_WORKERS = max(2, min(8, int(os.environ.get("RESOURCE_BROWSE_WORKERS", 4) or 4)))
+RESOURCE_QUARK_SHARE_WORKERS = max(2, min(8, int(os.environ.get("RESOURCE_QUARK_SHARE_WORKERS", 4) or 4)))
+RESOURCE_115_SHARE_WORKERS = max(2, min(8, int(os.environ.get("RESOURCE_115_SHARE_WORKERS", 3) or 3)))
 resource_browse_executor = ThreadPoolExecutor(
     max_workers=RESOURCE_BROWSE_WORKERS,
     thread_name_prefix="resource-browse",
+)
+resource_quark_share_executor = ThreadPoolExecutor(
+    max_workers=RESOURCE_QUARK_SHARE_WORKERS,
+    thread_name_prefix="resource-quark-share",
+)
+resource_115_share_executor = ThreadPoolExecutor(
+    max_workers=RESOURCE_115_SHARE_WORKERS,
+    thread_name_prefix="resource-115-share",
 )
 resource_channel_sync_submit_lock = threading.Lock()
 resource_channel_sync_submitted = False
@@ -173,6 +183,36 @@ def _build_resource_share_entries_response(
 ) -> Dict[str, Any]:
     entries = result.get("entries", []) if isinstance(result, dict) else []
     compact_entries = _compact_resource_browser_entries(entries, include_share_fields=True)
+    diagnostics: Dict[str, Any] = {}
+    if isinstance(result, dict):
+        timings = result.get("timings", []) if isinstance(result.get("timings"), list) else []
+        if timings or result.get("elapsed_ms") is not None:
+            diagnostics = {
+                "elapsed_ms": parse_int(result.get("elapsed_ms"), default=0),
+                "timings": [
+                    {
+                        "stage": str(item.get("stage", "") or "").strip(),
+                        "label": str(item.get("label", "") or "").strip(),
+                        "ms": parse_int(item.get("ms"), default=0),
+                    }
+                    for item in timings
+                    if isinstance(item, dict)
+                ],
+                "pages_scanned": parse_int(result.get("pages_scanned"), default=0),
+                "fast_path": bool(result.get("fast_path", False)),
+                "cache_derived": bool(result.get("cache_derived", False)),
+                "cache_stale": bool(result.get("cache_stale", False)),
+                "cache_error": str(result.get("cache_error", "") or "").strip(),
+            }
+            transport_timings = result.get("transport_timings", {})
+            if isinstance(transport_timings, dict):
+                diagnostics.update(
+                    {
+                        "backend_queue_ms": parse_int(transport_timings.get("backend_queue_ms"), default=0),
+                        "backend_worker_ms": parse_int(transport_timings.get("backend_worker_ms"), default=0),
+                        "backend_route_ms": parse_int(transport_timings.get("backend_route_ms"), default=0),
+                    }
+                )
     return {
         "ok": True,
         "cid": cid,
@@ -199,6 +239,7 @@ def _build_resource_share_entries_response(
             "paged": paged,
             "folders_only": folders_only,
         },
+        "diagnostics": diagnostics,
     }
 
 
@@ -244,9 +285,34 @@ def _build_resource_folder_response(
     }
 
 
-async def run_resource_browse_io(func, *args, **kwargs):
+def _run_resource_browse_io_timed(func, submitted_mono: float, args: tuple, kwargs: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
+    started_mono = time.monotonic()
+    result = func(*args, **kwargs)
+    finished_mono = time.monotonic()
+    return result, {
+        "backend_queue_ms": max(0, int((started_mono - submitted_mono) * 1000)),
+        "backend_worker_ms": max(0, int((finished_mono - started_mono) * 1000)),
+    }
+
+
+async def run_resource_browse_io(func, *args, executor=None, include_diagnostics: bool = False, **kwargs):
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(resource_browse_executor, functools.partial(func, *args, **kwargs))
+    selected_executor = executor or resource_browse_executor
+    if not include_diagnostics:
+        return await loop.run_in_executor(selected_executor, functools.partial(func, *args, **kwargs))
+    submitted_mono = time.monotonic()
+    result, runtime = await loop.run_in_executor(
+        selected_executor,
+        functools.partial(_run_resource_browse_io_timed, func, submitted_mono, args, kwargs),
+    )
+    route_ms = max(0, int((time.monotonic() - submitted_mono) * 1000))
+    if isinstance(result, dict):
+        result = dict(result)
+        result["transport_timings"] = {
+            **(runtime if isinstance(runtime, dict) else {}),
+            "backend_route_ms": route_ms,
+        }
+    return result
 
 
 def _build_resource_jobs_state_snapshot(limit: int = 20, offset: int = 0, status_filter: str = "") -> Dict[str, Any]:
@@ -565,18 +631,19 @@ async def create_resource_job_endpoint(request: Request) -> Dict[str, Any]:
     if not savepath:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "请填写网盘保存路径"})
     auto_refresh_requested = bool(data.get("auto_refresh", True))
+    allow_duplicate = bool(data.get("allow_duplicate", False)) and link_type in ("115share", "quark")
     provided_folder_id = str(data.get("folder_id", "") or "").strip()
     if provided_folder_id and not provided_folder_id.isdigit():
         provided_folder_id = ""
 
     async with resource_job_create_lock:
         existing = find_existing_resource_job(resource, savepath)
-        if existing:
+        if existing and not allow_duplicate:
             existing_status = str(existing.get("status", "")).strip().lower()
             if existing_status == "completed":
-                msg = "该资源已添加过。若需重新导入，请先清空“已完成导入记录”后再试。"
+                msg = "该链接在当前保存路径已有导入记录。如需从同一分享链接转存不同文件，请确认后重新提交。"
             else:
-                msg = "该资源已在处理中，请勿重复提交。"
+                msg = "该链接在当前保存路径已有处理中任务。如需从同一分享链接转存不同文件，请确认后重新提交。"
             return JSONResponse(
                 status_code=409,
                 content={
@@ -584,6 +651,8 @@ async def create_resource_job_endpoint(request: Request) -> Dict[str, Any]:
                     "msg": msg,
                     "job_id": existing.get("id", 0),
                     "status": existing_status,
+                    "duplicate_confirm_required": link_type in ("115share", "quark"),
+                    "link_type": link_type,
                 },
             )
 
@@ -728,6 +797,8 @@ async def get_115_share_entries_endpoint(request: Request) -> Dict[str, Any]:
             limit,
             1 if paged else 0,
             folders_only,
+            executor=resource_115_share_executor,
+            include_diagnostics=True,
         )
         return _build_resource_share_entries_response(
             cid,
@@ -776,6 +847,8 @@ async def preview_115_share_entries_endpoint(request: Request) -> Dict[str, Any]
             limit,
             1 if paged else 0,
             folders_only,
+            executor=resource_115_share_executor,
+            include_diagnostics=True,
         )
         return _build_resource_share_entries_response(
             cid,
@@ -880,6 +953,8 @@ async def get_quark_share_entries_endpoint(request: Request) -> Dict[str, Any]:
             limit,
             max_pages,
             folders_only,
+            executor=resource_quark_share_executor,
+            include_diagnostics=True,
         )
         return _build_resource_share_entries_response(
             cid,
@@ -930,6 +1005,8 @@ async def preview_quark_share_entries_endpoint(request: Request) -> Dict[str, An
             limit,
             max_pages,
             folders_only,
+            executor=resource_quark_share_executor,
+            include_diagnostics=True,
         )
         return _build_resource_share_entries_response(
             cid,
@@ -940,6 +1017,15 @@ async def preview_quark_share_entries_endpoint(request: Request) -> Dict[str, An
         )
     except Exception as exc:
         return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
+
+
+@router.get("/resource/quark/probe")
+async def probe_quark_connectivity_endpoint(request: Request) -> Dict[str, Any]:
+    cfg = get_config()
+    cookie = str(cfg.get("cookie_quark", "")).strip()
+    timeout = max(1.0, min(15.0, float(request.query_params.get("timeout", 5) or 5)))
+    result = await run_resource_browse_io(probe_quark_connectivity, cookie, timeout)
+    return {"ok": True, **result}
 
 
 @router.get("/resource/image")

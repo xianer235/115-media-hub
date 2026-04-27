@@ -93,6 +93,51 @@ async def start_subscription_task(request: Request) -> Dict[str, Any]:
     return {"ok": True, "status": status}
 
 
+@router.post("/subscription/start_with_link")
+async def start_subscription_task_with_link(request: Request) -> Dict[str, Any]:
+    data = await request.json()
+    task_name = str(data.get("name", "") or "").strip()
+    raw_text = str(data.get("raw_text", "") or data.get("link_url", "") or "").strip()
+    link_url = str(data.get("link_url", "") or "").strip()
+    receive_code = normalize_receive_code(data.get("receive_code", ""))
+    if not task_name:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "任务名称不能为空"})
+    if not raw_text and not link_url:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "请填写夸克分享链接"})
+    link_match = RESOURCE_QUARK_SHARE_URL_REGEX.search(link_url or raw_text)
+    normalized_link = str(link_match.group(0) if link_match else link_url).strip()
+    if normalized_link and not normalized_link.lower().startswith(("http://", "https://")):
+        normalized_link = f"https://{normalized_link.lstrip('/')}"
+    if resolve_resource_link_type("", normalized_link) != "quark":
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "指定链接仅支持夸克分享链接"})
+
+    cfg = get_config()
+    task = None
+    for raw_task in cfg.get("subscription_tasks", []) or []:
+        normalized = normalize_subscription_task(raw_task or {})
+        if normalized.get("name") == task_name:
+            task = normalized
+            break
+    if not task:
+        return JSONResponse(status_code=404, content={"ok": False, "msg": "任务不存在"})
+    if normalize_subscription_provider(task.get("provider", "115"), fallback="115") != "quark":
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "只有夸克订阅任务支持指定夸克链接扫描"})
+
+    payload = parse_quark_share_payload(normalized_link, raw_text, receive_code)
+    if not str(payload.get("pwd_id", "") or "").strip():
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "未能识别夸克分享链接"})
+    status = queue_subscription_job(
+        task_name,
+        "manual_link",
+        manual_candidate={
+            "link_url": str(payload.get("url", "") or normalized_link).strip(),
+            "raw_text": raw_text or normalized_link,
+            "receive_code": normalize_receive_code(payload.get("receive_code", "")),
+        },
+    )
+    return {"ok": True, "status": status}
+
+
 @router.post("/subscription/stop")
 async def stop_subscription_task(request: Request) -> Dict[str, Any]:
     data = await request.json()

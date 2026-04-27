@@ -317,7 +317,7 @@
             if (action === 'delete') {
                 const source = (resourceState.sources || [])[index];
                 const name = source?.name || getResourceSourceChannelId(source) || '该频道';
-                const ok = confirm(`将删除“${name}”，此操作不可恢复，确定继续吗？`);
+                const ok = await showAppConfirm(`将删除“${name}”，此操作不可恢复，确定继续吗？`);
                 if (!ok) return;
                 void deleteResourceSource(index, { confirm: false }).then(deleted => {
                     if (deleted) showToast(`已删除频道：${name}`, { tone: 'success', duration: 2400, placement: 'top-center' });
@@ -404,6 +404,10 @@
             }
             if (action === 'search') {
                 await quickSearchSubscriptionTask(name);
+                return;
+            }
+            if (action === 'scan-link') {
+                await startSubscriptionTaskWithLink(name);
                 return;
             }
             if (action === 'edit') editSubscriptionTask(name);

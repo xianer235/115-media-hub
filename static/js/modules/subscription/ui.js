@@ -617,7 +617,7 @@
             const fallbackQuery = document.getElementById('subscription_title')?.value || '';
             const query = String(searchInput?.value || fallbackQuery || '').trim();
             if (!query) {
-                alert('请先输入影视名称，再搜索 TMDB');
+                showToast('请先输入影视名称，再搜索 TMDB', { tone: 'warn', duration: 2600, placement: 'top-center' });
                 return;
             }
             const mediaType = normalizeSubscriptionMediaType(document.getElementById('subscription_media_type')?.value || 'movie');
@@ -963,12 +963,12 @@
         async function saveSubscriptionTask() {
             const task = currentSubscriptionFormData();
             task.provider = normalizeSubscriptionProvider(task.provider, '115');
-            if (!task.title) return alert('订阅影视名称不能为空');
-            if (!task.savepath) return alert('请先从网盘选择保存目录');
+            if (!task.title) return showToast('订阅影视名称不能为空', { tone: 'warn', duration: 2600, placement: 'top-center' });
+            if (!task.savepath) return showToast('请先从网盘选择保存目录', { tone: 'warn', duration: 2800, placement: 'top-center' });
             const rawShareLink = String(document.getElementById('subscription_share_link_url')?.value || '').trim();
-            if (task.provider === '115' && rawShareLink && !task.share_link_url) return alert('固定分享链接仅支持 115 分享链接格式');
+            if (task.provider === '115' && rawShareLink && !task.share_link_url) return showToast('固定分享链接仅支持 115 分享链接格式', { tone: 'warn', duration: 3000, placement: 'top-center' });
             const rawReceiveCode = String(document.getElementById('subscription_share_receive_code')?.value || '').trim();
-            if (task.provider === '115' && rawReceiveCode && !task.share_link_receive_code) return alert('提取码格式不正确，请输入 1-16 位字母或数字');
+            if (task.provider === '115' && rawReceiveCode && !task.share_link_receive_code) return showToast('提取码格式不正确，请输入 1-16 位字母或数字', { tone: 'warn', duration: 3000, placement: 'top-center' });
             if (task.provider !== '115' || !task.share_link_url) {
                 task.share_link_url = '';
                 task.share_link_receive_code = '';
@@ -977,17 +977,17 @@
                 task.fixed_link_channel_search = false;
             }
             if (!task.share_subdir) task.share_subdir_cid = '';
-            if (task.year && !/^(19|20)\d{2}$/.test(task.year)) return alert('年份格式不正确，请输入四位年份');
-            if (task.schedule_start_time === task.schedule_end_time) return alert('开始时间和结束时间不能相同');
-            if (task.schedule_interval_minutes < 1) return alert('时段内查询间隔不能小于 1 分钟');
+            if (task.year && !/^(19|20)\d{2}$/.test(task.year)) return showToast('年份格式不正确，请输入四位年份', { tone: 'warn', duration: 2800, placement: 'top-center' });
+            if (task.schedule_start_time === task.schedule_end_time) return showToast('开始时间和结束时间不能相同', { tone: 'warn', duration: 2800, placement: 'top-center' });
+            if (task.schedule_interval_minutes < 1) return showToast('时段内查询间隔不能小于 1 分钟', { tone: 'warn', duration: 3000, placement: 'top-center' });
             if (task.enabled && (!Array.isArray(task.schedule_weekdays) || task.schedule_weekdays.length <= 0)) {
-                return alert('请至少选择一个查询星期，或先关闭任务启用状态');
+                return showToast('请至少选择一个查询星期，或先关闭任务启用状态', { tone: 'warn', duration: 3400, placement: 'top-center' });
             }
-            if (task.provider === '115' && (task.min_score < 30 || task.min_score > 100)) return alert('匹配阈值需在 30-100 之间');
+            if (task.provider === '115' && (task.min_score < 30 || task.min_score > 100)) return showToast('匹配阈值需在 30-100 之间', { tone: 'warn', duration: 2800, placement: 'top-center' });
             if (task.provider !== '115') task.min_score = 55;
-            if (!['balanced', 'ultra', 'fhd', 'hd', 'sd'].includes(task.quality_priority)) return alert('清晰度优先级配置无效');
+            if (!['balanced', 'ultra', 'fhd', 'hd', 'sd'].includes(task.quality_priority)) return showToast('清晰度优先级配置无效', { tone: 'warn', duration: 2800, placement: 'top-center' });
             if (task.tmdb_id > 0 && task.tmdb_media_type && task.tmdb_media_type !== task.media_type) {
-                return alert('TMDB 绑定类型与订阅类型不一致，请重新绑定');
+                return showToast('TMDB 绑定类型与订阅类型不一致，请重新绑定', { tone: 'warn', duration: 3200, placement: 'top-center' });
             }
             if (task.media_type !== 'tv') {
                 task.season = 1;
@@ -1044,7 +1044,7 @@
                 task.name = buildSubscriptionProviderTaskName(normalizedTitle, task.provider);
             }
             const dup = tasks.find(item => item.name === task.name && item.name !== editingSubscriptionName);
-            if (dup) return alert(`任务名称重复（${task.name}），请修改标题或网盘提供方后再保存`);
+            if (dup) return showToast(`任务名称重复（${task.name}），请修改标题或网盘提供方后再保存`, { tone: 'warn', duration: 3600, placement: 'top-center' });
             const idx = tasks.findIndex(item => item.name === editingSubscriptionName);
             if (idx >= 0) tasks[idx] = task;
             else tasks.push(task);
@@ -1053,9 +1053,9 @@
                 await persistSubscriptionTasks(tasks);
                 closeSubscriptionModal();
                 resetSubscriptionForm();
-                alert('✅ 订阅任务已保存');
+                showToast('订阅任务已保存', { tone: 'success', duration: 2400, placement: 'top-center' });
             } catch (e) {
-                alert(`❌ ${e.message}`);
+                showToast(`保存失败：${e.message || '未知错误'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
             }
         }
 
@@ -1115,11 +1115,12 @@
         }
 
         async function deleteSubscriptionTask(name) {
-            if (!confirm(`确定删除订阅任务“${name}”吗？`)) return;
+            if (!(await showAppConfirm(`确定删除订阅任务“${name}”吗？`))) return;
             try {
                 await window.MediaHubApi.postJson('/subscription/delete', { name });
             } catch (error) {
-                return alert(`❌ ${error?.message || '删除失败'}`);
+                showToast(`删除失败：${error?.message || '请稍后重试'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
+                return;
             }
             await refreshSubscriptionState();
             if (editingSubscriptionName === name) resetSubscriptionForm();
@@ -1130,7 +1131,8 @@
             try {
                 data = await window.MediaHubApi.postJson('/subscription/start', { name });
             } catch (error) {
-                return alert(`❌ ${error?.message || '启动失败'}`);
+                showToast(`启动失败：${error?.message || '请稍后重试'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
+                return;
             }
             if (data.status === 'queued') {
                 const queued = Array.isArray(subscriptionState.queued) ? [...subscriptionState.queued] : [];
@@ -1147,10 +1149,105 @@
             await refreshSubscriptionState();
         }
 
+        function extractFirstHttpUrl(text = '') {
+            const raw = String(text || '').trim();
+            if (!raw) return '';
+            const links = raw.match(/https?:\/\/[^\s<>'"]+/gi) || [];
+            if (links.length) return String(links[0] || '').replace(/[，。；、]+$/g, '');
+            const compact = raw.replace(/\s+/g, '');
+            if (/^[a-z0-9.-]+\.[a-z]{2,}(?:\/[^\s]*)?$/i.test(compact)) return compact;
+            return '';
+        }
+
+        function setSubscriptionLinkScanError(message = '') {
+            const errorEl = document.getElementById('subscription-link-scan-error');
+            if (!errorEl) return;
+            const text = String(message || '').trim();
+            errorEl.textContent = text;
+            errorEl.classList.toggle('hidden', !text);
+        }
+
+        function openSubscriptionLinkScanModal(name) {
+            const task = getSubscriptionTaskByName(name);
+            if (!task) {
+                showToast('任务不存在或已被删除', { tone: 'warn', duration: 2600, placement: 'top-center' });
+                return;
+            }
+            if (normalizeSubscriptionProvider(task.provider || '115', '115') !== 'quark') {
+                showToast('指定链接扫描仅支持夸克订阅任务', { tone: 'warn', duration: 2600, placement: 'top-center' });
+                return;
+            }
+            const taskNameEl = document.getElementById('subscription-link-scan-task-name');
+            const taskLabelEl = document.getElementById('subscription-link-scan-task-label');
+            const textEl = document.getElementById('subscription-link-scan-text');
+            const submitBtn = document.getElementById('subscription-link-scan-submit-btn');
+            if (taskNameEl) taskNameEl.value = name;
+            if (taskLabelEl) taskLabelEl.textContent = `任务：${String(task.title || name || '').trim() || name}`;
+            if (textEl) textEl.value = '';
+            if (submitBtn) submitBtn.disabled = false;
+            setSubscriptionLinkScanError('');
+            showLockedModal('subscription-link-scan-modal');
+            window.setTimeout(() => textEl?.focus(), 30);
+        }
+
+        function closeSubscriptionLinkScanModal() {
+            hideLockedModal('subscription-link-scan-modal');
+            setSubscriptionLinkScanError('');
+        }
+
+        async function submitSubscriptionLinkScan() {
+            const name = String(document.getElementById('subscription-link-scan-task-name')?.value || '').trim();
+            const rawText = String(document.getElementById('subscription-link-scan-text')?.value || '').trim();
+            const submitBtn = document.getElementById('subscription-link-scan-submit-btn');
+            if (!name) {
+                setSubscriptionLinkScanError('任务名称为空，请关闭后重新从任务卡片进入。');
+                return;
+            }
+            const normalizedRaw = String(rawText || '').trim();
+            const linkUrl = extractFirstHttpUrl(normalizedRaw);
+            if (!linkUrl || !/quark\.cn\/s\//i.test(linkUrl)) {
+                setSubscriptionLinkScanError('请粘贴有效的夸克分享链接，例如 https://pan.quark.cn/s/xxxxxx');
+                return;
+            }
+            let data = {};
+            try {
+                if (submitBtn) submitBtn.disabled = true;
+                setSubscriptionLinkScanError('');
+                data = await window.MediaHubApi.postJson('/subscription/start_with_link', {
+                    name,
+                    link_url: linkUrl,
+                    raw_text: normalizedRaw,
+                });
+            } catch (error) {
+                setSubscriptionLinkScanError(error?.message || '启动指定链接扫描失败');
+                if (submitBtn) submitBtn.disabled = false;
+                return;
+            }
+            closeSubscriptionLinkScanModal();
+            if (data.status === 'queued') {
+                const queued = Array.isArray(subscriptionState.queued) ? [...subscriptionState.queued] : [];
+                if (!queued.includes(name)) queued.push(name);
+                applySubscriptionState({ ...subscriptionState, queued }, { forceRender: true });
+            } else {
+                applySubscriptionState({
+                    ...subscriptionState,
+                    running: true,
+                    current_task: name,
+                    summary: { step: '准备执行', detail: `${name} (manual_link)` }
+                }, { forceRender: true });
+            }
+            showToast('已提交指定夸克链接扫描', { tone: 'success', duration: 2600, placement: 'top-center' });
+            await refreshSubscriptionState();
+        }
+
+        async function startSubscriptionTaskWithLink(name) {
+            openSubscriptionLinkScanModal(name);
+        }
+
         async function stopSubscriptionTask(name) {
             const data = await window.MediaHubApi.postJson('/subscription/stop', { name }).catch(() => ({ ok: false }));
             if (!data.ok) {
-                alert('当前没有这个订阅任务在运行');
+                showToast('当前没有这个订阅任务在运行', { tone: 'warn', duration: 2600, placement: 'top-center' });
                 return;
             }
             applySubscriptionState({
@@ -1163,7 +1260,7 @@
         async function rebuildSubscriptionTask(name, { refreshEpisodeModal = false } = {}) {
             const normalizedName = String(name || '').trim();
             if (!normalizedName) return;
-            if (!confirm(`按当前保存目录重建“${normalizedName}”的追更进度和集数账本吗？`)) return;
+            if (!(await showAppConfirm(`按当前保存目录重建“${normalizedName}”的追更进度和集数账本吗？`))) return;
             try {
                 const data = await window.MediaHubApi.postJson('/subscription/rebuild', { name: normalizedName });
                 const episodeView = data.episode_view && typeof data.episode_view === 'object' ? data.episode_view : null;
@@ -1251,7 +1348,8 @@
             container.innerHTML = tasks.map(task => {
                 const taskName = String(task.name || '').trim();
                 const displayTitle = String(task.title || taskName || '').trim() || taskName;
-                const providerBadgeHtml = buildSubscriptionProviderBadge(task.provider || '115');
+                const provider = normalizeSubscriptionProvider(task.provider || '115', '115');
+                const providerBadgeHtml = buildSubscriptionProviderBadge(provider);
                 const running = subscriptionState.running && subscriptionState.current_task === taskName;
                 const queued = (subscriptionState.queued || []).includes(taskName);
                 const status = running ? 'running' : (task.status || 'idle');
@@ -1288,6 +1386,9 @@
                 const episodeViewButton = isTv
                     ? `<button type="button" data-subscription-action="episodes" data-task-name="${encodeURIComponent(taskName)}" class="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">集数视图</button>`
                     : '';
+                const linkScanButton = provider === 'quark'
+                    ? `<button type="button" data-subscription-action="scan-link" data-task-name="${encodeURIComponent(taskName)}" class="px-4 py-2 rounded-xl bg-violet-700 hover:bg-violet-600 text-white text-sm font-bold shadow-sm shadow-violet-950/20 ${toggleRunDisabled ? 'btn-disabled' : ''}" ${toggleRunDisabled ? 'disabled' : ''}>扫链接</button>`
+                    : '';
                 const introText = buildSubscriptionTaskIntro(task, { status, queued, nextRun, progress, isTv, episodeText, multiSeasonMode });
                 return `
                     <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-3 sm:p-4">
@@ -1314,6 +1415,7 @@
                             <div class="${actionGridClass}">
                                 <button type="button" data-subscription-action="toggle-run" data-subscription-run-action="${toggleRunAction}" data-task-name="${encodeURIComponent(taskName)}" class="px-4 py-2 rounded-xl text-sm font-bold ${toggleRunClass} ${toggleRunDisabled ? 'btn-disabled' : ''}" ${toggleRunDisabled ? 'disabled' : ''}>${toggleRunLabel}</button>
                                 <button type="button" data-subscription-action="search" data-task-name="${encodeURIComponent(taskName)}" class="subscription-task-search-btn px-4 py-2 rounded-xl text-sm font-bold">搜索</button>
+                                ${linkScanButton}
                                 <button type="button" data-subscription-action="edit" data-task-name="${encodeURIComponent(taskName)}" class="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">编辑</button>
                                 <button type="button" data-subscription-action="delete" data-task-name="${encodeURIComponent(taskName)}" class="px-4 py-2 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-300 text-sm font-bold">删除</button>
                                 ${rebuildButton}
@@ -1655,11 +1757,11 @@
             if (!normalizedName) return;
             const task = getSubscriptionTaskByName(normalizedName);
             if (!task) {
-                alert('任务不存在或已被删除');
+                showToast('任务不存在或已被删除', { tone: 'warn', duration: 2600, placement: 'top-center' });
                 return;
             }
             if (normalizeSubscriptionMediaType(task.media_type || 'movie') !== 'tv') {
-                alert('仅电视剧任务支持集数视图');
+                showToast('仅电视剧任务支持集数视图', { tone: 'warn', duration: 2600, placement: 'top-center' });
                 return;
             }
 
