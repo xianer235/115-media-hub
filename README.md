@@ -4,38 +4,33 @@
 
 它适合希望直接用网盘 Cookie 驱动“生成播放链接”“转存后自动刷新”“按片名自动找资源”一体化流程的场景。
 
-## AI 协作入口
-
-- 如果你是新会话 AI / 编码 Agent，优先阅读仓库根目录的 `AGENTS.md`
-
 ## 近期更新（以 `version.json` 为准）
 
-- 当前版本：`0.2.17`
-- 频道资源管理的分类测试新增资源数输入，可按频道质量调整采样数量。
-- 频道管理列表支持展示多个资源类型标签，并显示采样内的类型计数。
-- 频道 ID 标签支持点击跳转到对应 Telegram 频道页面。
+- 当前版本：`0.3.1`
+- 资源中心新增 `频道搜索 / 盘搜` 双搜索模式，支持分类筛选、耗时状态和搜索中断。
+- PanSou 支持账号密码登录获取 JWT，并接入资源中心搜索与订阅候选召回。
+- TG 频道管理收拢为“频道管理中心”，支持排序应用、批量置顶/置底和同步频道官方名称。
 
-## 这项目能做什么（按模块）
+## 核心功能
 
 | 模块 | 作用 |
 | --- | --- |
-| 资源中心 | 同步 TG 公开频道、手动预览/导入资源文本，支持 magnet、115 分享、Quark 分享入库并提交导入任务 |
+| 资源中心 | 同步 TG 公开频道、可选接入 PanSou 盘搜、手动预览/导入资源文本，支持 magnet、115 分享、Quark 分享入库并提交导入任务 |
 | 影视订阅任务 | 电影/剧集自动匹配资源并入库，支持 115 / Quark 单网盘模式、周期时段调度、评分阈值、质量偏好、TMDB 绑定与追更状态 |
 | 文件夹监控任务 | 扫描 115 网盘目录变化，支持手动、定时、Webhook 触发，并可按 savepath/sharetitle 局部刷新 |
 | 目录树任务 | 基于 115 官方目录树 TXT 文件批量生成 `.strm`，支持多源路径、父目录前缀补全、排除层级与同步清理 |
 | 企业微信通知推送 | 可对订阅成功和监控生成成功事件推送提醒，支持机器人和应用两种通道 |
 | 115 每日签到 | 支持手动签到与每日定时签到，并在页面顶部展示签到状态 |
-| 实时状态总线 | 前端通过 SSE (`/events`) 实时接收任务进度、日志和运行状态更新 |
 | Web 管理后台 | 集中管理配置、任务、日志、版本提示，支持桌面和移动端 |
 
-## 适合这些场景
+适合这些场景：
 
 - 大媒体库初始化：先用目录树任务一次性生成 `.strm`
 - 连载或日更内容：用文件夹监控任务做增量刷新
 - 转存成功后自动补扫：用 Webhook 触发指定监控任务
 - 想减少手动找资源：用资源中心和影视订阅任务自动化处理
 
-## 怎么选任务模式
+## 怎么选任务
 
 | 需求 | 推荐方式 |
 | --- | --- |
@@ -44,51 +39,6 @@
 | 想按影片/剧集名称自动找资源 | `影视订阅任务` |
 | 想把 115 转存、磁力离线、刷新串起来 | `资源中心 + Webhook + 文件夹监控任务` |
 | 想导入 Quark 分享但不生成 115 strm 刷新 | `资源中心或影视订阅任务的 Quark 模式` |
-
-## 功能检查结果（与当前代码对齐）
-
-### 资源中心
-
-- 支持 TG 频道订阅、同步、分页加载与关键词搜索，频道支持批量启停；导入兼容 CloudSaver JSON 与盘搜 `CHANNELS`，导出使用 CloudSaver JSON。
-- 支持频道快捷管理、批量筛选/启停/删除、频道分类测试、频道同步后台执行。
-- 频道模板导入会自动识别 CloudSaver JSON 与盘搜 `export CHANNELS=...`；导出时会先弹窗展示 CloudSaver JSON，可手动复制或点击按钮下载 JSON。
-- 支持资源文本“预览解析”和“正式入库”两步，识别 magnet、115 分享、Quark 分享等常见格式。
-- 导入任务支持 `magnet`、`115share`、`quark` 三类链路，并内置同资源+路径去重；115 / Quark 分享链接重复时可确认继续创建，适配同一分享分批转存。
-- 支持浏览 115 / Quark 网盘目录、创建目录、预览分享链接目录树，并可选择分享子目录或文件后再转存。
-- 支持资源快捷链接、分享目录搜索、分享目录选择计数、分享解析阶段耗时展示。
-- 导入任务支持刷新、取消、重试、清理已完成/失败记录。
-
-### 影视订阅任务
-
-- 支持电影与剧集两类任务，支持 115 / Quark provider、多别名、排除词、年份、最小匹配分、质量偏好（清晰度优先策略）。
-- 调度模型为“周几 + 时间窗口 + 窗口内间隔分钟”，可按任务独立启停。
-- 支持 TMDB 搜索与绑定，自动带回别名、年份、总季/总集、分季集数映射。
-- 115 模式支持固定分享链接导入、访问码、子目录路径和 CID 锚定；也可开启固定链接后补搜频道。
-- Quark 模式使用独立评分与导入链路，支持指定 Quark 链接手动扫描；Quark 导入不联动文件夹监控刷新。
-- 支持集数视图、任务进度重建、候选分享内容文件级筛选，减少整包误导入。
-
-### 文件夹监控任务
-
-- 支持手动运行、按分钟定时运行、Webhook 触发运行。
-- Webhook 同时支持“普通目录刷新”与“磁力直导入”两种模式。
-- 签名支持 `X-Webhook-Token` 或 `X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign`（HMAC-SHA256）。
-- 新建监控任务的内置默认值：读取失败尝试次数 `3`，目录列出后延时 `250ms`，任务执行延时 `0s`。
-- 支持任务取消、队列清理、日志清空，以及运行日志中的步骤化状态反馈。
-
-### 目录树任务
-
-- 只处理 115 官方目录树 TXT 文件，不承担目录递归扫描（目录扫描由“文件夹监控任务”负责）。
-- 支持多源目录树文件路径、父目录前缀补全、排除层级、增量/全量写入模式。
-- 支持 MD5 校验缓存：目录树内容无变化时复用缓存并跳过同步。
-- 支持同步清理（删除本地已失效 `.strm`）。
-
-### 参数与系统能力
-
-- 支持 TG/TMDB 代理配置和延迟测试。
-- 支持 115 / Quark Cookie 健康检测；分享失效、提取码错误等内容侧异常不会误判 Cookie 失效。
-- 支持 115 每日签到（手动+定时）。
-- 支持企业微信通知测试与运行时推送（订阅成功、监控成功）。
-- 支持版本检查、关于页更新提示、SSE 实时状态推送。
 
 ## 快速开始
 
@@ -138,10 +88,11 @@ docker compose up -d
 3. 根据账号风控策略调整 `115 API 最小间隔`、`目录缓存 TTL`、`下载链接缓存 TTL`
 4. 确认 `扫描后缀名` 是否符合你的媒体类型
 5. 如果要提升影视订阅识别准确率，再启用 `TMDB API Key`
-6. 如果服务器访问 TG / TMDB 不稳定，再补充代理设置（同一套代理配置会同时用于 TG 与 TMDB）
-7. 点击 Cookie 健康检测，确认 115 / Quark Cookie 可用
-8. 如果要自动签到 115，再开启 `115 每日签到` 并设置签到时间
-9. 如果要在任务成功后收到提醒，再配置「通知推送（企业微信）」并发送测试消息
+6. 如果要使用 PanSou 盘搜，在「PanSou 盘搜」里填写服务地址；如 PanSou 开启认证，再填写账号/密码，按需填写 src / channels / plugins 并点击测试
+7. 如果服务器访问 TG / TMDB 不稳定，再补充代理设置（同一套代理配置会同时用于 TG 与 TMDB）
+8. 点击 Cookie 健康检测，确认 115 / Quark Cookie 可用
+9. 如果要自动签到 115，再开启 `115 每日签到` 并设置签到时间
+10. 如果要在任务成功后收到提醒，再配置「通知推送（企业微信）」并发送测试消息
 
 ## 推荐使用流程
 
@@ -160,7 +111,7 @@ docker compose up -d
 
 ### 方案三：自动找资源并导入网盘
 
-1. 在「资源中心」配置 TG 频道源，或手动粘贴资源文本
+1. 在「资源中心」配置 TG 频道源，也可以在参数配置里开启 PanSou 后切到「盘搜」搜索，或手动粘贴资源文本
 2. 按目标网盘配置 `115 Cookie` 或 `Quark Cookie`
 3. 在「影视订阅任务」中创建订阅项，并选择 provider
 4. 系统按周期匹配候选资源，并创建导入任务
@@ -219,70 +170,6 @@ POST /webhook/{任务名}
 - 方式二：签名头 `X-Webhook-Ts`、`X-Webhook-Nonce`、`X-Webhook-Sign`
 - 签名基串为 `{ts}.{nonce}.{body}`，算法为 `HMAC-SHA256`
 
-## 接口速查（常用）
-
-页面与会话：
-
-- `GET /login`：登录页
-- `POST /login`：登录
-- `GET /logout`：退出
-- `GET /events`：SSE 状态流
-
-配置与系统：
-
-- `GET /get_settings` / `POST /save_settings`
-- `GET /version`：版本检查状态
-- `GET /strm/proxy?path=/...`：STRM 播放入口（默认 `302` 直跳 115 上游地址，支持附带 `pickcode` 跳过路径反查；`mode=relay` 时改为 `307` 跳转到容器内 relay，`mode=proxy` 时走服务端中继流）
-- `GET /strm/relay?token=...`：STRM 中继拉流入口（内部临时令牌接口，给 `mode=relay` 使用）
-- `GET /settings/cookies/status` / `POST /settings/cookies/check`：Cookie 健康状态与手动检测
-- `POST /settings/tg_proxy/test`：TG 代理延迟测试
-- `POST /settings/notify/test`：企业微信通知测试
-- `GET /settings/115/sign/status` / `POST /settings/115/sign/run`
-
-目录树：
-
-- `POST /start`：启动目录树任务
-- `GET /logs`：目录树状态与日志
-
-资源中心：
-
-- `GET /resource/state`
-- `GET /resource/jobs/state`
-- `POST /resource/sources/save`
-- `POST /resource/quick_links/save`
-- `POST /resource/channels/sync`
-- `POST /resource/channels/classify`
-- `POST /resource/channels/more`
-- `POST /resource/items/preview_text`
-- `POST /resource/items/import_text`
-- `POST /resource/items/delete`
-- `POST /resource/jobs/create`
-- `POST /resource/jobs/refresh|cancel|retry|clear|clear_completed`
-- `GET /resource/115/folders`
-- `POST /resource/115/folders/create`
-- `GET /resource/115/share_entries`
-- `POST /resource/115/share_entries_preview`
-- `GET /resource/quark/folders`
-- `POST /resource/quark/folders/create`
-- `GET /resource/quark/share_entries`
-- `POST /resource/quark/share_entries_preview`
-- `GET /resource/quark/probe`
-- `GET /resource/image`
-
-订阅与监控：
-
-- `GET /subscription/status`
-- `POST /subscription/save|start|stop|rebuild|delete`
-- `GET /monitor/status`
-- `POST /monitor/save|start|stop|delete`
-- `POST /webhook/{task_name}`
-
-订阅任务字段说明（新增）：
-
-- `provider=115|quark`（单网盘模式，不混排候选）
-- `provider=115`：候选仅 `magnet/115share`
-- `provider=quark`：候选仅 `quark`，使用独立评分与导入链路（不联动监控刷新）
-
 ## 企业微信通知推送
 
 配置入口：`参数配置 -> 通知推送（企业微信）`
@@ -309,15 +196,6 @@ POST /webhook/{任务名}
 3. 分别按需开启“订阅更新成功推送”和“文件夹监控生成成功推送”。
 4. 失败/跳过场景可在 Web 日志中排查具体原因。
 
-## 本地开发运行
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-.venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 18080 --reload
-```
-
 ## 持久化目录说明
 
 - `/app/strm`：生成的 `.strm` 文件
@@ -330,91 +208,18 @@ pip install -r requirements.txt
 
 ## 常用环境变量
 
-基础超时与调度：
+大多数用户不需要改环境变量，先用页面里的「参数配置」即可。下面这些适合部署时按机器性能或网络情况调整：
 
-- `SUBSCRIPTION_ATTEMPT_INTERVAL_SECONDS`：订阅候选尝试间隔，默认 `2`
-- `SUBSCRIPTION_IMPORT_TIMEOUT_SECONDS`：订阅导入超时秒数，默认 `90`
-- `RESOURCE_IMPORT_TIMEOUT_SECONDS`：资源导入超时秒数，默认 `90`
-- `RESOURCE_JOB_STALE_RECOVER_SECONDS`：导入任务卡死恢复阈值，默认 `300`
-- `RESOURCE_JOB_COMPLETED_KEEP` / `RESOURCE_JOB_FAILED_KEEP`：导入任务完成/失败记录保留数量，默认 `1000` / `500`
-- `VERSION_CACHE_TTL`：版本检查缓存秒数，默认 `21600`
-
-订阅去重与重试：
-
-- `SUBSCRIPTION_INVALID_LINK_CACHE_TTL_SECONDS`：订阅无效链接缓存时长，默认 `604800`
-- `SUBSCRIPTION_DUPLICATE_VERIFY_RETRIES`：115 重复状态复核重试次数，默认 `2`
-- `SUBSCRIPTION_DUPLICATE_VERIFY_DELAY_SECONDS`：重复复核重试间隔秒，默认 `3`
-- `SUBSCRIPTION_SHARE_SCAN_CONCURRENCY`：订阅分享内容扫描并发，默认 `3`
-- `SUBSCRIPTION_SHARE_SCAN_REQUEST_TIMEOUT_SECONDS`：订阅分享扫描单请求超时，默认 `12`
-- `SUBSCRIPTION_SHARE_SCAN_RATE_LIMIT_SECONDS`：订阅分享扫描限速间隔，默认 `0.25`
-- `SUBSCRIPTION_QUARK_MIN_SCORE`：Quark 订阅默认最低分，默认 `60`
-- `SUBSCRIPTION_QUARK_MAX_ATTEMPTS`：Quark 订阅候选尝试上限，默认 `60`
-
-TG 访问相关：
-
-- `TG_CHANNEL_THREADS_DEFAULT`：TG 同步默认线程数，默认 `6`
-- `TG_SEARCH_PAGE_LIMIT`：单频道搜索分页大小，默认 `20`
-- `TG_SEARCH_MAX_PAGES`：单频道搜索最大页数，默认 `6`
-- `TG_SEARCH_MATCH_LIMIT_PER_CHANNEL`：单频道匹配结果上限，默认 `12`
-- `TG_SEARCH_TOTAL_LIMIT`：全局搜索返回上限，默认 `60`
-- `TG_SEARCH_CHANNEL_TIMEOUT_SECONDS`：单频道搜索整体超时，默认 `10`
-- `TG_SEARCH_REQUEST_TIMEOUT_SECONDS`：单次 TG 请求超时，默认 `8`
-- `TG_SEARCH_RETRY_ATTEMPTS`：TG 搜索请求重试次数，默认 `1`
-- `TG_FETCH_RETRY_ATTEMPTS`：抓取重试次数，默认 `3`
-- `TG_FETCH_RETRY_DELAY_SECONDS`：抓取重试退避系数，默认 `0.8`
-
-115 / Quark / STRM 访问相关：
-
-- `API_115_RATE_LIMIT_SECONDS`：115 API 最小间隔，默认 `0.35`
+- `TZ`：容器时区，建议 `Asia/Shanghai`
+- `UVICORN_ACCESS_LOG`：是否启用 HTTP 访问日志，默认 `0`；排查接口访问时可设为 `1`
+- `STRM_PROXY_MODE`：STRM 播放模式默认值，默认 `redirect_direct`
+- `API_115_RATE_LIMIT_SECONDS`：115 API 最小间隔，默认 `0.35`；账号风控明显时可调大
 - `API_115_LIST_CACHE_TTL_SECONDS`：115 目录列表缓存秒数，默认 `60`
 - `API_115_DOWNLOAD_URL_CACHE_TTL_SECONDS`：115 下载链接缓存秒数，默认 `20`
-- `API_115_PICKCODE_CACHE_TTL_SECONDS`：STRM 路径反查 pickcode 缓存秒数，默认 `7200`
-- `API_115_FOLDER_CID_CACHE_TTL_SECONDS`：115 文件夹 CID 缓存秒数，默认 `7200`
-- `STRM_PROXY_MODE`：STRM 播放模式默认值，默认 `redirect_direct`
-- `STRM_RELAY_CHUNK_SIZE`：STRM relay 分块大小，默认 `262144`
-- `QUARK_SHARE_FAST_DEADLINE_SECONDS`：Quark 分享首屏 fast path 总 deadline，默认 `3`
-- `RESOURCE_SHARE_BROWSE_RATE_LIMIT_SECONDS`：分享目录浏览限速，默认 `0.05`
-- `RESOURCE_BROWSE_WORKERS` / `RESOURCE_115_SHARE_WORKERS` / `RESOURCE_QUARK_SHARE_WORKERS`：资源浏览线程数，默认 `4` / `3` / `4`
-
-Cookie 健康检测：
-
-- `COOKIE_HEALTH_MIN_REFRESH_INTERVAL_SECONDS`：Cookie 健康检测最小刷新间隔，默认 `20`
-- `COOKIE_HEALTH_SUCCESS_UPDATE_INTERVAL_SECONDS`：Cookie 成功状态刷新间隔，默认 `90`
-
-TMDB 相关：
-
-- `TMDB_REQUEST_TIMEOUT_SECONDS`：TMDB 请求超时，默认 `20`
-- `TMDB_SEARCH_LIMIT`：TMDB 搜索结果截断上限，默认 `12`
-- `TMDB_API_BASE_URL`：TMDB API 基础地址
-- `TMDB_IMAGE_BASE_URL`：TMDB 图片基础地址
-
-通知推送相关：
-
-- `NOTIFY_DEDUPE_TTL_DAYS`：通知去重记录保留天数，默认 `180`，最小 `7`
-
-日志与可观测性：
-
-- `UVICORN_ACCESS_LOG`：是否启用 HTTP 访问日志，默认 `0`（关闭，减少轮询刷屏；设为 `1` 可开启）
-- `HTTP_TIMING_HEADER_ENABLED`：是否输出后端耗时响应头，默认 `0`
-- `LOG_ROTATE_MAX_BYTES` / `LOG_ROTATE_BACKUPS`：日志滚动大小和备份数，默认 `5MB` / `2`
-- `TEMPLATE_CACHE_SECONDS` / `ASSET_VERSION_CACHE_SECONDS`：模板与静态资源版本缓存秒数，默认 `30` / `30`
-
-频道缓存治理：
-
-- `RESOURCE_CHANNEL_TYPE_SAMPLE_SIZE`：频道类型识别采样条数，默认 `10`
-- `RESOURCE_CHANNEL_TYPE_PAGE_LIMIT`：频道类型识别单页抓取条数
-- `RESOURCE_CHANNEL_TYPE_MAX_PAGES`：频道类型识别最大抓取页数
-- `RESOURCE_CHANNEL_CACHE_LIMIT`：单频道缓存保留上限，默认 `10`
-- `RESOURCE_CHANNEL_INACTIVE_CACHE_LIMIT`：未启用频道保留条数
-- `RESOURCE_CHANNEL_CACHE_TTL_DAYS`：频道缓存按天过期
-- `RESOURCE_CHANNEL_CACHE_GLOBAL_LIMIT`：全局频道缓存硬上限
-- `RESOURCE_CHANNEL_CACHE_ACTIVE_MIN_KEEP`：活跃频道最小保留条数
-
-分享目录预览缓存：
-
-- `SHARE_SNAP_RATE_LIMIT_SECONDS`：分享快照接口限速，默认 `0.2`
-- `SHARE_SNAP_CACHE_TTL_SECONDS`：分享快照缓存秒数，默认 `300`
-- `SHARE_SNAP_CACHE_MAX_ROWS`：分享快照缓存最大行数，默认 `3000`
+- `TG_CHANNEL_THREADS_DEFAULT`：TG 同步默认线程数，默认 `6`；代理不稳时建议调低
+- `PANSOU_SEARCH_TIMEOUT_SECONDS`：PanSou 搜索请求超时秒数，默认 `15`
+- `PANSOU_SEARCH_TOTAL_LIMIT`：PanSou 搜索结果截断上限，默认 `80`
+- `TMDB_API_BASE_URL` / `TMDB_IMAGE_BASE_URL`：需要自定义 TMDB 访问地址时再配置
 
 ## 浏览器辅助脚本
 

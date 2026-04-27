@@ -70,6 +70,11 @@
                 .join('');
         }
 
+        function getResourceSourceOutputCount(view) {
+            const value = Number(view?.support?.matched_items || 0);
+            return Number.isFinite(value) && value > 0 ? value : 0;
+        }
+
         function getResourceSourceSectionIndex() {
             const index = {};
             (Array.isArray(resourceState.channel_sections) ? resourceState.channel_sections : []).forEach(section => {
@@ -213,6 +218,55 @@
                     latestPublishedMs,
                 };
             });
+        }
+
+        function getResourceSourceSortMode() {
+            const mode = String(resourceSourceSortMode || 'manual').trim().toLowerCase();
+            return mode || 'manual';
+        }
+
+        function compareResourceSourceViews(a, b, mode = getResourceSourceSortMode()) {
+            const normalizedMode = String(mode || 'manual').trim().toLowerCase();
+            if (normalizedMode === 'manual') {
+                return Number(a?.index || 0) - Number(b?.index || 0);
+            }
+            if (normalizedMode === 'name') {
+                return String(a?.source?.name || a?.channelId || '').localeCompare(String(b?.source?.name || b?.channelId || ''));
+            }
+            if (normalizedMode === 'activity') {
+                const ad = (a?.activityBucket === 'week' ? 4 : a?.activityBucket === 'month' ? 3 : a?.activityBucket === 'half_year' ? 2 : a?.activityBucket === 'older' ? 1 : 0);
+                const bd = (b?.activityBucket === 'week' ? 4 : b?.activityBucket === 'month' ? 3 : b?.activityBucket === 'half_year' ? 2 : b?.activityBucket === 'older' ? 1 : 0);
+                if (bd !== ad) return bd - ad;
+            }
+            if (normalizedMode === 'support') {
+                const aSearched = Math.max(0, Number(a?.support?.searched_runs || 0));
+                const bSearched = Math.max(0, Number(b?.support?.searched_runs || 0));
+                const aMatched = Math.max(0, Number(a?.support?.matched_runs || 0));
+                const bMatched = Math.max(0, Number(b?.support?.matched_runs || 0));
+                const aItems = getResourceSourceOutputCount(a);
+                const bItems = getResourceSourceOutputCount(b);
+                const aRate = aSearched > 0 ? (aMatched / aSearched) : -1;
+                const bRate = bSearched > 0 ? (bMatched / bSearched) : -1;
+                if (bRate !== aRate) return bRate - aRate;
+                if (bItems !== aItems) return bItems - aItems;
+                if (bSearched !== aSearched) return bSearched - aSearched;
+            }
+            if (normalizedMode === 'output') {
+                const aItems = getResourceSourceOutputCount(a);
+                const bItems = getResourceSourceOutputCount(b);
+                if (bItems !== aItems) return bItems - aItems;
+                const aMatched = Math.max(0, Number(a?.support?.matched_runs || 0));
+                const bMatched = Math.max(0, Number(b?.support?.matched_runs || 0));
+                if (bMatched !== aMatched) return bMatched - aMatched;
+            }
+            const aMs = Number(a?.latestPublishedMs || 0);
+            const bMs = Number(b?.latestPublishedMs || 0);
+            if (bMs !== aMs) return bMs - aMs;
+            return String(a?.source?.name || a?.channelId || '').localeCompare(String(b?.source?.name || b?.channelId || ''));
+        }
+
+        function sortResourceSourceViews(views = [], mode = getResourceSourceSortMode()) {
+            return [...(Array.isArray(views) ? views : [])].sort((a, b) => compareResourceSourceViews(a, b, mode));
         }
 
         function buildResourceSourceFilterOptions(sources, sectionIndex = {}) {
@@ -383,6 +437,118 @@
             renderResourceSourceManagerModal();
         }
 
+        function getResourceSourceSortModeLabel(mode = getResourceSourceSortMode()) {
+            const normalized = String(mode || 'manual').trim().toLowerCase();
+            if (normalized === 'recent') return '最近发布时间';
+            if (normalized === 'activity') return '活跃度';
+            if (normalized === 'support') return '订阅支持度';
+            if (normalized === 'output') return '产出次数';
+            if (normalized === 'name') return '频道名称';
+            return '手动顺序';
+        }
+
+        async function applyResourceSourceCurrentSortOrder() {
+            const mode = getResourceSourceSortMode();
+            const sources = Array.isArray(resourceState.sources) ? resourceState.sources : [];
+            if (!sources.length) {
+                showToast('当前没有可排序的频道', { tone: 'warn', duration: 2400, placement: 'top-center' });
+                return;
+            }
+            if (mode === 'manual') {
+                showToast('当前已经是手动顺序，无需应用', { tone: 'info', duration: 2200, placement: 'top-center' });
+                return;
+            }
+
+            const sectionIndex = getResourceSourceSectionIndex();
+            const sortedViews = sortResourceSourceViews(getResourceSourceViewList(sources, sectionIndex), mode);
+            const nextSources = sortedViews.map(view => view.source);
+            const changed = nextSources.some((source, index) => getResourceSourceChannelId(source) !== getResourceSourceChannelId(sources[index]));
+            if (!changed) {
+                showToast('当前频道顺序已经符合这个排序', { tone: 'info', duration: 2200, placement: 'top-center' });
+                return;
+            }
+            const ok = await showAppConfirm(`将按“${getResourceSourceSortModeLabel(mode)}”重排全部 ${nextSources.length} 个频道，并保存为新的手动顺序。确定继续吗？`);
+            if (!ok) return;
+            try {
+                const saveTask = persistResourceSources(nextSources);
+                resourceSourceSortMode = 'manual';
+                renderResourceSourceManagerModal();
+                showToast('已应用为频道顺序', { tone: 'success', duration: 2400, placement: 'top-center' });
+                reportResourceSourcePersistFailure(saveTask, '排序');
+            } catch (e) {
+                showToast(`排序保存失败：${e.message || '未知错误'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
+            }
+        }
+
+        async function bulkMoveResourceSources(position) {
+            const selectedIds = getSelectedResourceSourceIdsInFiltered();
+            if (!selectedIds.length) {
+                showToast('请先在当前筛选结果中勾选要移动的频道', { tone: 'warn', duration: 2600, placement: 'top-center' });
+                return;
+            }
+            const direction = String(position || '').trim().toLowerCase() === 'bottom' ? 'bottom' : 'top';
+            const selectedSet = new Set(selectedIds);
+            const sources = Array.isArray(resourceState.sources) ? resourceState.sources : [];
+            const selectedInView = getFilteredResourceSourceViewList()
+                .filter(view => selectedSet.has(view.channelId))
+                .map(view => view.source);
+            const rest = sources.filter(source => !selectedSet.has(getResourceSourceChannelId(source)));
+            const nextSources = direction === 'bottom'
+                ? [...rest, ...selectedInView]
+                : [...selectedInView, ...rest];
+            try {
+                const saveTask = persistResourceSources(nextSources);
+                resourceSourceSortMode = 'manual';
+                renderResourceSourceManagerModal();
+                showToast(`已${direction === 'bottom' ? '置底' : '置顶'} ${selectedInView.length} 个频道`, { tone: 'success', duration: 2400, placement: 'top-center' });
+                reportResourceSourcePersistFailure(saveTask, direction === 'bottom' ? '置底' : '置顶');
+            } catch (e) {
+                showToast(`移动失败：${e.message || '未知错误'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
+            }
+        }
+
+        async function syncSelectedResourceSourceNames() {
+            const selectedIds = getSelectedResourceSourceIdsInFiltered();
+            if (!selectedIds.length) {
+                showToast('请先勾选要同步名称的频道', { tone: 'warn', duration: 2600, placement: 'top-center' });
+                return;
+            }
+            const ok = await showAppConfirm(`将从 TG 公开频道页同步 ${selectedIds.length} 个频道的官方名称，并覆盖当前频道名称。确定继续吗？`);
+            if (!ok) return;
+
+            resourceSourceNameSyncBusy = true;
+            renderResourceSourceManagerModal();
+            try {
+                const data = await window.MediaHubApi.postJson('/resource/channels/sync-names', {
+                    channel_ids: selectedIds,
+                });
+                const nextSources = Array.isArray(data.sources) ? data.sources : null;
+                if (nextSources) {
+                    applyResourceSourcesLocal(nextSources, { deferHeavyRender: true });
+                }
+                const success = Math.max(0, Number(data.success || 0));
+                const failed = Math.max(0, Number(data.failed || 0));
+                if (success > 0 && failed > 0) {
+                    const firstError = Array.isArray(data.errors) && data.errors[0]
+                        ? `；示例：${data.errors[0].channel_id || '--'} ${data.errors[0].message || ''}`
+                        : '';
+                    showToast(`已同步 ${success} 个频道名称，失败 ${failed} 个${firstError}`, { tone: 'warn', duration: 4200, placement: 'top-center' });
+                } else if (success > 0) {
+                    showToast(`已同步 ${success} 个频道名称`, { tone: 'success', duration: 2600, placement: 'top-center' });
+                } else {
+                    const firstError = Array.isArray(data.errors) && data.errors[0]
+                        ? `${data.errors[0].channel_id || '--'} ${data.errors[0].message || '未识别到名称'}`
+                        : '未同步到频道名称';
+                    showToast(firstError, { tone: 'warn', duration: 3600, placement: 'top-center' });
+                }
+            } catch (e) {
+                showToast(`同步频道名称失败：${e.message || '未知错误'}`, { tone: 'error', duration: 3600, placement: 'top-center' });
+            } finally {
+                resourceSourceNameSyncBusy = false;
+                renderResourceSourceManagerModal();
+            }
+        }
+
         function getFilteredResourceSourceViewList() {
             const sources = resourceState.sources || [];
             const sectionIndex = getResourceSourceSectionIndex();
@@ -401,35 +567,7 @@
                 return true;
             });
 
-            const mode = String(resourceSourceSortMode || 'recent').trim().toLowerCase();
-            filtered.sort((a, b) => {
-                if (mode === 'name') {
-                    return String(a?.source?.name || a?.channelId || '').localeCompare(String(b?.source?.name || b?.channelId || ''));
-                }
-                if (mode === 'activity') {
-                    const ad = (a?.activityBucket === 'week' ? 4 : a?.activityBucket === 'month' ? 3 : a?.activityBucket === 'half_year' ? 2 : a?.activityBucket === 'older' ? 1 : 0);
-                    const bd = (b?.activityBucket === 'week' ? 4 : b?.activityBucket === 'month' ? 3 : b?.activityBucket === 'half_year' ? 2 : b?.activityBucket === 'older' ? 1 : 0);
-                    if (bd !== ad) return bd - ad;
-                }
-                if (mode === 'support') {
-                    const aSearched = Math.max(0, Number(a?.support?.searched_runs || 0));
-                    const bSearched = Math.max(0, Number(b?.support?.searched_runs || 0));
-                    const aMatched = Math.max(0, Number(a?.support?.matched_runs || 0));
-                    const bMatched = Math.max(0, Number(b?.support?.matched_runs || 0));
-                    const aItems = Math.max(0, Number(a?.support?.matched_items || 0));
-                    const bItems = Math.max(0, Number(b?.support?.matched_items || 0));
-                    const aRate = aSearched > 0 ? (aMatched / aSearched) : -1;
-                    const bRate = bSearched > 0 ? (bMatched / bSearched) : -1;
-                    if (bRate !== aRate) return bRate - aRate;
-                    if (bItems !== aItems) return bItems - aItems;
-                    if (bSearched !== aSearched) return bSearched - aSearched;
-                }
-                const aMs = Number(a?.latestPublishedMs || 0);
-                const bMs = Number(b?.latestPublishedMs || 0);
-                if (bMs !== aMs) return bMs - aMs;
-                return String(a?.source?.name || a?.channelId || '').localeCompare(String(b?.source?.name || b?.channelId || ''));
-            });
-            return filtered;
+            return sortResourceSourceViews(filtered, getResourceSourceSortMode());
         }
 
         function getSelectedResourceSourceIdsInFiltered() {
@@ -508,6 +646,8 @@
             const activityFiltersEl = document.getElementById('resource-source-manager-activity-filters');
             const searchInputEl = document.getElementById('resource-source-manager-search');
             const sortSelectEl = document.getElementById('resource-source-manager-sort');
+            const sortHintEl = document.getElementById('resource-source-manager-sort-hint');
+            const applySortBtn = document.getElementById('resource-source-manager-apply-sort-btn');
             const hintEl = document.getElementById('resource-source-manager-filter-hint');
             const listEl = document.getElementById('resource-source-manager-list');
             const selectedCountEl = document.getElementById('resource-source-manager-selected-count');
@@ -520,7 +660,8 @@
             const sampleInput = document.getElementById('resource-source-manager-test-sample-size');
             const selectAllBtn = document.getElementById('resource-source-manager-select-all-btn');
             const invertBtn = document.getElementById('resource-source-manager-invert-btn');
-            if (!shell || !typeFiltersEl || !statusFiltersEl || !activityFiltersEl || !searchInputEl || !sortSelectEl || !hintEl || !listEl || !selectedCountEl || !mobileFilteredCountEl || !mobileSelectedCountEl || !mobileListTabEl || !mobileToolsTabEl || !resultEl || !testBtn || !sampleInput || !selectAllBtn || !invertBtn) return;
+            const syncNamesBtn = document.getElementById('resource-source-manager-sync-names-btn');
+            if (!shell || !typeFiltersEl || !statusFiltersEl || !activityFiltersEl || !searchInputEl || !sortSelectEl || !sortHintEl || !applySortBtn || !hintEl || !listEl || !selectedCountEl || !mobileFilteredCountEl || !mobileSelectedCountEl || !mobileListTabEl || !mobileToolsTabEl || !resultEl || !testBtn || !sampleInput || !selectAllBtn || !invertBtn || !syncNamesBtn) return;
 
             const sources = resourceState.sources || [];
             const sectionIndex = getResourceSourceSectionIndex();
@@ -540,8 +681,14 @@
             }
 
             const filtered = getFilteredResourceSourceViewList();
+            const sortMode = getResourceSourceSortMode();
             searchInputEl.value = resourceSourceKeyword;
-            sortSelectEl.value = resourceSourceSortMode;
+            sortSelectEl.value = sortMode;
+            sortHintEl.textContent = sortMode === 'manual'
+                ? '当前为手动顺序，可用上移/下移或批量置顶置底调整真实顺序。'
+                : `当前按“${getResourceSourceSortModeLabel(sortMode)}”查看；点击应用后才会保存为真实频道顺序。`;
+            applySortBtn.disabled = sortMode === 'manual' || !sources.length;
+            applySortBtn.classList.toggle('btn-disabled', sortMode === 'manual' || !sources.length);
 
             typeFiltersEl.innerHTML = typeOptions.map(option => `
                 <button
@@ -597,6 +744,9 @@
             selectAllBtn.textContent = isAllSelected ? '当前筛选结果已全选' : '全选当前筛选结果';
             invertBtn.disabled = !hasFiltered;
             invertBtn.classList.toggle('btn-disabled', !hasFiltered);
+            syncNamesBtn.disabled = selectedInFiltered <= 0 || resourceSourceNameSyncBusy;
+            syncNamesBtn.classList.toggle('btn-disabled', selectedInFiltered <= 0 || resourceSourceNameSyncBusy);
+            syncNamesBtn.textContent = resourceSourceNameSyncBusy ? '同步中...' : '同步频道名称';
 
             if (resourceSourceTestBusy) {
                 const total = Number(resourceSourceTestResult.total || sources.length || 0);
@@ -631,6 +781,9 @@
             listEl.innerHTML = filtered.map(view => {
                 const checked = !!resourceSourceBulkSelected[view.channelId];
                 const enabled = view.source.enabled !== false;
+                const showManualMove = sortMode === 'manual';
+                const moveUpDisabled = view.index <= 0 ? 'btn-disabled' : '';
+                const moveDownDisabled = view.index >= sources.length - 1 ? 'btn-disabled' : '';
                 const latest = String(view.latestPublishedAt || '').trim();
                 const latestAge = view.latestPublishedMs ? formatResourceAgeText(view.latestPublishedMs) : '待同步';
                 const typeText = (Array.isArray(view.sourceTypes) ? view.sourceTypes : [])
@@ -663,6 +816,8 @@
                             <div class="resource-source-manager-row-meta">类型：${escapeHtml(typeText || getResourceLinkTypeLabel(view.primaryType || 'unknown'))} · 活跃度：${escapeHtml(getResourceSourceActivityBucketLabel(view.activityBucket))} · 最近：${escapeHtml(latestAge)}${latest ? `（${escapeHtml(formatTimeText(latest))}）` : ''} · ${escapeHtml(supportText)}</div>
                         </div>
                         <div class="resource-source-manager-row-actions">
+                            ${showManualMove ? `<button type="button" data-resource-source-manager-action="move-up" data-source-index="${view.index}" class="resource-source-compact-btn ${moveUpDisabled}" ${view.index <= 0 ? 'disabled' : ''}>上移</button>` : ''}
+                            ${showManualMove ? `<button type="button" data-resource-source-manager-action="move-down" data-source-index="${view.index}" class="resource-source-compact-btn ${moveDownDisabled}" ${view.index >= sources.length - 1 ? 'disabled' : ''}>下移</button>` : ''}
                             <button type="button" data-resource-source-manager-action="toggle" data-source-index="${view.index}" data-enabled="${enabled ? '1' : '0'}" class="resource-source-compact-btn">${enabled ? '停用' : '启用'}</button>
                             <button type="button" data-resource-source-manager-action="edit" data-source-index="${view.index}" class="resource-source-compact-btn">编辑</button>
                             <button type="button" data-resource-source-manager-action="delete" data-source-index="${view.index}" class="resource-source-compact-btn resource-source-compact-btn-danger">删除</button>
@@ -764,12 +919,18 @@
             const sources = Array.isArray(resourceState.sources) ? resourceState.sources : [];
             const enabledCount = sources.filter(source => source.enabled !== false).length;
             const disabledCount = Math.max(0, sources.length - enabledCount);
+            const sectionIndex = getResourceSourceSectionIndex();
+            const outputCount = getResourceSourceViewList(sources, sectionIndex)
+                .filter(view => getResourceSourceOutputCount(view) > 0)
+                .length;
             const totalEl = document.getElementById('resource-source-total-count');
             const enabledEl = document.getElementById('resource-source-enabled-count');
             const disabledEl = document.getElementById('resource-source-disabled-count');
+            const outputEl = document.getElementById('resource-source-output-count');
             if (totalEl) totalEl.innerText = String(sources.length);
             if (enabledEl) enabledEl.innerText = String(enabledCount);
             if (disabledEl) disabledEl.innerText = String(disabledCount);
+            if (outputEl) outputEl.innerText = String(outputCount);
         }
 
         function syncResourceSourceModalState() {
@@ -1012,7 +1173,7 @@
                 const link = document.createElement('a');
                 const href = URL.createObjectURL(blob);
                 link.href = href;
-                link.download = `tg-resource-sources-cloudsaver-${stamp}.json`;
+                link.download = `tg-resource-sources-${stamp}.json`;
                 document.body.appendChild(link);
                 link.click();
                 link.remove();
@@ -1478,47 +1639,7 @@
 
         function renderResourceSources() {
             const container = document.getElementById('resource-source-list');
-            const sources = resourceState.sources || [];
-            if (!container) return;
             syncResourceSourceSummary();
-            const sectionIndex = getResourceSourceSectionIndex();
-            if (!sources.length) {
-                container.innerHTML = `
-                    <div class="resource-source-empty">
-                        <div class="resource-source-empty-title">还没有频道订阅</div>
-                        <div class="resource-source-empty-copy">从底部添加一个公开 TG 频道后，资源中心就会按这里的顺序展示对应内容。</div>
-                    </div>
-                `;
-                return;
-            }
-            const rows = getResourceSourceViewList(sources, sectionIndex).map(view => {
-                const moveUpDisabled = view.index === 0 ? 'btn-disabled' : '';
-                const moveDownDisabled = view.index === sources.length - 1 ? 'btn-disabled' : '';
-                const enabledLabel = view.source.enabled !== false ? '已启用' : '已停用';
-                const latestPublished = String(view.profile?.latest_published_at || '').trim();
-                return `
-                    <div class="resource-source-compact-row">
-                        <div class="resource-source-compact-main">
-                            <div class="resource-source-compact-title">
-                                <span class="resource-source-compact-name">${escapeHtml(view.source.name || `频道 ${view.index + 1}`)}</span>
-                                <span class="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">#${view.index + 1}</span>
-                                <span class="text-[10px] px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-200 border border-sky-500/20">${escapeHtml(getResourceLinkTypeLabel(view.primaryType))}</span>
-                                <span class="text-[10px] px-2 py-0.5 rounded-full ${view.source.enabled !== false ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20' : 'bg-slate-700 text-slate-300 border border-slate-600'}">${enabledLabel}</span>
-                            </div>
-                            <div class="resource-source-compact-meta">@${escapeHtml(view.channelId || '--')} · ${escapeHtml(getResourceSourceActivityBucketLabel(view.activityBucket))} · 最近 ${escapeHtml(latestPublished ? formatTimeText(latestPublished) : '--')}</div>
-                        </div>
-                        <div class="resource-source-compact-actions">
-                            <label class="ui-switch">
-                                <input type="checkbox" data-resource-source-toggle="1" data-resource-source-index="${view.index}" ${view.source.enabled !== false ? 'checked' : ''}>
-                                <span class="ui-switch-slider"></span>
-                            </label>
-                            <button type="button" data-resource-source-action="move-up" data-resource-source-index="${view.index}" class="resource-source-compact-btn ${moveUpDisabled}" ${view.index === 0 ? 'disabled' : ''}>上移</button>
-                            <button type="button" data-resource-source-action="move-down" data-resource-source-index="${view.index}" class="resource-source-compact-btn ${moveDownDisabled}" ${view.index === sources.length - 1 ? 'disabled' : ''}>下移</button>
-                            <button type="button" data-resource-source-action="edit" data-resource-source-index="${view.index}" class="resource-source-compact-btn">编辑</button>
-                        </div>
-                    </div>
-                `;
-            }).join('');
-            container.innerHTML = `<div class="resource-source-compact-list">${rows}</div>`;
+            if (container) container.innerHTML = '';
             renderResourceSourceManagerModal();
         }

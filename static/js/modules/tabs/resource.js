@@ -8,6 +8,8 @@ export async function ensureTabData(context) {
 export async function refreshResourceState({
     allowSearch = true,
     keywordOverride = null,
+    searchId = '',
+    signal = null,
     getResourceState,
     isDirectImportInput,
     setResourceStateHydrated,
@@ -24,11 +26,14 @@ export async function refreshResourceState({
             && allowSearch;
         const params = new URLSearchParams();
         if (shouldSearchChannels) params.set('q', activeKeyword);
+        params.set('search_source', String(currentResourceState.search_source || 'tg').trim() || 'tg');
+        params.set('provider_filter', 'all');
+        if (searchId) params.set('search_id', String(searchId || '').trim());
         const endpoint = params.toString() ? `/resource/state?${params.toString()}` : '/resource/state';
         const data = window.MediaHubApi?.getJson
-            ? await window.MediaHubApi.getJson(endpoint)
+            ? await window.MediaHubApi.getJson(endpoint, signal ? { signal } : undefined)
             : await (async () => {
-                const res = await fetch(endpoint);
+                const res = await fetch(endpoint, signal ? { signal } : undefined);
                 if (!res.ok) return null;
                 return res.json();
             })();
@@ -37,6 +42,7 @@ export async function refreshResourceState({
         if (typeof applyResourceState === 'function') applyResourceState(data);
         return data;
     } catch (e) {
+        if (e?.name === 'AbortError') throw e;
         return null;
     }
 }

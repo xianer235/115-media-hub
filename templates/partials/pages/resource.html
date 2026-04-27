@@ -11,12 +11,23 @@
                     <button id="resource-search-btn" type="button" onclick="searchResources()" class="resource-search-btn bg-sky-600 hover:bg-sky-500 text-white shadow-lg">搜索</button>
                     <button id="resource-sync-btn" type="button" onclick="syncResourceChannels(true)" class="resource-search-btn bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700">同步频道</button>
                 </div>
+                <div class="resource-search-filterbar" aria-label="资源搜索筛选">
+                    <div class="resource-search-segment" role="group" aria-label="搜索来源">
+                        <button id="resource-search-source-tg" type="button" onclick="setResourceSearchSource('tg')" class="resource-search-segment-btn">频道搜索</button>
+                        <button id="resource-search-source-pansou" type="button" onclick="setResourceSearchSource('pansou')" class="resource-search-segment-btn">盘搜</button>
+                    </div>
+                    <div class="resource-search-segment" role="group" aria-label="网盘类型">
+                        <button id="resource-provider-filter-all" type="button" onclick="setResourceProviderFilter('all')" class="resource-search-segment-btn">全部</button>
+                        <button id="resource-provider-filter-115" type="button" onclick="setResourceProviderFilter('115')" class="resource-search-segment-btn">115</button>
+                        <button id="resource-provider-filter-magnet" type="button" onclick="setResourceProviderFilter('magnet')" class="resource-search-segment-btn">磁力</button>
+                        <button id="resource-provider-filter-quark" type="button" onclick="setResourceProviderFilter('quark')" class="resource-search-segment-btn">夸克</button>
+                    </div>
+                </div>
                 <div class="resource-search-strip-head">
                     <div id="resource-board-hint" class="resource-search-sub min-w-0 hidden" aria-live="polite"></div>
                     <div class="resource-search-stats">
                         <div class="resource-search-stat">源 <span id="resource-source-count" class="text-sky-400 font-bold">0</span></div>
                         <div class="resource-search-stat">缓存 <span id="resource-item-count" class="text-emerald-400 font-bold">0</span></div>
-                        <div class="resource-search-stat">完成 <span id="resource-completed-job-count" class="text-amber-300 font-bold">0</span></div>
                     </div>
                 </div>
             </div>

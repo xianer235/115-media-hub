@@ -349,10 +349,30 @@ def _import_resource_candidates_to_db(candidates: List[Dict[str, Any]]) -> Dict[
 @router.get("/resource/state")
 async def get_resource_state(request: Request) -> Dict[str, Any]:
     search = str(request.query_params.get("q", "") or "").strip()
+    search_source = normalize_resource_search_source(request.query_params.get("search_source", "tg"))
+    provider_filter = normalize_resource_provider_filter(request.query_params.get("provider_filter", "all"))
+    search_id = normalize_resource_search_id(request.query_params.get("search_id", ""))
     sync_channels = request.query_params.get("sync") == "1"
     if sync_channels:
         submit_resource_channel_sync(force=False, limit_per_channel=10)
-    return await build_resource_state_payload(search=search)
+    try:
+        return await build_resource_state_payload(
+            search=search,
+            search_source=search_source,
+            provider_filter=provider_filter,
+            search_id=search_id,
+        )
+    finally:
+        clear_resource_search_cancel(search_id)
+
+
+@router.post("/resource/search/cancel")
+async def cancel_resource_search_endpoint(request: Request) -> JSONResponse:
+    incoming = await request.json()
+    payload = incoming if isinstance(incoming, dict) else {}
+    search_id = normalize_resource_search_id(payload.get("search_id", ""))
+    cancelled = cancel_resource_search(search_id)
+    return JSONResponse(content={"ok": True, "cancelled": cancelled, "search_id": search_id})
 
 
 @router.get("/resource/jobs/state")
@@ -385,6 +405,95 @@ async def save_resource_sources(request: Request) -> Dict[str, Any]:
     async with resource_sources_save_lock:
         normalized = await asyncio.to_thread(_save_resource_sources_payload, data.get("sources", []))
     return {"ok": True, "sources": normalized}
+
+
+@router.post("/resource/channels/sync-names")
+async def sync_resource_channel_names_endpoint(request: Request) -> Dict[str, Any]:
+    data = await request.json()
+    incoming_channel_ids = data.get("channel_ids", [])
+    requested_ids = [
+        normalize_telegram_channel_id_from_input(item)
+        for item in (incoming_channel_ids if isinstance(incoming_channel_ids, list) else [])
+    ]
+    channel_ids = []
+    seen_channel_ids = set()
+    for channel_id in requested_ids:
+        if not channel_id or channel_id in seen_channel_ids:
+            continue
+        seen_channel_ids.add(channel_id)
+        channel_ids.append(channel_id)
+    if not channel_ids:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "请先选择要同步名称的频道"})
+    if len(channel_ids) > 100:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "一次最多同步 100 个频道名称"})
+
+    cfg = get_config()
+    current_sources = [normalize_resource_source(item or {}) for item in cfg.get("resource_sources", [])]
+    source_channel_ids = {
+        normalize_telegram_channel_id_from_input(source.get("channel_id", ""))
+        for source in current_sources
+    }
+    targets = [channel_id for channel_id in channel_ids if channel_id in source_channel_ids]
+    if not targets:
+        return JSONResponse(status_code=404, content={"ok": False, "msg": "没有找到可同步的频道"})
+
+    semaphore = asyncio.Semaphore(max(1, min(get_tg_channel_threads(cfg), 8)))
+
+    async def fetch_one(channel_id: str) -> Dict[str, Any]:
+        try:
+            async with semaphore:
+                info = await asyncio.to_thread(fetch_telegram_channel_info, cfg, channel_id, 20)
+            return {
+                "channel_id": channel_id,
+                "name": str(info.get("name", "") or "").strip(),
+                "url": str(info.get("url", "") or "").strip(),
+            }
+        except Exception as exc:
+            return {"channel_id": channel_id, "error": str(exc)}
+
+    results = await asyncio.gather(*(fetch_one(channel_id) for channel_id in targets))
+    name_by_channel = {
+        str(item.get("channel_id", "")).strip(): str(item.get("name", "") or "").strip()
+        for item in results
+        if isinstance(item, dict) and str(item.get("name", "") or "").strip()
+    }
+    errors = [
+        {
+            "channel_id": str(item.get("channel_id", "")).strip(),
+            "message": str(item.get("error", "") or "同步失败").strip(),
+        }
+        for item in results
+        if isinstance(item, dict) and str(item.get("error", "") or "").strip()
+    ]
+
+    async with resource_sources_save_lock:
+        fresh_cfg = get_config()
+        fresh_sources = [normalize_resource_source(item or {}) for item in fresh_cfg.get("resource_sources", [])]
+        updated_sources = []
+        for source in fresh_sources:
+            channel_id = normalize_telegram_channel_id_from_input(source.get("channel_id", ""))
+            official_name = name_by_channel.get(channel_id, "")
+            if official_name:
+                source = {
+                    **source,
+                    "name": official_name,
+                }
+            updated_sources.append(source)
+        fresh_cfg["resource_sources"] = updated_sources
+        save_config(fresh_cfg)
+
+    return {
+        "ok": True,
+        "sources": updated_sources,
+        "updated": [
+            {"channel_id": channel_id, "name": name}
+            for channel_id, name in name_by_channel.items()
+        ],
+        "errors": errors,
+        "total": len(targets),
+        "success": len(name_by_channel),
+        "failed": len(errors),
+    }
 
 
 @router.post("/resource/quick_links/save")
@@ -475,6 +584,7 @@ async def load_more_resource_channel_items_endpoint(request: Request) -> Dict[st
     limit = max(1, min(int(data.get("limit", 10) or 10), 20))
     before = extract_telegram_post_cursor(data.get("before", "") or "")
     query = str(data.get("query", "") or "").strip()
+    provider_filter = normalize_resource_provider_filter(data.get("provider_filter", "all"))
     cfg = get_config()
     source = next(
         (item for item in cfg.get("resource_sources", []) if normalize_telegram_channel_id_from_input(item.get("channel_id", "")) == channel_id),
@@ -499,6 +609,11 @@ async def load_more_resource_channel_items_endpoint(request: Request) -> Dict[st
                     TG_SEARCH_MAX_PAGES,
                     max(limit, TG_SEARCH_PAGE_LIMIT),
                     before,
+                    "message",
+                    0,
+                    TG_SEARCH_REQUEST_TIMEOUT_SECONDS,
+                    TG_SEARCH_RETRY_ATTEMPTS,
+                    provider_filter,
                 )
             else:
                 page = await asyncio.to_thread(fetch_telegram_channel_posts_page, cfg, source, limit, before)
@@ -511,6 +626,8 @@ async def load_more_resource_channel_items_endpoint(request: Request) -> Dict[st
     items = page.get("posts", []) if isinstance(page, dict) else []
     if query and isinstance(page, dict):
         items = page.get("items", []) or []
+    if provider_filter != "all":
+        items = filter_resource_items_by_provider(items, provider_filter)
     import_result = await asyncio.to_thread(_import_resource_candidates_to_db, items) if items else {
         "inserted": 0,
         "updated": 0,

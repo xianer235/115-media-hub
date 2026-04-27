@@ -836,7 +836,7 @@ def find_subscription_task_match_candidate(task: Dict[str, Any], last_episode: i
         else max(30, min(100, int(task.get("min_score", SUBSCRIPTION_MIN_SCORE) or SUBSCRIPTION_MIN_SCORE)))
     )
     media_type = str(task.get("media_type", "movie") or "movie").strip().lower()
-    supported_link_types = {"quark"} if provider == "quark" else {"magnet", "115share"}
+    supported_link_types = {"quark"} if provider == "quark" else {"115share"}
     candidates: List[Dict[str, Any]] = []
     for row in rows:
         item = serialize_resource_item_row(row)

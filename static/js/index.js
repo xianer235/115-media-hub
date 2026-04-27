@@ -20,7 +20,7 @@
             quark: { configured: false, state: 'missing', message: '未配置 Quark Cookie', last_checked_at: '', last_success_at: '', trigger: '', fail_count: 0 }
         };
         let cookieHealthCheckBusy = false;
-        let resourceState = { sources: [], quick_links: [], items: [], jobs: [], active_jobs: [], job_counts: {}, job_pagination: {}, channel_sections: [], channel_profiles: {}, subscription_channel_support: {}, search_sections: [], last_syncs: {}, channel_sync: {}, monitor_tasks: [], stats: { source_count: 0, item_count: 0, filtered_item_count: 0, completed_job_count: 0 }, cookie_configured: false, quark_cookie_configured: false, cookie_health: null, setup_status: null, search: '', search_meta: {} };
+        let resourceState = { sources: [], quick_links: [], items: [], jobs: [], active_jobs: [], job_counts: {}, job_pagination: {}, channel_sections: [], channel_profiles: {}, subscription_channel_support: {}, search_sections: [], last_syncs: {}, channel_sync: {}, monitor_tasks: [], stats: { source_count: 0, item_count: 0, filtered_item_count: 0, completed_job_count: 0 }, cookie_configured: false, quark_cookie_configured: false, cookie_health: null, setup_status: null, search: '', search_source: 'tg', provider_filter: 'all', search_meta: {} };
         let editingMonitorName = null;
         let editingSubscriptionName = null;
         let editingResourceSourceIndex = null;
@@ -100,7 +100,13 @@
         let resourceShareFetchInFlight = {};
         let subscriptionShareFolderFetchInFlight = {};
         let resourceSectionCollapsed = {};
+        let resourceSearchSource = 'tg';
+        let resourceProviderFilter = 'all';
         let resourceSearchBusy = false;
+        let resourceSearchAbortController = null;
+        let resourceActiveSearchId = '';
+        let resourceSearchCancelRequested = false;
+        let resourceRestartSearchAfterCancel = false;
         let resourceSyncBusy = false;
         let resourceChannelExtraItems = {};
         let resourceChannelLoadingMore = {};
@@ -128,7 +134,7 @@
         let resourceSourceEnabledFilter = 'all';
         let resourceSourceActivityFilter = 'all';
         let resourceSourceKeyword = '';
-        let resourceSourceSortMode = 'recent';
+        let resourceSourceSortMode = 'manual';
         let resourceSourceBulkSelected = {};
         let resourceSourceManagerMobilePanel = 'list';
         let resourceSourcePersistToken = 0;
@@ -139,12 +145,14 @@
         let resourceSourcePersistPending = [];
         let resourceSourcePersistRollbackSources = null;
         let resourceSourceTestBusy = false;
+        let resourceSourceNameSyncBusy = false;
         let resourceSourceTestResult = { total: 0, done: 0, success: 0, failed: 0, running: false, last_name: '', error: '' };
         let resourceHeavyRenderRafId = null;
         let resourceSubmitBusy = false;
         let resourceJobFilter = 'all';
         let appMountPoints = [];
         let tgProxyTestState = { loading: false, ok: null, message: '', latency_ms: 0, mode: '', proxy_url: '', target_url: '' };
+        let pansouTestState = { loading: false, ok: null, message: '', latency_ms: 0, auth_enabled: false, auth_configured: false, auth_logged_in: false, plugin_count: 0, channels_count: 0 };
         let notifyTestState = { loading: false, ok: null, message: '', channel: '', target_desc: '', webhook_host: '', sent_at: '' };
         let resourceBoardHintText = '';
         let resourceTgHealthState = { visible: false, tone: 'loading', title: '', meta: '', note: '' };
@@ -213,6 +221,7 @@
             'notify_wecom_webhook',
             'notify_wecom_app_secret',
             'tmdb_api_key',
+            'pansou_password',
         ]);
         const STATUS_FALLBACK_INTERVAL = 15000;
         const RESOURCE_SYNC_POLL_INTERVAL = 3000;
@@ -249,7 +258,25 @@
         };
         const SUBSCRIPTION_DEFAULT_WEEKDAYS = [1, 2, 3, 4, 5, 6, 7];
         const SUBSCRIPTION_DEFAULT_SCHEDULE_INTERVAL_MINUTES = 120;
-        const TAB_RUNTIME_IMPORT_PATH = '/static/js/modules/tabs/runtime.js';
+        const CURRENT_ASSET_IMPORT_QUERY = (() => {
+            try {
+                const script = document.currentScript
+                    || Array.from(document.scripts || []).find(item => String(item?.src || '').includes('/static/js/index.js'));
+                const url = new URL(String(script?.src || ''), window.location.origin);
+                const version = String(url.searchParams.get('v') || '').trim();
+                return version ? `?v=${encodeURIComponent(version)}` : '';
+            } catch (e) {
+                return '';
+            }
+        })();
+
+        function withCurrentAssetImportQuery(path) {
+            const value = String(path || '').trim();
+            if (!value || !CURRENT_ASSET_IMPORT_QUERY || value.includes('?')) return value;
+            return `${value}${CURRENT_ASSET_IMPORT_QUERY}`;
+        }
+
+        const TAB_RUNTIME_IMPORT_PATH = withCurrentAssetImportQuery('/static/js/modules/tabs/runtime.js');
 
         function getWindowScrollTop() {
             if (document.body.classList.contains('body-scroll-lock')) {
@@ -1814,6 +1841,18 @@
             };
         }
 
+        function getCurrentPansouConfig() {
+            return {
+                pansou_enabled: !!document.getElementById('pansou_enabled')?.checked,
+                pansou_base_url: document.getElementById('pansou_base_url')?.value?.trim() || '',
+                pansou_username: document.getElementById('pansou_username')?.value?.trim() || '',
+                pansou_password: document.getElementById('pansou_password')?.value?.trim() || '',
+                pansou_src: document.getElementById('pansou_src')?.value?.trim() || 'all',
+                pansou_channels: document.getElementById('pansou_channels')?.value?.trim() || '',
+                pansou_plugins: document.getElementById('pansou_plugins')?.value?.trim() || ''
+            };
+        }
+
         function notifyChannelLabel(value) {
             const key = String(value || '').trim().toLowerCase();
             if (key === 'wecom_app') return '企业微信应用 API';
@@ -1849,8 +1888,8 @@
 
         function formatLatencyText(latencyMs) {
             const value = Number(latencyMs || 0);
-            if (!Number.isFinite(value) || value <= 0) return '延迟 --';
-            return `延迟 ${Math.max(1, Math.round(value))} ms`;
+            if (!Number.isFinite(value) || value <= 0) return 'TG 延迟 --';
+            return `TG 延迟 ${Math.max(1, Math.round(value))} ms`;
         }
 
         async function probeResourceTgLatency() {
@@ -1912,6 +1951,41 @@
                     renderTgProxyTestStatus,
                 });
             }
+        }
+
+        function renderPansouTestStatus() {
+            const settingsModule = tabRuntimeState.tabModuleCache.settings;
+            if (settingsModule?.renderPansouTestStatus) {
+                settingsModule.renderPansouTestStatus({
+                    pansouTestState,
+                    escapeHtml,
+                    formatDurationText,
+                });
+                return;
+            }
+            void loadSettingsTabModule().then((mod) => {
+                mod?.renderPansouTestStatus?.({
+                    pansouTestState,
+                    escapeHtml,
+                    formatDurationText,
+                });
+            });
+        }
+
+        async function testPansouConnection() {
+            const settingsModule = await loadSettingsTabModule();
+            if (settingsModule?.testPansouConnection) {
+                await settingsModule.testPansouConnection({
+                    getCurrentPansouConfig,
+                    getPansouTestState: () => pansouTestState,
+                    setPansouTestState: (nextValue) => {
+                        pansouTestState = { ...nextValue };
+                    },
+                    renderPansouTestStatus,
+                });
+                return;
+            }
+            showToast('PanSou 测试模块加载失败，请刷新页面后重试', { tone: 'error', duration: 3200, placement: 'top-center' });
         }
 
         function renderNotifyTestStatus() {
@@ -1976,16 +2050,24 @@
             let text = String(resourceBoardHintText || '').trim();
 
             if (resourceSearchBusy) {
-                if (directImport) {
-                    text = '正在识别导入链接，请稍候。';
-                } else {
-                    const baseText = `正在频道内搜索「${keyword || '...'}」，请稍候。`;
-                    text = tgText ? `${baseText} ${tgText}` : baseText;
+                if (!text) {
+                    if (directImport) {
+                        text = `资源识别执行中 · 关键词「${keyword || '...'}」 · 已开始`;
+                    } else {
+                        const sourceLabel = resourceSearchSource === 'pansou' ? '盘搜' : '频道搜索';
+                        const typeLabel = resourceProviderFilter === '115'
+                            ? '115'
+                            : (resourceProviderFilter === 'magnet' ? '磁力' : (resourceProviderFilter === 'quark' ? '夸克' : '全部'));
+                        const latencyText = resourceSearchSource === 'pansou'
+                            ? '已开始'
+                            : (tgText || 'TG 延迟检测中');
+                        text = `${sourceLabel}执行中 · 关键词「${keyword || '...'}」 · 类型 ${typeLabel} · ${latencyText}`;
+                    }
                 }
             } else if (resourceSyncBusy) {
-                const baseText = '正在刷新订阅频道资源，请稍候。';
-                text = tgText ? `${baseText} ${tgText}` : baseText;
-            } else if (tgText) {
+                const baseText = '频道同步执行中';
+                text = tgText ? `${baseText} · ${tgText}` : baseText;
+            } else if (tgText && !text) {
                 text = text ? `${text} ｜ ${tgText}` : tgText;
             }
 
@@ -1998,7 +2080,7 @@
                 'resource-search-sub--warning',
                 'resource-search-sub--error'
             );
-            if (hasText && tgText) hint.classList.add(`resource-search-sub--${tone}`);
+            if (hasText && (tgText || resourceSearchBusy || resourceSyncBusy)) hint.classList.add(`resource-search-sub--${tone}`);
             hint.innerText = hasText ? text : '';
         }
 
@@ -2032,7 +2114,7 @@
                 visible: true,
                 tone: 'loading',
                 title: `TG ${actionText}`,
-                meta: '延迟检测中 · 总耗时 --',
+                meta: 'TG 延迟检测中 · 耗时 --',
                 note: '',
             });
         }
@@ -2149,7 +2231,9 @@
                     getMonitorTasks: () => monitorState.tasks || [],
                     showToast,
                 });
+                return;
             }
+            showToast('设置模块加载失败，请刷新页面后重试', { tone: 'error', duration: 3200, placement: 'top-center' });
         }
 
         async function clearMainLogs() {

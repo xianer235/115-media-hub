@@ -34,6 +34,23 @@ def _format_elapsed_seconds(seconds: float) -> str:
     return f"{normalized:.2f}秒"
 
 
+def _subscription_supported_link_types(provider: str) -> Set[str]:
+    if normalize_subscription_provider(provider, fallback="115") == "quark":
+        return {"quark"}
+    return {"115share"}
+
+
+def _filter_subscription_supported_items(items: List[Dict[str, Any]], provider: str) -> List[Dict[str, Any]]:
+    supported_link_types = _subscription_supported_link_types(provider)
+    result: List[Dict[str, Any]] = []
+    for raw_item in items:
+        item = raw_item if isinstance(raw_item, dict) else {}
+        link_type = resolve_resource_link_type(item.get("link_type", ""), item.get("link_url", ""))
+        if link_type in supported_link_types:
+            result.append(item)
+    return result
+
+
 SUBSCRIPTION_STAGE_TIMING_ORDER: Tuple[Tuple[str, str], ...] = (
     ("prepare", "准备"),
     ("search", "搜索"),
@@ -1029,6 +1046,9 @@ async def find_subscription_task_match_candidate_by_search(
     matched_channels = 0
     pages_scanned = 0
     search_thread_limit = 0
+    pansou_items = 0
+    pansou_errors = 0
+    pansou_elapsed_seconds = 0.0
     slow_channel_rows: List[Dict[str, Any]] = []
     keyword_search_started_at = time.perf_counter()
     keyword_semaphore = asyncio.Semaphore(SUBSCRIPTION_SEARCH_KEYWORD_CONCURRENCY)
@@ -1154,6 +1174,46 @@ async def find_subscription_task_match_candidate_by_search(
                 channel_id = normalize_telegram_channel_id_from_input(err.get("channel_id", ""))
                 if channel_id:
                     incremental_error_channels.add(channel_id)
+
+    cfg = get_config()
+    if bool(cfg.get("pansou_enabled", False)):
+        pansou_started_at = time.perf_counter()
+
+        async def search_one_pansou_keyword(keyword: str) -> Tuple[str, Dict[str, Any]]:
+            check_subscription_cancelled()
+            async with keyword_semaphore:
+                check_subscription_cancelled()
+                search_meta = await search_pansou_resource_sources(
+                    keyword,
+                    provider_filter=provider,
+                    include_magnet_for_115=False,
+                )
+                if isinstance(search_meta, dict):
+                    search_meta["keyword"] = keyword
+                return keyword, search_meta
+
+        pansou_results = await asyncio.gather(
+            *(search_one_pansou_keyword(keyword) for keyword in keywords),
+            return_exceptions=True,
+        )
+        pansou_elapsed_seconds = max(0.0, time.perf_counter() - pansou_started_at)
+        for keyword, raw_pansou_meta in zip(keywords, pansou_results):
+            check_subscription_cancelled()
+            if isinstance(raw_pansou_meta, Exception):
+                pansou_errors += 1
+                all_errors.append({"channel_id": "pansou", "name": keyword, "message": str(raw_pansou_meta)})
+                continue
+            _, pansou_meta = raw_pansou_meta
+            meta_items = pansou_meta.get("items", []) if isinstance(pansou_meta.get("items"), list) else []
+            pansou_items += len(meta_items)
+            all_items.extend(meta_items)
+            pansou_meta_errors = pansou_meta.get("errors", []) if isinstance(pansou_meta.get("errors"), list) else []
+            pansou_errors += len(pansou_meta_errors)
+            all_errors.extend(pansou_meta_errors)
+            searched_sources += max(0, int(pansou_meta.get("searched_sources", 0) or 0))
+            matched_channels += max(0, int(pansou_meta.get("matched_channels", 0) or 0))
+            pages_scanned += max(0, int(pansou_meta.get("pages_scanned", 0) or 0))
+            search_thread_limit = max(search_thread_limit, max(0, int(pansou_meta.get("thread_limit", 0) or 0)))
     keyword_search_elapsed_seconds = max(0.0, time.perf_counter() - keyword_search_started_at)
 
     live_raw_items = len(all_items)
@@ -1179,6 +1239,7 @@ async def find_subscription_task_match_candidate_by_search(
             expanded_115_items.extend(_expand_subscription_115_item_variants(raw_item))
         deduped_items = dedupe_resource_item_dicts(expanded_115_items, identity_mode="link")
         deduped_items.sort(key=get_resource_item_sort_key, reverse=True)
+    deduped_items = _filter_subscription_supported_items(deduped_items, provider)
     merged_errors = _merge_subscription_search_errors(all_errors)
     incremental_channels_advanced = 0
     channel_support_rows_updated = 0
@@ -1280,7 +1341,7 @@ async def find_subscription_task_match_candidate_by_search(
     season_guard_filtered = 0
     exclude_keyword_filtered = 0
     exclude_keyword_hits: Dict[str, int] = {}
-    supported_link_types = {"quark"} if provider == "quark" else {"magnet", "115share"}
+    supported_link_types = _subscription_supported_link_types(provider)
     media_type = str(task.get("media_type", "movie") or "movie").strip().lower()
     single_season_tv = media_type == "tv" and (not is_subscription_multi_season_mode(task))
     target_season = max(1, int(task.get("season", 1) or 1))
@@ -1478,6 +1539,10 @@ async def find_subscription_task_match_candidate_by_search(
             "incremental_channel_watermarks_advanced": int(incremental_channels_advanced or 0),
             "channel_support_rows_updated": int(channel_support_rows_updated or 0),
             "slow_channels": slow_channel_rows[:5],
+            "pansou_enabled": bool(cfg.get("pansou_enabled", False)),
+            "pansou_items": pansou_items,
+            "pansou_errors": pansou_errors,
+            "pansou_elapsed_seconds": pansou_elapsed_seconds,
         },
     }
 
@@ -1606,6 +1671,8 @@ def merge_subscription_search_results(
         "incremental_channel_watermarks_error_channels",
         "incremental_channel_watermarks_advanced",
         "channel_support_rows_updated",
+        "pansou_items",
+        "pansou_errors",
     )
     merged_stats: Dict[str, Any] = {}
     for key in sum_stat_keys:
@@ -1651,6 +1718,13 @@ def merge_subscription_search_results(
     )
     merged_stats["incremental_search_enabled"] = bool(
         fixed_stats.get("incremental_search_enabled", False) or channel_stats.get("incremental_search_enabled", False)
+    )
+    merged_stats["pansou_enabled"] = bool(
+        fixed_stats.get("pansou_enabled", False) or channel_stats.get("pansou_enabled", False)
+    )
+    merged_stats["pansou_elapsed_seconds"] = max(
+        float(fixed_stats.get("pansou_elapsed_seconds", 0.0) or 0.0),
+        float(channel_stats.get("pansou_elapsed_seconds", 0.0) or 0.0),
     )
     merged_stats["incremental_watermark_overlap_posts"] = max(
         int(fixed_stats.get("incremental_watermark_overlap_posts", 0) or 0),

@@ -145,8 +145,11 @@
             const pagination = resourceState?.job_pagination && typeof resourceState.job_pagination === 'object'
                 ? resourceState.job_pagination
                 : {};
-            const loadedCount = visibleJobs.length;
             const totalCount = Number(pagination.total ?? counts.total) || 0;
+            const paginationLoadedCount = Number(pagination.loaded_count ?? pagination.next_offset ?? 0) || 0;
+            const loadedCount = totalCount > 0
+                ? Math.min(totalCount, Math.max(visibleJobs.length, paginationLoadedCount))
+                : visibleJobs.length;
             const loadMoreHtml = pagination.has_more && pageStatus === normalizedFilter
                 ? `
                     <div class="resource-browser-load-more-row">

@@ -117,9 +117,9 @@
             <div class="w-full max-w-6xl mx-auto mt-[4vh] group-card modal-card resource-source-modal-shell resource-source-manager-shell">
                 <div class="resource-source-modal-header">
                     <div class="min-w-0">
-                        <div class="resource-source-modal-eyebrow">Manage / Detect</div>
-                        <div class="resource-source-modal-title">频道批量管理</div>
-                        <div class="resource-source-modal-subtitle">支持手动测试频道分类、按资源类型/启用状态/活跃时间快捷筛选，再对选中频道批量启用、停用或删除。</div>
+                        <div class="resource-source-modal-eyebrow">Manage / Sort</div>
+                        <div class="resource-source-modal-title">频道管理中心</div>
+                        <div class="resource-source-modal-subtitle">统一管理频道筛选、分类测试、批量操作和频道顺序；排序查看不会自动改动真实顺序。</div>
                     </div>
                     <button type="button" class="resource-source-modal-close" onclick="closeResourceSourceManagerModal()" aria-label="关闭频道管理弹窗">✕</button>
                 </div>
@@ -148,6 +148,15 @@
                         </div>
 
                         <div class="resource-source-manager-card">
+                            <div class="resource-source-manager-card-title">频道维护</div>
+                            <div class="resource-source-manager-maintenance-actions">
+                                <button type="button" onclick="openResourceSourceModal()" class="resource-source-manager-primary-btn">添加频道</button>
+                                <button type="button" onclick="openResourceSourceImportModal()" class="resource-source-secondary-btn">导入频道</button>
+                                <button type="button" onclick="exportResourceSources()" class="resource-source-secondary-btn">导出频道</button>
+                            </div>
+                        </div>
+
+                        <div class="resource-source-manager-card">
                             <div class="resource-source-manager-card-title">快捷筛选</div>
                             <div class="resource-source-manager-filter-block">
                                 <div class="resource-source-manager-filter-label">资源类型</div>
@@ -165,12 +174,16 @@
                             <div class="resource-source-manager-toolbar">
                                 <input id="resource-source-manager-search" type="text" class="resource-source-manager-search" placeholder="搜索频道名 / 频道 ID / 类型">
                                 <select id="resource-source-manager-sort" class="resource-source-manager-sort">
+                                    <option value="manual">手动顺序</option>
                                     <option value="recent">按最近发布时间</option>
                                     <option value="activity">按活跃度分层</option>
                                     <option value="support">按订阅支持度</option>
+                                    <option value="output">按产出次数</option>
                                     <option value="name">按频道名称</option>
                                 </select>
                             </div>
+                            <div id="resource-source-manager-sort-hint" class="resource-source-manager-filter-hint">当前为手动顺序。</div>
+                            <button id="resource-source-manager-apply-sort-btn" type="button" onclick="applyResourceSourceCurrentSortOrder()" class="resource-source-manager-primary-btn">应用当前排序为频道顺序</button>
                         </div>
 
                         <div class="resource-source-manager-card">
@@ -184,6 +197,9 @@
                             </div>
                             <div class="resource-source-manager-bulk-actions">
                                 <button type="button" onclick="clearResourceSourceSelections()" class="resource-source-secondary-btn">清空选择</button>
+                                <button id="resource-source-manager-sync-names-btn" type="button" onclick="syncSelectedResourceSourceNames()" class="resource-source-secondary-btn">同步频道名称</button>
+                                <button type="button" onclick="bulkMoveResourceSources('top')" class="resource-source-secondary-btn">置顶选中</button>
+                                <button type="button" onclick="bulkMoveResourceSources('bottom')" class="resource-source-secondary-btn">置底选中</button>
                                 <button type="button" onclick="bulkEnableResourceSources(true)" class="resource-source-manager-primary-btn">启用选中</button>
                                 <button type="button" onclick="bulkEnableResourceSources(false)" class="resource-source-secondary-btn">停用选中</button>
                                 <button type="button" onclick="bulkDeleteResourceSources()" class="resource-source-manager-danger-btn">删除选中</button>

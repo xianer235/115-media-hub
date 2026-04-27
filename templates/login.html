@@ -7,42 +7,291 @@
     <link rel="icon" type="image/svg+xml" href="/static/icons/favicon.svg">
     <link rel="shortcut icon" href="/favicon.ico">
     <meta name="theme-color" content="#0f172a">
-    <script defer src="https://cdn.tailwindcss.com"></script>
+    <style>
+        :root {
+            color-scheme: dark;
+            --login-bg: #08111f;
+            --login-panel: rgba(15, 23, 42, 0.94);
+            --login-panel-soft: rgba(14, 165, 233, 0.1);
+            --login-stroke: rgba(148, 163, 184, 0.2);
+            --login-stroke-strong: rgba(56, 189, 248, 0.28);
+            --login-text: #e5eefb;
+            --login-muted: #93a4bb;
+            --login-primary: #0284c7;
+            --login-primary-hover: #0ea5e9;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            min-height: 100%;
+            margin: 0;
+        }
+
+        .login-body {
+            min-height: 100dvh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: max(1rem, env(safe-area-inset-top)) 1rem max(1rem, env(safe-area-inset-bottom));
+            background:
+                radial-gradient(circle at 50% -20%, rgba(14, 165, 233, 0.22), transparent 34rem),
+                linear-gradient(180deg, #0b1220 0%, var(--login-bg) 100%);
+            color: var(--login-text);
+            font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+
+        .login-card {
+            width: min(100%, 28rem);
+            padding: clamp(1.5rem, 4vw, 2rem);
+            border: 1px solid var(--login-stroke);
+            border-radius: 1.5rem;
+            background: var(--login-panel);
+            box-shadow: 0 24px 80px rgba(0, 0, 0, 0.42);
+        }
+
+        .login-head {
+            margin-bottom: 1.75rem;
+            text-align: center;
+        }
+
+        .login-title {
+            margin: 0;
+            font-size: clamp(1.65rem, 7vw, 2.1rem);
+            line-height: 1.1;
+            font-weight: 900;
+            letter-spacing: 0;
+            color: #f8fbff;
+        }
+
+        .login-title-accent {
+            color: #38bdf8;
+        }
+
+        .login-subtitle {
+            margin: 0.55rem 0 0;
+            color: var(--login-muted);
+            font-size: 0.92rem;
+        }
+
+        .login-credential-note {
+            margin-bottom: 1.5rem;
+            padding: 1rem;
+            border: 1px solid var(--login-stroke-strong);
+            border-radius: 1rem;
+            background: var(--login-panel-soft);
+        }
+
+        .login-note-title {
+            margin-bottom: 0.38rem;
+            color: #7dd3fc;
+            font-size: 0.72rem;
+            font-weight: 900;
+            text-transform: uppercase;
+        }
+
+        .login-note-line {
+            margin-top: 0.25rem;
+            color: #cbd5e1;
+            font-size: 0.9rem;
+        }
+
+        .login-note-line code {
+            color: #ffffff;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-weight: 800;
+        }
+
+        .login-note-warning {
+            margin-top: 0.6rem;
+            color: #fbbf24;
+            font-size: 0.75rem;
+            line-height: 1.55;
+        }
+
+        .login-form {
+            display: grid;
+            gap: 1rem;
+        }
+
+        .login-input {
+            width: 100%;
+            min-height: 3.25rem;
+            border: 1px solid var(--login-stroke);
+            border-radius: 0.9rem;
+            background: rgba(2, 6, 23, 0.72);
+            color: #f8fafc;
+            font: inherit;
+            font-size: 1rem;
+            outline: none;
+            padding: 0 1rem;
+            transition: border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
+        }
+
+        .login-input::placeholder {
+            color: #64748b;
+        }
+
+        .login-input:focus {
+            border-color: #38bdf8;
+            background: rgba(2, 6, 23, 0.9);
+            box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.12);
+        }
+
+        .login-submit {
+            width: 100%;
+            min-height: 3.25rem;
+            border: 0;
+            border-radius: 0.9rem;
+            background: var(--login-primary);
+            color: #ffffff;
+            cursor: pointer;
+            font: inherit;
+            font-weight: 900;
+            box-shadow: 0 14px 32px rgba(2, 132, 199, 0.28);
+            transition: background 0.16s ease, transform 0.16s ease, opacity 0.16s ease;
+        }
+
+        .login-submit:hover {
+            background: var(--login-primary-hover);
+        }
+
+        .login-submit:active {
+            transform: scale(0.985);
+        }
+
+        .login-submit:disabled {
+            cursor: wait;
+            opacity: 0.68;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        .login-alert-modal {
+            position: fixed;
+            inset: 0;
+            z-index: 50;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1rem;
+            background: rgba(0, 0, 0, 0.68);
+            backdrop-filter: blur(10px);
+        }
+
+        .login-alert-panel {
+            width: min(100%, 24rem);
+            overflow: hidden;
+            border: 1px solid var(--login-stroke);
+            border-radius: 1.35rem;
+            background: #111827;
+            box-shadow: 0 22px 60px rgba(0, 0, 0, 0.45);
+        }
+
+        .login-alert-head,
+        .login-alert-foot {
+            padding: 1rem 1.25rem;
+            border-color: var(--login-stroke);
+        }
+
+        .login-alert-head {
+            border-bottom: 1px solid var(--login-stroke);
+        }
+
+        .login-alert-foot {
+            display: flex;
+            justify-content: flex-end;
+            border-top: 1px solid var(--login-stroke);
+        }
+
+        .login-alert-eyebrow {
+            color: #7dd3fc;
+            font-size: 0.72rem;
+            font-weight: 900;
+            text-transform: uppercase;
+        }
+
+        .login-alert-title {
+            margin-top: 0.2rem;
+            color: #ffffff;
+            font-size: 1.12rem;
+            font-weight: 900;
+        }
+
+        .login-alert-message {
+            padding: 1rem 1.25rem;
+            color: #dbeafe;
+            font-size: 0.92rem;
+            line-height: 1.7;
+        }
+
+        .login-alert-btn {
+            border: 0;
+            border-radius: 0.8rem;
+            background: var(--login-primary);
+            color: #ffffff;
+            cursor: pointer;
+            font: inherit;
+            font-size: 0.9rem;
+            font-weight: 800;
+            padding: 0.65rem 1rem;
+        }
+
+        .login-alert-btn:hover {
+            background: var(--login-primary-hover);
+        }
+
+        @media (max-width: 480px) {
+            .login-card {
+                border-radius: 1.25rem;
+                padding: 1.25rem;
+            }
+
+            .login-credential-note {
+                padding: 0.9rem;
+            }
+        }
+    </style>
 </head>
-<body class="bg-slate-900 text-slate-200 min-h-dvh flex items-center justify-center font-sans p-4">
-    <div class="bg-slate-800 p-6 md:p-8 rounded-3xl border border-slate-700 shadow-2xl w-full max-w-md">
-        <div class="text-center mb-8">
-            <h1 class="text-2xl md:text-3xl font-black bg-gradient-to-r from-sky-400 to-emerald-400 bg-clip-text text-transparent">115 Media Hub</h1>
-            <p class="text-slate-400 text-sm mt-2">请验证您的身份以继续</p>
-        </div>
-        
-        <div class="bg-sky-500/10 border border-sky-500/20 rounded-2xl p-4 mb-6">
-            <div class="text-sky-400 text-xs font-bold uppercase mb-1">📢 初始凭据</div>
-            <div class="text-sm text-slate-300">账号：<span class="text-white font-mono">admin</span></div>
-            <div class="text-sm text-slate-300">密码：<span class="text-white font-mono">admin123</span></div>
-            <div class="text-[11px] text-amber-400/80 mt-2 italic">⚠️ 温馨提醒：登录后请务必在配置页面修改密码以保安全。</div>
+<body class="login-body bg-slate-900 text-slate-200 min-h-dvh flex items-center justify-center font-sans p-4">
+    <div class="login-card bg-slate-800 p-6 md:p-8 rounded-3xl border border-slate-700 shadow-2xl w-full max-w-md">
+        <div class="login-head text-center mb-8">
+            <h1 class="login-title text-2xl md:text-3xl font-black bg-gradient-to-r from-sky-400 to-emerald-400 bg-clip-text text-transparent">115 <span class="login-title-accent">Media Hub</span></h1>
+            <p class="login-subtitle text-slate-400 text-sm mt-2">请验证您的身份以继续</p>
         </div>
 
-        <form id="loginForm" class="space-y-4">
+        <div class="login-credential-note bg-sky-500/10 border border-sky-500/20 rounded-2xl p-4 mb-6">
+            <div class="login-note-title text-sky-400 text-xs font-bold uppercase mb-1">初始凭据</div>
+            <div class="login-note-line text-sm text-slate-300">账号：<code class="text-white font-mono">admin</code></div>
+            <div class="login-note-line text-sm text-slate-300">密码：<code class="text-white font-mono">admin123</code></div>
+            <div class="login-note-warning text-[11px] text-amber-400/80 mt-2 italic">登录后请务必在配置页面修改密码以保安全。</div>
+        </div>
+
+        <form id="loginForm" class="login-form space-y-4">
             <input type="text" id="username" name="username" placeholder="管理账号" required
-                   class="w-full bg-slate-900 border-slate-700 rounded-xl p-4 text-base outline-none focus:border-sky-500 transition-colors">
+                   class="login-input w-full bg-slate-900 border-slate-700 rounded-xl p-4 text-base outline-none focus:border-sky-500 transition-colors">
             <input type="password" id="password" name="password" placeholder="访问密码" required
-                   class="w-full bg-slate-900 border-slate-700 rounded-xl p-4 text-base outline-none focus:border-sky-500 transition-colors">
+                   class="login-input w-full bg-slate-900 border-slate-700 rounded-xl p-4 text-base outline-none focus:border-sky-500 transition-colors">
             <button type="submit" id="submitBtn" 
-                    class="w-full bg-sky-600 hover:bg-sky-500 p-4 rounded-xl font-bold text-base transition-all active:scale-95 shadow-lg text-white mt-4">
+                    class="login-submit w-full bg-sky-600 hover:bg-sky-500 p-4 rounded-xl font-bold text-base transition-all active:scale-95 shadow-lg text-white mt-4">
                 进入管理后台
             </button>
         </form>
     </div>
-    <div id="login-alert-modal" class="hidden fixed inset-0 z-50 bg-black/65 backdrop-blur-sm p-4 flex items-center justify-center">
-        <div class="w-full max-w-sm rounded-3xl border border-slate-700 bg-slate-800 shadow-2xl overflow-hidden">
-            <div class="px-5 py-4 border-b border-slate-700">
-                <div class="text-[11px] font-black uppercase text-sky-300">Message</div>
-                <div id="login-alert-title" class="text-lg font-black text-white mt-1">提示</div>
+    <div id="login-alert-modal" class="login-alert-modal hidden fixed inset-0 z-50 bg-black/65 backdrop-blur-sm p-4 flex items-center justify-center">
+        <div class="login-alert-panel w-full max-w-sm rounded-3xl border border-slate-700 bg-slate-800 shadow-2xl overflow-hidden">
+            <div class="login-alert-head px-5 py-4 border-b border-slate-700">
+                <div class="login-alert-eyebrow text-[11px] font-black uppercase text-sky-300">Message</div>
+                <div id="login-alert-title" class="login-alert-title text-lg font-black text-white mt-1">提示</div>
             </div>
-            <div id="login-alert-message" class="px-5 py-4 text-sm leading-7 text-slate-200"></div>
-            <div class="px-5 py-4 border-t border-slate-700 flex justify-end">
-                <button type="button" onclick="closeLoginAlert()" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">知道了</button>
+            <div id="login-alert-message" class="login-alert-message px-5 py-4 text-sm leading-7 text-slate-200"></div>
+            <div class="login-alert-foot px-5 py-4 border-t border-slate-700 flex justify-end">
+                <button type="button" onclick="closeLoginAlert()" class="login-alert-btn px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">知道了</button>
             </div>
         </div>
     </div>

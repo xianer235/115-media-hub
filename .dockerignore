@@ -25,3 +25,6 @@ design/
 # local agent handoff context (not for image build context)
 AGENTS.md
 doc/
+
+# tracked export template, excluded from image build context
+tg-resource.json

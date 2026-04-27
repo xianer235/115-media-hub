@@ -124,6 +124,7 @@ from .resource_tg import (
     TG_SEARCH_TOTAL_LIMIT,
     TG_WIDGET_POST_REGEX,
     build_tg_proxy_url,
+    fetch_telegram_channel_info,
     fetch_telegram_channel_post_samples,
     fetch_telegram_channel_posts,
     fetch_telegram_channel_posts_page,
@@ -163,6 +164,53 @@ from .versioning import (
     load_local_version,
     version_key,
 )
+
+
+RESOURCE_SEARCH_CANCEL_LOCK = threading.Lock()
+RESOURCE_SEARCH_CANCELLED_IDS: Set[str] = set()
+
+
+class ResourceSearchCancelled(RuntimeError):
+    pass
+
+
+def normalize_resource_search_id(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    normalized = re.sub(r"[^A-Za-z0-9_-]+", "-", raw).strip("-")
+    return normalized[:80]
+
+
+def cancel_resource_search(search_id: Any) -> bool:
+    normalized = normalize_resource_search_id(search_id)
+    if not normalized:
+        return False
+    with RESOURCE_SEARCH_CANCEL_LOCK:
+        RESOURCE_SEARCH_CANCELLED_IDS.add(normalized)
+    return True
+
+
+def clear_resource_search_cancel(search_id: Any) -> None:
+    normalized = normalize_resource_search_id(search_id)
+    if not normalized:
+        return
+    with RESOURCE_SEARCH_CANCEL_LOCK:
+        RESOURCE_SEARCH_CANCELLED_IDS.discard(normalized)
+
+
+def is_resource_search_cancelled(search_id: Any) -> bool:
+    normalized = normalize_resource_search_id(search_id)
+    if not normalized:
+        return False
+    with RESOURCE_SEARCH_CANCEL_LOCK:
+        return normalized in RESOURCE_SEARCH_CANCELLED_IDS
+
+
+def check_resource_search_cancelled(search_id: Any) -> None:
+    if is_resource_search_cancelled(search_id):
+        raise ResourceSearchCancelled("搜索已中断")
+
 
 app = FastAPI()
 app.add_middleware(
@@ -605,6 +653,13 @@ def default_config() -> Dict[str, Any]:
         "tmdb_language": "zh-CN",
         "tmdb_region": "CN",
         "tmdb_cache_ttl_hours": 24,
+        "pansou_enabled": False,
+        "pansou_base_url": "",
+        "pansou_username": "",
+        "pansou_password": "",
+        "pansou_src": "all",
+        "pansou_channels": "",
+        "pansou_plugins": "",
         "mount_points": [dict(item) for item in DEFAULT_MOUNT_POINTS],
         "extensions": DEFAULT_EXTENSIONS,
         "trees": [{"source_type": "tree_file", "path": "", "prefix": "", "exclude": 1}],
@@ -1670,6 +1725,20 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         merged["tmdb_region"] = "CN"
     if "tmdb_cache_ttl_hours" not in merged:
         merged["tmdb_cache_ttl_hours"] = 24
+    if "pansou_enabled" not in merged:
+        merged["pansou_enabled"] = False
+    if "pansou_base_url" not in merged:
+        merged["pansou_base_url"] = ""
+    if "pansou_username" not in merged:
+        merged["pansou_username"] = ""
+    if "pansou_password" not in merged:
+        merged["pansou_password"] = ""
+    if "pansou_src" not in merged:
+        merged["pansou_src"] = "all"
+    if "pansou_channels" not in merged:
+        merged["pansou_channels"] = ""
+    if "pansou_plugins" not in merged:
+        merged["pansou_plugins"] = ""
     if "mount_points" not in merged or not isinstance(merged["mount_points"], list):
         merged["mount_points"] = [dict(item) for item in DEFAULT_MOUNT_POINTS]
     if "monitor_tasks" not in merged or not isinstance(merged["monitor_tasks"], list):
@@ -1751,6 +1820,15 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     merged["webhook_secret"] = str(merged.get("webhook_secret", "")).strip()
     merged["cookie_115"] = str(merged.get("cookie_115", "")).strip()
     merged["cookie_quark"] = str(merged.get("cookie_quark", "")).strip()
+    merged["pansou_enabled"] = normalize_bool(merged.get("pansou_enabled", False), default=False)
+    merged["pansou_base_url"] = str(merged.get("pansou_base_url", "")).strip().rstrip("/")
+    merged["pansou_username"] = str(merged.get("pansou_username", "") or "").strip()
+    merged["pansou_password"] = str(merged.get("pansou_password", "") or "").strip()
+    merged["pansou_src"] = str(merged.get("pansou_src", "all") or "all").strip().lower()
+    if merged["pansou_src"] not in ("all", "tg", "plugin"):
+        merged["pansou_src"] = "all"
+    merged["pansou_channels"] = str(merged.get("pansou_channels", "") or "").strip()
+    merged["pansou_plugins"] = str(merged.get("pansou_plugins", "") or "").strip()
     merged["sign115_enabled"] = normalize_bool(merged.get("sign115_enabled", False), default=False)
     merged["sign115_cron_time"] = normalize_sign115_cron_time(merged.get("sign115_cron_time", "09:00"))
     # 订阅批次收口刷新已固定为内置策略，不再保留配置项。
@@ -2173,6 +2251,76 @@ def build_resource_channel_profile(
     }
 
 
+def normalize_resource_provider_filter(value: Any) -> str:
+    normalized = str(value or "all").strip().lower()
+    if normalized in ("115", "magnet", "quark", "all"):
+        return normalized
+    if normalized == "115share":
+        return "115"
+    if normalized == "magnet115":
+        return "magnet"
+    return "all"
+
+
+def normalize_resource_search_source(value: Any) -> str:
+    normalized = str(value or "tg").strip().lower()
+    if normalized in ("pansou", "pan", "盘搜"):
+        return "pansou"
+    return "tg"
+
+
+def resource_item_matches_provider_filter(item: Dict[str, Any], provider_filter: str = "all") -> bool:
+    normalized_filter = normalize_resource_provider_filter(provider_filter)
+    if normalized_filter == "all":
+        return True
+    payload = item if isinstance(item, dict) else {}
+    link_type = resolve_resource_link_type(payload.get("link_type", ""), payload.get("link_url", ""))
+    if normalized_filter == "115":
+        return link_type == "115share"
+    if normalized_filter == "magnet":
+        return link_type == "magnet"
+    if normalized_filter == "quark":
+        return link_type == "quark"
+    return True
+
+
+def filter_resource_items_by_provider(
+    items: List[Dict[str, Any]],
+    provider_filter: str = "all",
+) -> List[Dict[str, Any]]:
+    normalized_filter = normalize_resource_provider_filter(provider_filter)
+    if normalized_filter == "all":
+        return list(items or [])
+    return [item for item in (items or []) if resource_item_matches_provider_filter(item, normalized_filter)]
+
+
+def filter_resource_sections_by_provider(
+    sections: List[Dict[str, Any]],
+    provider_filter: str = "all",
+    *,
+    drop_empty: bool = True,
+) -> List[Dict[str, Any]]:
+    normalized_filter = normalize_resource_provider_filter(provider_filter)
+    if normalized_filter == "all":
+        return list(sections or [])
+    filtered_sections: List[Dict[str, Any]] = []
+    for raw_section in sections or []:
+        section = raw_section if isinstance(raw_section, dict) else {}
+        filtered_items = filter_resource_items_by_provider(section.get("items", []), normalized_filter)
+        if drop_empty and not filtered_items:
+            continue
+        filtered_sections.append(
+            {
+                **section,
+                "items": filtered_items,
+                "item_count": len(filtered_items),
+                "has_more": bool(section.get("has_more", False)) and not drop_empty,
+                "next_before": str(section.get("next_before", "") or "") if not drop_empty else "",
+            }
+        )
+    return filtered_sections
+
+
 def build_resource_channel_sections(
     sources: List[Dict[str, Any]],
     items: Optional[List[Dict[str, Any]]] = None,
@@ -2261,6 +2409,8 @@ def search_telegram_channel_resource_items(
     stop_cursor: int = 0,
     request_timeout_seconds: int = 45,
     retry_attempts: int = TG_FETCH_RETRY_ATTEMPTS,
+    provider_filter: str = "all",
+    search_id: str = "",
 ) -> Dict[str, Any]:
     normalized_source = normalize_resource_source(source or {})
     channel_id = normalize_telegram_channel_id_from_input(normalized_source.get("channel_id", ""))
@@ -2283,6 +2433,7 @@ def search_telegram_channel_resource_items(
     fetch_limit = max(target_limit, max(1, int(page_size or TG_SEARCH_PAGE_LIMIT)))
 
     for _ in range(max(1, int(max_pages or TG_SEARCH_MAX_PAGES))):
+        check_resource_search_cancelled(search_id)
         page = fetch_telegram_channel_posts_page(
             cfg,
             normalized_source,
@@ -2310,7 +2461,10 @@ def search_telegram_channel_resource_items(
             if normalized_stop_cursor > 0 and post_cursor > 0 and post_cursor <= normalized_stop_cursor:
                 incremental_stop_hit = True
                 break
+            check_resource_search_cancelled(search_id)
             if not resource_item_matches_search(post, keyword):
+                continue
+            if not resource_item_matches_provider_filter(post, provider_filter):
                 continue
             identity = build_resource_item_identity_by_mode(post, identity_mode=normalized_identity_mode)
             if identity in seen_keys:
@@ -2358,9 +2512,12 @@ async def search_resource_sources(
     keyword: str,
     identity_mode: str = "message",
     incremental_since_cursor_by_channel: Optional[Dict[str, int]] = None,
+    provider_filter: str = "all",
+    search_id: str = "",
 ) -> Dict[str, Any]:
     query = str(keyword or "").strip()
     normalized_identity_mode = normalize_resource_identity_mode(identity_mode, fallback="message")
+    normalized_provider_filter = normalize_resource_provider_filter(provider_filter)
     normalized_incremental_cursors: Dict[str, int] = {}
     if isinstance(incremental_since_cursor_by_channel, dict):
         for raw_channel_id, raw_cursor in incremental_since_cursor_by_channel.items():
@@ -2380,6 +2537,7 @@ async def search_resource_sources(
             "matched_channels": 0,
             "pages_scanned": 0,
             "thread_limit": tg_channel_threads,
+            "provider_filter": normalized_provider_filter,
             "incremental_stop_channels": 0,
             "channel_watermarks": {},
             "channel_stats": [],
@@ -2388,11 +2546,13 @@ async def search_resource_sources(
     semaphore = asyncio.Semaphore(tg_channel_threads)
 
     async def search_one_source(source: Dict[str, Any]) -> Dict[str, Any]:
+        check_resource_search_cancelled(search_id)
         channel_id = normalize_telegram_channel_id_from_input(source.get("channel_id", ""))
         stop_cursor = max(0, int(normalized_incremental_cursors.get(channel_id, 0) or 0))
         started_at = time.perf_counter()
         try:
             async with semaphore:
+                check_resource_search_cancelled(search_id)
                 result = await asyncio.wait_for(
                     asyncio.to_thread(
                         search_telegram_channel_resource_items,
@@ -2407,9 +2567,12 @@ async def search_resource_sources(
                         stop_cursor,
                         TG_SEARCH_REQUEST_TIMEOUT_SECONDS,
                         TG_SEARCH_RETRY_ATTEMPTS,
+                        normalized_provider_filter,
+                        search_id,
                     ),
                     timeout=TG_SEARCH_CHANNEL_TIMEOUT_SECONDS,
                 )
+                check_resource_search_cancelled(search_id)
                 if isinstance(result, dict):
                     result["elapsed_seconds"] = max(0.0, time.perf_counter() - started_at)
                 return result
@@ -2422,7 +2585,10 @@ async def search_resource_sources(
             raise RuntimeError(f"{exc}（{elapsed_seconds:.1f}秒）") from exc
 
     tasks = [search_one_source(source) for source in sources]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    try:
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+    except ResourceSearchCancelled:
+        raise
 
     items: List[Dict[str, Any]] = []
     sections: List[Dict[str, Any]] = []
@@ -2434,6 +2600,7 @@ async def search_resource_sources(
     channel_watermarks: Dict[str, Dict[str, Any]] = {}
 
     for source, result in zip(sources, results):
+        check_resource_search_cancelled(search_id)
         channel_id = normalize_telegram_channel_id_from_input(source.get("channel_id", ""))
         source_name = str(source.get("name", "") or channel_id).strip()
         if isinstance(result, Exception):
@@ -2513,9 +2680,142 @@ async def search_resource_sources(
         "matched_channels": matched_channels,
         "pages_scanned": pages_scanned,
         "thread_limit": tg_channel_threads,
+        "provider_filter": normalized_provider_filter,
         "incremental_stop_channels": incremental_stop_channels,
         "channel_watermarks": channel_watermarks,
         "channel_stats": channel_stats,
+    }
+
+
+async def search_pansou_resource_sources(
+    keyword: str,
+    provider_filter: str = "all",
+    *,
+    include_magnet_for_115: bool = False,
+    search_id: str = "",
+) -> Dict[str, Any]:
+    query = str(keyword or "").strip()
+    normalized_provider_filter = normalize_resource_provider_filter(provider_filter)
+    cfg = get_config()
+    enabled = bool(cfg.get("pansou_enabled", False))
+    base_url = str(cfg.get("pansou_base_url", "") or "").strip()
+    if not query:
+        return {
+            "items": [],
+            "sections": [],
+            "errors": [],
+            "searched_sources": 0,
+            "matched_channels": 0,
+            "pages_scanned": 0,
+            "thread_limit": 1,
+            "provider_filter": normalized_provider_filter,
+            "pansou_enabled": enabled,
+            "pansou_items": 0,
+            "pansou_elapsed_ms": 0,
+        }
+    if not enabled:
+        return {
+            "items": [],
+            "sections": [],
+            "errors": [{"channel_id": "pansou", "name": "盘搜", "message": "盘搜未启用，请先在参数配置中开启"}],
+            "searched_sources": 0,
+            "matched_channels": 0,
+            "pages_scanned": 0,
+            "thread_limit": 1,
+            "provider_filter": normalized_provider_filter,
+            "pansou_enabled": False,
+            "pansou_items": 0,
+            "pansou_elapsed_ms": 0,
+        }
+    if not base_url:
+        return {
+            "items": [],
+            "sections": [],
+            "errors": [{"channel_id": "pansou", "name": "盘搜", "message": "请先在参数配置中填写 PanSou 地址"}],
+            "searched_sources": 0,
+            "matched_channels": 0,
+            "pages_scanned": 0,
+            "thread_limit": 1,
+            "provider_filter": normalized_provider_filter,
+            "pansou_enabled": True,
+            "pansou_items": 0,
+            "pansou_elapsed_ms": 0,
+        }
+
+    check_resource_search_cancelled(search_id)
+    try:
+        result = await asyncio.to_thread(
+            request_pansou_search,
+            cfg,
+            query,
+            normalized_provider_filter,
+            include_magnet_for_115=include_magnet_for_115,
+        )
+        check_resource_search_cancelled(search_id)
+    except Exception as exc:
+        if isinstance(exc, ResourceSearchCancelled):
+            raise
+        return {
+            "items": [],
+            "sections": [],
+            "errors": [{"channel_id": "pansou", "name": "盘搜", "message": str(exc)}],
+            "searched_sources": 1,
+            "matched_channels": 0,
+            "pages_scanned": 0,
+            "thread_limit": 1,
+            "provider_filter": normalized_provider_filter,
+            "pansou_enabled": True,
+            "pansou_items": 0,
+            "pansou_elapsed_ms": 0,
+        }
+
+    items = filter_resource_items_by_provider(
+        result.get("items", []) if isinstance(result, dict) else [],
+        normalized_provider_filter,
+    )
+    if normalized_provider_filter == "115" and not include_magnet_for_115:
+        items = [
+            item
+            for item in items
+            if resolve_resource_link_type(item.get("link_type", ""), item.get("link_url", "")) == "115share"
+        ]
+    items = dedupe_resource_item_dicts(items, identity_mode="link")
+    items.sort(key=get_resource_item_sort_key, reverse=True)
+    section = {
+        "name": "盘搜结果",
+        "channel_id": "pansou",
+        "section_type": "pansou",
+        "url": str(cfg.get("pansou_base_url", "") or "").strip(),
+        "enabled": True,
+        "last_sync_at": time.time(),
+        "last_error": "",
+        "item_count": len(items),
+        "items": items[: max(1, min(int(PANSOU_SEARCH_TOTAL_LIMIT or 80), len(items) or 1))],
+        "next_before": "",
+        "has_more": False,
+        "channel_profile": {
+            "primary_link_type": normalized_provider_filter if normalized_provider_filter != "all" else "unknown",
+            "dominant_link_types": [],
+            "link_type_counts": {},
+        },
+        "latest_published_at": "",
+        "primary_link_type": normalized_provider_filter if normalized_provider_filter != "all" else "unknown",
+        "dominant_link_types": [],
+        "link_type_counts": {},
+    }
+    sections = [section] if items else []
+    return {
+        "items": items,
+        "sections": sections,
+        "errors": [],
+        "searched_sources": 1,
+        "matched_channels": 1 if items else 0,
+        "pages_scanned": 1,
+        "thread_limit": 1,
+        "provider_filter": normalized_provider_filter,
+        "pansou_enabled": True,
+        "pansou_items": len(items),
+        "pansou_elapsed_ms": max(0, int(result.get("elapsed_ms", 0) or 0)) if isinstance(result, dict) else 0,
     }
 
 
@@ -2861,7 +3161,7 @@ def _classify_cookie_health_error(error: Any) -> Tuple[str, str]:
     if any(hint in lowered for hint in COOKIE_HEALTH_INVALID_MESSAGE_HINTS):
         return "invalid", detail
     if any(hint in lowered for hint in COOKIE_HEALTH_TRANSIENT_MESSAGE_HINTS):
-        return "error", detail
+        return "error", f"Cookie 检测遇到网络或 SSL 异常，不代表 Cookie 已失效：{detail}"
     return "error", detail
 
 
@@ -3070,22 +3370,62 @@ def _probe_115_cookie(cookie: str) -> None:
     if not normalized_cookie:
         raise RuntimeError("115 Cookie 未配置")
     throttle_115_api_requests()
-    headers = {
-        "Cookie": normalized_cookie,
-        "Accept": "application/json, text/plain, */*",
-        "Referer": "https://115.com/",
-        "User-Agent": "Mozilla/5.0 115-media-hub",
-    }
-    url = "https://aps.115.com/natsort/files.php?aid=1&cid=0&offset=0&limit=1&show_dir=1&natsort=1&format=json"
-    result = http_request_json(url, extra_headers=headers, timeout=20)
-    if not bool((result or {}).get("state", False)):
+    probes: List[Tuple[str, str, Dict[str, str]]] = [
+        (
+            "webapi",
+            "https://webapi.115.com/files?aid=1&cid=0&o=user_ptime&asc=1&offset=0&show_dir=1&limit=1&type=0&format=json&star=0&suffix=&natsort=0&snap=0&record_open_time=1&fc_mix=0",
+            {
+                "Cookie": normalized_cookie,
+                "Accept": "application/json, text/plain, */*",
+                "Connection": "keep-alive",
+                "xweb_xhr": "1",
+                "Referer": "https://servicewechat.com/wx2c744c010a61b0fa/94/page-frame.html",
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36 "
+                    "MicroMessenger/6.8.0(0x16080000) NetType/WIFI MiniProgramEnv/Mac "
+                    "MacWechat/WMPF MacWechat/3.8.9(0x13080910) XWEB/1227"
+                ),
+                "Accept-Language": "zh-CN,zh;q=0.9",
+            },
+        ),
+        (
+            "aps",
+            "https://aps.115.com/natsort/files.php?aid=1&cid=0&offset=0&limit=1&show_dir=1&natsort=1&format=json",
+            {
+                "Cookie": normalized_cookie,
+                "Accept": "application/json, text/plain, */*",
+                "Referer": "https://115.com/",
+                "User-Agent": "Mozilla/5.0 115-media-hub",
+            },
+        ),
+    ]
+    failures: List[str] = []
+    invalid_details: List[str] = []
+    for probe_name, url, headers in probes:
+        try:
+            result = http_request_json(url, extra_headers=headers, timeout=20)
+        except Exception as exc:
+            failures.append(f"{probe_name}: {exc}")
+            continue
+        if bool((result or {}).get("state", False)):
+            return
         detail = (
             str((result or {}).get("error", "")).strip()
             or str((result or {}).get("msg", "")).strip()
             or str((result or {}).get("message", "")).strip()
             or "115 Cookie 检测失败"
         )
-        raise RuntimeError(detail)
+        state, _ = _classify_cookie_health_error(detail)
+        if state == "invalid":
+            invalid_details.append(f"{probe_name}: {detail}")
+        else:
+            failures.append(f"{probe_name}: {detail}")
+    if invalid_details:
+        raise RuntimeError("；".join(invalid_details))
+    if failures:
+        raise RuntimeError("；".join(failures))
+    raise RuntimeError("115 Cookie 检测失败")
 
 
 def _probe_quark_cookie(cookie: str) -> None:
@@ -3342,8 +3682,12 @@ def _build_resource_state_payload_snapshot(
     cfg: Dict[str, Any],
     keyword: str,
     search_meta: Dict[str, Any],
+    search_source: str = "tg",
+    provider_filter: str = "all",
 ) -> Dict[str, Any]:
     keyword = str(keyword or "").strip()
+    normalized_search_source = normalize_resource_search_source(search_source)
+    normalized_provider_filter = normalize_resource_provider_filter(provider_filter)
     items = search_meta.get("items", []) if keyword else []
     search_sections = search_meta.get("sections", []) if keyword else []
     jobs_state = build_resource_jobs_state_payload(limit=20, cfg=cfg)
@@ -3352,7 +3696,7 @@ def _build_resource_state_payload_snapshot(
     job_counts = jobs_state.get("job_counts", {})
     job_pagination = jobs_state.get("pagination", {})
     total_item_count = count_resource_items(source_type="tg")
-    filtered_item_count = len(items)
+    filtered_item_count = 0
     stats_payload = jobs_state.get("stats", {})
     total_job_count = int(stats_payload.get("total_job_count", 0) or 0)
     active_job_count = int(stats_payload.get("active_job_count", 0) or 0)
@@ -3368,6 +3712,10 @@ def _build_resource_state_payload_snapshot(
     subscription_channel_support = load_subscription_channel_support_stats(channel_ids)
     enabled_sources = [source for source in sources if source.get("enabled")]
     channel_sections = build_resource_channel_sections(sources, per_channel=10)
+    channel_sections = filter_resource_sections_by_provider(channel_sections, normalized_provider_filter, drop_empty=normalized_provider_filter != "all")
+    search_sections = filter_resource_sections_by_provider(search_sections, normalized_provider_filter, drop_empty=True)
+    items = filter_resource_items_by_provider(items, normalized_provider_filter)
+    filtered_item_count = len(items)
     channel_profiles = {
         str(section.get("channel_id", "")).strip(): section.get("channel_profile", {})
         for section in channel_sections
@@ -3397,6 +3745,8 @@ def _build_resource_state_payload_snapshot(
             "has_jobs": bool(jobs),
         },
         "search": keyword,
+        "search_source": normalized_search_source,
+        "provider_filter": normalized_provider_filter,
         "channel_sections": clone_jsonable(channel_sections),
         "channel_profiles": clone_jsonable(channel_profiles),
         "subscription_channel_support": clone_jsonable(subscription_channel_support),
@@ -3410,6 +3760,11 @@ def _build_resource_state_payload_snapshot(
                 "matched_channels": search_meta.get("matched_channels", 0),
                 "pages_scanned": search_meta.get("pages_scanned", 0),
                 "thread_limit": search_meta.get("thread_limit", get_tg_channel_threads(cfg)),
+                "search_source": normalized_search_source,
+                "provider_filter": normalized_provider_filter,
+                "pansou_enabled": search_meta.get("pansou_enabled", bool(cfg.get("pansou_enabled", False))),
+                "pansou_items": search_meta.get("pansou_items", 0),
+                "pansou_elapsed_ms": search_meta.get("pansou_elapsed_ms", 0),
             }
         ),
         "stats": {
@@ -3424,19 +3779,59 @@ def _build_resource_state_payload_snapshot(
     }
 
 
-async def build_resource_state_payload(search: str = "") -> Dict[str, Any]:
+async def build_resource_state_payload(
+    search: str = "",
+    search_source: str = "tg",
+    provider_filter: str = "all",
+    search_id: str = "",
+) -> Dict[str, Any]:
     cfg = get_config()
     await asyncio.to_thread(recover_resource_jobs_if_due)
     keyword = str(search or "").strip()
-    search_meta = await search_resource_sources(keyword) if keyword else {
-        "items": [],
-        "sections": [],
-        "errors": [],
-        "searched_sources": len([source for source in cfg.get("resource_sources", []) if source.get("enabled")]),
-        "matched_channels": 0,
-        "pages_scanned": 0,
-    }
-    return await asyncio.to_thread(_build_resource_state_payload_snapshot, cfg, keyword, search_meta)
+    normalized_search_source = normalize_resource_search_source(search_source)
+    normalized_provider_filter = normalize_resource_provider_filter(provider_filter)
+    normalized_search_id = normalize_resource_search_id(search_id)
+    try:
+        check_resource_search_cancelled(normalized_search_id)
+        if keyword and normalized_search_source == "pansou":
+            search_meta = await search_pansou_resource_sources(
+                keyword,
+                provider_filter=normalized_provider_filter,
+                search_id=normalized_search_id,
+            )
+        elif keyword:
+            search_meta = await search_resource_sources(
+                keyword,
+                provider_filter=normalized_provider_filter,
+                search_id=normalized_search_id,
+            )
+        else:
+            search_meta = {
+                "items": [],
+                "sections": [],
+                "errors": [],
+                "searched_sources": len([source for source in cfg.get("resource_sources", []) if source.get("enabled")]),
+                "matched_channels": 0,
+                "pages_scanned": 0,
+            }
+    except ResourceSearchCancelled:
+        search_meta = {
+            "items": [],
+            "sections": [],
+            "errors": [{"channel_id": "resource-search", "name": "资源搜索", "message": "搜索已中断"}],
+            "searched_sources": 0,
+            "matched_channels": 0,
+            "pages_scanned": 0,
+            "cancelled": True,
+        }
+    return await asyncio.to_thread(
+        _build_resource_state_payload_snapshot,
+        cfg,
+        keyword,
+        search_meta,
+        normalized_search_source,
+        normalized_provider_filter,
+    )
 
 
 async def sync_telegram_channels(force: bool = False, limit_per_channel: int = 10) -> Dict[str, Any]:
@@ -4067,6 +4462,11 @@ from .providers.quark import (
     resolve_quark_folder_id_by_path,
     resolve_quark_share_payload,
     submit_quark_share_save,
+)
+from .providers.pansou import (
+    PANSOU_SEARCH_TOTAL_LIMIT,
+    request_pansou_search,
+    test_pansou_health,
 )
 
 

@@ -289,7 +289,7 @@
             renderResourceSourceManagerModal();
         });
         document.getElementById('resource-source-manager-sort')?.addEventListener('change', (e) => {
-            resourceSourceSortMode = String(e.target?.value || 'recent') || 'recent';
+            resourceSourceSortMode = String(e.target?.value || 'manual') || 'manual';
             renderResourceSourceManagerModal();
         });
         document.getElementById('resource-source-manager-list')?.addEventListener('change', (e) => {
@@ -312,6 +312,14 @@
             if (action === 'toggle') {
                 const enabled = String(btn.dataset.enabled || '0') === '1';
                 void toggleResourceSourceEnabled(index, !enabled);
+                return;
+            }
+            if (action === 'move-up') {
+                void moveResourceSource(index, -1);
+                return;
+            }
+            if (action === 'move-down') {
+                void moveResourceSource(index, 1);
                 return;
             }
             if (action === 'delete') {

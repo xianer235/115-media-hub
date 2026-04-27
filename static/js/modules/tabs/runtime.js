@@ -1,13 +1,29 @@
+const TAB_MODULE_IMPORT_QUERY = (() => {
+    try {
+        const url = new URL(import.meta.url);
+        const version = String(url.searchParams.get('v') || '').trim();
+        return version ? `?v=${encodeURIComponent(version)}` : '';
+    } catch (e) {
+        return '';
+    }
+})();
+
+function withTabModuleImportQuery(path) {
+    const value = String(path || '').trim();
+    if (!value || !TAB_MODULE_IMPORT_QUERY || value.includes('?')) return value;
+    return `${value}${TAB_MODULE_IMPORT_QUERY}`;
+}
+
 export const TAB_MODULE_IMPORT_PATHS = Object.freeze({
-    resource: '/static/js/modules/tabs/resource.js',
-    subscription: '/static/js/modules/tabs/subscription.js',
-    monitor: '/static/js/modules/tabs/monitor.js',
-    task: '/static/js/modules/tabs/task.js',
-    settings: '/static/js/modules/tabs/settings.js',
-    about: '/static/js/modules/tabs/about.js',
+    resource: withTabModuleImportQuery('/static/js/modules/tabs/resource.js'),
+    subscription: withTabModuleImportQuery('/static/js/modules/tabs/subscription.js'),
+    monitor: withTabModuleImportQuery('/static/js/modules/tabs/monitor.js'),
+    task: withTabModuleImportQuery('/static/js/modules/tabs/task.js'),
+    settings: withTabModuleImportQuery('/static/js/modules/tabs/settings.js'),
+    about: withTabModuleImportQuery('/static/js/modules/tabs/about.js'),
 });
 
-const TAB_HASH_SYNC_IMPORT_PATH = '/static/js/modules/tabs/url-sync.js';
+const TAB_HASH_SYNC_IMPORT_PATH = withTabModuleImportQuery('/static/js/modules/tabs/url-sync.js');
 
 export function createTabModuleContext(deps = {}) {
     return {

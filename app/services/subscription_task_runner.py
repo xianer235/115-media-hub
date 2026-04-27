@@ -153,6 +153,14 @@ async def _write_subscription_search_diagnostics(search_stats: Dict[str, Any], l
             f"{label}本地缓存召回有 {cache_errors} 次查询异常，已忽略并继续执行",
             "warn",
         )
+    pansou_items = int(payload.get("pansou_items", 0) or 0)
+    pansou_errors = int(payload.get("pansou_errors", 0) or 0)
+    if bool(payload.get("pansou_enabled", False)):
+        elapsed = max(0.0, float(payload.get("pansou_elapsed_seconds", 0.0) or 0.0))
+        await write_subscription_log(
+            f"{label}盘搜召回：候选 {pansou_items} 条，异常 {pansou_errors} 次，用时 {elapsed:.1f} 秒",
+            "info" if pansou_errors <= 0 else "warn",
+        )
     slow_channels = payload.get("slow_channels", [])
     if not isinstance(slow_channels, list) or not slow_channels:
         return
@@ -1820,8 +1828,9 @@ async def run_subscription_task(
             )
             await _write_subscription_search_diagnostics(search_stats, search_label)
             if unsupported_items > 0:
+                supported_link_label = "夸克分享" if provider == "quark" else "115 分享"
                 await write_subscription_log(
-                    f"已过滤 {unsupported_items} 条不支持链接（仅支持 magnet / 115 分享）",
+                    f"已过滤 {unsupported_items} 条不支持链接（仅支持 {supported_link_label}）",
                     "warn",
                 )
             if int(search_stats.get("exclude_keyword_filtered", 0) or 0) > 0:
@@ -1944,7 +1953,8 @@ async def run_subscription_task(
                 detail = f"自定义排除词已过滤候选 {int(search_stats.get('exclude_keyword_filtered', 0) or 0)} 条，当前暂无可导入资源"
                 status = "waiting"
             elif int(search_stats.get("supported_items", 0) or 0) <= 0:
-                detail = "命中资源均非可导入类型（仅支持 magnet / 115 分享），请调整频道或关键词"
+                supported_link_label = "夸克分享" if provider == "quark" else "115 分享"
+                detail = f"命中资源均非可导入类型（仅支持 {supported_link_label}），请调整频道或关键词"
                 status = "waiting"
             elif int(search_stats.get("media_guard_filtered", 0) or 0) > 0 and int(search_stats.get("scored_items", 0) or 0) <= 0:
                 media_label = "电影" if task.get("media_type") == "movie" else "电视剧"

@@ -56,6 +56,12 @@ TG_WIDGET_POST_REGEX = re.compile(r'<div[^>]+class="tgme_widget_message[^"]*"[^>
 TG_LINK_HREF_REGEX = re.compile(r'href="([^"]+)"', re.IGNORECASE)
 TG_IMAGE_STYLE_REGEX = re.compile(r"background-image:url\('([^']+)'\)", re.IGNORECASE)
 TG_PREV_BEFORE_REGEX = re.compile(r'rel="prev"[^>]+href="[^"]*before=([^"&]+)', re.IGNORECASE)
+TG_CHANNEL_TITLE_REGEXES = [
+    re.compile(r'<div[^>]+class="[^"]*\btgme_channel_info_header_title\b[^"]*"[^>]*>(.*?)</div>', re.IGNORECASE | re.DOTALL),
+    re.compile(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']', re.IGNORECASE | re.DOTALL),
+    re.compile(r'<meta[^>]+name=["\']twitter:title["\'][^>]+content=["\']([^"\']+)["\']', re.IGNORECASE | re.DOTALL),
+    re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL),
+]
 
 
 def _unique_preserve_order(values: List[str]) -> List[str]:
@@ -197,6 +203,60 @@ def test_telegram_latency(cfg: Dict[str, Any], channel_id: str = "telegram", tim
         "channel_id": target_channel_id,
         "post_count": post_count,
         "msg": f"TG 连通，延迟约 {latency_ms} ms",
+    }
+
+
+def parse_telegram_channel_display_name(html: str, channel_id: str = "") -> str:
+    normalized_channel = normalize_telegram_channel_id_from_input(channel_id)
+    for regex in TG_CHANNEL_TITLE_REGEXES:
+        match = regex.search(str(html or ""))
+        if not match:
+            continue
+        title = strip_html_to_text(match.group(1))
+        title = unescape(title).replace("\u00a0", " ").strip()
+        title = re.sub(r"\s+", " ", title)
+        title = re.sub(r"\s*[-–|]\s*Telegram\s*$", "", title, flags=re.IGNORECASE).strip()
+        if not title:
+            continue
+        if normalized_channel and title.lower() in {
+            f"telegram: contact @{normalized_channel}".lower(),
+            f"@{normalized_channel}".lower(),
+            normalized_channel.lower(),
+        }:
+            continue
+        return title[:120]
+    return ""
+
+
+def fetch_telegram_channel_info(cfg: Dict[str, Any], channel_id: str, timeout_seconds: int = 20) -> Dict[str, Any]:
+    normalized_channel = normalize_telegram_channel_id_from_input(channel_id)
+    if not normalized_channel:
+        raise RuntimeError("频道 ID 无效")
+    target_url = build_telegram_channel_url(normalized_channel)
+    proxy_url = build_tg_proxy_url(cfg)
+    headers = {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "User-Agent": "Mozilla/5.0 115-media-hub",
+    }
+    try:
+        html, final_url = http_request_text_with_final_url(
+            target_url,
+            timeout=max(3, min(60, int(timeout_seconds or 20))),
+            extra_headers=headers,
+            proxy_url=proxy_url,
+        )
+    except Exception as exc:
+        raise RuntimeError(f"TG 页面抓取失败：{format_network_error(exc)}") from exc
+    if not is_expected_telegram_channel_url(final_url, normalized_channel):
+        raise RuntimeError(f"频道 ID 无效、频道未公开，或地址已跳转：{final_url}")
+    display_name = parse_telegram_channel_display_name(html, normalized_channel)
+    if not display_name:
+        raise RuntimeError("已连接到 TG，但未识别到频道官方名称")
+    return {
+        "ok": True,
+        "channel_id": normalized_channel,
+        "name": display_name,
+        "url": final_url or target_url,
     }
 
 
@@ -408,6 +468,8 @@ __all__ = [
     "is_retryable_telegram_request_error",
     "is_expected_telegram_channel_url",
     "test_telegram_latency",
+    "parse_telegram_channel_display_name",
+    "fetch_telegram_channel_info",
     "parse_telegram_posts_page",
     "fetch_telegram_channel_posts_page",
     "fetch_telegram_channel_posts",

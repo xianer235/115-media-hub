@@ -115,6 +115,19 @@ async def test_tg_proxy(request: Request) -> JSONResponse:
     return JSONResponse(content=result)
 
 
+@router.post("/settings/pansou/test")
+async def test_pansou(request: Request) -> JSONResponse:
+    incoming = await request.json()
+    incoming_payload = incoming if isinstance(incoming, dict) else {}
+    cfg = normalize_config(merge_settings_preserve_sensitive(get_config(), incoming_payload))
+    try:
+        result = await asyncio.to_thread(test_pansou_health, cfg)
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
+    status_code = 200 if result.get("ok") else 400
+    return JSONResponse(status_code=status_code, content=result)
+
+
 @router.post("/settings/notify/test")
 async def test_notify_push(request: Request) -> JSONResponse:
     incoming = await request.json()

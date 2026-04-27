@@ -83,8 +83,59 @@
                     </div>
                 </div>
 
-                <div id="settings-network-proxy" class="group-card settings-section-card" style="order: 6;">
-                    <h3 class="group-title">6. 网络代理（TG / TMDB）</h3>
+                <div id="settings-pansou" class="group-card settings-section-card" style="order: 6;">
+                    <h3 class="group-title">6. PanSou 盘搜（可选）</h3>
+                    <div class="space-y-4">
+                        <label class="flex items-center gap-3 cursor-pointer text-sm">
+                            <input type="checkbox" id="pansou_enabled" class="ui-checkbox">
+                            启用 PanSou 盘搜
+                        </label>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <label class="block">
+                                <span class="text-xs text-slate-500">PanSou 服务地址</span>
+                                <input id="pansou_base_url" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如 http://127.0.0.1:8888">
+                            </label>
+                            <label class="block">
+                                <span class="text-xs text-slate-500">认证账号（可选）</span>
+                                <input id="pansou_username" autocomplete="username" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="PanSou 登录用户名">
+                            </label>
+                            <label class="block">
+                                <span class="text-xs text-slate-500">认证密码（可选）</span>
+                                <input id="pansou_password" type="password" autocomplete="current-password" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="已保存时不会回显">
+                            </label>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <label class="block">
+                                <span class="text-xs text-slate-500">搜索来源 src</span>
+                                <select id="pansou_src" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1">
+                                    <option value="all">all（全部）</option>
+                                    <option value="tg">tg</option>
+                                    <option value="plugin">plugin</option>
+                                </select>
+                            </label>
+                            <label class="block">
+                                <span class="text-xs text-slate-500">限定 channels（逗号分隔，可选）</span>
+                                <input id="pansou_channels" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如 QukanMovie,Aliyun_4K_Movies">
+                            </label>
+                            <label class="block">
+                                <span class="text-xs text-slate-500">限定 plugins（逗号分隔，可选）</span>
+                                <input id="pansou_plugins" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如 quark,pan115">
+                            </label>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-3 pt-1">
+                            <button id="pansou-test-btn" type="button" onclick="testPansouConnection()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">
+                                测试 PanSou
+                            </button>
+                            <div class="text-xs text-slate-500">
+                                盘搜只在资源中心切到“盘搜”后请求；开启 PanSou 认证时填写账号密码，项目会自动登录获取 JWT。
+                            </div>
+                        </div>
+                        <div id="pansou-test-status" class="hidden rounded-xl border px-4 py-3 text-sm leading-6"></div>
+                    </div>
+                </div>
+
+                <div id="settings-network-proxy" class="group-card settings-section-card" style="order: 7;">
+                    <h3 class="group-title">7. 网络代理（TG / TMDB）</h3>
                     <div class="space-y-4">
                         <label class="flex items-center gap-3 cursor-pointer text-sm">
                             <input type="checkbox" id="tg_proxy_enabled" class="ui-checkbox">
@@ -122,8 +173,8 @@
                     </div>
                 </div>
 
-                <div id="settings-tmdb" class="group-card settings-section-card" style="order: 7;">
-                    <h3 class="group-title">7. TMDB 元数据增强（可选）</h3>
+                <div id="settings-tmdb" class="group-card settings-section-card" style="order: 8;">
+                    <h3 class="group-title">8. TMDB 元数据增强（可选）</h3>
                     <div class="space-y-4">
                         <label class="flex items-center gap-3 cursor-pointer text-sm">
                             <input type="checkbox" id="tmdb_enabled" class="ui-checkbox">
@@ -186,20 +237,20 @@
                                             <div class="resource-source-summary-label">停用</div>
                                             <div id="resource-source-disabled-count" class="resource-source-summary-value resource-source-summary-value-disabled">0</div>
                                         </div>
+                                        <div class="resource-source-summary-item">
+                                            <div class="resource-source-summary-label">有产出</div>
+                                            <div id="resource-source-output-count" class="resource-source-summary-value">0</div>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
                         </div>
                         <div class="resource-source-panel-body">
-                            <div class="resource-source-panel-note">频道列表已切换为紧凑模式；资源类型检测、启用状态筛选、活跃度筛选和批量启停/删除可在“管理频道”弹窗完成。</div>
-                            <div id="resource-source-list" class="space-y-3"></div>
+                            <div class="resource-source-panel-note">频道列表、分类检测、筛选排序、批量启停/删除和频道顺序调整统一收在“管理频道”弹窗里。</div>
                             <div class="resource-source-panel-footer">
                                 <div class="resource-source-panel-footer-copy">频道订阅会即时保存；其余参数仍然需要点击页面底部悬浮的“保存全部配置”。</div>
                                 <div class="resource-source-footer-actions">
-                                    <button type="button" onclick="openResourceSourceManagerModal()" class="resource-source-secondary-btn">管理频道</button>
-                                    <button type="button" onclick="openResourceSourceImportModal()" class="resource-source-secondary-btn">导入频道</button>
-                                    <button type="button" onclick="exportResourceSources()" class="resource-source-secondary-btn">导出频道</button>
-                                    <button type="button" onclick="openResourceSourceModal()" class="resource-source-add-btn">+ 添加频道订阅</button>
+                                    <button type="button" onclick="openResourceSourceManagerModal()" class="resource-source-add-btn">管理频道</button>
                                 </div>
                             </div>
                         </div>
@@ -285,8 +336,8 @@
                     </div>
                 </div>
 
-                <div id="settings-notify" class="group-card settings-section-card" style="order: 8;">
-                    <h3 class="group-title">8. 通知推送（企业微信）</h3>
+                <div id="settings-notify" class="group-card settings-section-card" style="order: 9;">
+                    <h3 class="group-title">9. 通知推送（企业微信）</h3>
                     <div class="space-y-4">
                         <label class="flex items-center gap-3 cursor-pointer text-sm">
                             <input type="checkbox" id="notify_push_enabled" class="ui-checkbox">
@@ -342,8 +393,8 @@
                     </div>
                 </div>
 
-                <div id="settings-security" class="group-card settings-section-card" style="order: 9;">
-                    <h3 class="group-title">9. 后台安全管理</h3>
+                <div id="settings-security" class="group-card settings-section-card" style="order: 10;">
+                    <h3 class="group-title">10. 后台安全管理</h3>
                     <div class="space-y-4">
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <label class="block"><span class="text-xs text-slate-500">管理账号</span><input id="username" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1"></label>

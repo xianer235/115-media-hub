@@ -46,6 +46,12 @@ function collectSettingsPayload({
         'tmdb_api_key',
         'tmdb_language',
         'tmdb_region',
+        'pansou_base_url',
+        'pansou_username',
+        'pansou_password',
+        'pansou_src',
+        'pansou_channels',
+        'pansou_plugins',
         'cron_hour',
         'sync_mode',
         'extensions',
@@ -69,6 +75,7 @@ function collectSettingsPayload({
     cfg.notify_push_enabled = !!document.getElementById('notify_push_enabled')?.checked;
     cfg.notify_monitor_enabled = !!document.getElementById('notify_monitor_enabled')?.checked;
     cfg.tmdb_enabled = !!document.getElementById('tmdb_enabled')?.checked;
+    cfg.pansou_enabled = !!document.getElementById('pansou_enabled')?.checked;
 
     const rawTmdbCacheTtl = parseInt(document.getElementById('tmdb_cache_ttl_hours')?.value || '', 10);
     cfg.tmdb_cache_ttl_hours = Math.min(720, Math.max(1, Number.isFinite(rawTmdbCacheTtl) ? rawTmdbCacheTtl : 24));
@@ -196,6 +203,103 @@ export async function testTgProxyLatency({
         }
     }
     if (typeof renderTgProxyTestStatus === 'function') renderTgProxyTestStatus();
+}
+
+export function renderPansouTestStatus({
+    pansouTestState,
+    escapeHtml,
+    formatDurationText,
+} = {}) {
+    const state = pansouTestState || {};
+    const btn = document.getElementById('pansou-test-btn');
+    const statusEl = document.getElementById('pansou-test-status');
+    if (btn) {
+        btn.disabled = !!state.loading;
+        btn.classList.toggle('btn-disabled', !!state.loading);
+        btn.textContent = state.loading ? '测试中...' : '测试 PanSou';
+    }
+    if (!statusEl) return;
+
+    if (state.loading) {
+        statusEl.className = 'tg-proxy-status tg-proxy-status--loading';
+        statusEl.innerHTML = `
+            <div class="tg-proxy-status-title">正在检测 PanSou 服务</div>
+            <div class="tg-proxy-status-meta">正在请求健康接口，请稍候...</div>
+        `;
+        statusEl.classList.remove('hidden');
+        return;
+    }
+
+    if (state.ok === true) {
+        statusEl.className = 'tg-proxy-status tg-proxy-status--success';
+        statusEl.innerHTML = `
+            <div class="tg-proxy-status-title">PanSou 可达 · ${escapeHtml(formatDurationText(state.latency_ms) || `总耗时 ${String(state.latency_ms || 0)} ms`)}</div>
+            <div class="tg-proxy-status-meta">认证：${state.auth_enabled ? (state.auth_logged_in ? '已开启，账号已验证' : '已开启') : '未开启'}｜插件 ${escapeHtml(String(state.plugin_count || 0))}｜频道 ${escapeHtml(String(state.channels_count || 0))}</div>
+        `;
+        statusEl.classList.remove('hidden');
+        return;
+    }
+
+    if (state.ok === false) {
+        statusEl.className = 'tg-proxy-status tg-proxy-status--error';
+        statusEl.innerHTML = `
+            <div class="tg-proxy-status-title">PanSou 测试失败</div>
+            <div class="tg-proxy-status-meta">${escapeHtml(state.message || '未知错误')}</div>
+        `;
+        statusEl.classList.remove('hidden');
+        return;
+    }
+
+    statusEl.classList.add('hidden');
+    statusEl.textContent = '';
+}
+
+export async function testPansouConnection({
+    getCurrentPansouConfig,
+    getPansouTestState,
+    setPansouTestState,
+    renderPansouTestStatus,
+} = {}) {
+    const currentState = typeof getPansouTestState === 'function' ? getPansouTestState() : {};
+    if (currentState?.loading) return;
+    if (typeof setPansouTestState === 'function') {
+        setPansouTestState({ loading: true, ok: null, message: '', latency_ms: 0, auth_enabled: false, auth_configured: false, auth_logged_in: false, plugin_count: 0, channels_count: 0 });
+    }
+    if (typeof renderPansouTestStatus === 'function') renderPansouTestStatus();
+    try {
+        const data = await window.MediaHubApi.postJson(
+            '/settings/pansou/test',
+            typeof getCurrentPansouConfig === 'function' ? getCurrentPansouConfig() : {}
+        );
+        if (typeof setPansouTestState === 'function') {
+            setPansouTestState({
+                loading: false,
+                ok: true,
+                message: String(data.msg || 'PanSou 可用'),
+                latency_ms: Number(data.latency_ms || 0),
+                auth_enabled: !!data.auth_enabled,
+                auth_configured: !!data.auth_configured,
+                auth_logged_in: !!data.auth_logged_in,
+                plugin_count: Number(data.plugin_count || 0),
+                channels_count: Number(data.channels_count || 0)
+            });
+        }
+    } catch (e) {
+        if (typeof setPansouTestState === 'function') {
+            setPansouTestState({
+                loading: false,
+                ok: false,
+                message: e instanceof Error ? e.message : String(e || 'PanSou 测试失败'),
+                latency_ms: 0,
+                auth_enabled: false,
+                auth_configured: false,
+                auth_logged_in: false,
+                plugin_count: 0,
+                channels_count: 0
+            });
+        }
+    }
+    if (typeof renderPansouTestStatus === 'function') renderPansouTestStatus();
 }
 
 export function renderNotifyTestStatus({

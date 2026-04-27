@@ -143,6 +143,41 @@
             return normalizeSubscriptionProvider(provider, '115') === 'quark' ? '夸克' : '115';
         }
 
+        function normalizeResourceSearchSource(value) {
+            const normalized = String(value || 'tg').trim().toLowerCase();
+            return normalized === 'pansou' ? 'pansou' : 'tg';
+        }
+
+        function normalizeResourceProviderFilter(value) {
+            const normalized = String(value || 'all').trim().toLowerCase();
+            if (normalized === '115' || normalized === 'magnet' || normalized === 'quark') return normalized;
+            if (normalized === '115share') return '115';
+            if (normalized === 'magnet115') return 'magnet';
+            return 'all';
+        }
+
+        function getResourceSearchSourceLabel(value = resourceSearchSource) {
+            return normalizeResourceSearchSource(value) === 'pansou' ? '盘搜' : '频道搜索';
+        }
+
+        function getResourceProviderFilterLabel(value = resourceProviderFilter) {
+            const normalized = normalizeResourceProviderFilter(value);
+            if (normalized === '115') return '115';
+            if (normalized === 'magnet') return '磁力';
+            if (normalized === 'quark') return '夸克';
+            return '全部';
+        }
+
+        function resourceItemMatchesProviderFilter(item, providerFilter = resourceProviderFilter) {
+            const normalized = normalizeResourceProviderFilter(providerFilter);
+            if (normalized === 'all') return true;
+            const linkType = getEffectiveResourceLinkType(item);
+            if (normalized === '115') return linkType === '115share';
+            if (normalized === 'magnet') return linkType === 'magnet';
+            if (normalized === 'quark') return linkType === 'quark';
+            return true;
+        }
+
         function getResourceFolderApiPrefix(provider) {
             return normalizeSubscriptionProvider(provider, '115') === 'quark' ? '/resource/quark' : '/resource/115';
         }
@@ -220,6 +255,85 @@
                 hintEl.classList.add('border-amber-500/25', 'bg-amber-500/10', 'text-amber-200');
             }
             hintEl.innerText = message;
+        }
+
+        function renderResourceSearchFilters() {
+            const currentSource = normalizeResourceSearchSource(resourceSearchSource || resourceState.search_source || 'tg');
+            const currentProvider = normalizeResourceProviderFilter(resourceProviderFilter || resourceState.provider_filter || 'all');
+            [
+                ['resource-search-source-tg', currentSource === 'tg'],
+                ['resource-search-source-pansou', currentSource === 'pansou'],
+                ['resource-provider-filter-all', currentProvider === 'all'],
+                ['resource-provider-filter-115', currentProvider === '115'],
+                ['resource-provider-filter-magnet', currentProvider === 'magnet'],
+                ['resource-provider-filter-quark', currentProvider === 'quark'],
+            ].forEach(([id, active]) => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.classList.toggle('resource-search-segment-btn-active', !!active);
+                el.setAttribute('aria-pressed', active ? 'true' : 'false');
+            });
+        }
+
+        async function refreshResourceForCurrentSearchControls() {
+            const keyword = String(document.getElementById('resource-search-input')?.value || resourceState.search || '').trim();
+            if (keyword && resourceSearchBusy) {
+                resourceRestartSearchAfterCancel = true;
+                cancelActiveResourceSearch({ notify: false });
+                return;
+            }
+            if (keyword && !isDirectImportInput(keyword)) {
+                await searchResources();
+                return;
+            }
+            if (!keyword) {
+                await refreshResourceState({ allowSearch: false, keywordOverride: '' });
+                return;
+            }
+            renderResourceBoard();
+        }
+
+        function setResourceSearchSource(value) {
+            const next = normalizeResourceSearchSource(value);
+            if (next === resourceSearchSource) {
+                renderResourceSearchFilters();
+                return;
+            }
+            resourceSearchSource = next;
+            resourceState = {
+                ...resourceState,
+                search_source: next,
+            };
+            renderResourceSearchFilters();
+            void refreshResourceForCurrentSearchControls();
+        }
+
+        function setResourceProviderFilter(value) {
+            const next = normalizeResourceProviderFilter(value);
+            if (next === resourceProviderFilter) {
+                renderResourceSearchFilters();
+                return;
+            }
+            resourceProviderFilter = next;
+            resourceState = {
+                ...resourceState,
+                provider_filter: next,
+            };
+            renderResourceSearchFilters();
+            if (resourceSearchBusy) {
+                const keyword = String(document.getElementById('resource-search-input')?.value || resourceState.search || '').trim();
+                const source = normalizeResourceSearchSource(resourceSearchSource || resourceState.search_source || 'tg');
+                resourceBoardHintText = buildResourceSearchStatusText({
+                    phase: 'running',
+                    source,
+                    keyword,
+                    providerFilter: next,
+                    latencyMs: source === 'tg' ? resourceTgLastLatencyMs : 0,
+                });
+                renderResourceBoardHint();
+                return;
+            }
+            renderResourceBoard();
         }
 
         function isResourceShareLinkType(linkType) {
@@ -809,12 +923,12 @@
             const direct = (resourceState.items || []).find(item => Number(item.id) === target);
             if (direct) return direct;
             for (const section of resourceState.channel_sections || []) {
-                const found = getResourceSectionItems(section, '').find(item => Number(item.id) === target);
+                const found = getResourceSectionItems(section, '', { providerFilter: 'all' }).find(item => Number(item.id) === target);
                 if (found) return found;
             }
             const searchKeyword = String(resourceState.search || '').trim();
             for (const section of resourceState.search_sections || []) {
-                const found = getResourceSectionItems(section, searchKeyword).find(item => Number(item.id) === target);
+                const found = getResourceSectionItems(section, searchKeyword, { providerFilter: 'all' }).find(item => Number(item.id) === target);
                 if (found) return found;
             }
             return null;
@@ -969,9 +1083,19 @@
                 if (!channelId || sourceIndex.has(channelId)) return;
                 sourceIndex.set(channelId, source);
             });
-            if (!sourceIndex.size) return [];
             return (Array.isArray(sections) ? sections : [])
                 .map(section => {
+                    const sectionType = String(section?.section_type || '').trim().toLowerCase();
+                    if (sectionType === 'pansou') {
+                        return {
+                            ...section,
+                            name: section?.name || '盘搜结果',
+                            section_type: 'pansou',
+                            channel_id: 'pansou',
+                            enabled: true
+                        };
+                    }
+                    if (!sourceIndex.size) return null;
                     const channelId = normalizeTelegramChannelIdInput(section?.channel_id || '');
                     if (!channelId || !sourceIndex.has(channelId)) return null;
                     const source = sourceIndex.get(channelId) || {};
@@ -1040,13 +1164,31 @@
             };
         }
 
-        function getResourceSectionItems(section, searchKeyword = '') {
+        function getResourceSectionItems(section, searchKeyword = '', options = {}) {
             const channelId = normalizeTelegramChannelIdInput(section?.channel_id || '');
             const pagingKey = getResourceSectionPagingKey(channelId, searchKeyword);
+            const providerFilter = normalizeResourceProviderFilter(
+                Object.prototype.hasOwnProperty.call(options || {}, 'providerFilter')
+                    ? options.providerFilter
+                    : (resourceProviderFilter || resourceState.provider_filter || 'all')
+            );
             return dedupeResourceItems([
                 ...(Array.isArray(section?.items) ? section.items : []),
                 ...(Array.isArray(resourceChannelExtraItems[pagingKey]) ? resourceChannelExtraItems[pagingKey] : [])
-            ]).sort((a, b) => getResourceItemSortScore(b) - getResourceItemSortScore(a));
+            ])
+                .filter(item => resourceItemMatchesProviderFilter(item, providerFilter))
+                .sort((a, b) => getResourceItemSortScore(b) - getResourceItemSortScore(a));
+        }
+
+        function getResourceVisibleSections(sections, searchKeyword = '') {
+            return (Array.isArray(sections) ? sections : [])
+                .filter(section => section?.enabled !== false)
+                .filter(section => getResourceSectionItems(section, searchKeyword).length > 0);
+        }
+
+        function countResourceVisibleSectionItems(sections, searchKeyword = '') {
+            return getResourceVisibleSections(sections, searchKeyword)
+                .reduce((sum, section) => sum + getResourceSectionItems(section, searchKeyword).length, 0);
         }
 
         function normalizeResourceStatusForDisplay(status) {
@@ -1436,7 +1578,7 @@
             const section = sectionPool.find(item => normalizeTelegramChannelIdInput(item?.channel_id || '') === normalizedChannelId);
             if (!section) return null;
 
-            const currentItems = getResourceSectionItems(section, keyword);
+            const currentItems = getResourceSectionItems(section, keyword, { providerFilter: 'all' });
             const meta = getResourceSectionPagingMeta(section, keyword);
             const before = String(meta.nextBefore || getResourceItemPostCursor(currentItems[currentItems.length - 1]) || '').trim();
 
@@ -1451,7 +1593,8 @@
                     channel_id: normalizedChannelId,
                     before,
                     limit: 10,
-                    query: keyword
+                    query: keyword,
+                    provider_filter: 'all'
                 });
 
                 const incomingItems = hydrateResourceItems(Array.isArray(data.items) ? data.items : []);
@@ -1490,14 +1633,14 @@
                 resourceState = {
                     ...resourceState,
                     items: keyword
-                        ? dedupeResourceItems(nextSectionPool.flatMap(item => getResourceSectionItems(item, keyword)))
+                        ? dedupeResourceItems(nextSectionPool.flatMap(item => getResourceSectionItems(item, keyword, { providerFilter: 'all' })))
                         : resourceState.items,
                     channel_sections: keyword ? resourceState.channel_sections : nextSectionPool,
                     search_sections: keyword ? nextSectionPool : resourceState.search_sections,
                     stats: keyword
                         ? {
                             ...(resourceState.stats || {}),
-                            filtered_item_count: nextSectionPool.reduce((sum, item) => sum + getResourceSectionItems(item, keyword).length, 0)
+                            filtered_item_count: countResourceVisibleSectionItems(nextSectionPool, keyword)
                         }
                         : resourceState.stats
                 };
@@ -1520,27 +1663,30 @@
         function buildResourceSectionCard(section, { searchKeyword = '' } = {}) {
             const keyword = String(searchKeyword || '').trim();
             const isSearchSection = !!keyword;
+            const sectionType = String(section?.section_type || '').trim().toLowerCase();
+            const isPansouSection = sectionType === 'pansou';
             const sectionItems = getResourceSectionItems(section, keyword);
             const pagingMeta = getResourceSectionPagingMeta(section, keyword);
             const normalizedChannelId = normalizeTelegramChannelIdInput(section?.channel_id || '');
-            const canManageSection = !!normalizedChannelId;
+            const canManageSection = !!normalizedChannelId && !isPansouSection;
+            const canLoadMoreSection = !isPansouSection;
             const shownCount = sectionItems.length;
             const primaryBadge = isSearchSection
                 ? `命中 ${shownCount}`
                 : `显示 ${shownCount}`;
             const secondaryBadge = isSearchSection
-                ? `${escapeHtml(String(section?.pages_scanned || 0))} 页`
+                ? (isPansouSection ? '外部搜索' : `${escapeHtml(String(section?.pages_scanned || 0))} 页`)
                 : `缓存 ${escapeHtml(String(section.item_count || (section.items || []).length || 0))}`;
             const primaryType = getResourceLinkTypeLabel(section?.primary_link_type || section?.channel_profile?.primary_link_type || 'unknown');
             const latestPublishedAt = String(section?.latest_published_at || section?.channel_profile?.latest_published_at || '').trim();
             const subtleText = isSearchSection
-                ? `关键词「${escapeHtml(keyword)}」`
+                ? (isPansouSection ? `关键词「${escapeHtml(keyword)}」 · 类型 ${escapeHtml(getResourceProviderFilterLabel())}` : `关键词「${escapeHtml(keyword)}」`)
                 : `最近资源 ${escapeHtml(latestPublishedAt ? formatTimeText(latestPublishedAt) : '--')} · 最近同步 ${escapeHtml(formatResourceSyncTime(section.last_sync_at))}`;
             const footerText = isSearchSection
-                ? `当前已显示 ${escapeHtml(String(shownCount))} 条命中结果。`
+                ? (isPansouSection ? `当前已显示 ${escapeHtml(String(shownCount))} 条盘搜结果。` : `当前已显示 ${escapeHtml(String(shownCount))} 条命中结果。`)
                 : `当前已显示 ${escapeHtml(String(shownCount))} 条，频道缓存 ${escapeHtml(String(section.item_count || 0))} 条。`;
             const emptyText = isSearchSection
-                ? '这个频道暂时没有可展示的命中结果。'
+                ? (isPansouSection ? '盘搜暂时没有返回可导入结果。' : '这个频道暂时没有可展示的命中结果。')
                 : '这个频道还没有同步到资源，稍后再试一次同步。';
 
             return `
@@ -1549,7 +1695,7 @@
                         <button type="button" data-resource-section-toggle="${escapeHtml(section.channel_id || '')}" class="resource-section-header-main min-w-0 flex-1 text-left bg-transparent border-none p-0">
                             <div class="resource-section-title-row">
                                 <h4 class="resource-section-title">${escapeHtml(section.name || section.channel_id || '未命名频道')}</h4>
-                                <span class="resource-section-chip">@${escapeHtml(section.channel_id || '--')}</span>
+                                ${isPansouSection ? '<span class="resource-section-chip resource-section-chip-accent">PanSou</span>' : `<span class="resource-section-chip">@${escapeHtml(section.channel_id || '--')}</span>`}
                                 <span class="resource-section-chip resource-section-chip-accent">${primaryBadge}</span>
                                 <span class="resource-section-chip">${secondaryBadge}</span>
                                 ${!isSearchSection ? `<span class="resource-section-chip">${escapeHtml(primaryType)}</span>` : ''}
@@ -1559,7 +1705,7 @@
                         </button>
                         <div class="resource-section-actions">
                             ${canManageSection ? `<button type="button" data-resource-section-manage="${escapeHtml(normalizedChannelId)}" class="resource-section-manage-btn">管理</button>` : ''}
-                            <a href="${escapeHtml(section.url || '#')}" target="_blank" rel="noopener noreferrer" class="resource-section-link">打开频道</a>
+                            ${section.url ? `<a href="${escapeHtml(section.url || '#')}" target="_blank" rel="noopener noreferrer" class="resource-section-link">${isPansouSection ? '打开盘搜' : '打开频道'}</a>` : ''}
                             <button type="button" data-resource-section-toggle="${escapeHtml(section.channel_id || '')}" class="resource-section-toggle bg-transparent border-none p-0" aria-label="展开或收起频道">⌄</button>
                         </div>
                     </div>
@@ -1575,10 +1721,10 @@
                                 type="button"
                                 data-resource-load-more="${escapeHtml(normalizedChannelId)}"
                                 class="resource-section-more-btn ${pagingMeta.loading ? 'btn-disabled' : ''}"
-                                ${pagingMeta.loading || pagingMeta.noMore ? 'disabled' : ''}
+                                ${(!canLoadMoreSection) || pagingMeta.loading || pagingMeta.noMore ? 'disabled' : ''}
                             >${pagingMeta.loading
                                 ? '获取中...'
-                                : (pagingMeta.noMore ? '没有更多资源了' : '获取更多资源')
+                                : ((!canLoadMoreSection) ? '盘搜结果已全部显示' : (pagingMeta.noMore ? '没有更多资源了' : '获取更多资源'))
                             }</button>
                         </div>
                     </div>
@@ -1635,6 +1781,97 @@
             container.__resourceBoardHtml = nextHtml;
         }
 
+        function formatResourceSearchDuration(durationMs, label = '耗时') {
+            const value = Number(durationMs || 0);
+            if (!Number.isFinite(value) || value <= 0) return `${label} --`;
+            if (value < 1000) return `${label} ${Math.max(1, Math.round(value))} ms`;
+            return `${label} ${(value / 1000).toFixed(value >= 10000 ? 0 : 1)} 秒`;
+        }
+
+        function formatResourceSearchLatency(latencyMs) {
+            const value = Number(latencyMs || 0);
+            if (!Number.isFinite(value) || value <= 0) return 'TG 延迟检测中';
+            return `TG 延迟 ${Math.max(1, Math.round(value))} ms`;
+        }
+
+        function getResourceSearchResultCount(state = resourceState, keyword = '') {
+            const sections = Array.isArray(state?.search_sections) ? state.search_sections : [];
+            return countResourceVisibleSectionItems(sections, keyword);
+        }
+
+        function buildResourceSearchStatusText({
+            phase = 'completed',
+            source = resourceSearchSource,
+            keyword = '',
+            providerFilter = resourceProviderFilter,
+            state = resourceState,
+            durationMs = 0,
+            latencyMs = 0,
+        } = {}) {
+            const normalizedSource = normalizeResourceSearchSource(source);
+            const meta = state?.search_meta && typeof state.search_meta === 'object' ? state.search_meta : {};
+            const sourceLabel = getResourceSearchSourceLabel(normalizedSource);
+            const keywordText = String(keyword || state?.search || '').trim() || '...';
+            const providerLabel = getResourceProviderFilterLabel(providerFilter);
+            const errors = Array.isArray(meta.errors) ? meta.errors : [];
+            const searchedSources = Number(meta.searched_sources || 0);
+            const resultCount = getResourceSearchResultCount(state, keywordText);
+            const normalizedPhase = String(phase || '').trim().toLowerCase();
+            const phaseLabel = normalizedPhase === 'running'
+                ? '执行中'
+                : (normalizedPhase === 'failed' ? '失败' : (normalizedPhase === 'cancelled' ? '已中断' : '完成'));
+            const parts = [
+                `${sourceLabel}${phaseLabel}`,
+                `关键词「${keywordText}」`,
+                `类型 ${providerLabel}`,
+            ];
+
+            if (normalizedPhase === 'running') {
+                parts.push(normalizedSource === 'tg' ? formatResourceSearchLatency(latencyMs) : '已开始');
+                return parts.join(' · ');
+            }
+
+            if (normalizedPhase === 'completed') parts.push(`命中 ${resultCount} 条`);
+            if (normalizedSource === 'tg' && searchedSources > 0) parts.push(`检索 ${searchedSources} 个来源`);
+            if (errors.length) parts.push(`异常 ${errors.length} 个来源`);
+            if (normalizedSource === 'tg') {
+                const finalLatencyMs = Number(latencyMs || meta.tg_latency_ms || resourceTgLastLatencyMs || 0);
+                parts.push(finalLatencyMs > 0 ? formatResourceSearchLatency(finalLatencyMs) : 'TG 延迟 --');
+            }
+            if (normalizedSource === 'pansou') {
+                const pansouElapsedMs = Number(meta.pansou_elapsed_ms || 0);
+                parts.push(formatResourceSearchDuration(pansouElapsedMs || durationMs || meta.client_elapsed_ms, 'PanSou 耗时'));
+            } else {
+                parts.push(formatResourceSearchDuration(durationMs || meta.client_elapsed_ms, normalizedPhase === 'cancelled' ? '已耗时' : '耗时'));
+            }
+            return parts.join(' · ');
+        }
+
+        function buildPansouIdleState() {
+            const providerLabel = getResourceProviderFilterLabel(resourceProviderFilter || resourceState.provider_filter);
+            return `
+                <div class="resource-pansou-idle" role="status" aria-live="polite">
+                    <div class="resource-pansou-idle-main">
+                        <div class="resource-pansou-idle-kicker">PanSou</div>
+                        <div class="resource-pansou-idle-title">输入关键词后搜索盘搜</div>
+                        <div class="resource-pansou-idle-copy">盘搜不会在空关键词时自动请求；当前类型筛选为 ${escapeHtml(providerLabel)}。</div>
+                    </div>
+                    <div class="resource-pansou-idle-meta">下方仍显示已同步频道的资源概览</div>
+                </div>
+            `;
+        }
+
+        function buildResourceOverviewDivider() {
+            return `
+                <div class="resource-overview-divider">
+                    <div>
+                        <div class="resource-overview-title">频道资源概览</div>
+                        <div class="resource-overview-copy">来自已启用频道的本地缓存，不是盘搜结果。</div>
+                    </div>
+                </div>
+            `;
+        }
+
         function renderResourceBoard() {
             const container = document.getElementById('resource-board');
             if (!container) return;
@@ -1648,15 +1885,24 @@
 
             const activeKeyword = String(resourceState.search || '').trim();
             const isSearchMode = !!activeKeyword;
-            const sections = (resourceState.channel_sections || []).filter(section => section.enabled !== false);
+            const isPansouIdle = !isSearchMode && normalizeResourceSearchSource(resourceState.search_source || resourceSearchSource) === 'pansou';
+            const sections = getResourceVisibleSections(resourceState.channel_sections || [], '');
             if (isSearchMode) {
-                const searchSections = (resourceState.search_sections || []).filter(section => section.enabled !== false);
-                const filteredCount = Number(resourceState?.stats?.filtered_item_count ?? 0);
-                const searchedSources = Number(resourceState?.search_meta?.searched_sources || 0);
+                const searchSections = getResourceVisibleSections(resourceState.search_sections || [], activeKeyword);
                 const searchErrors = Array.isArray(resourceState?.search_meta?.errors) ? resourceState.search_meta.errors : [];
-                resourceBoardHintText = `频道内搜索：关键词「${activeKeyword}」 / 命中 ${filteredCount} 条${searchedSources ? ` / 已检索 ${searchedSources} 个订阅源` : ''}${searchErrors.length ? ` / ${searchErrors.length} 个频道暂未返回` : ''}`;
+                resourceBoardHintText = buildResourceSearchStatusText({
+                    phase: resourceState?.search_meta?.client_phase || 'completed',
+                    source: resourceState.search_source || resourceSearchSource,
+                    keyword: activeKeyword,
+                    providerFilter: resourceProviderFilter || resourceState.provider_filter || 'all',
+                    durationMs: Number(resourceState?.search_meta?.client_elapsed_ms || 0),
+                    latencyMs: Number(resourceState?.search_meta?.tg_latency_ms || resourceTgLastLatencyMs || 0),
+                });
                 if (!searchSections.length) {
-                    setResourceBoardHtml(container, '<div class="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">没有在已启用订阅频道里找到匹配内容。可以先同步频道，或直接粘贴 magnet / 常见网盘分享链接进入识别。</div>');
+                    const emptyCopy = normalizeResourceSearchSource(resourceState.search_source || resourceSearchSource) === 'pansou'
+                        ? '盘搜没有返回当前类型的可导入结果。请检查 PanSou 配置，或换一个关键词再试。'
+                        : '没有在已启用订阅频道里找到匹配内容。可以先同步频道，或直接粘贴 magnet / 常见网盘分享链接进入识别。';
+                    setResourceBoardHtml(container, `<div class="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">${escapeHtml(emptyCopy)}</div>`);
                     renderResourceBoardHint();
                     return;
                 }
@@ -1670,12 +1916,23 @@
 
             resourceBoardHintText = '';
             if (!sections.length) {
-                setResourceBoardHtml(container, '<div class="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">还没有可展示的频道资源。先在“参数配置”里添加频道，并执行一次同步即可。</div>');
+                const hasAnyEnabledSection = (resourceState.channel_sections || []).some(section => section?.enabled !== false);
+                const emptyText = hasAnyEnabledSection && normalizeResourceProviderFilter(resourceProviderFilter || resourceState.provider_filter) !== 'all'
+                    ? `当前类型（${getResourceProviderFilterLabel(resourceProviderFilter || resourceState.provider_filter)}）暂无可展示的频道资源。`
+                    : '还没有可展示的频道资源。先在“参数配置”里添加频道，并执行一次同步即可。';
+                const emptyChannelHtml = `<div class="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">${escapeHtml(emptyText)}</div>`;
+                setResourceBoardHtml(container, `${isPansouIdle ? buildPansouIdleState() : ''}${isPansouIdle ? '<div class="h-3"></div>' : ''}${emptyChannelHtml}`);
                 renderResourceBoardHint();
                 return;
             }
 
-            setResourceBoardHtml(container, sections.map(section => buildResourceSectionCard(section, { searchKeyword: '' })).join(''));
+            const overviewHtml = sections.map(section => buildResourceSectionCard(section, { searchKeyword: '' })).join('');
+            setResourceBoardHtml(
+                container,
+                isPansouIdle
+                    ? `${buildPansouIdleState()}<div class="h-3"></div>${buildResourceOverviewDivider()}${overviewHtml}`
+                    : overviewHtml
+            );
             renderResourceBoardHint();
         }
 
@@ -1753,6 +2010,8 @@
             const nextJobPagination = data.pagination && typeof data.pagination === 'object'
                 ? data.pagination
                 : (resourceState.job_pagination || {});
+            const nextSearchSource = normalizeResourceSearchSource(data.search_source || resourceSearchSource || resourceState.search_source || 'tg');
+            const nextProviderFilter = normalizeResourceProviderFilter(resourceProviderFilter || resourceState.provider_filter || data.provider_filter || 'all');
             const nextStats = data.stats || {
                 source_count: nextSources.length,
                 item_count: Number(resourceState?.stats?.item_count || 0),
@@ -1807,8 +2066,12 @@
                     : (resourceState.cookie_health || null),
                 stats: nextStats,
                 search: typeof data.search === 'string' ? data.search : (resourceState.search || ''),
+                search_source: nextSearchSource,
+                provider_filter: nextProviderFilter,
                 search_meta: data.search_meta || resourceState.search_meta || {}
             };
+            resourceSearchSource = nextSearchSource;
+            resourceProviderFilter = nextProviderFilter;
             if (data.cookie_health && typeof data.cookie_health === 'object') {
                 applyCookieHealthState(data.cookie_health);
             } else {
@@ -1829,12 +2092,9 @@
             const stats = resourceState.stats || {};
             document.getElementById('resource-source-count').innerText = String(stats.source_count ?? resourceState.sources.length ?? 0);
             document.getElementById('resource-item-count').innerText = String(stats.item_count ?? 0);
-            const jobCounts = getResourceJobCounts(resourceState.jobs || []);
-            const completedCount = Number(stats.completed_job_count ?? jobCounts.completed ?? 0);
-            const completedCountEl = document.getElementById('resource-completed-job-count');
-            if (completedCountEl) completedCountEl.innerText = String(completedCount);
             syncResourceJobClearMenuState();
             renderResourceCookieHint();
+            renderResourceSearchFilters();
             syncResourceSourceSelect();
             syncResourceMonitorTaskOptions(document.getElementById('resource_job_savepath')?.value || '');
             renderResourceOnboardingCard();
@@ -1875,13 +2135,14 @@
             const directImport = isDirectImportInput(keyword);
 
             if (searchBtn) {
-                const blocked = resourceSearchBusy || resourceSyncBusy;
+                const blocked = resourceSyncBusy;
                 searchBtn.disabled = blocked;
                 searchBtn.classList.toggle('btn-disabled', blocked);
                 searchBtn.classList.toggle('is-loading', resourceSearchBusy);
+                searchBtn.classList.toggle('resource-search-btn-cancel', resourceSearchBusy);
                 searchBtn.setAttribute('aria-busy', resourceSearchBusy ? 'true' : 'false');
                 searchBtn.textContent = resourceSearchBusy
-                    ? (directImport ? '识别中...' : '搜索中...')
+                    ? (resourceSearchCancelRequested ? '停止中...' : (directImport ? '停止识别' : '停止搜索'))
                     : '搜索';
             }
 
@@ -1912,12 +2173,39 @@
             renderResourceBoard();
         }
 
-        async function refreshResourceState({ allowSearch = true, keywordOverride = null } = {}) {
+        function buildResourceSearchId() {
+            if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+                return `resource-${window.crypto.randomUUID()}`;
+            }
+            return `resource-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        }
+
+        function cancelActiveResourceSearch({ notify = true } = {}) {
+            if (!resourceSearchBusy) return false;
+            resourceSearchCancelRequested = true;
+            if (resourceSearchAbortController) {
+                try { resourceSearchAbortController.abort(); } catch (e) {}
+            }
+            const searchId = String(resourceActiveSearchId || '').trim();
+            if (searchId) {
+                void window.MediaHubApi.postJson('/resource/search/cancel', { search_id: searchId }).catch(() => null);
+            }
+            if (notify) {
+                showToast('已请求停止当前搜索', { tone: 'info', duration: 1800, placement: 'top-center' });
+            }
+            syncResourceActionButtons();
+            renderResourceBoardHint();
+            return true;
+        }
+
+        async function refreshResourceState({ allowSearch = true, keywordOverride = null, searchId = '', signal = null } = {}) {
             const resourceModule = await loadResourceTabModule();
             if (resourceModule?.refreshResourceState) {
                 return resourceModule.refreshResourceState({
                     allowSearch,
                     keywordOverride,
+                    searchId,
+                    signal,
                     getResourceState: () => resourceState,
                     isDirectImportInput,
                     setResourceStateHydrated: (nextValue) => {
@@ -1933,8 +2221,11 @@
                 const shouldSearchChannels = !!activeKeyword && !isDirectImportInput(activeKeyword) && allowSearch;
                 const params = new URLSearchParams();
                 if (shouldSearchChannels) params.set('q', activeKeyword);
+                params.set('search_source', normalizeResourceSearchSource(resourceSearchSource));
+                params.set('provider_filter', 'all');
+                if (searchId) params.set('search_id', String(searchId || '').trim());
                 const endpoint = params.toString() ? `/resource/state?${params.toString()}` : '/resource/state';
-                const data = await window.MediaHubApi.getJson(endpoint);
+                const data = await window.MediaHubApi.getJson(endpoint, signal ? { signal } : undefined);
                 resourceStateHydrated = true;
                 applyResourceState(data);
                 return data;
@@ -1997,6 +2288,12 @@
                 }));
                 if (append) {
                     data.jobs = mergeResourceJobPages(resourceState.jobs || [], data.jobs || []);
+                }
+                if (data && typeof data === 'object') {
+                    data.pagination = {
+                        ...(data.pagination && typeof data.pagination === 'object' ? data.pagination : {}),
+                        loaded_count: Array.isArray(data.jobs) ? data.jobs.length : 0,
+                    };
                 }
                 applyResourceJobsState(data);
                 return data;
@@ -2114,7 +2411,7 @@
         async function parseResourceInputFromSearch(rawText) {
             const data = await window.MediaHubApi.postJson('/resource/items/preview_text', {
                 raw_text: rawText
-            });
+            }, resourceSearchAbortController?.signal ? { signal: resourceSearchAbortController.signal } : undefined);
             const items = Array.isArray(data.items) ? data.items : [];
             const importableItems = items
                 .filter(item => canOpenResourceImport(item))
@@ -2161,42 +2458,193 @@
 
         async function searchResources() {
             const keyword = document.getElementById('resource-search-input')?.value?.trim() || '';
-            if (resourceSearchBusy || resourceSyncBusy) return null;
+            if (resourceSearchBusy) {
+                resourceRestartSearchAfterCancel = false;
+                cancelActiveResourceSearch();
+                return null;
+            }
+            if (resourceSyncBusy) return null;
             if (!keyword) {
                 renderResourceBoard();
                 return null;
             }
             const directImportMode = isDirectImportInput(keyword);
+            const currentSearchSource = normalizeResourceSearchSource(resourceSearchSource || resourceState.search_source || 'tg');
             const startedAt = performance.now();
+            const currentSearchId = buildResourceSearchId();
+            resourceActiveSearchId = currentSearchId;
+            resourceSearchAbortController = new AbortController();
+            resourceSearchCancelRequested = false;
             resourceSearchBusy = true;
             let latencyProbePromise = null;
-            if (!directImportMode) {
+            if (!directImportMode && currentSearchSource === 'tg') {
                 showResourceTgHealthLoading('search');
                 latencyProbePromise = probeResourceTgLatency();
+                latencyProbePromise.then((result) => {
+                    const latencyMs = Number(result?.latency_ms || resourceTgLastLatencyMs || 0);
+                    if (resourceSearchBusy && resourceActiveSearchId === currentSearchId && latencyMs > 0) {
+                        resourceBoardHintText = buildResourceSearchStatusText({
+                            phase: 'running',
+                            source: currentSearchSource,
+                            keyword,
+                            providerFilter: resourceProviderFilter,
+                            latencyMs,
+                        });
+                        renderResourceBoardHint();
+                    }
+                }).catch(() => null);
+            } else if (!directImportMode && currentSearchSource === 'pansou') {
+                setResourceTgHealthState({ visible: false, tone: 'loading', title: '', meta: '', note: '' });
             }
+            if (!directImportMode) {
+                resourceBoardHintText = buildResourceSearchStatusText({
+                    phase: 'running',
+                    source: currentSearchSource,
+                    keyword,
+                    providerFilter: resourceProviderFilter,
+                    latencyMs: currentSearchSource === 'tg' ? resourceTgLastLatencyMs : 0,
+                });
+            } else {
+                resourceBoardHintText = `资源识别执行中 · 关键词「${keyword || '...'}」 · 已开始`;
+            }
+            renderResourceBoardHint();
             syncResourceActionButtons();
+            let finalHintText = '';
             try {
                 if (directImportMode) {
                     if (String(resourceState.search || '').trim()) resetResourceSearchResults();
                     const result = await parseResourceInputFromSearch(keyword);
                     return result;
                 }
-                const data = await refreshResourceState({ allowSearch: true, keywordOverride: keyword });
+                const data = await refreshResourceState({
+                    allowSearch: true,
+                    keywordOverride: keyword,
+                    searchId: currentSearchId,
+                    signal: resourceSearchAbortController.signal,
+                });
                 if (!data) throw new Error('搜索请求失败，请稍后重试');
-                const latencyMs = await resolveResourceTgLatencyMs(latencyProbePromise);
-                applyResourceTgHealthFromSearchResult(data, getActionElapsedMs(startedAt), latencyMs);
+                const hasSearchErrors = Array.isArray(resourceState?.search_meta?.errors) && resourceState.search_meta.errors.length > 0;
+                const visibleResultCount = getResourceSearchResultCount(resourceState, keyword);
+                const completedPhase = hasSearchErrors && visibleResultCount <= 0 ? 'failed' : 'completed';
+                if (currentSearchSource === 'tg') {
+                    const latencyMs = await resolveResourceTgLatencyMs(latencyProbePromise);
+                    resourceState = {
+                        ...resourceState,
+                        search_meta: {
+                            ...(resourceState.search_meta || {}),
+                            client_phase: completedPhase,
+                            client_elapsed_ms: getActionElapsedMs(startedAt),
+                            tg_latency_ms: latencyMs,
+                        }
+                    };
+                    applyResourceTgHealthFromSearchResult(data, getActionElapsedMs(startedAt), latencyMs);
+                    finalHintText = buildResourceSearchStatusText({
+                        phase: completedPhase,
+                        source: currentSearchSource,
+                        keyword,
+                        providerFilter: resourceProviderFilter,
+                        durationMs: getActionElapsedMs(startedAt),
+                        latencyMs,
+                    });
+                } else {
+                    resourceState = {
+                        ...resourceState,
+                        search_meta: {
+                            ...(resourceState.search_meta || {}),
+                            client_phase: completedPhase,
+                            client_elapsed_ms: getActionElapsedMs(startedAt),
+                        }
+                    };
+                    finalHintText = buildResourceSearchStatusText({
+                        phase: completedPhase,
+                        source: currentSearchSource,
+                        keyword,
+                        providerFilter: resourceProviderFilter,
+                        durationMs: getActionElapsedMs(startedAt),
+                    });
+                }
                 return data;
             } catch (e) {
-                if (!directImportMode) {
+                if (e?.name === 'AbortError') {
+                    const latencyMs = currentSearchSource === 'tg' ? Number(resourceTgLastLatencyMs || 0) : 0;
+                    resourceState = {
+                        ...resourceState,
+                        search_meta: {
+                            ...(resourceState.search_meta || {}),
+                            client_phase: 'cancelled',
+                            client_elapsed_ms: getActionElapsedMs(startedAt),
+                            tg_latency_ms: latencyMs,
+                        }
+                    };
+                    finalHintText = buildResourceSearchStatusText({
+                        phase: 'cancelled',
+                        source: currentSearchSource,
+                        keyword,
+                        providerFilter: resourceProviderFilter,
+                        durationMs: getActionElapsedMs(startedAt),
+                        latencyMs,
+                    });
+                    showToast(resourceSearchCancelRequested ? '搜索已停止' : '搜索请求已取消', { tone: 'info', duration: 1800, placement: 'top-center' });
+                    return null;
+                }
+                if (!directImportMode && currentSearchSource === 'tg') {
                     const latencyMs = await resolveResourceTgLatencyMs(latencyProbePromise);
+                    resourceState = {
+                        ...resourceState,
+                        search_meta: {
+                            ...(resourceState.search_meta || {}),
+                            client_phase: 'failed',
+                            client_elapsed_ms: getActionElapsedMs(startedAt),
+                            tg_latency_ms: latencyMs,
+                        }
+                    };
+                    finalHintText = buildResourceSearchStatusText({
+                        phase: 'failed',
+                        source: currentSearchSource,
+                        keyword,
+                        providerFilter: resourceProviderFilter,
+                        durationMs: getActionElapsedMs(startedAt),
+                        latencyMs,
+                    });
                     applyResourceTgHealthFailure('search', getActionElapsedMs(startedAt), latencyMs);
+                } else if (!directImportMode) {
+                    resourceState = {
+                        ...resourceState,
+                        search_meta: {
+                            ...(resourceState.search_meta || {}),
+                            client_phase: 'failed',
+                            client_elapsed_ms: getActionElapsedMs(startedAt),
+                        }
+                    };
+                    finalHintText = buildResourceSearchStatusText({
+                        phase: 'failed',
+                        source: currentSearchSource,
+                        keyword,
+                        providerFilter: resourceProviderFilter,
+                        durationMs: getActionElapsedMs(startedAt),
+                    });
                 }
                 showToast(`搜索失败：${e.message || '请稍后重试'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
                 return null;
             } finally {
+                if (resourceActiveSearchId === currentSearchId) {
+                    resourceActiveSearchId = '';
+                    resourceSearchAbortController = null;
+                    resourceSearchCancelRequested = false;
+                }
                 resourceSearchBusy = false;
                 syncResourceActionButtons();
                 if (!resourceSyncBusy) renderResourceBoard();
+                if (finalHintText) {
+                    resourceBoardHintText = finalHintText;
+                    renderResourceBoardHint();
+                }
+                if (resourceRestartSearchAfterCancel) {
+                    resourceRestartSearchAfterCancel = false;
+                    window.setTimeout(() => {
+                        if (!resourceSearchBusy && !resourceSyncBusy) void searchResources();
+                    }, 0);
+                }
             }
         }
 
@@ -2351,6 +2799,8 @@
             refreshResourceState,
             refreshResourceJobsOnly,
             searchResources,
+            setResourceSearchSource,
+            setResourceProviderFilter,
             syncResourceChannels,
             clearResourceSearch,
             pasteResourceSearch,

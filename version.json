@@ -1,10 +1,10 @@
 {
-  "version": "0.2.17",
-  "buildDate": "2026-04-27T20:42:52+08:00",
+  "version": "0.3.1",
+  "buildDate": "2026-04-28T01:51:20+08:00",
   "notes": [
-    "频道资源管理的分类测试新增资源数输入，可按频道质量调整采样数量。",
-    "频道管理列表支持展示多个资源类型标签，并显示采样内的类型计数。",
-    "频道 ID 标签支持点击跳转到对应 Telegram 频道页面。"
+    "资源中心新增频道搜索 / 盘搜双搜索模式，支持分类筛选、耗时状态与搜索中断。",
+    "PanSou 支持账号密码登录获取 JWT，并接入资源中心搜索与订阅候选召回。",
+    "TG 频道管理收拢为频道管理中心，支持排序应用、批量置顶/置底和同步频道官方名称。"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"
