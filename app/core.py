@@ -1133,6 +1133,20 @@ def extract_year_from_date(value: Any) -> str:
     return matched.group(1) if matched else ""
 
 
+def normalize_subscription_exclude_keywords(value: Any) -> List[str]:
+    if isinstance(value, list):
+        joined = ",".join(str(item or "").strip() for item in value)
+    else:
+        joined = str(value or "")
+    tokens = []
+    for token in re.split(r"[,\n，]+", joined):
+        normalized = re.sub(r"\s+", " ", str(token or "").strip())
+        if not normalized:
+            continue
+        tokens.append(normalized[:60])
+    return unique_preserve_order(tokens)[:50]
+
+
 def normalize_subscription_task(task: Dict[str, Any]) -> Dict[str, Any]:
     media_type = str(task.get("media_type", "") or task.get("type", "movie")).strip().lower()
     if media_type not in ("movie", "tv"):
@@ -1154,6 +1168,12 @@ def normalize_subscription_task(task: Dict[str, Any]) -> Dict[str, Any]:
             for token in re.split(r"[,\n，|/]+", aliases_joined)
             if token and token.strip()
         ]
+    )
+    exclude_keywords = normalize_subscription_exclude_keywords(
+        task.get(
+            "exclude_keywords",
+            task.get("exclude_words", task.get("excluded_keywords", "")),
+        )
     )
     year = str(task.get("year", "")).strip()
     if year and not re.fullmatch(r"(19|20)\d{2}", year):
@@ -1285,6 +1305,7 @@ def normalize_subscription_task(task: Dict[str, Any]) -> Dict[str, Any]:
         "media_type": media_type,
         "title": title,
         "aliases": aliases,
+        "exclude_keywords": exclude_keywords,
         "year": year,
         "season": max(1, season),
         "total_episodes": max(0, total_episodes),
@@ -1832,6 +1853,7 @@ from .subscription_scoring import (
     detect_resource_year,
     detect_subscription_resolution,
     evaluate_subscription_candidate_title_match,
+    match_subscription_exclude_keyword,
     match_subscription_media_type,
     parse_resource_episode_meta,
     parse_small_cjk_number,

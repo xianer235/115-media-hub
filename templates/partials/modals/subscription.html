@@ -34,6 +34,11 @@
                         <span class="text-xs text-slate-500">别名（可选，逗号分隔）</span>
                         <input id="subscription_aliases" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：The Long Night, 长夜难明">
                     </label>
+                    <label class="block">
+                        <span class="text-xs text-slate-500">自定义排除词（可选，逗号分隔）</span>
+                        <input id="subscription_exclude_keywords" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：短剧, 解说">
+                        <div class="text-[11px] text-slate-500 mt-2">候选标题或正文包含这些词时会跳过；保存时会把中文逗号统一为英文逗号。</div>
+                    </label>
                     <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 space-y-3">
                         <div class="flex flex-wrap items-center justify-between gap-2">
                             <div class="text-xs text-slate-500">TMDB 绑定（可选，推荐）</div>

@@ -40,6 +40,36 @@ def _build_manual_quark_subscription_search_result(
             "manual_subscription_link": True,
         },
     }
+    blocked_keyword = match_subscription_exclude_keyword(task, resource_item)
+    if blocked_keyword:
+        return {
+            "candidate": {},
+            "candidates": [],
+            "keywords": ["manual-quark-link"],
+            "errors": [],
+            "stats": {
+                "search_keywords": 0,
+                "searched_sources": 0,
+                "matched_channels": 0,
+                "pages_scanned": 0,
+                "raw_items": 1,
+                "deduped_items": 1,
+                "persisted_items": 0,
+                "supported_items": 0,
+                "unsupported_items": 0,
+                "exclude_keyword_filtered": 1,
+                "exclude_keyword_hits": {blocked_keyword: 1},
+                "exclude_keywords": normalize_subscription_exclude_keywords(task.get("exclude_keywords", [])),
+                "manual_link_candidate_count": 0,
+                "scored_items": 0,
+                "scored_candidates": 0,
+                "relaxed_score_mode": False,
+                "relaxed_candidates": 0,
+                "search_errors": 0,
+                "best_score": 0,
+                "provider": "quark",
+            },
+        }
     ensure_db()
     conn = open_db()
     try:
@@ -75,6 +105,9 @@ def _build_manual_quark_subscription_search_result(
             "persisted_items": 1,
             "supported_items": 1,
             "unsupported_items": 0,
+            "exclude_keyword_filtered": 0,
+            "exclude_keyword_hits": {},
+            "exclude_keywords": normalize_subscription_exclude_keywords(task.get("exclude_keywords", [])),
             "manual_link_candidate_count": 1,
             "scored_items": 1,
             "scored_candidates": 1,
@@ -164,6 +197,12 @@ async def _write_subscription_task_overview(
         "info",
     )
     await write_subscription_log(f"批次收口刷新: {batch_refresh_label}", "info")
+    exclude_keywords = normalize_subscription_exclude_keywords(task.get("exclude_keywords", []))
+    if exclude_keywords:
+        await write_subscription_log(
+            f"自定义排除词: {', '.join(exclude_keywords[:10])}",
+            "info",
+        )
 
     if int(task.get("tmdb_id", 0) or 0) > 0:
         tmdb_label = str(task.get("tmdb_title", "") or task.get("title", "") or "--").strip()
@@ -359,6 +398,18 @@ async def _run_subscription_task_quark(
             f"已过滤 {unsupported_items} 条非夸克链接（当前 provider=quark，仅支持夸克分享）",
             "warn",
         )
+    if int(search_stats.get("exclude_keyword_filtered", 0) or 0) > 0:
+        exclude_hits = search_stats.get("exclude_keyword_hits", {}) if isinstance(search_stats.get("exclude_keyword_hits"), dict) else {}
+        exclude_text = "，".join(
+            f"{str(keyword)} {int(count or 0)} 条"
+            for keyword, count in list(exclude_hits.items())[:5]
+            if int(count or 0) > 0
+        )
+        await write_subscription_log(
+            f"自定义排除词已过滤 {int(search_stats.get('exclude_keyword_filtered', 0) or 0)} 条候选"
+            + (f"（{exclude_text}）" if exclude_text else ""),
+            "warn",
+        )
     if int(search_stats.get("title_blocked_candidates", 0) or 0) > 0:
         await write_subscription_log(
             f"已拦截 {int(search_stats.get('title_blocked_candidates', 0) or 0)} 条“仅集数命中/标题不匹配”候选",
@@ -424,6 +475,9 @@ async def _run_subscription_task_quark(
         if completed_locked:
             detail = f"已完结（{last_episode}/{known_total}），未发现可更新资源"
             status = "completed"
+        elif int(search_stats.get("exclude_keyword_filtered", 0) or 0) > 0 and int(search_stats.get("scored_items", 0) or 0) <= 0:
+            detail = f"自定义排除词已过滤候选 {int(search_stats.get('exclude_keyword_filtered', 0) or 0)} 条，当前暂无可导入资源"
+            status = "waiting"
         elif searched_sources <= 0:
             detail = "未启用任何 TG 订阅源，请先在参数配置里启用频道后重试"
             status = "waiting"
@@ -1652,6 +1706,9 @@ async def run_subscription_task(
                     "persisted_items": 0,
                     "supported_items": 1,
                     "unsupported_items": 0,
+                    "exclude_keyword_filtered": 0,
+                    "exclude_keyword_hits": {},
+                    "exclude_keywords": normalize_subscription_exclude_keywords(task.get("exclude_keywords", [])),
                     "media_guard_filtered": 0,
                     "media_guard_reasons": {},
                     "season_guard_filtered": 0,
@@ -1767,6 +1824,18 @@ async def run_subscription_task(
                     f"已过滤 {unsupported_items} 条不支持链接（仅支持 magnet / 115 分享）",
                     "warn",
                 )
+            if int(search_stats.get("exclude_keyword_filtered", 0) or 0) > 0:
+                exclude_hits = search_stats.get("exclude_keyword_hits", {}) if isinstance(search_stats.get("exclude_keyword_hits"), dict) else {}
+                exclude_text = "，".join(
+                    f"{str(keyword)} {int(count or 0)} 条"
+                    for keyword, count in list(exclude_hits.items())[:5]
+                    if int(count or 0) > 0
+                )
+                await write_subscription_log(
+                    f"自定义排除词已过滤 {int(search_stats.get('exclude_keyword_filtered', 0) or 0)} 条候选"
+                    + (f"（{exclude_text}）" if exclude_text else ""),
+                    "warn",
+                )
             if int(search_stats.get("media_guard_filtered", 0) or 0) > 0:
                 media_reasons = search_stats.get("media_guard_reasons", {}) if isinstance(search_stats.get("media_guard_reasons"), dict) else {}
                 reason_labels = {
@@ -1870,6 +1939,9 @@ async def run_subscription_task(
                 status = "waiting"
             elif int(search_stats.get("searched_sources", 0) or 0) <= 0:
                 detail = "未启用任何 TG 订阅源，请先在参数配置里启用频道后重试"
+                status = "waiting"
+            elif int(search_stats.get("exclude_keyword_filtered", 0) or 0) > 0 and int(search_stats.get("scored_items", 0) or 0) <= 0:
+                detail = f"自定义排除词已过滤候选 {int(search_stats.get('exclude_keyword_filtered', 0) or 0)} 条，当前暂无可导入资源"
                 status = "waiting"
             elif int(search_stats.get("supported_items", 0) or 0) <= 0:
                 detail = "命中资源均非可导入类型（仅支持 magnet / 115 分享），请调整频道或关键词"

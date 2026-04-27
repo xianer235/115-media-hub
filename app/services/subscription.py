@@ -1278,6 +1278,8 @@ async def find_subscription_task_match_candidate_by_search(
     media_guard_filtered = 0
     media_guard_reasons: Dict[str, int] = {}
     season_guard_filtered = 0
+    exclude_keyword_filtered = 0
+    exclude_keyword_hits: Dict[str, int] = {}
     supported_link_types = {"quark"} if provider == "quark" else {"magnet", "115share"}
     media_type = str(task.get("media_type", "movie") or "movie").strip().lower()
     single_season_tv = media_type == "tv" and (not is_subscription_multi_season_mode(task))
@@ -1292,6 +1294,11 @@ async def find_subscription_task_match_candidate_by_search(
         link_type = resolve_resource_link_type(item.get("link_type", ""), link_url)
         if link_type not in supported_link_types:
             unsupported_items += 1
+            continue
+        blocked_keyword = match_subscription_exclude_keyword(task, item)
+        if blocked_keyword:
+            exclude_keyword_filtered += 1
+            exclude_keyword_hits[blocked_keyword] = int(exclude_keyword_hits.get(blocked_keyword, 0) or 0) + 1
             continue
         media_match, media_reason = match_subscription_media_type(task, item)
         if not media_match:
@@ -1441,6 +1448,9 @@ async def find_subscription_task_match_candidate_by_search(
             "persisted_items": len(persisted_items),
             "supported_items": supported_items,
             "unsupported_items": unsupported_items,
+            "exclude_keyword_filtered": exclude_keyword_filtered,
+            "exclude_keyword_hits": exclude_keyword_hits,
+            "exclude_keywords": normalize_subscription_exclude_keywords(task.get("exclude_keywords", [])),
             "media_guard_filtered": media_guard_filtered,
             "media_guard_reasons": media_guard_reasons,
             "season_guard_filtered": season_guard_filtered,
@@ -1577,6 +1587,7 @@ def merge_subscription_search_results(
         "persisted_items",
         "supported_items",
         "unsupported_items",
+        "exclude_keyword_filtered",
         "media_guard_filtered",
         "season_guard_filtered",
         "season_guard_deferred",
@@ -1611,6 +1622,26 @@ def merge_subscription_search_results(
             merged_reasons[reason_text] = int(merged_reasons.get(reason_text, 0) or 0) + int(reason_count or 0)
 
     merged_stats["media_guard_reasons"] = merged_reasons
+    merged_exclude_hits: Dict[str, int] = {}
+    for part in [fixed_stats.get("exclude_keyword_hits", {}), channel_stats.get("exclude_keyword_hits", {})]:
+        if not isinstance(part, dict):
+            continue
+        for keyword, count in part.items():
+            keyword_text = str(keyword or "").strip()
+            if not keyword_text:
+                continue
+            merged_exclude_hits[keyword_text] = int(merged_exclude_hits.get(keyword_text, 0) or 0) + int(count or 0)
+    merged_stats["exclude_keyword_hits"] = merged_exclude_hits
+    merged_stats["exclude_keywords"] = unique_preserve_order(
+        [
+            str(keyword or "").strip()
+            for keyword in (
+                (fixed_stats.get("exclude_keywords", []) if isinstance(fixed_stats.get("exclude_keywords", []), list) else [])
+                + (channel_stats.get("exclude_keywords", []) if isinstance(channel_stats.get("exclude_keywords", []), list) else [])
+            )
+            if str(keyword or "").strip()
+        ]
+    )
     merged_stats["target_season"] = max(
         int(fixed_stats.get("target_season", 0) or 0),
         int(channel_stats.get("target_season", 0) or 0),

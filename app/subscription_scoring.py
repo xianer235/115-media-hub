@@ -378,6 +378,23 @@ def evaluate_subscription_candidate_title_match(task: Dict[str, Any], item: Dict
         "matched_titles": matched_titles[:8],
     }
 
+def match_subscription_exclude_keyword(task: Dict[str, Any], item: Dict[str, Any]) -> str:
+    keywords = normalize_subscription_exclude_keywords((task or {}).get("exclude_keywords", []))
+    if not keywords:
+        return ""
+    text = build_subscription_candidate_text(item)
+    text_compact = compact_subscription_text(text)
+    for keyword in keywords:
+        normalized_keyword = str(keyword or "").strip().lower()
+        if not normalized_keyword:
+            continue
+        if normalized_keyword in text:
+            return keyword
+        keyword_compact = compact_subscription_text(normalized_keyword)
+        if keyword_compact and keyword_compact in text_compact:
+            return keyword
+    return ""
+
 def score_subscription_candidate(
     task: Dict[str, Any],
     item: Dict[str, Any],

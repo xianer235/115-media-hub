@@ -846,6 +846,8 @@ def find_subscription_task_match_candidate(task: Dict[str, Any], last_episode: i
         link_type = resolve_resource_link_type(item.get("link_type", ""), item.get("link_url", ""))
         if link_type not in supported_link_types:
             continue
+        if match_subscription_exclude_keyword(task, item):
+            continue
         media_match, _ = match_subscription_media_type(task, item)
         if not media_match:
             continue

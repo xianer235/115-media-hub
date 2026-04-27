@@ -103,6 +103,11 @@
             const fixedLinkChannelSearch = !!task?.fixed_link_channel_search;
             const shareSubdir = normalizeRelativePathInput(task?.share_subdir || '');
             const shareSubdirCid = normalizeShareCidInput(task?.share_subdir_cid || '');
+            const excludeKeywords = parseSubscriptionExcludeKeywords(
+                Array.isArray(task?.exclude_keywords)
+                    ? task.exclude_keywords.join(',')
+                    : (task?.exclude_keywords || task?.exclude_words || '')
+            );
             const scheduleWeekdays = normalizeSubscriptionWeekdays(task?.schedule_weekdays || []);
             const scheduleStartTime = normalizeSubscriptionScheduleTime(task?.schedule_start_time || '00:00', '00:00');
             const scheduleEndTime = normalizeSubscriptionScheduleTime(task?.schedule_end_time || '23:59', '23:59');
@@ -134,7 +139,8 @@
                 ? `，分享子目录 ${shareSubdir}${shareSubdirCid ? `（CID ${shareSubdirCid}）` : ''}`
                 : (provider === '115' && shareSubdirCid ? `，分享子目录 CID ${shareSubdirCid}` : '');
             const providerRuleText = provider === 'quark' ? '，仅频道自动匹配（不使用固定分享链接）' : '';
-            return `状态：${statusText}（${enabledText}）。${providerText} · ${mediaText}《${titleText}》保存到 ${savepath}${fixedShareText}${shareScopeText}${providerRuleText}，${modeText}，${episodeText}；${scheduleText}；${latestText}。`;
+            const excludeText = excludeKeywords.length ? `，排除 ${excludeKeywords.slice(0, 4).join('、')}` : '';
+            return `状态：${statusText}（${enabledText}）。${providerText} · ${mediaText}《${titleText}》保存到 ${savepath}${fixedShareText}${shareScopeText}${providerRuleText}${excludeText}，${modeText}，${episodeText}；${scheduleText}；${latestText}。`;
         }
 
         function buildSubscriptionTaskProgressBar({ progress = 0, detail = '' } = {}) {
@@ -476,6 +482,20 @@
                 .split(/[,\n，|/]+/)
                 .map(item => item.trim())
                 .filter(Boolean));
+        }
+
+        function parseSubscriptionExcludeKeywords(value) {
+            return uniquePreserveOrder(String(value || '')
+                .split(/[,\n，]+/)
+                .map(item => item.trim())
+                .filter(Boolean));
+        }
+
+        function formatSubscriptionExcludeKeywords(value) {
+            const values = Array.isArray(value)
+                ? value
+                : parseSubscriptionExcludeKeywords(value);
+            return parseSubscriptionExcludeKeywords(values.join(',')).join(', ');
         }
 
         function getSubscriptionTmdbBindingFromForm() {
@@ -832,12 +852,16 @@
                 ? normalizeShareCidInput(document.getElementById('subscription_share_subdir_cid')?.value || '')
                 : '';
             const fixedLinkChannelSearch = provider === '115' && !!document.getElementById('subscription_fixed_link_channel_search')?.checked;
+            const excludeKeywords = parseSubscriptionExcludeKeywords(document.getElementById('subscription_exclude_keywords')?.value || '');
+            const excludeInput = document.getElementById('subscription_exclude_keywords');
+            if (excludeInput) excludeInput.value = excludeKeywords.join(', ');
             return {
                 name: title,
                 provider,
                 media_type: normalizeSubscriptionMediaType(document.getElementById('subscription_media_type').value),
                 title,
                 aliases: document.getElementById('subscription_aliases').value.trim(),
+                exclude_keywords: excludeKeywords,
                 year: document.getElementById('subscription_year').value.trim(),
                 season: parseInt(document.getElementById('subscription_season').value || '1', 10) || 1,
                 total_episodes: parseInt(document.getElementById('subscription_total_episodes').value || '0', 10) || 0,
@@ -878,6 +902,8 @@
             if (providerInput) providerInput.value = '115';
             document.getElementById('subscription_title').value = '';
             document.getElementById('subscription_aliases').value = '';
+            const excludeInput = document.getElementById('subscription_exclude_keywords');
+            if (excludeInput) excludeInput.value = '';
             document.getElementById('subscription_year').value = '';
             document.getElementById('subscription_season').value = 1;
             document.getElementById('subscription_total_episodes').value = 0;
@@ -1070,6 +1096,8 @@
             document.getElementById('subscription_media_type').value = normalizeSubscriptionMediaType(task.media_type || 'movie');
             document.getElementById('subscription_title').value = task.title || '';
             document.getElementById('subscription_aliases').value = Array.isArray(task.aliases) ? task.aliases.join(', ') : (task.aliases || '');
+            const excludeInput = document.getElementById('subscription_exclude_keywords');
+            if (excludeInput) excludeInput.value = formatSubscriptionExcludeKeywords(task.exclude_keywords || task.exclude_words || '');
             document.getElementById('subscription_year').value = task.year || '';
             document.getElementById('subscription_season').value = task.season || 1;
             document.getElementById('subscription_total_episodes').value = task.total_episodes || 0;
