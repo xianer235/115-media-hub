@@ -110,6 +110,7 @@ from .resource_tg import (
     RESOURCE_CHANNEL_TYPE_SAMPLE_SIZE,
     TG_CHANNEL_THREADS_DEFAULT,
     TG_CHANNEL_THREADS_MAX,
+    TG_CHANNEL_SYNC_LIMIT_DEFAULT,
     TG_FETCH_RETRY_ATTEMPTS,
     TG_FETCH_RETRY_DELAY_SECONDS,
     TG_IMAGE_STYLE_REGEX,
@@ -129,9 +130,11 @@ from .resource_tg import (
     fetch_telegram_channel_posts,
     fetch_telegram_channel_posts_page,
     format_network_error,
+    get_tg_channel_sync_limit,
     get_tg_channel_threads,
     is_expected_telegram_channel_url,
     is_retryable_telegram_request_error,
+    normalize_tg_channel_sync_limit,
     parse_telegram_posts_page,
     test_telegram_latency,
     unwrap_network_error,
@@ -648,6 +651,7 @@ def default_config() -> Dict[str, Any]:
         "notify_wecom_app_secret": "",
         "notify_wecom_app_touser": "",
         "tg_channel_threads": TG_CHANNEL_THREADS_DEFAULT,
+        "tg_channel_sync_limit": TG_CHANNEL_SYNC_LIMIT_DEFAULT,
         "tmdb_enabled": False,
         "tmdb_api_key": "",
         "tmdb_language": "zh-CN",
@@ -1715,6 +1719,8 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         merged["notify_wecom_app_touser"] = ""
     if "tg_channel_threads" not in merged:
         merged["tg_channel_threads"] = TG_CHANNEL_THREADS_DEFAULT
+    if "tg_channel_sync_limit" not in merged:
+        merged["tg_channel_sync_limit"] = TG_CHANNEL_SYNC_LIMIT_DEFAULT
     if "tmdb_enabled" not in merged:
         merged["tmdb_enabled"] = False
     if "tmdb_api_key" not in merged:
@@ -1867,6 +1873,10 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     except (TypeError, ValueError):
         tg_channel_threads = TG_CHANNEL_THREADS_DEFAULT
     merged["tg_channel_threads"] = max(1, min(TG_CHANNEL_THREADS_MAX, tg_channel_threads))
+    merged["tg_channel_sync_limit"] = normalize_tg_channel_sync_limit(
+        merged.get("tg_channel_sync_limit", TG_CHANNEL_SYNC_LIMIT_DEFAULT),
+        fallback=TG_CHANNEL_SYNC_LIMIT_DEFAULT,
+    )
     return merged
 
 
@@ -2190,15 +2200,20 @@ def prune_resource_cache_global_limit(
     return deleted
 
 
-def run_resource_cache_governance(conn: sqlite3.Connection, sources: List[Dict[str, Any]]) -> Dict[str, int]:
+def run_resource_cache_governance(
+    conn: sqlite3.Connection,
+    sources: List[Dict[str, Any]],
+    active_min_keep: int = RESOURCE_CHANNEL_CACHE_ACTIVE_MIN_KEEP,
+) -> Dict[str, int]:
     active_channel_ids = list_enabled_resource_channel_ids(sources or [])
     inactive_pruned = prune_resource_inactive_channel_cache(conn, active_channel_ids, RESOURCE_CHANNEL_INACTIVE_CACHE_LIMIT)
     expired_pruned = prune_resource_cache_by_age(conn, RESOURCE_CHANNEL_CACHE_TTL_DAYS)
+    protected_keep = max(0, int(active_min_keep or RESOURCE_CHANNEL_CACHE_ACTIVE_MIN_KEEP))
     global_pruned = prune_resource_cache_global_limit(
         conn,
         RESOURCE_CHANNEL_CACHE_GLOBAL_LIMIT,
         active_channel_ids,
-        RESOURCE_CHANNEL_CACHE_ACTIVE_MIN_KEEP,
+        protected_keep,
     )
     return {
         "inactive": inactive_pruned,
@@ -3711,7 +3726,8 @@ def _build_resource_state_payload_snapshot(
     channel_ids = [channel_id for channel_id in channel_ids if channel_id]
     subscription_channel_support = load_subscription_channel_support_stats(channel_ids)
     enabled_sources = [source for source in sources if source.get("enabled")]
-    channel_sections = build_resource_channel_sections(sources, per_channel=10)
+    tg_channel_sync_limit = get_tg_channel_sync_limit(cfg)
+    channel_sections = build_resource_channel_sections(sources, per_channel=tg_channel_sync_limit)
     channel_sections = filter_resource_sections_by_provider(channel_sections, normalized_provider_filter, drop_empty=normalized_provider_filter != "all")
     search_sections = filter_resource_sections_by_provider(search_sections, normalized_provider_filter, drop_empty=True)
     items = filter_resource_items_by_provider(items, normalized_provider_filter)
@@ -3760,6 +3776,7 @@ def _build_resource_state_payload_snapshot(
                 "matched_channels": search_meta.get("matched_channels", 0),
                 "pages_scanned": search_meta.get("pages_scanned", 0),
                 "thread_limit": search_meta.get("thread_limit", get_tg_channel_threads(cfg)),
+                "sync_limit_per_channel": tg_channel_sync_limit,
                 "search_source": normalized_search_source,
                 "provider_filter": normalized_provider_filter,
                 "pansou_enabled": search_meta.get("pansou_enabled", bool(cfg.get("pansou_enabled", False))),
@@ -3834,8 +3851,12 @@ async def build_resource_state_payload(
     )
 
 
-async def sync_telegram_channels(force: bool = False, limit_per_channel: int = 10) -> Dict[str, Any]:
+async def sync_telegram_channels(force: bool = False, limit_per_channel: Optional[int] = None) -> Dict[str, Any]:
     cfg = get_config()
+    tg_channel_sync_limit = normalize_tg_channel_sync_limit(
+        limit_per_channel,
+        fallback=get_tg_channel_sync_limit(cfg),
+    )
     sources = [source for source in cfg.get("resource_sources", []) if source.get("enabled")]
     if not sources:
         ensure_db()
@@ -3866,6 +3887,7 @@ async def sync_telegram_channels(force: bool = False, limit_per_channel: int = 1
             "errors": [],
             "cache_pruned": cache_pruned,
             "cache_prune_detail": cache_prune_detail,
+            "limit_per_channel": tg_channel_sync_limit,
         }
 
     ensure_db()
@@ -3898,13 +3920,13 @@ async def sync_telegram_channels(force: bool = False, limit_per_channel: int = 1
                     fetch_telegram_channel_post_samples,
                     cfg,
                     source,
-                    max(limit_per_channel, RESOURCE_CHANNEL_TYPE_SAMPLE_SIZE),
-                    max(limit_per_channel, RESOURCE_CHANNEL_TYPE_PAGE_LIMIT),
+                    max(tg_channel_sync_limit, RESOURCE_CHANNEL_TYPE_SAMPLE_SIZE),
+                    max(tg_channel_sync_limit, RESOURCE_CHANNEL_TYPE_PAGE_LIMIT),
                     RESOURCE_CHANNEL_TYPE_MAX_PAGES,
                 )
                 posts = sample_bundle.get("posts", []) if isinstance(sample_bundle, dict) else []
                 if not posts:
-                    posts = await asyncio.to_thread(fetch_telegram_channel_posts, cfg, source, limit_per_channel)
+                    posts = await asyncio.to_thread(fetch_telegram_channel_posts, cfg, source, tg_channel_sync_limit)
             return {"channel_id": channel_id, "name": source_name, "posts": posts}
         except Exception as exc:
             return {"channel_id": channel_id, "name": source_name, "error": str(exc)}
@@ -3936,12 +3958,16 @@ async def sync_telegram_channels(force: bool = False, limit_per_channel: int = 1
                 _, created = upsert_resource_item(conn, post)
                 upserted_items += 1 if created else 0
             resource_channel_profiles[channel_id] = build_resource_channel_profile(channel_id, posts)
-            per_channel_pruned += prune_resource_channel_cache(conn, channel_id)
+            per_channel_pruned += prune_resource_channel_cache(conn, channel_id, keep=tg_channel_sync_limit)
             conn.commit()
             resource_channel_last_sync[channel_id] = time.time()
             resource_channel_last_error.pop(channel_id, None)
             synced_channels += 1
-        governance_detail = run_resource_cache_governance(conn, sources)
+        governance_detail = run_resource_cache_governance(
+            conn,
+            sources,
+            active_min_keep=max(RESOURCE_CHANNEL_CACHE_ACTIVE_MIN_KEEP, tg_channel_sync_limit),
+        )
         cache_prune_detail = {
             "per_channel": per_channel_pruned,
             "inactive": int(governance_detail.get("inactive", 0) or 0),
@@ -3968,6 +3994,7 @@ async def sync_telegram_channels(force: bool = False, limit_per_channel: int = 1
         "errors": errors,
         "cache_pruned": cache_pruned,
         "cache_prune_detail": cache_prune_detail,
+        "limit_per_channel": tg_channel_sync_limit,
     }
 
 

@@ -213,12 +213,18 @@
                                 <div class="settings-hero-eyebrow">Telegram Sources</div>
                                 <h3 class="group-title mb-0">5. TG 订阅源管理</h3>
                                 <div class="resource-source-panel-copy">只需要填写公开频道 ID，例如 `QukanMovie`。支持直接粘贴 `@QukanMovie` 或完整的 `https://t.me/s/QukanMovie` 链接，保存时会自动规范化。</div>
-                                <div class="mt-3 max-w-xs">
-                                    <label class="block">
-                                        <span class="text-xs text-slate-500">频道抓取线程数（1-20）</span>
-                                        <input id="tg_channel_threads" type="number" min="1" max="20" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="6">
-                                    </label>
-                                    <div class="text-[11px] text-slate-500 mt-2">用于控制 TG 频道“同步”和“关键词搜索”的并发线程数，建议按网络与代理能力逐步调高。</div>
+                                <div class="mt-3 max-w-2xl">
+                                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                        <label class="block">
+                                            <span class="text-xs text-slate-500">频道抓取线程数（1-20）</span>
+                                            <input id="tg_channel_threads" type="number" min="1" max="20" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="6">
+                                        </label>
+                                        <label class="block">
+                                            <span class="text-xs text-slate-500">每频道同步资源数（1-30）</span>
+                                            <input id="tg_channel_sync_limit" type="number" min="1" max="30" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="10">
+                                        </label>
+                                    </div>
+                                    <div class="text-[11px] text-slate-500 mt-2 leading-5">线程数控制 TG 频道“同步”和“关键词搜索”的并发；每频道同步资源数控制点击“同步频道”时，每个频道最多抓取并保留的资源条数。</div>
                                 </div>
                             </div>
                             <div class="resource-source-summary">

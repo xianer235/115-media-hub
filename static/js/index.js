@@ -1879,6 +1879,20 @@
             return Math.min(20, Math.max(1, candidate));
         }
 
+        function getCurrentTgChannelSyncLimit() {
+            const inputRaw = parseInt(document.getElementById('tg_channel_sync_limit')?.value || '', 10);
+            const stateRaw = parseInt(
+                resourceState?.search_meta?.sync_limit_per_channel
+                    || resourceState?.channel_sync?.last_result?.limit_per_channel
+                    || '',
+                10
+            );
+            const candidate = Number.isFinite(inputRaw)
+                ? inputRaw
+                : (Number.isFinite(stateRaw) ? stateRaw : 10);
+            return Math.min(30, Math.max(1, candidate));
+        }
+
         function formatDurationText(durationMs) {
             const value = Number(durationMs || 0);
             if (!Number.isFinite(value) || value <= 0) return '';

@@ -44,7 +44,7 @@ resource_channel_sync_submit_lock = threading.Lock()
 resource_channel_sync_submitted = False
 
 
-async def _run_resource_channel_sync(force: bool, limit_per_channel: int) -> Dict[str, Any]:
+async def _run_resource_channel_sync(force: bool, limit_per_channel: Optional[int]) -> Dict[str, Any]:
     global resource_channel_sync_submitted
     started_ts = time.time()
     set_resource_channel_sync_status(
@@ -92,7 +92,7 @@ async def _run_resource_channel_sync(force: bool, limit_per_channel: int) -> Dic
         schedule_ui_state_push(0)
 
 
-def submit_resource_channel_sync(force: bool, limit_per_channel: int) -> bool:
+def submit_resource_channel_sync(force: bool, limit_per_channel: Optional[int] = None) -> bool:
     global resource_channel_sync_submitted
     with resource_channel_sync_submit_lock:
         if resource_channel_sync_submitted:
@@ -354,7 +354,7 @@ async def get_resource_state(request: Request) -> Dict[str, Any]:
     search_id = normalize_resource_search_id(request.query_params.get("search_id", ""))
     sync_channels = request.query_params.get("sync") == "1"
     if sync_channels:
-        submit_resource_channel_sync(force=False, limit_per_channel=10)
+        submit_resource_channel_sync(force=False)
     try:
         return await build_resource_state_payload(
             search=search,
@@ -510,7 +510,11 @@ async def save_resource_quick_links_endpoint(request: Request) -> Dict[str, Any]
 async def sync_resource_channels_endpoint(request: Request) -> Dict[str, Any]:
     data = await request.json()
     force = bool(data.get("force", False))
-    limit_per_channel = max(1, min(int(data.get("limit", 10) or 10), 30))
+    cfg = get_config()
+    limit_per_channel = normalize_tg_channel_sync_limit(
+        data.get("limit"),
+        fallback=get_tg_channel_sync_limit(cfg),
+    )
     accepted = submit_resource_channel_sync(force=force, limit_per_channel=limit_per_channel)
     return {
         "ok": True,
@@ -522,6 +526,7 @@ async def sync_resource_channels_endpoint(request: Request) -> Dict[str, Any]:
         "errors": [],
         "cache_pruned": 0,
         "cache_prune_detail": {},
+        "limit_per_channel": limit_per_channel,
         "channel_sync": build_resource_channel_sync_payload(),
     }
 

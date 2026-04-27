@@ -2657,7 +2657,10 @@
             if (!silent) latencyProbePromise = probeResourceTgLatency();
             syncResourceActionButtons();
             try {
-                const data = await window.MediaHubApi.postJson('/resource/channels/sync', { force, limit: 10 });
+                const syncLimit = typeof getCurrentTgChannelSyncLimit === 'function'
+                    ? getCurrentTgChannelSyncLimit()
+                    : 10;
+                const data = await window.MediaHubApi.postJson('/resource/channels/sync', { force, limit: syncLimit });
                 if (!data?.queued) {
                     await refreshResourceState();
                 } else if (typeof scheduleResourcePolling === 'function') {

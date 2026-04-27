@@ -49,6 +49,11 @@ TG_SEARCH_RETRY_ATTEMPTS = max(
 )
 TG_CHANNEL_THREADS_MAX = 20
 TG_CHANNEL_THREADS_DEFAULT = max(1, min(TG_CHANNEL_THREADS_MAX, int(os.environ.get("TG_CHANNEL_THREADS_DEFAULT", 6) or 6)))
+TG_CHANNEL_SYNC_LIMIT_MAX = 30
+TG_CHANNEL_SYNC_LIMIT_DEFAULT = max(
+    1,
+    min(TG_CHANNEL_SYNC_LIMIT_MAX, int(os.environ.get("TG_CHANNEL_SYNC_LIMIT_DEFAULT", 10) or 10)),
+)
 TG_FETCH_RETRY_ATTEMPTS = max(1, int(os.environ.get("TG_FETCH_RETRY_ATTEMPTS", 3) or 3))
 TG_FETCH_RETRY_DELAY_SECONDS = max(0.2, float(os.environ.get("TG_FETCH_RETRY_DELAY_SECONDS", 0.8) or 0.8))
 
@@ -93,6 +98,25 @@ def get_tg_channel_threads(cfg: Dict[str, Any]) -> int:
     except (TypeError, ValueError):
         raw_value = TG_CHANNEL_THREADS_DEFAULT
     return max(1, min(TG_CHANNEL_THREADS_MAX, raw_value))
+
+
+def normalize_tg_channel_sync_limit(value: Any, fallback: int = TG_CHANNEL_SYNC_LIMIT_DEFAULT) -> int:
+    try:
+        fallback_value = int(fallback or TG_CHANNEL_SYNC_LIMIT_DEFAULT)
+    except (TypeError, ValueError):
+        fallback_value = TG_CHANNEL_SYNC_LIMIT_DEFAULT
+    try:
+        raw_value = int(value or fallback_value)
+    except (TypeError, ValueError):
+        raw_value = fallback_value
+    return max(1, min(TG_CHANNEL_SYNC_LIMIT_MAX, raw_value))
+
+
+def get_tg_channel_sync_limit(cfg: Dict[str, Any]) -> int:
+    return normalize_tg_channel_sync_limit(
+        (cfg or {}).get("tg_channel_sync_limit", TG_CHANNEL_SYNC_LIMIT_DEFAULT),
+        fallback=TG_CHANNEL_SYNC_LIMIT_DEFAULT,
+    )
 
 
 def format_network_error(exc: Exception) -> str:
@@ -455,6 +479,8 @@ __all__ = [
     "TG_SEARCH_RETRY_ATTEMPTS",
     "TG_CHANNEL_THREADS_MAX",
     "TG_CHANNEL_THREADS_DEFAULT",
+    "TG_CHANNEL_SYNC_LIMIT_MAX",
+    "TG_CHANNEL_SYNC_LIMIT_DEFAULT",
     "TG_FETCH_RETRY_ATTEMPTS",
     "TG_FETCH_RETRY_DELAY_SECONDS",
     "TG_WIDGET_POST_REGEX",
@@ -463,6 +489,8 @@ __all__ = [
     "TG_PREV_BEFORE_REGEX",
     "build_tg_proxy_url",
     "get_tg_channel_threads",
+    "get_tg_channel_sync_limit",
+    "normalize_tg_channel_sync_limit",
     "format_network_error",
     "unwrap_network_error",
     "is_retryable_telegram_request_error",

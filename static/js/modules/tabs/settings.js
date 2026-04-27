@@ -83,6 +83,9 @@ function collectSettingsPayload({
     const rawTgThreads = parseInt(document.getElementById('tg_channel_threads')?.value || '', 10);
     cfg.tg_channel_threads = Math.min(20, Math.max(1, Number.isFinite(rawTgThreads) ? rawTgThreads : 6));
 
+    const rawTgSyncLimit = parseInt(document.getElementById('tg_channel_sync_limit')?.value || '', 10);
+    cfg.tg_channel_sync_limit = Math.min(30, Math.max(1, Number.isFinite(rawTgSyncLimit) ? rawTgSyncLimit : 10));
+
     cfg.monitor_tasks = typeof getMonitorTasks === 'function' ? (getMonitorTasks() || []) : [];
     cfg.trees = [];
 

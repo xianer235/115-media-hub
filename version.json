@@ -1,10 +1,10 @@
 {
-  "version": "0.3.1",
-  "buildDate": "2026-04-28T01:51:20+08:00",
+  "version": "0.3.2",
+  "buildDate": "2026-04-28T02:22:08+08:00",
   "notes": [
-    "资源中心新增频道搜索 / 盘搜双搜索模式，支持分类筛选、耗时状态与搜索中断。",
-    "PanSou 支持账号密码登录获取 JWT，并接入资源中心搜索与订阅候选召回。",
-    "TG 频道管理收拢为频道管理中心，支持排序应用、批量置顶/置底和同步频道官方名称。"
+    "参数配置页新增每频道同步资源数，可控制同步频道时每个 TG 频道抓取并保留的资源条数。",
+    "资源中心频道分组展示数量与 TG 同步缓存保留数量统一读取每频道同步资源数配置。",
+    "新增 TG_CHANNEL_SYNC_LIMIT_DEFAULT 环境变量，用于设置每频道同步资源数默认值。"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

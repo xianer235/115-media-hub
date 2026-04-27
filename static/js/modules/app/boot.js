@@ -97,6 +97,11 @@
                     const rawTgThreads = parseInt(cfg.tg_channel_threads || '', 10);
                     tgThreadsInput.value = String(Math.min(20, Math.max(1, Number.isFinite(rawTgThreads) ? rawTgThreads : 6)));
                 }
+                const tgSyncLimitInput = document.getElementById('tg_channel_sync_limit');
+                if (tgSyncLimitInput) {
+                    const rawTgSyncLimit = parseInt(cfg.tg_channel_sync_limit || '', 10);
+                    tgSyncLimitInput.value = String(Math.min(30, Math.max(1, Number.isFinite(rawTgSyncLimit) ? rawTgSyncLimit : 10)));
+                }
 
                 const container = document.getElementById('trees-container');
                 container.innerHTML = '';
