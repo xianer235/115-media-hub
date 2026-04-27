@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.2.16] - 2026-04-27
+- 频道订阅导入兼容 CloudSaver JSON 与盘搜 `export CHANNELS=...`；导出统一为 CloudSaver JSON，并改为先弹窗展示内容，再由用户手动复制或下载 JSON。
+- 文件夹监控新建任务默认值调整：目录列出后延时改为 `250ms`，并保留显式填写 `0` 的语义。
+- 补充油猴脚本与文件夹监控任务的参数关系说明，明确名称、请求地址、保存路径与延迟的作用边界。
+- 优化参数配置页相关说明在日间/夜间模式下的可读性，并同步更新 README 与本地 AI 协作文档说明。
+
 ## [0.2.15] - 2026-04-27
 - 油猴脚本更名为 `115-media-hub助手`，并补充夸克分享链接识别，会在 `pan.quark.cn` / `www.quark.cn` 分享链接旁生成复制按钮，保留原有 magnet / torrent / 115 行为。
 

@@ -71,12 +71,12 @@
                     <div class="min-w-0">
                         <div class="resource-source-modal-eyebrow">Import / Export</div>
                         <div class="resource-source-modal-title">导入频道订阅模板</div>
-                        <div class="resource-source-modal-subtitle">粘贴 JSON 数组后可一键导入。兼容你提供的 `[{"name":"频道名","id":"频道ID"}]` 模版，也兼容 `channel_id / channel / url` 字段。</div>
+                        <div class="resource-source-modal-subtitle">粘贴后会自动识别格式：支持盘搜 `export CHANNELS=a,b,c`，也支持 CloudSaver `[{"name":"频道名","id":"频道ID"}]`。</div>
                     </div>
                     <button type="button" class="resource-source-modal-close" onclick="closeResourceSourceImportModal()" aria-label="关闭频道导入弹窗">✕</button>
                 </div>
                 <div class="space-y-4 mt-5">
-                    <textarea id="resource_source_import_json" class="resource-source-import-textarea w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" placeholder='请粘贴 JSON 数组，例如：&#10;[{"name":"115影视资源分享频道","id":"QukanMovie"}]'></textarea>
+                    <textarea id="resource_source_import_json" class="resource-source-import-textarea w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" placeholder='支持两种格式：&#10;export CHANNELS=tgsearchers6,Aliyun_4K_Movies&#10;&#10;或：&#10;[{"name":"115影视资源分享频道","id":"QukanMovie"}]'></textarea>
                     <label class="ui-switch-field">
                         <span class="text-sm text-slate-200">覆盖现有频道（关闭则追加并按频道 ID 去重）</span>
                         <span class="ui-switch">
@@ -87,6 +87,27 @@
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
                         <button id="resource-source-import-submit-btn" type="button" onclick="importResourceSources()" class="resource-source-modal-action-btn resource-source-modal-action-btn-primary">开始导入</button>
                         <button type="button" onclick="closeResourceSourceImportModal()" class="resource-source-modal-action-btn resource-source-modal-action-btn-secondary">取消</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="resource-source-export-modal" class="hidden fixed inset-0 bg-black/65 backdrop-blur-sm z-[58] p-4">
+            <div class="w-full max-w-2xl mx-auto mt-[8vh] group-card modal-card resource-source-modal-shell">
+                <div class="resource-source-modal-header">
+                    <div class="min-w-0">
+                        <div class="resource-source-modal-eyebrow">Export</div>
+                        <div class="resource-source-modal-title">导出频道订阅</div>
+                        <div id="resource-source-export-subtitle" class="resource-source-modal-subtitle">导出内容使用 CloudSaver JSON 格式；盘搜 CHANNELS 只在导入时兼容。</div>
+                    </div>
+                    <button type="button" class="resource-source-modal-close" onclick="closeResourceSourceExportModal()" aria-label="关闭频道导出弹窗">✕</button>
+                </div>
+                <div class="space-y-4 mt-5">
+                    <textarea id="resource_source_export_json" class="resource-source-import-textarea w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" readonly aria-label="频道订阅导出 JSON"></textarea>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
+                        <button type="button" onclick="copyResourceSourceExportJson()" class="resource-source-modal-action-btn resource-source-modal-action-btn-secondary">复制内容</button>
+                        <button type="button" onclick="downloadResourceSourceExportJson()" class="resource-source-modal-action-btn resource-source-modal-action-btn-primary">下载 JSON</button>
+                        <button type="button" onclick="closeResourceSourceExportModal()" class="resource-source-modal-action-btn resource-source-modal-action-btn-secondary">关闭</button>
                     </div>
                 </div>
             </div>

@@ -643,7 +643,10 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
     name = str(task.get("name", "")).strip()
     retries = int(task.get("retries", 3) or 3)
     retries = max(1, min(MAX_MONITOR_RETRIES, retries))
-    list_delay_ms = int(task.get("list_delay_ms", 0) or 0)
+    raw_list_delay_ms = task.get("list_delay_ms", 250)
+    if raw_list_delay_ms is None or str(raw_list_delay_ms).strip() == "":
+        raw_list_delay_ms = 250
+    list_delay_ms = int(raw_list_delay_ms)
     min_file_size_mb = float(task.get("min_file_size_mb", 0) or 0)
     delay_seconds = int(task.get("delay_seconds", 0) or 0)
     cron_minutes = int(task.get("cron_minutes", 0) or 0)

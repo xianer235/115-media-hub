@@ -15,14 +15,15 @@
                     <label class="flex items-center gap-3 cursor-pointer text-sm">
                         <input type="checkbox" id="monitor_webhook_enabled" class="ui-checkbox" onchange="refreshWebhookHint()">
                         开启 webhook
-                        <button type="button" class="info-dot" onclick="showHelp('Webhook 参数说明：\\n1) 接口地址：/webhook/任务名（任务名用于匹配并触发对应监控任务）\\n2) 请求方式：POST + JSON\\n3) 普通刷新参数：savepath、sharetitle、refresh_target_type、delayTime、title\\n4) 磁力导入参数：magnet 或 link_url（磁力链接）+ savepath（必填）\\n5) 签名校验（可选）：X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign，或 X-Webhook-Token\\n6) 签名密钥在“后台安全管理”中设置，留空表示不校验。')">i</button>
+                        <button type="button" class="info-dot" onclick="showHelp('Webhook 参数说明：\\n1) 接口地址：/webhook/任务名，任务名用于匹配这个文件夹监控任务\\n2) 请求方式：POST + JSON\\n3) 磁力导入必填：magnet 或 link_url + savepath\\n4) savepath 是磁力保存目录；落在本任务扫描路径内时，导入成功后才会自动刷新并生成 strm\\n5) delayTime 可选，表示本次导入成功后延迟几秒刷新；不传则使用任务默认延迟\\n6) title / sharetitle 只用于日志或局部刷新提示\\n7) 签名校验可选：X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign，或 X-Webhook-Token。')">i</button>
                     </label>
                     <div id="webhook-hint" class="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3 leading-5">
-                        webhook 地址：IP:容器端口/webhook/任务名（用于触发指定任务）
-                        <br>普通刷新参数：savepath / sharetitle / refresh_target_type / delayTime / title
-                        <br>磁力任务参数：magnet 或 link_url（值为磁力链接） + savepath（必填）
+                        webhook 地址：IP:容器端口/webhook/任务名（任务名用于绑定这个监控任务）
+                        <br>磁力导入必填：magnet 或 link_url + savepath
+                        <br>savepath 是 115 保存目录；必须落在本任务扫描路径内，导入后才会自动刷新 strm
+                        <br>delayTime 可选：本次导入成功后延迟几秒刷新；不传则使用任务默认延迟
+                        <br>title / sharetitle 可选：仅用于日志或局部刷新提示
                         <br>签名校验（可选）：X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign 或 X-Webhook-Token
-                        <br>说明：签名密钥在「参数配置 -> 后台安全管理」中设置；为空时不校验
                     </div>
                     <label class="block">
                         <span class="text-xs text-slate-500 inline-flex items-center gap-2">
@@ -61,7 +62,7 @@
                         </label>
                         <label class="block">
                             <span class="text-xs text-slate-500">目录列出后延时 (毫秒)</span>
-                            <input id="monitor_list_delay_ms" type="number" min="0" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
+                            <input id="monitor_list_delay_ms" type="number" min="0" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="250">
                         </label>
                     </div>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">

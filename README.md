@@ -1,8 +1,8 @@
 # 115 Media Hub
 
-`115 Media Hub` 是一个基于 FastAPI 的媒体自动化管理面板，把 `115`、`.strm`、TG 资源同步、影视订阅追更放进同一个后台。
+`115 Media Hub` 是一个基于 FastAPI 的媒体自动化管理面板，把 `115` / `Quark` 网盘转存、`.strm` 生成、TG 资源同步、影视订阅追更放进同一个后台。
 
-它适合希望直接用 115 Cookie 驱动“生成播放链接”“转存后自动刷新”“按片名自动找资源”一体化流程的场景。
+它适合希望直接用网盘 Cookie 驱动“生成播放链接”“转存后自动刷新”“按片名自动找资源”一体化流程的场景。
 
 ## AI 协作入口
 
@@ -10,16 +10,17 @@
 
 ## 近期更新（以 `version.json` 为准）
 
-- 修复日间模式下集数视图切换按钮的对比度问题，当前视图与未激活视图的层级更清晰。
-- 修复日间模式下资源导入流程提示与频道管理删除按钮的可见性问题，关键危险操作与当前步骤更容易识别。
-- 提升夜间模式下 `115` 每日签到时间选择器的边框与输入层次，时间框在深色背景中更明显。
+- 当前版本：`0.2.16`
+- 频道订阅导入兼容 CloudSaver JSON 与盘搜 `export CHANNELS=...`，导出统一为 CloudSaver JSON 并先弹窗预览。
+- 文件夹监控新建任务的目录列出后延时默认调整为 `250ms`。
+- 补充油猴脚本与文件夹监控任务的参数关系说明，并优化日夜间模式下的可读性。
 
 ## 这项目能做什么（按模块）
 
 | 模块 | 作用 |
 | --- | --- |
-| 资源中心 | 同步 TG 公开频道、手动预览/导入资源文本，支持 magnet 与 115 分享链接入库并提交导入任务 |
-| 影视订阅任务 | 电影/剧集自动匹配资源并入库，支持周期时段调度、评分阈值、质量偏好、TMDB 绑定与追更状态 |
+| 资源中心 | 同步 TG 公开频道、手动预览/导入资源文本，支持 magnet、115 分享、Quark 分享入库并提交导入任务 |
+| 影视订阅任务 | 电影/剧集自动匹配资源并入库，支持 115 / Quark 单网盘模式、周期时段调度、评分阈值、质量偏好、TMDB 绑定与追更状态 |
 | 文件夹监控任务 | 扫描 115 网盘目录变化，支持手动、定时、Webhook 触发，并可按 savepath/sharetitle 局部刷新 |
 | 目录树任务 | 基于 115 官方目录树 TXT 文件批量生成 `.strm`，支持多源路径、父目录前缀补全、排除层级与同步清理 |
 | 企业微信通知推送 | 可对订阅成功和监控生成成功事件推送提醒，支持机器人和应用两种通道 |
@@ -41,30 +42,37 @@
 | 媒体库很大、更新不频繁 | `目录树任务` |
 | 已有固定目录，想持续补新内容 | `文件夹监控任务` |
 | 想按影片/剧集名称自动找资源 | `影视订阅任务` |
-| 想把转存、离线、刷新串起来 | `资源中心 + Webhook + 文件夹监控任务` |
+| 想把 115 转存、磁力离线、刷新串起来 | `资源中心 + Webhook + 文件夹监控任务` |
+| 想导入 Quark 分享但不生成 115 strm 刷新 | `资源中心或影视订阅任务的 Quark 模式` |
 
 ## 功能检查结果（与当前代码对齐）
 
 ### 资源中心
 
-- 支持 TG 频道订阅、同步、分页加载与关键词搜索，频道支持批量启停和 JSON 导入导出。
-- 支持资源文本“预览解析”和“正式入库”两步，识别 magnet、115 分享链接等常见格式。
-- 导入任务支持 `magnet` 和 `115share` 两类链路，并内置同资源+路径去重，避免重复提交。
-- 支持浏览 115 网盘目录、创建目录、预览分享链接目录树，并可选择分享子目录后再转存。
+- 支持 TG 频道订阅、同步、分页加载与关键词搜索，频道支持批量启停；导入兼容 CloudSaver JSON 与盘搜 `CHANNELS`，导出使用 CloudSaver JSON。
+- 支持频道快捷管理、批量筛选/启停/删除、频道分类测试、频道同步后台执行。
+- 频道模板导入会自动识别 CloudSaver JSON 与盘搜 `export CHANNELS=...`；导出时会先弹窗展示 CloudSaver JSON，可手动复制或点击按钮下载 JSON。
+- 支持资源文本“预览解析”和“正式入库”两步，识别 magnet、115 分享、Quark 分享等常见格式。
+- 导入任务支持 `magnet`、`115share`、`quark` 三类链路，并内置同资源+路径去重；115 / Quark 分享链接重复时可确认继续创建，适配同一分享分批转存。
+- 支持浏览 115 / Quark 网盘目录、创建目录、预览分享链接目录树，并可选择分享子目录或文件后再转存。
+- 支持资源快捷链接、分享目录搜索、分享目录选择计数、分享解析阶段耗时展示。
 - 导入任务支持刷新、取消、重试、清理已完成/失败记录。
 
 ### 影视订阅任务
 
-- 支持电影与剧集两类任务，支持多别名、年份、最小匹配分、质量偏好（清晰度优先策略）。
+- 支持电影与剧集两类任务，支持 115 / Quark provider、多别名、排除词、年份、最小匹配分、质量偏好（清晰度优先策略）。
 - 调度模型为“周几 + 时间窗口 + 窗口内间隔分钟”，可按任务独立启停。
 - 支持 TMDB 搜索与绑定，自动带回别名、年份、总季/总集、分季集数映射。
-- 支持固定分享链接导入与子目录 CID 锚定；支持集数视图与任务进度重建。
+- 115 模式支持固定分享链接导入、访问码、子目录路径和 CID 锚定；也可开启固定链接后补搜频道。
+- Quark 模式使用独立评分与导入链路，支持指定 Quark 链接手动扫描；Quark 导入不联动文件夹监控刷新。
+- 支持集数视图、任务进度重建、候选分享内容文件级筛选，减少整包误导入。
 
 ### 文件夹监控任务
 
 - 支持手动运行、按分钟定时运行、Webhook 触发运行。
 - Webhook 同时支持“普通目录刷新”与“磁力直导入”两种模式。
 - 签名支持 `X-Webhook-Token` 或 `X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign`（HMAC-SHA256）。
+- 新建监控任务的内置默认值：读取失败尝试次数 `3`，目录列出后延时 `250ms`，任务执行延时 `0s`。
 - 支持任务取消、队列清理、日志清空，以及运行日志中的步骤化状态反馈。
 
 ### 目录树任务
@@ -77,6 +85,7 @@
 ### 参数与系统能力
 
 - 支持 TG/TMDB 代理配置和延迟测试。
+- 支持 115 / Quark Cookie 健康检测；分享失效、提取码错误等内容侧异常不会误判 Cookie 失效。
 - 支持 115 每日签到（手动+定时）。
 - 支持企业微信通知测试与运行时推送（订阅成功、监控成功）。
 - 支持版本检查、关于页更新提示、SSE 实时状态推送。
@@ -130,14 +139,15 @@ docker compose up -d
 4. 确认 `扫描后缀名` 是否符合你的媒体类型
 5. 如果要提升影视订阅识别准确率，再启用 `TMDB API Key`
 6. 如果服务器访问 TG / TMDB 不稳定，再补充代理设置（同一套代理配置会同时用于 TG 与 TMDB）
-7. 如果要自动签到 115，再开启 `115 每日签到` 并设置签到时间
-8. 如果要在任务成功后收到提醒，再配置「通知推送（企业微信）」并发送测试消息
+7. 点击 Cookie 健康检测，确认 115 / Quark Cookie 可用
+8. 如果要自动签到 115，再开启 `115 每日签到` 并设置签到时间
+9. 如果要在任务成功后收到提醒，再配置「通知推送（企业微信）」并发送测试消息
 
 ## 推荐使用流程
 
 ### 方案一：先建库，再持续增量
 
-1. 在「参数配置」中填好 115 Cookie 与 STRM 对外访问地址（网盘前缀映射已内置固定：`115 -> /115`）
+1. 在「参数配置」中填好 115 Cookie 与 STRM 对外访问地址（网盘前缀映射已内置：`115 -> /115`、`Quark -> /quark`）
 2. 在「目录树任务」里配置一个或多个目录树源
 3. 先跑一次目录树任务，完成 `.strm` 初始化
 4. 再为常更新目录添加「文件夹监控任务」，用于后续增量维护
@@ -148,11 +158,11 @@ docker compose up -d
 2. 让外部工具在转存完成后调用 `/webhook/{任务名}`
 3. 服务端收到请求后，会优先按 `savepath` / `sharetitle` 做局部刷新
 
-### 方案三：自动找资源并导入 115
+### 方案三：自动找资源并导入网盘
 
 1. 在「资源中心」配置 TG 频道源，或手动粘贴资源文本
-2. 配置 `115 Cookie`
-3. 在「影视订阅任务」中创建订阅项
+2. 按目标网盘配置 `115 Cookie` 或 `Quark Cookie`
+3. 在「影视订阅任务」中创建订阅项，并选择 provider
 4. 系统按周期匹配候选资源，并创建导入任务
 
 ## Webhook 说明
@@ -189,9 +199,17 @@ POST /webhook/{任务名}
 
 - `savepath`：转存目标父目录。磁力导入场景下必填
 - `sharetitle`：资源文件夹名。提供后会优先做更小范围的局部刷新
-- `delayTime`：本次延时秒数，会覆盖任务默认延时
+- `delayTime`：本次延时秒数；大于 0 时覆盖监控任务默认延时，不传或为 0 时使用任务默认延时
 - `title`：只用于日志展示
 - `magnet` / `link_url` / `url`：可选，可直接触发资源导入流程
+
+油猴脚本任务和文件夹监控任务的关系：
+
+- 脚本“请求地址”必须指向已开启 Webhook 的监控任务：`http://IP:端口/webhook/{任务名}`，后台用 `{任务名}` 找到要触发的文件夹监控任务
+- 脚本“保存路径 savepath”是磁力离线下载到 115 的目标目录；它会拼到 115 挂载前缀后和监控任务“扫描路径”匹配
+- 只有 `savepath` 落在该监控任务的扫描路径内，导入成功后才会自动触发刷新并生成 `.strm`
+- 脚本“延迟”是导入成功后等待几秒再刷新；填 0 或不填时使用监控任务默认延迟
+- 脚本“名称”只用于 Tampermonkey 任务列表显示，不参与后台匹配
 
 安全校验：
 
@@ -216,6 +234,7 @@ POST /webhook/{任务名}
 - `GET /version`：版本检查状态
 - `GET /strm/proxy?path=/...`：STRM 播放入口（默认 `302` 直跳 115 上游地址，支持附带 `pickcode` 跳过路径反查；`mode=relay` 时改为 `307` 跳转到容器内 relay，`mode=proxy` 时走服务端中继流）
 - `GET /strm/relay?token=...`：STRM 中继拉流入口（内部临时令牌接口，给 `mode=relay` 使用）
+- `GET /settings/cookies/status` / `POST /settings/cookies/check`：Cookie 健康状态与手动检测
 - `POST /settings/tg_proxy/test`：TG 代理延迟测试
 - `POST /settings/notify/test`：企业微信通知测试
 - `GET /settings/115/sign/status` / `POST /settings/115/sign/run`
@@ -228,9 +247,15 @@ POST /webhook/{任务名}
 资源中心：
 
 - `GET /resource/state`
+- `GET /resource/jobs/state`
+- `POST /resource/sources/save`
+- `POST /resource/quick_links/save`
 - `POST /resource/channels/sync`
+- `POST /resource/channels/classify`
+- `POST /resource/channels/more`
 - `POST /resource/items/preview_text`
 - `POST /resource/items/import_text`
+- `POST /resource/items/delete`
 - `POST /resource/jobs/create`
 - `POST /resource/jobs/refresh|cancel|retry|clear|clear_completed`
 - `GET /resource/115/folders`
@@ -241,6 +266,8 @@ POST /webhook/{任务名}
 - `POST /resource/quark/folders/create`
 - `GET /resource/quark/share_entries`
 - `POST /resource/quark/share_entries_preview`
+- `GET /resource/quark/probe`
+- `GET /resource/image`
 
 订阅与监控：
 
@@ -256,7 +283,7 @@ POST /webhook/{任务名}
 - `provider=115`：候选仅 `magnet/115share`
 - `provider=quark`：候选仅 `quark`，使用独立评分与导入链路（不联动监控刷新）
 
-## 企业微信通知推送（0.1.6）
+## 企业微信通知推送
 
 配置入口：`参数配置 -> 通知推送（企业微信）`
 
@@ -287,8 +314,8 @@ POST /webhook/{任务名}
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install fastapi uvicorn pydantic python-multipart starlette itsdangerous requests
-uvicorn main:app --host 0.0.0.0 --port 18080 --reload
+pip install -r requirements.txt
+.venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 18080 --reload
 ```
 
 ## 持久化目录说明
@@ -309,6 +336,7 @@ uvicorn main:app --host 0.0.0.0 --port 18080 --reload
 - `SUBSCRIPTION_IMPORT_TIMEOUT_SECONDS`：订阅导入超时秒数，默认 `90`
 - `RESOURCE_IMPORT_TIMEOUT_SECONDS`：资源导入超时秒数，默认 `90`
 - `RESOURCE_JOB_STALE_RECOVER_SECONDS`：导入任务卡死恢复阈值，默认 `300`
+- `RESOURCE_JOB_COMPLETED_KEEP` / `RESOURCE_JOB_FAILED_KEEP`：导入任务完成/失败记录保留数量，默认 `1000` / `500`
 - `VERSION_CACHE_TTL`：版本检查缓存秒数，默认 `21600`
 
 订阅去重与重试：
@@ -316,15 +344,42 @@ uvicorn main:app --host 0.0.0.0 --port 18080 --reload
 - `SUBSCRIPTION_INVALID_LINK_CACHE_TTL_SECONDS`：订阅无效链接缓存时长，默认 `604800`
 - `SUBSCRIPTION_DUPLICATE_VERIFY_RETRIES`：115 重复状态复核重试次数，默认 `2`
 - `SUBSCRIPTION_DUPLICATE_VERIFY_DELAY_SECONDS`：重复复核重试间隔秒，默认 `3`
+- `SUBSCRIPTION_SHARE_SCAN_CONCURRENCY`：订阅分享内容扫描并发，默认 `3`
+- `SUBSCRIPTION_SHARE_SCAN_REQUEST_TIMEOUT_SECONDS`：订阅分享扫描单请求超时，默认 `12`
+- `SUBSCRIPTION_SHARE_SCAN_RATE_LIMIT_SECONDS`：订阅分享扫描限速间隔，默认 `0.25`
+- `SUBSCRIPTION_QUARK_MIN_SCORE`：Quark 订阅默认最低分，默认 `60`
+- `SUBSCRIPTION_QUARK_MAX_ATTEMPTS`：Quark 订阅候选尝试上限，默认 `60`
 
 TG 访问相关：
 
 - `TG_CHANNEL_THREADS_DEFAULT`：TG 同步默认线程数，默认 `6`
 - `TG_SEARCH_PAGE_LIMIT`：单频道搜索分页大小，默认 `20`
 - `TG_SEARCH_MAX_PAGES`：单频道搜索最大页数，默认 `6`
+- `TG_SEARCH_MATCH_LIMIT_PER_CHANNEL`：单频道匹配结果上限，默认 `12`
 - `TG_SEARCH_TOTAL_LIMIT`：全局搜索返回上限，默认 `60`
+- `TG_SEARCH_CHANNEL_TIMEOUT_SECONDS`：单频道搜索整体超时，默认 `10`
+- `TG_SEARCH_REQUEST_TIMEOUT_SECONDS`：单次 TG 请求超时，默认 `8`
+- `TG_SEARCH_RETRY_ATTEMPTS`：TG 搜索请求重试次数，默认 `1`
 - `TG_FETCH_RETRY_ATTEMPTS`：抓取重试次数，默认 `3`
 - `TG_FETCH_RETRY_DELAY_SECONDS`：抓取重试退避系数，默认 `0.8`
+
+115 / Quark / STRM 访问相关：
+
+- `API_115_RATE_LIMIT_SECONDS`：115 API 最小间隔，默认 `0.35`
+- `API_115_LIST_CACHE_TTL_SECONDS`：115 目录列表缓存秒数，默认 `60`
+- `API_115_DOWNLOAD_URL_CACHE_TTL_SECONDS`：115 下载链接缓存秒数，默认 `20`
+- `API_115_PICKCODE_CACHE_TTL_SECONDS`：STRM 路径反查 pickcode 缓存秒数，默认 `7200`
+- `API_115_FOLDER_CID_CACHE_TTL_SECONDS`：115 文件夹 CID 缓存秒数，默认 `7200`
+- `STRM_PROXY_MODE`：STRM 播放模式默认值，默认 `redirect_direct`
+- `STRM_RELAY_CHUNK_SIZE`：STRM relay 分块大小，默认 `262144`
+- `QUARK_SHARE_FAST_DEADLINE_SECONDS`：Quark 分享首屏 fast path 总 deadline，默认 `3`
+- `RESOURCE_SHARE_BROWSE_RATE_LIMIT_SECONDS`：分享目录浏览限速，默认 `0.05`
+- `RESOURCE_BROWSE_WORKERS` / `RESOURCE_115_SHARE_WORKERS` / `RESOURCE_QUARK_SHARE_WORKERS`：资源浏览线程数，默认 `4` / `3` / `4`
+
+Cookie 健康检测：
+
+- `COOKIE_HEALTH_MIN_REFRESH_INTERVAL_SECONDS`：Cookie 健康检测最小刷新间隔，默认 `20`
+- `COOKIE_HEALTH_SUCCESS_UPDATE_INTERVAL_SECONDS`：Cookie 成功状态刷新间隔，默认 `90`
 
 TMDB 相关：
 
@@ -340,6 +395,9 @@ TMDB 相关：
 日志与可观测性：
 
 - `UVICORN_ACCESS_LOG`：是否启用 HTTP 访问日志，默认 `0`（关闭，减少轮询刷屏；设为 `1` 可开启）
+- `HTTP_TIMING_HEADER_ENABLED`：是否输出后端耗时响应头，默认 `0`
+- `LOG_ROTATE_MAX_BYTES` / `LOG_ROTATE_BACKUPS`：日志滚动大小和备份数，默认 `5MB` / `2`
+- `TEMPLATE_CACHE_SECONDS` / `ASSET_VERSION_CACHE_SECONDS`：模板与静态资源版本缓存秒数，默认 `30` / `30`
 
 频道缓存治理：
 
@@ -354,9 +412,9 @@ TMDB 相关：
 
 分享目录预览缓存：
 
-- `SHARE_SNAP_RATE_LIMIT_SECONDS`
-- `SHARE_SNAP_CACHE_TTL_SECONDS`
-- `SHARE_SNAP_CACHE_MAX_ROWS`
+- `SHARE_SNAP_RATE_LIMIT_SECONDS`：分享快照接口限速，默认 `0.2`
+- `SHARE_SNAP_CACHE_TTL_SECONDS`：分享快照缓存秒数，默认 `300`
+- `SHARE_SNAP_CACHE_MAX_ROWS`：分享快照缓存最大行数，默认 `3000`
 
 ## 浏览器辅助脚本
 
@@ -364,11 +422,12 @@ TMDB 相关：
 
 - `115-magnet-helper-webhook.user.js`
 
-它是浏览器侧工具，不会打包进容器镜像。它的用途主要是：
+它是浏览器侧工具，镜像会随服务端一起包含，并通过后台安装入口提供给 Tampermonkey。它的用途主要是：
 
 - 在页面里识别 magnet / torrent / 115 / 夸克分享链接并生成快捷操作
 - 按保存目录绑定不同的 Webhook 地址
 - 在离线任务提交后顺手触发服务端刷新
+- 复制 115 / Quark 分享链接时保留快捷操作，不强制提交到后台
 
 服务端同时提供下载入口：
 

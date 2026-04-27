@@ -2198,7 +2198,9 @@
                 skip_by_dir_mtime: document.getElementById('monitor_skip_by_dir_mtime').checked,
                 incremental: document.getElementById('monitor_incremental').checked,
                 retries: parseInt(document.getElementById('monitor_retries').value || '3', 10) || 3,
-                list_delay_ms: parseInt(document.getElementById('monitor_list_delay_ms').value || '0', 10) || 0,
+                list_delay_ms: document.getElementById('monitor_list_delay_ms').value === ''
+                    ? 250
+                    : (parseInt(document.getElementById('monitor_list_delay_ms').value, 10) || 0),
                 min_file_size_mb: parseFloat(document.getElementById('monitor_min_file_size_mb').value || '0') || 0,
                 delay_seconds: parseInt(document.getElementById('monitor_delay_seconds').value || '0', 10) || 0,
                 cron_minutes: parseInt(document.getElementById('monitor_cron_minutes').value || '0', 10) || 0
@@ -2412,7 +2414,7 @@
             document.getElementById('monitor_skip_by_dir_mtime').checked = false;
             document.getElementById('monitor_incremental').checked = false;
             document.getElementById('monitor_retries').value = 3;
-            document.getElementById('monitor_list_delay_ms').value = 0;
+            document.getElementById('monitor_list_delay_ms').value = 250;
             document.getElementById('monitor_min_file_size_mb').value = 0;
             document.getElementById('monitor_delay_seconds').value = 0;
             document.getElementById('monitor_cron_minutes').value = 0;
@@ -2431,10 +2433,11 @@
         function refreshWebhookHint() {
             const name = document.getElementById('monitor_name').value.trim() || '任务名';
             document.getElementById('webhook-hint').innerHTML = [
-                `webhook 地址：IP:容器端口/webhook/${escapeHtml(name)}（用于触发指定任务）`,
-                '普通刷新参数：savepath / sharetitle / refresh_target_type / delayTime / title',
-                '磁力任务参数：magnet 或 link_url（值为磁力链接） + savepath（必填）',
-                '磁力任务会直接创建到资源导入队列，并按当前监控任务自动刷新',
+                `webhook 地址：IP:容器端口/webhook/${escapeHtml(name)}（任务名用于绑定这个监控任务）`,
+                '磁力导入必填：magnet 或 link_url + savepath',
+                'savepath 是 115 保存目录；必须落在本任务扫描路径内，导入后才会自动刷新 strm',
+                'delayTime 可选：本次导入成功后延迟几秒刷新；不传则使用任务默认延迟',
+                'title / sharetitle 可选：仅用于日志或局部刷新提示',
                 '签名校验（可选）：X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign 或 X-Webhook-Token',
                 '说明：签名密钥在「参数配置 -> 后台安全管理」里设置；为空时不校验'
             ].join('<br>');
@@ -2492,7 +2495,7 @@
             document.getElementById('monitor_skip_by_dir_mtime').checked = !!task.skip_by_dir_mtime;
             document.getElementById('monitor_incremental').checked = !!task.incremental;
             document.getElementById('monitor_retries').value = task.retries ?? 3;
-            document.getElementById('monitor_list_delay_ms').value = task.list_delay_ms ?? 0;
+            document.getElementById('monitor_list_delay_ms').value = task.list_delay_ms ?? 250;
             document.getElementById('monitor_min_file_size_mb').value = task.min_file_size_mb ?? 0;
             document.getElementById('monitor_delay_seconds').value = task.delay_seconds ?? 0;
             document.getElementById('monitor_cron_minutes').value = task.cron_minutes ?? 0;

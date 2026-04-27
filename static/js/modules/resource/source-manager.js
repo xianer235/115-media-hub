@@ -942,7 +942,7 @@
             }
         }
 
-        function buildResourceSourceExportPayload(sources = []) {
+        function buildResourceSourceExportItems(sources = []) {
             return (Array.isArray(sources) ? sources : [])
                 .map((source, index) => {
                     const channelId = getResourceSourceChannelId(source);
@@ -956,6 +956,20 @@
                 .filter(Boolean);
         }
 
+        function buildResourceSourceExportText(sources = []) {
+            const items = buildResourceSourceExportItems(sources);
+            return {
+                label: 'CloudSaver JSON',
+                count: items.length,
+                text: JSON.stringify(items, null, 2),
+            };
+        }
+
+        function getResourceSourceExportTextFromModal() {
+            const input = document.getElementById('resource_source_export_json');
+            return String(input?.value || '').trim();
+        }
+
         function downloadResourceSourceExportFile(text) {
             const payload = String(text || '').trim();
             if (!payload) return false;
@@ -965,7 +979,7 @@
                 const link = document.createElement('a');
                 const href = URL.createObjectURL(blob);
                 link.href = href;
-                link.download = `tg-resource-sources-${stamp}.json`;
+                link.download = `tg-resource-sources-cloudsaver-${stamp}.json`;
                 document.body.appendChild(link);
                 link.click();
                 link.remove();
@@ -976,33 +990,63 @@
             }
         }
 
-        async function exportResourceSources() {
-            const payload = buildResourceSourceExportPayload(resourceState.sources || []);
-            if (!payload.length) {
+        function openResourceSourceExportModal() {
+            if (resourceSourceManagerOpen) closeResourceSourceManagerModal();
+            if (resourceSourceImportModalOpen) closeResourceSourceImportModal();
+            if (resourceSourceModalOpen) closeResourceSourceModal();
+            switchTab('settings');
+            const sources = Array.isArray(resourceState.sources) ? resourceState.sources : [];
+            const exportData = buildResourceSourceExportText(sources);
+            if (!exportData.count) {
                 showToast('当前没有可导出的频道源', { tone: 'warn', duration: 2600, placement: 'top-center' });
                 return;
             }
-            const text = JSON.stringify(payload, null, 2);
-            let copied = false;
+            const subtitle = document.getElementById('resource-source-export-subtitle');
+            if (subtitle) subtitle.innerText = `当前将导出 ${exportData.count} 个频道，格式为 CloudSaver JSON。需要文件时请点击“下载 JSON”。`;
+            const input = document.getElementById('resource_source_export_json');
+            if (input) input.value = exportData.text;
+            showLockedModal('resource-source-export-modal');
+            requestAnimationFrame(() => {
+                const exportInput = document.getElementById('resource_source_export_json');
+                exportInput?.focus();
+                exportInput?.select?.();
+            });
+        }
+
+        function closeResourceSourceExportModal() {
+            hideLockedModal('resource-source-export-modal');
+        }
+
+        async function copyResourceSourceExportJson() {
+            const text = getResourceSourceExportTextFromModal();
+            if (!text) {
+                showToast('没有可复制的频道 JSON', { tone: 'warn', duration: 2400, placement: 'top-center' });
+                return;
+            }
             try {
                 if (!navigator.clipboard?.writeText) throw new Error('当前浏览器不支持剪贴板接口');
                 await navigator.clipboard.writeText(text);
-                copied = true;
+                showToast('已复制频道 JSON', { tone: 'success', duration: 2200, placement: 'top-center' });
             } catch (e) {
-                void showAppPrompt('复制失败，请手动复制下面的频道源 JSON：', text);
+                void showAppPrompt('复制失败，请手动复制下面的频道 JSON：', text);
             }
-            const downloaded = downloadResourceSourceExportFile(text);
-            if (copied && downloaded) {
-                showToast(`已导出 ${payload.length} 个频道，已复制并下载 JSON 文件`, { tone: 'success', duration: 3200, placement: 'top-center' });
+        }
+
+        function downloadResourceSourceExportJson() {
+            const text = getResourceSourceExportTextFromModal();
+            if (!text) {
+                showToast('没有可下载的频道 JSON', { tone: 'warn', duration: 2400, placement: 'top-center' });
                 return;
             }
-            if (copied) {
-                showToast(`已导出 ${payload.length} 个频道，已复制到剪贴板`, { tone: 'success', duration: 3000, placement: 'top-center' });
-                return;
+            if (downloadResourceSourceExportFile(text)) {
+                showToast('已生成频道 JSON 下载文件', { tone: 'success', duration: 2600, placement: 'top-center' });
+            } else {
+                showToast('下载 JSON 失败，请复制文本后手动保存', { tone: 'error', duration: 3000, placement: 'top-center' });
             }
-            if (downloaded) {
-                showToast(`已导出 ${payload.length} 个频道，已下载 JSON 文件`, { tone: 'success', duration: 3000, placement: 'top-center' });
-            }
+        }
+
+        function exportResourceSources() {
+            openResourceSourceExportModal();
         }
 
         function resetResourceSourceImportForm() {
@@ -1065,16 +1109,47 @@
             return { source: normalized, reason: '' };
         }
 
+        function parsePanSearchResourceSourceImportText(text) {
+            const matched = String(text || '').match(/(?:^|\n)\s*(?:export\s+)?CHANNELS\s*=\s*([^\n\r]+)/i);
+            if (!matched) return null;
+            let value = String(matched[1] || '').trim();
+            value = value.replace(/^['"]|['"]$/g, '').trim();
+            const items = value
+                .split(',')
+                .map(item => item.trim())
+                .filter(Boolean);
+            if (!items.length) throw new Error('盘搜 CHANNELS 格式中没有频道 ID');
+            return items;
+        }
+
+        function parseCloudSaverResourceSourceImportText(text) {
+            const payload = JSON.parse(text);
+            if (!Array.isArray(payload)) throw new Error('导入内容必须是 JSON 数组');
+            return payload;
+        }
+
         function parseResourceSourceImportText(rawText) {
             const text = String(rawText || '').trim();
-            if (!text) throw new Error('请先粘贴频道源 JSON');
+            if (!text) throw new Error('请先粘贴频道源配置');
             let payload = null;
+            let detectedFormat = '';
+            let jsonError = null;
             try {
-                payload = JSON.parse(text);
+                payload = parseCloudSaverResourceSourceImportText(text);
+                detectedFormat = 'CloudSaver JSON';
             } catch (e) {
-                throw new Error(`JSON 格式错误：${e.message}`);
+                jsonError = e;
             }
-            if (!Array.isArray(payload)) throw new Error('导入内容必须是 JSON 数组');
+            if (!payload) {
+                try {
+                    payload = parsePanSearchResourceSourceImportText(text);
+                    if (!payload) throw new Error('未找到 CHANNELS=...');
+                    detectedFormat = '盘搜 CHANNELS';
+                } catch (e) {
+                    throw new Error(`无法识别频道格式：${e.message || jsonError?.message || '请粘贴 JSON 数组或 export CHANNELS=...'}`);
+                }
+            }
+            if (!Array.isArray(payload)) throw new Error('导入内容必须是频道数组');
 
             const parsed = [];
             const seen = new Set();
@@ -1105,6 +1180,7 @@
                 sources: parsed,
                 duplicateCount,
                 invalidReasons,
+                detectedFormat,
             };
         }
 
@@ -1186,6 +1262,7 @@
                 closeResourceSourceImportModal();
                 const notes = [
                     `已导入 ${parsed.sources.length} 个频道`,
+                    `识别格式：${parsed.detectedFormat || '自动'}`,
                 ];
                 if (replaceExisting) notes.push('已覆盖旧配置');
                 else notes.push(`当前频道总数 ${nextSources.length}`);

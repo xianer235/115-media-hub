@@ -197,8 +197,8 @@
                                 <div class="resource-source-panel-footer-copy">频道订阅会即时保存；其余参数仍然需要点击页面底部悬浮的“保存全部配置”。</div>
                                 <div class="resource-source-footer-actions">
                                     <button type="button" onclick="openResourceSourceManagerModal()" class="resource-source-secondary-btn">管理频道</button>
-                                    <button type="button" onclick="openResourceSourceImportModal()" class="resource-source-secondary-btn">导入 JSON</button>
-                                    <button type="button" onclick="exportResourceSources()" class="resource-source-secondary-btn">导出 JSON</button>
+                                    <button type="button" onclick="openResourceSourceImportModal()" class="resource-source-secondary-btn">导入频道</button>
+                                    <button type="button" onclick="exportResourceSources()" class="resource-source-secondary-btn">导出频道</button>
                                     <button type="button" onclick="openResourceSourceModal()" class="resource-source-add-btn">+ 添加频道订阅</button>
                                 </div>
                             </div>
@@ -363,6 +363,12 @@
                         <div class="text-xs text-slate-500 leading-6">
                             主要用于“油猴脚本导入磁力链接”的请求防伪；脚本与后台填写同一个密钥即可长期校验。未配置则不校验。
                             <br>当前支持：`X-Webhook-Token` 或 `X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign`。
+                        </div>
+                        <div class="settings-info-note">
+                            <div class="settings-info-note-title">油猴脚本和文件夹监控的关系</div>
+                            <div>必须先有一个开启 Webhook 的文件夹监控任务；油猴脚本里的“请求地址”填这个任务的 `/webhook/任务名`，脚本推送后就会绑定并触发该任务。</div>
+                            <div>脚本里的“保存路径 savepath”是磁力离线下载到 115 的目标目录，也会映射到 115 挂载前缀后和监控任务的“扫描路径”匹配。只有保存路径落在扫描路径内，导入成功后才会自动刷新并生成 strm。</div>
+                            <div>“延迟”只控制导入成功后等待多久再刷新，留 0 会使用监控任务自己的默认延迟；“名称”只方便在脚本里识别任务，不参与后台匹配。</div>
                         </div>
                         <div class="flex items-center gap-2 flex-wrap">
                             <a href="/userscript/magnet-helper.user.js" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">

@@ -1083,7 +1083,7 @@
     function validateManagerTask(task) {
         if (!task.name) return '任务名称不能为空';
         if (!task.webhookUrl || !isHttpUrl(task.webhookUrl)) return '请求地址必须是 http:// 或 https://';
-        if (!task.savepath) return 'savepath 不能为空';
+        if (!task.savepath) return '保存路径 savepath 不能为空';
         return '';
     }
 
@@ -1114,10 +1114,10 @@
             <div class="mh-task-editor" data-editor-mode="${mode}"${taskIdAttr} style="margin-top:10px;padding:10px;border:1px solid #334155;border-radius:10px;background:#020617;">
                 <div style="font-size:12px;font-weight:700;color:#f8fafc;">${title}</div>
                 <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-                    <input data-editor-field="name" type="text" placeholder="任务名称，例如：自存电影" value="${escapeHtml(task.name || '')}" style="padding:8px 10px;border:1px solid #475569;border-radius:8px;background:#020617;color:#f8fafc;outline:none;">
-                    <input data-editor-field="webhookUrl" type="text" placeholder="请求地址，例如：http://IP:18080/webhook/任务名" value="${escapeHtml(task.webhookUrl || '')}" style="padding:8px 10px;border:1px solid #475569;border-radius:8px;background:#020617;color:#f8fafc;outline:none;">
-                    <input data-editor-field="savepath" type="text" placeholder="savepath，例如：自存影视/电影" value="${escapeHtml(task.savepath || '')}" style="padding:8px 10px;border:1px solid #475569;border-radius:8px;background:#020617;color:#f8fafc;outline:none;">
-                    <input data-editor-field="delaySeconds" type="number" min="0" step="1" value="${Number(task.delaySeconds || 0)}" style="padding:8px 10px;border:1px solid #475569;border-radius:8px;background:#020617;color:#f8fafc;outline:none;">
+                    <input data-editor-field="name" type="text" placeholder="名称：只在脚本内显示，例如：自存电影" value="${escapeHtml(task.name || '')}" style="padding:8px 10px;border:1px solid #475569;border-radius:8px;background:#020617;color:#f8fafc;outline:none;">
+                    <input data-editor-field="webhookUrl" type="text" placeholder="请求地址：后台监控任务的 /webhook/任务名" value="${escapeHtml(task.webhookUrl || '')}" style="padding:8px 10px;border:1px solid #475569;border-radius:8px;background:#020617;color:#f8fafc;outline:none;">
+                    <input data-editor-field="savepath" type="text" placeholder="保存路径：115 目标目录，需在监控扫描路径内" value="${escapeHtml(task.savepath || '')}" style="padding:8px 10px;border:1px solid #475569;border-radius:8px;background:#020617;color:#f8fafc;outline:none;">
+                    <input data-editor-field="delaySeconds" type="number" min="0" step="1" title="延迟：导入成功后等待几秒再刷新；0 使用监控任务默认延迟" value="${Number(task.delaySeconds || 0)}" style="padding:8px 10px;border:1px solid #475569;border-radius:8px;background:#020617;color:#f8fafc;outline:none;">
                 </div>
                 <div style="margin-top:8px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
                     <label style="display:flex;align-items:center;gap:6px;color:#cbd5e1;cursor:pointer;">
@@ -1230,7 +1230,8 @@
                     <button id="mh-manager-close" type="button" style="padding:6px 11px;border-radius:9px;border:1px solid #475569;background:#1e293b;color:#e2e8f0;cursor:pointer;">关闭</button>
                 </div>
                 <div style="margin-top:10px;padding:10px;border-radius:10px;background:rgba(30,41,59,.55);border:1px solid rgba(71,85,105,.5);color:#cbd5e1;">
-                    用途：配置油猴脚本推送任务（请求地址、savepath、延时）和签名密钥。签名密钥需与后台的 Webhook 签名密钥一致。
+                    用途：把网页里的 magnet / torrent 推送到 115-media-hub。必须填写“请求地址”和“保存路径”；“延迟”可选，“名称”只用于脚本内识别。签名密钥需与后台的 Webhook 签名密钥一致。
+                    <br>关系：请求地址里的 /webhook/任务名 决定绑定哪个文件夹监控任务；保存路径是磁力离线到 115 的目标目录，也要落在该任务的扫描路径内，导入完成后才会自动刷新并生成 strm。
                 </div>
 
                 <div style="margin-top:12px;padding:12px;border-radius:10px;border:1px solid #334155;background:#0b1220;">

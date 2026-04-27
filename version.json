@@ -1,10 +1,10 @@
 {
-  "version": "0.2.15",
-  "buildDate": "2026-04-27T16:57:49+08:00",
+  "version": "0.2.16",
+  "buildDate": "2026-04-27T20:07:01+08:00",
   "notes": [
-    "油猴脚本更名为 115-media-hub助手。",
-    "油猴脚本新增夸克分享链接复制按钮，支持 pan.quark.cn / www.quark.cn 分享链接。",
-    "保留原有 magnet / torrent / 115 分享链接识别与快捷操作。"
+    "频道订阅导入兼容 CloudSaver JSON 与盘搜 CHANNELS，导出统一为 CloudSaver JSON 并先弹窗预览。",
+    "文件夹监控新建任务的目录列出后延时默认调整为 250ms。",
+    "补充油猴脚本与文件夹监控任务的参数关系说明，并优化日夜间模式下的可读性。"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"
