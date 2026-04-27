@@ -197,7 +197,6 @@
             selectedResourceItem = null;
             resourceModalMode = 'detail';
             resourceModalLinkType = '';
-            resourceImportLastFeedback = null;
             setResourceBatchImportItems([]);
             resetResourceShareState();
             hideLockedModal('resource-import-modal');
@@ -246,11 +245,6 @@
                         showToast('批量导入队列为空，请重新粘贴磁力链接后再试', { tone: 'warn', duration: 3200, placement: 'top-center' });
                         return;
                     }
-                    updateResourceImportFeedback({
-                        stage: '提交中',
-                        jobText: `批量 ${batchItems.length} 条`,
-                        note: '正在逐条创建导入任务，请稍候'
-                    });
                     const createdJobIds = [];
                     let duplicatedCount = 0;
                     let failedCount = 0;
@@ -323,11 +317,6 @@
                     }
                     const summaryText = summaryParts.join('，');
                     const tone = failedCount > 0 ? (createdJobIds.length > 0 || duplicatedCount > 0 ? 'warn' : 'error') : 'success';
-                    updateResourceImportFeedback({
-                        stage: failedCount > 0 ? '部分完成' : '已完成',
-                        jobText: createdJobIds.length ? `#${createdJobIds[0]} 等 ${createdJobIds.length} 条` : '无新任务',
-                        note: summaryText || '批量导入已处理完成'
-                    });
                     showToast(summaryText || '批量导入已处理完成', {
                         tone,
                         duration: failedCount > 0 ? 5200 : 3600,
@@ -342,12 +331,6 @@
                     }
                     return;
                 }
-
-                updateResourceImportFeedback({
-                    stage: '提交中',
-                    jobText: '等待返回任务编号',
-                    note: '正在向后端创建导入任务'
-                });
 
                 const payload = {
                     savepath,
@@ -383,13 +366,6 @@
                             ? (data.auto_refresh ? `，保存完成后会自动触发“${matchedTaskName}”` : `，已匹配“${matchedTaskName}”，可稍后手动触发刷新`)
                             : '，当前目录不会自动生成 strm'
                     );
-                updateResourceImportFeedback({
-                    stage: '已完成',
-                    jobText: `#${data.job_id}`,
-                    note: currentProvider === 'quark'
-                        ? '夸克导入任务已创建，可在任务中心继续追踪进度'
-                        : `${matchedTaskName ? `命中监控任务 ${matchedTaskName}` : '未命中监控任务'}，可在任务中心继续追踪进度`
-                });
                 showToast(`已创建导入任务 #${data.job_id}${tail}`, { tone: 'success', duration: 3000, placement: 'top-center' });
             } finally {
                 resourceSubmitBusy = false;

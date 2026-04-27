@@ -41,12 +41,22 @@
         const treeEl = document.getElementById('resource-share-tree');
         const rootTitleEl = document.getElementById('resource-share-root-title');
         const currentCheckAllEl = document.getElementById('resource-share-current-check-all');
+        const selectedCountEl = document.getElementById('resource-share-selected-count');
         if (!card || !treeEl || !rootTitleEl) return;
 
         const importMode = ctx.resourceModalMode === 'import';
         const isShare = ctx.isCurrentResource115Share();
         const providerLabel = ctx.getResourceProviderLabel(ctx.getCurrentResourceProvider());
+        const selectionState = typeof window.getResourceShareSelectionState === 'function'
+            ? window.getResourceShareSelectionState()
+            : { selected_entries: [] };
+        const selectedCount = Array.isArray(selectionState.selected_entries) ? selectionState.selected_entries.length : 0;
+        const selectedLabel = selectedCount > 0 ? `已选 ${selectedCount} 项` : '未选择';
         card.classList.toggle('hidden', !importMode);
+        if (selectedCountEl) {
+            selectedCountEl.classList.toggle('hidden', !importMode || !isShare);
+            selectedCountEl.textContent = selectedLabel;
+        }
         ctx.syncResourceShareReceiveCodeSection();
         if (!importMode) {
             ctx.renderResourceImportBehaviorHint();

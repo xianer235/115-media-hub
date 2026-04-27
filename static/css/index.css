@@ -3497,6 +3497,54 @@
             font-size: 0.74rem;
             font-weight: 800;
         }
+        .monitor-folder-secondary-btn,
+        .monitor-folder-refresh-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 40px;
+            padding: 0.5rem 1rem;
+            border-radius: 0.75rem;
+            border: 1px solid transparent;
+            font-size: 0.875rem;
+            font-weight: 800;
+            line-height: 1.25;
+            white-space: nowrap;
+            transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+        }
+        .monitor-folder-secondary-btn {
+            background: rgba(51, 65, 85, 0.92);
+            border-color: rgba(100, 116, 139, 0.52);
+            color: #f8fafc;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+        }
+        .monitor-folder-secondary-btn:hover {
+            background: rgba(71, 85, 105, 0.98);
+            border-color: rgba(148, 163, 184, 0.58);
+            color: #ffffff;
+        }
+        .monitor-folder-refresh-btn {
+            background: rgba(2, 132, 199, 0.92);
+            border-color: rgba(56, 189, 248, 0.45);
+            color: #f0f9ff;
+            box-shadow: 0 10px 22px rgba(14, 165, 233, 0.13);
+        }
+        .monitor-folder-refresh-btn:hover {
+            background: rgba(14, 165, 233, 0.98);
+            border-color: rgba(125, 211, 252, 0.62);
+            color: #ffffff;
+        }
+        .monitor-folder-secondary-btn:active,
+        .monitor-folder-refresh-btn:active {
+            transform: translateY(1px);
+        }
+        .monitor-folder-secondary-btn:disabled,
+        .monitor-folder-refresh-btn:disabled {
+            cursor: not-allowed;
+            opacity: 0.62;
+            box-shadow: none;
+            transform: none;
+        }
         .resource-save-layout {
             display: flex;
             flex-direction: column;
@@ -4805,14 +4853,23 @@
             border-color: #0ea5e9;
             color: #0369a1;
         }
-        html.theme-day .resource-source-compact-btn-danger,
+        html.theme-day .resource-source-compact-btn-danger {
+            background: #fee2e2 !important;
+            border-color: rgba(220, 38, 38, 0.72) !important;
+            color: #991b1b !important;
+            box-shadow: 0 1px 2px rgba(127, 29, 29, 0.08) !important;
+        }
+        html.theme-day .resource-source-compact-btn-danger:hover {
+            background: #fecaca !important;
+            border-color: rgba(185, 28, 28, 0.88) !important;
+            color: #7f1d1d !important;
+        }
         html.theme-day .resource-source-manager-danger-btn {
             background: linear-gradient(180deg, rgba(254, 242, 242, 0.98), rgba(254, 226, 226, 0.94));
             border-color: rgba(248, 113, 113, 0.68);
             color: #dc2626;
             box-shadow: none;
         }
-        html.theme-day .resource-source-compact-btn-danger:hover,
         html.theme-day .resource-source-manager-danger-btn:hover {
             background: linear-gradient(180deg, rgba(254, 228, 230, 1), rgba(254, 205, 211, 0.96));
             border-color: rgba(239, 68, 68, 0.8);
@@ -5798,6 +5855,19 @@
         html.theme-day .text-sky-400,
         html.theme-day .text-sky-500 { color: #0369a1 !important; }
         html.theme-day .text-sky-700 { color: #075985 !important; }
+        html.theme-day #cookie-health-115-text.text-emerald-200,
+        html.theme-day #cookie-health-quark-text.text-emerald-200 {
+            color: #166534 !important;
+            font-weight: 700;
+        }
+        html.theme-day #cookie-health-115-card.bg-emerald-500\/10,
+        html.theme-day #cookie-health-quark-card.bg-emerald-500\/10 {
+            background: rgba(22, 163, 74, 0.14) !important;
+        }
+        html.theme-day #cookie-health-115-card.border-emerald-500\/40,
+        html.theme-day #cookie-health-quark-card.border-emerald-500\/40 {
+            border-color: rgba(21, 128, 61, 0.42) !important;
+        }
         html.theme-day .text-emerald-300,
         html.theme-day .text-emerald-500\/80 { color: #047857 !important; }
         html.theme-day .text-amber-100,
@@ -5809,6 +5879,28 @@
         html.theme-day .border-violet-500\/20 { border-color: rgba(109, 40, 217, 0.28) !important; }
         html.theme-day .bg-emerald-600 { background: #059669 !important; }
         html.theme-day .hover\:bg-emerald-500:hover { background: #10b981 !important; }
+        html.theme-day .monitor-folder-secondary-btn {
+            background: #f1f5f9 !important;
+            border-color: #cbd5e1 !important;
+            color: #334155 !important;
+            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06) !important;
+        }
+        html.theme-day .monitor-folder-secondary-btn:hover {
+            background: #e2e8f0 !important;
+            border-color: #94a3b8 !important;
+            color: #0f172a !important;
+        }
+        html.theme-day .monitor-folder-refresh-btn {
+            background: #2563eb !important;
+            border-color: #1d4ed8 !important;
+            color: #ffffff !important;
+            box-shadow: 0 10px 22px rgba(37, 99, 235, 0.16) !important;
+        }
+        html.theme-day .monitor-folder-refresh-btn:hover {
+            background: #1d4ed8 !important;
+            border-color: #1e40af !important;
+            color: #ffffff !important;
+        }
         html.theme-day .btn-ctrl.bg-slate-700 {
             background: #334155 !important;
             color: #f8fafc !important;

@@ -58,7 +58,10 @@
                             </div>
                             <div id="resource-share-browser-card" class="resource-detail-card hidden">
                                 <div class="resource-import-toolbar">
-                                    <div class="text-sm font-black text-white">资源选择</div>
+                                    <div class="flex items-center gap-2">
+                                        <div class="text-sm font-black text-white">资源选择</div>
+                                        <span id="resource-share-selected-count" class="resource-import-inline-chip hidden">未选择</span>
+                                    </div>
                                     <div class="resource-import-toolbar-actions">
                                         <button type="button" onclick="goResourceShareRoot()" class="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-[11px] font-bold">根目录</button>
                                         <button type="button" onclick="goResourceShareBack()" class="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-[11px] font-bold">上级</button>
@@ -134,7 +137,6 @@
                             </div>
                         </div>
                     </div>
-                    <div id="resource-import-feedback-card" class="resource-import-feedback hidden"></div>
                     <div id="resource-import-footer" class="resource-import-footer-shell grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
                         <button id="resource-submit-btn" onclick="submitResourceJob()" class="resource-import-submit-btn">保存到 115</button>
                         <button id="resource-close-btn" onclick="closeResourceJobModal()" class="resource-import-cancel-btn">取消</button>

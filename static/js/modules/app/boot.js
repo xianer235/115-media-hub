@@ -80,6 +80,9 @@
             try {
                 const cfg = await window.MediaHubApi.getJson('/get_settings');
                 const sensitiveMeta = normalizeSensitiveConfigMeta(cfg.sensitive_configured || {});
+                if (typeof setAppMountPoints === 'function') {
+                    setAppMountPoints(cfg.mount_points || []);
+                }
 
                 Object.keys(cfg).forEach(k => {
                     const el = document.getElementById(k);
@@ -474,6 +477,9 @@
         document.getElementById('resource-import-modal')?.addEventListener('click', (e) => {
             if (e.target.id === 'resource-import-modal') closeResourceJobModal();
         });
+        document.getElementById('monitor-folder-modal')?.addEventListener('click', (e) => {
+            if (e.target.id === 'monitor-folder-modal') closeMonitorFolderModal();
+        });
         document.getElementById('resource-folder-modal')?.addEventListener('click', (e) => {
             if (e.target.id === 'resource-folder-modal') closeResourceFolderModal();
         });
@@ -505,6 +511,14 @@
             if (action === 'toggle-files') {
                 resourceFolderShowAllFiles = !resourceFolderShowAllFiles;
                 renderResourceFolderList();
+            }
+        });
+        document.getElementById('monitor-folder-list')?.addEventListener('click', async (e) => {
+            const btn = e.target.closest('[data-monitor-folder-action]');
+            if (!btn) return;
+            const action = btn.dataset.monitorFolderAction || '';
+            if (action === 'open') {
+                await openMonitorFolderChild(btn.dataset.monitorFolderId || '0', btn.dataset.monitorFolderName || '--');
             }
         });
         document.getElementById('subscription-folder-list')?.addEventListener('click', async (e) => {
@@ -541,6 +555,14 @@
             const action = btn.dataset.resourceFolderAction || '';
             if (action === 'trail') {
                 await openResourceFolderTrail(btn.dataset.resourceFolderIndex || '0');
+            }
+        });
+        document.getElementById('monitor-folder-breadcrumbs')?.addEventListener('click', async (e) => {
+            const btn = e.target.closest('[data-monitor-folder-action]');
+            if (!btn) return;
+            const action = btn.dataset.monitorFolderAction || '';
+            if (action === 'trail') {
+                await openMonitorFolderTrail(btn.dataset.monitorFolderIndex || '0');
             }
         });
         document.getElementById('subscription-folder-breadcrumbs')?.addEventListener('click', async (e) => {
@@ -598,6 +620,11 @@
             const subscriptionFolderModal = document.getElementById('subscription-folder-modal');
             if (e.key === 'Escape' && subscriptionFolderModal && !subscriptionFolderModal.classList.contains('hidden')) {
                 closeSubscriptionFolderModal();
+                return;
+            }
+            const monitorFolderModal = document.getElementById('monitor-folder-modal');
+            if (e.key === 'Escape' && monitorFolderModal && !monitorFolderModal.classList.contains('hidden')) {
+                closeMonitorFolderModal();
                 return;
             }
             const subscriptionShareFolderModal = document.getElementById('subscription-share-folder-modal');

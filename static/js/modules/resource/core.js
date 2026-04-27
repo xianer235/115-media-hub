@@ -1339,7 +1339,6 @@
                 delayInput.disabled = true;
                 renderResourceImportBehaviorHint(match.savepath);
                 renderResourceImportSummary();
-                renderResourceImportFeedback();
                 return;
             }
 
@@ -1354,7 +1353,6 @@
 
             renderResourceImportBehaviorHint(match.savepath);
             renderResourceImportSummary();
-            renderResourceImportFeedback();
         }
 
         function syncResourceProviderUI() {
@@ -1409,35 +1407,6 @@
                 node.classList.toggle('is-done', step < activeStep);
                 node.classList.toggle('is-active', step === activeStep);
             });
-        }
-
-        function renderResourceImportFeedback() {
-            const card = document.getElementById('resource-import-feedback-card');
-            if (!card) return;
-            if (resourceModalMode !== 'import' || !resourceImportLastFeedback) {
-                card.classList.add('hidden');
-                card.innerHTML = '';
-                return;
-            }
-            const feedback = resourceImportLastFeedback;
-            const lines = [
-                `任务：${feedback.jobText || '--'}`,
-                `阶段：${feedback.stage || '--'}`,
-                `时间：${feedback.timeText || formatTimeText(new Date())}`,
-            ];
-            if (feedback.note) lines.push(`说明：${feedback.note}`);
-            card.innerHTML = lines.map(line => `<div>${escapeHtml(line)}</div>`).join('');
-            card.classList.remove('hidden');
-        }
-
-        function updateResourceImportFeedback(payload = {}) {
-            resourceImportLastFeedback = {
-                stage: String(payload.stage || '已提交').trim(),
-                jobText: String(payload.jobText || '--').trim(),
-                note: String(payload.note || '').trim(),
-                timeText: formatTimeText(new Date())
-            };
-            renderResourceImportFeedback();
         }
 
         function syncResourceChannelPagingState() {
@@ -2391,8 +2360,6 @@
             syncResourceMonitorTaskOptions,
             renderResourceImportSummary,
             renderResourceImportStepper,
-            renderResourceImportFeedback,
-            updateResourceImportFeedback,
             renderResourceImportBehaviorHint,
             toggleResourceSection,
             loadMoreResourceChannelItems,

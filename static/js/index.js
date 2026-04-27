@@ -72,6 +72,11 @@
         let resourceTargetPreviewSummary = { folder_count: 0, file_count: 0 };
         let resourceTargetPreviewLoading = false;
         let resourceTargetPreviewError = '';
+        let monitorFolderTrail = [{ id: '0', name: '根目录' }];
+        let monitorFolderEntries = [];
+        let monitorFolderSummary = { folder_count: 0, file_count: 0 };
+        let monitorFolderLoading = false;
+        let monitorFolderRequestToken = 0;
         let resourceModalLinkType = '';
         let resourceShareEntriesByParent = { '0': [] };
         let resourceShareEntryIndex = {};
@@ -136,7 +141,7 @@
         let resourceHeavyRenderRafId = null;
         let resourceSubmitBusy = false;
         let resourceJobFilter = 'all';
-        let resourceImportLastFeedback = null;
+        let appMountPoints = [];
         let tgProxyTestState = { loading: false, ok: null, message: '', latency_ms: 0, mode: '', proxy_url: '', target_url: '' };
         let notifyTestState = { loading: false, ok: null, message: '', channel: '', target_desc: '', webhook_host: '', sent_at: '' };
         let resourceBoardHintText = '';
@@ -960,9 +965,9 @@
             const raw = String(label || '').trim();
             if (!raw) return '';
             if (/(任务开始|订阅开始)/.test(raw)) return 'start';
-            if (/(执行成功|订阅成功|已完成|完成|已结束)/.test(raw)) return 'success';
-            if (/(已中断|中断|取消)/.test(raw)) return 'warn';
             if (/(执行失败|失败|异常|错误)/.test(raw)) return 'error';
+            if (/(已中断|中断|取消)/.test(raw)) return 'warn';
+            if (/(任务结束|订阅结束|执行成功|订阅成功|MD5 校验命中|已完成|完成|已结束)/.test(raw)) return 'success';
             return '';
         }
 
@@ -1514,10 +1519,37 @@
             return BUILTIN_MOUNT_POINTS.map(item => ({ provider: item.provider, prefix: item.prefix }));
         }
 
+        function normalizeMountPointsInput(value) {
+            const source = Array.isArray(value) ? value : [];
+            const seen = new Set();
+            const normalized = [];
+            source.forEach((item) => {
+                const provider = normalizeMountProviderInput(item?.provider || '');
+                const prefix = normalizeRemotePathInput(item?.prefix || '');
+                if (!provider || !prefix || prefix === '/' || seen.has(provider)) return;
+                seen.add(provider);
+                normalized.push({ provider, prefix });
+            });
+            getBuiltinMountPoints().forEach((item) => {
+                const provider = normalizeMountProviderInput(item.provider);
+                const prefix = normalizeRemotePathInput(item.prefix);
+                if (!provider || !prefix || prefix === '/' || seen.has(provider)) return;
+                seen.add(provider);
+                normalized.push({ provider, prefix });
+            });
+            return normalized;
+        }
+
+        function setAppMountPoints(value) {
+            appMountPoints = normalizeMountPointsInput(value);
+        }
+
         function getMountPrefixByProvider(provider) {
             const providerKey = normalizeMountProviderInput(provider);
             if (!providerKey) return '';
-            const points = getBuiltinMountPoints();
+            const points = Array.isArray(appMountPoints) && appMountPoints.length
+                ? appMountPoints
+                : normalizeMountPointsInput([]);
             const matched = points.find(item => normalizeMountProviderInput(item.provider) === providerKey);
             return matched ? normalizeRemotePathInput(matched.prefix || '') : '';
         }
@@ -1988,10 +2020,11 @@
         }
 
         function currentMonitorFormData() {
+            const rawScanPath = document.getElementById('monitor_scan_path').value.trim();
             return {
                 name: document.getElementById('monitor_name').value.trim(),
                 webhook_enabled: document.getElementById('monitor_webhook_enabled').checked,
-                scan_path: document.getElementById('monitor_scan_path').value.trim(),
+                scan_path: rawScanPath ? normalizeRemotePathInput(rawScanPath) : '',
                 target_path: document.getElementById('monitor_target_path').value.trim(),
                 skip_by_dir_mtime: document.getElementById('monitor_skip_by_dir_mtime').checked,
                 incremental: document.getElementById('monitor_incremental').checked,
@@ -2003,12 +2036,209 @@
             };
         }
 
+        function getMonitorMountPrefix() {
+            return normalizeRemotePathInput(getMountPrefixByProvider('115') || '/115');
+        }
+
+        function updateMonitorScanPathHint(scanPath = '') {
+            const hintEl = document.getElementById('monitor_scan_path_hint');
+            if (!hintEl) return;
+            const normalized = normalizeRemotePathInput(scanPath || '');
+            hintEl.textContent = normalized && normalized !== '/'
+                ? `当前保存路径：${normalized}。保存的是 115 路径字符串；即使 Cookie 暂时失效，路径也会保留，恢复后可继续使用。`
+                : '保存的是 115 路径字符串；即使 Cookie 暂时失效，路径也会保留，恢复后可继续使用。';
+        }
+
+        function getMonitorScanPathRelative(scanPath = '') {
+            const normalized = normalizeRemotePathInput(scanPath || '');
+            const mountPrefix = getMonitorMountPrefix();
+            if (!normalized || normalized === '/' || normalized === mountPrefix) return '';
+            if (normalized.startsWith(`${mountPrefix}/`)) {
+                return normalizeRelativePathInput(normalized.slice(mountPrefix.length));
+            }
+            return '';
+        }
+
+        function buildMonitorScanPathFromTrail(trail = []) {
+            const relativePath = buildResourceFolderDisplayPathFromTrail(trail);
+            return normalizeRemotePathInput(joinRelativePathInput(getMonitorMountPrefix(), relativePath));
+        }
+
+        function renderMonitorFolderBreadcrumbs() {
+            const container = document.getElementById('monitor-folder-breadcrumbs');
+            if (!container) return;
+            container.innerHTML = monitorFolderTrail.map((item, index) => {
+                const isLast = index === monitorFolderTrail.length - 1;
+                return `
+                    ${index > 0 ? '<span class="resource-folder-sep">›</span>' : ''}
+                    <button
+                        type="button"
+                        data-monitor-folder-action="trail"
+                        data-monitor-folder-index="${index}"
+                        class="resource-folder-crumb ${isLast ? 'resource-folder-crumb-active' : ''}"
+                        ${isLast ? 'disabled' : ''}
+                    >${escapeHtml(item?.name || '根目录')}</button>
+                `;
+            }).join('');
+        }
+
+        function renderMonitorFolderList() {
+            const container = document.getElementById('monitor-folder-list');
+            const summaryEl = document.getElementById('monitor-folder-summary');
+            const refreshBtn = document.getElementById('monitor-folder-refresh-btn');
+            if (!container) return;
+            if (refreshBtn) {
+                refreshBtn.disabled = monitorFolderLoading;
+                refreshBtn.classList.toggle('btn-disabled', monitorFolderLoading);
+                refreshBtn.textContent = monitorFolderLoading ? '刷新中...' : '刷新当前目录';
+            }
+            if (summaryEl) {
+                const folderCount = Number(monitorFolderSummary.folder_count || 0);
+                const fileCount = Number(monitorFolderSummary.file_count || 0);
+                summaryEl.textContent = `当前目录下共有 ${folderCount} 个文件夹 / ${fileCount} 个文件，这里只展示文件夹，方便精确选择监控范围。`;
+            }
+            if (monitorFolderLoading && !monitorFolderEntries.length) {
+                container.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">正在读取 115 目录...</div>';
+                return;
+            }
+            if (!monitorFolderEntries.length) {
+                container.innerHTML = '<div class="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-slate-400 text-sm">当前目录下没有子文件夹，可以直接选择这里作为监控路径。</div>';
+                return;
+            }
+            container.innerHTML = monitorFolderEntries.map((entry) => (
+                buildResourceEntryRow(entry, { showOpenButton: true, openActionPrefix: 'monitor-folder' })
+            )).join('');
+        }
+
+        async function loadMonitorFolders(cid = '0', { forceRefresh = false } = {}) {
+            const requestToken = ++monitorFolderRequestToken;
+            const targetCid = String(cid || '0').trim() || '0';
+            monitorFolderLoading = true;
+            renderMonitorFolderBreadcrumbs();
+            renderMonitorFolderList();
+            try {
+                const result = await fetchResourceFolderData(targetCid, {
+                    provider: '115',
+                    foldersOnly: true,
+                    forceRefresh,
+                });
+                if (requestToken !== monitorFolderRequestToken) return false;
+                monitorFolderEntries = Array.isArray(result.entries) ? result.entries.filter(entry => !!entry?.is_dir) : [];
+                monitorFolderSummary = result.summary || { folder_count: 0, file_count: 0 };
+                return true;
+            } catch (e) {
+                if (requestToken !== monitorFolderRequestToken) return false;
+                monitorFolderEntries = [];
+                monitorFolderSummary = { folder_count: 0, file_count: 0 };
+                showToast(`目录读取失败：${e?.message || '请稍后重试'}`, {
+                    tone: 'error',
+                    duration: 3200,
+                    placement: 'top-center'
+                });
+                return false;
+            } finally {
+                if (requestToken !== monitorFolderRequestToken) return false;
+                monitorFolderLoading = false;
+                renderMonitorFolderBreadcrumbs();
+                renderMonitorFolderList();
+            }
+        }
+
+        async function resolveMonitorFolderTrailByPath(scanPath = '') {
+            const relativePath = getMonitorScanPathRelative(scanPath);
+            const resolvedTrail = [{ id: '0', name: '根目录' }];
+            if (!relativePath) return resolvedTrail;
+
+            let parentCid = '0';
+            const parts = relativePath.split('/').filter(Boolean);
+            for (const part of parts) {
+                const result = await fetchResourceFolderData(parentCid, {
+                    provider: '115',
+                    foldersOnly: true,
+                });
+                const entries = Array.isArray(result.entries) ? result.entries : [];
+                const matched = entries.find((entry) => !!entry?.is_dir && String(entry?.name || '').trim() === part);
+                if (!matched) break;
+                const matchedId = String(matched.id || matched.cid || '').trim();
+                if (!matchedId) break;
+                resolvedTrail.push({ id: matchedId, name: String(matched.name || part).trim() || part });
+                parentCid = matchedId;
+            }
+            return resolvedTrail;
+        }
+
+        async function openMonitorFolderModal() {
+            const hasConfiguredCookie = !!(resourceState.cookie_configured || sensitiveConfigMeta.cookie_115);
+            if (!hasConfiguredCookie) {
+                showToast('请先在参数配置中填写 115 Cookie', {
+                    tone: 'warn',
+                    duration: 2800,
+                    placement: 'top-center'
+                });
+                return;
+            }
+            showLockedModal('monitor-folder-modal');
+            renderMonitorFolderBreadcrumbs();
+            renderMonitorFolderList();
+            try {
+                monitorFolderTrail = await resolveMonitorFolderTrailByPath(
+                    document.getElementById('monitor_scan_path')?.value || ''
+                );
+            } catch (e) {
+                monitorFolderTrail = [{ id: '0', name: '根目录' }];
+            }
+            await loadMonitorFolders(monitorFolderTrail[monitorFolderTrail.length - 1]?.id || '0');
+        }
+
+        function closeMonitorFolderModal() {
+            hideLockedModal('monitor-folder-modal');
+        }
+
+        async function goMonitorFolderBack() {
+            if (monitorFolderTrail.length <= 1) return;
+            monitorFolderTrail = monitorFolderTrail.slice(0, -1);
+            await loadMonitorFolders(monitorFolderTrail[monitorFolderTrail.length - 1]?.id || '0');
+        }
+
+        async function openMonitorFolderTrail(index) {
+            const targetIndex = Math.max(0, Math.min(Number(index || 0), monitorFolderTrail.length - 1));
+            monitorFolderTrail = monitorFolderTrail.slice(0, targetIndex + 1);
+            await loadMonitorFolders(monitorFolderTrail[monitorFolderTrail.length - 1]?.id || '0');
+        }
+
+        async function openMonitorFolderChild(folderId, folderName) {
+            monitorFolderTrail = monitorFolderTrail.concat([{ id: String(folderId || '0'), name: String(folderName || '--') }]);
+            await loadMonitorFolders(folderId);
+        }
+
+        async function refreshCurrentMonitorFolder() {
+            if (monitorFolderLoading) return;
+            const currentCid = monitorFolderTrail[monitorFolderTrail.length - 1]?.id || '0';
+            const refreshed = await loadMonitorFolders(currentCid, { forceRefresh: true });
+            if (refreshed) {
+                showToast('已刷新当前目录', { tone: 'success', duration: 2200, placement: 'top-center' });
+            }
+        }
+
+        function selectCurrentMonitorFolder() {
+            const scanPath = buildMonitorScanPathFromTrail(monitorFolderTrail);
+            const inputEl = document.getElementById('monitor_scan_path');
+            if (inputEl) inputEl.value = scanPath;
+            updateMonitorScanPathHint(scanPath);
+            closeMonitorFolderModal();
+        }
+
         function resetMonitorForm() {
             editingMonitorName = null;
             document.getElementById('monitor-modal-title').innerText = '新增监控任务';
             document.getElementById('monitor_name').value = '';
             document.getElementById('monitor_webhook_enabled').checked = false;
             document.getElementById('monitor_scan_path').value = '';
+            updateMonitorScanPathHint('');
+            monitorFolderTrail = [{ id: '0', name: '根目录' }];
+            monitorFolderEntries = [];
+            monitorFolderSummary = { folder_count: 0, file_count: 0 };
+            monitorFolderLoading = false;
             document.getElementById('monitor_target_path').value = '';
             document.getElementById('monitor_skip_by_dir_mtime').checked = false;
             document.getElementById('monitor_incremental').checked = false;
@@ -2051,6 +2281,10 @@
             if (!task.name) return alert('任务名不能为空');
             if (!task.scan_path) return alert('扫描路径不能为空');
             if (!task.target_path) return alert('目标路径不能为空');
+            const mountPrefix = getMonitorMountPrefix();
+            if (task.scan_path !== mountPrefix && !task.scan_path.startsWith(`${mountPrefix}/`)) {
+                return alert(`扫描路径必须位于 ${mountPrefix} 下`);
+            }
             if (task.retries < 1 || task.retries > 5) return alert('读取失败尝试次数只能在 1 到 5 之间');
             if (task.cron_minutes < 0) return alert('定时执行分钟不能小于 0');
 
@@ -2080,6 +2314,11 @@
             document.getElementById('monitor_name').value = task.name || '';
             document.getElementById('monitor_webhook_enabled').checked = !!task.webhook_enabled;
             document.getElementById('monitor_scan_path').value = task.scan_path || '';
+            updateMonitorScanPathHint(task.scan_path || '');
+            monitorFolderTrail = [{ id: '0', name: '根目录' }];
+            monitorFolderEntries = [];
+            monitorFolderSummary = { folder_count: 0, file_count: 0 };
+            monitorFolderLoading = false;
             document.getElementById('monitor_target_path').value = task.target_path || '';
             document.getElementById('monitor_skip_by_dir_mtime').checked = !!task.skip_by_dir_mtime;
             document.getElementById('monitor_incremental').checked = !!task.incremental;

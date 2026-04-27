@@ -3,7 +3,7 @@
                 <div class="flex flex-wrap justify-between gap-3 items-center">
                     <div>
                         <h3 class="group-title mb-2">文件夹监控任务列表</h3>
-                        <div class="text-xs text-slate-400">执行前会先触发 `reload(refresh=true)`。Webhook 优先尝试定位变动子目录，只刷新对应目录。</div>
+                        <div class="text-xs text-slate-400">手动或定时运行会从监控路径递归扫描；资源导入 / Webhook 传入 savepath 时，会优先定位到命中的 115 子路径并只刷新该子树，定位失败时回退整条监控路径。</div>
                     </div>
                     <div class="flex items-center gap-3 flex-wrap">
                         <div class="text-xs px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-300">

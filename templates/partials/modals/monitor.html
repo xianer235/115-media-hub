@@ -29,7 +29,13 @@
                             扫描路径 (115 网盘内监控的源路径)
                             <button type="button" class="info-dot" onclick="showHelp('手动运行会从该路径开始递归。Webhook 触发时会根据 savepath/path 自动定位这个路径下的变动子目录，优先局部刷新。')">i</button>
                         </span>
-                        <input id="monitor_scan_path" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="/115/自存影视/115自存电视剧">
+                        <div class="resource-save-path-grid mt-1">
+                            <input id="monitor_scan_path" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" placeholder="/115/自存影视/115自存电视剧" readonly>
+                            <button type="button" onclick="openMonitorFolderModal()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold whitespace-nowrap">选择文件夹</button>
+                        </div>
+                        <div id="monitor_scan_path_hint" class="text-[11px] text-slate-500 leading-5 px-1 mt-2">
+                            保存的是 115 路径字符串；即使 Cookie 暂时失效，路径也会保留，恢复后可继续使用。
+                        </div>
                     </label>
                     <label class="block">
                         <span class="text-xs text-slate-500 inline-flex items-center gap-2">
@@ -79,6 +85,30 @@
                 <div id="monitor-modal-footer" class="monitor-modal-footer-shell grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
                     <button onclick="saveMonitorTask()" class="task-modal-save-btn monitor-modal-save-btn">保存任务</button>
                     <button onclick="closeMonitorModal()" class="task-modal-cancel-btn monitor-modal-cancel-btn">取消</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="monitor-folder-modal" class="hidden fixed inset-0 bg-black/60 z-[56] p-4">
+            <div class="w-full max-w-2xl mx-auto mt-[8vh] max-h-[88vh] overflow-y-auto group-card modal-card">
+                <div class="flex items-center justify-between">
+                    <h3 class="group-title mb-0">选择 115 监控文件夹</h3>
+                    <button onclick="closeMonitorFolderModal()" class="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm">关闭</button>
+                </div>
+                <div class="space-y-4 mt-4">
+                    <div class="resource-folder-pathbar">
+                        <div class="resource-folder-path-label">当前监控路径</div>
+                        <div id="monitor-folder-breadcrumbs" class="resource-folder-path-track">根目录</div>
+                    </div>
+                    <div id="monitor-folder-summary" class="text-xs text-slate-500">
+                        这里只展示 115 当前目录下的子文件夹，选择后会直接保存成完整监控路径。
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                        <button type="button" onclick="selectCurrentMonitorFolder()" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold">选择当前目录</button>
+                        <button type="button" onclick="goMonitorFolderBack()" class="monitor-folder-secondary-btn">返回上一级</button>
+                        <button id="monitor-folder-refresh-btn" type="button" onclick="refreshCurrentMonitorFolder()" class="monitor-folder-refresh-btn">刷新当前目录</button>
+                    </div>
+                    <div id="monitor-folder-list" class="space-y-3"></div>
                 </div>
             </div>
         </div>
