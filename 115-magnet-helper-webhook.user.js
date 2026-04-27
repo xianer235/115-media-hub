@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         115云盘磁力助手 核心版
+// @name         115-media-hub助手
 // @namespace    http://tampermonkey.net/
-// @version      2.3.1
-// @description  检测网页 magnet / torrent / 115 分享链接并生成快捷按钮
+// @version      2.4.0
+// @description  检测网页 magnet / torrent / 115 / 夸克分享链接并生成快捷按钮
 // @author       仙儿
 // @license      MIT
 // @match        *://*/*
@@ -17,10 +17,9 @@
 (function () {
     'use strict';
 
-    const APP_NAME = '115云盘磁力助手 核心版';
+    const APP_NAME = '115-media-hub助手';
     const MAGNET_REGEX = /magnet:\?xt=urn:btih:[A-Za-z0-9]{32,40}[^\s<>'"]*/gi;
-    const SHARE115_REGEX = /https?:\/\/(?:115cdn|115|anxia)\.com\/s\/[A-Za-z0-9]+[^\s<>'"]*/gi;
-    const DETECTABLE_LINK_REGEX = /(magnet:\?xt=urn:btih:[A-Za-z0-9]{32,40}[^\s<>'"]*|https?:\/\/[^\s<>'"]+?\.torrent(?:\?[^\s<>'"]*)?|https?:\/\/(?:115cdn|115|anxia)\.com\/s\/[A-Za-z0-9]+[^\s<>'"]*)/gi;
+    const DETECTABLE_LINK_REGEX = /(magnet:\?xt=urn:btih:[A-Za-z0-9]{32,40}[^\s<>'"]*|https?:\/\/[^\s<>'"]+?\.torrent(?:\?[^\s<>'"]*)?|https?:\/\/(?:115cdn|115|anxia)\.com\/s\/[A-Za-z0-9]+[^\s<>'"]*|https?:\/\/(?:pan|www)\.quark\.cn\/s\/[A-Za-z0-9]+[^\s<>'"]*)/gi;
     const STORE_TASKS_KEY = 'magnet_push_tasks_v2';
     const STORE_SECRET_KEY = 'magnet_push_secret_v2';
 
@@ -126,6 +125,44 @@
         const text = String(url || '').trim();
         if (!isHttpUrl(text)) return false;
         return /^https?:\/\/(?:115cdn|115|anxia)\.com\/s\/[A-Za-z0-9]+/i.test(text);
+    }
+
+    function isLikelyQuarkShareUrl(url) {
+        const text = String(url || '').trim();
+        if (!isHttpUrl(text)) return false;
+        return /^https?:\/\/(?:pan|www)\.quark\.cn\/s\/[A-Za-z0-9]+/i.test(text);
+    }
+
+    function getShareLinkMeta(url) {
+        if (isLikely115ShareUrl(url)) {
+            return {
+                provider: '115',
+                copyTitle: '复制 115 分享链接',
+                copiedMessage: '115 链接已复制',
+                baseColor: '#16a34a'
+            };
+        }
+        if (isLikelyQuarkShareUrl(url)) {
+            return {
+                provider: 'quark',
+                copyTitle: '复制夸克分享链接',
+                copiedMessage: '夸克链接已复制',
+                baseColor: '#0891b2'
+            };
+        }
+        return null;
+    }
+
+    function isLikelyShareUrl(url) {
+        return !!getShareLinkMeta(url);
+    }
+
+    function hasDetectableSourceText(text) {
+        const raw = String(text || '');
+        return raw.includes('magnet:?')
+            || /\.torrent/i.test(raw)
+            || /(?:115cdn|115|anxia)\.com\/s\/[A-Za-z0-9]+/i.test(raw)
+            || /(?:pan|www)\.quark\.cn\/s\/[A-Za-z0-9]+/i.test(raw);
     }
 
     async function copyTextToClipboard(text) {
@@ -895,13 +932,18 @@
 
     function createCopyButton(sourceLink) {
         const source = normalizeSourceLink(sourceLink);
+        const meta = getShareLinkMeta(source) || {
+            copyTitle: '复制分享链接',
+            copiedMessage: '链接已复制',
+            baseColor: '#16a34a'
+        };
         const button = document.createElement('button');
         button.type = 'button';
         button.className = COPY_BTN_CLASS;
         button.textContent = '复制';
-        button.title = '复制 115 分享链接';
+        button.title = meta.copyTitle;
         button.style.cssText = BTN_STYLE
-            .replace('background:#2777F8', 'background:#16a34a')
+            .replace('background:#2777F8', `background:${meta.baseColor}`)
             .replace('min-width:32px', 'min-width:38px');
 
         button.addEventListener('mouseenter', () => {
@@ -919,12 +961,12 @@
             button.textContent = '复制中';
             try {
                 await copyTextToClipboard(source);
-                button.style.background = '#16a34a';
+                button.style.background = meta.baseColor;
                 button.textContent = '已复制';
-                showToast('115 链接已复制');
+                showToast(meta.copiedMessage);
                 window.setTimeout(() => {
                     button.textContent = '复制';
-                    button.style.background = '#16a34a';
+                    button.style.background = meta.baseColor;
                     button.disabled = false;
                 }, 900);
             } catch (err) {
@@ -933,7 +975,7 @@
                 button.style.background = '#ef4444';
                 button.disabled = false;
                 window.setTimeout(() => {
-                    button.style.background = '#16a34a';
+                    button.style.background = meta.baseColor;
                 }, 1200);
             }
         });
@@ -949,7 +991,7 @@
         if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'TEXTAREA') return true;
         if (tag === 'A') {
             const href = String(parent.getAttribute('href') || '');
-            if (href.includes('magnet:?') || isLikelyTorrentUrl(href) || isLikely115ShareUrl(href)) return true;
+            if (href.includes('magnet:?') || isLikelyTorrentUrl(href) || isLikelyShareUrl(href)) return true;
         }
         const style = window.getComputedStyle(parent);
         if (style.display === 'none' || style.visibility === 'hidden') return true;
@@ -961,8 +1003,8 @@
         node[NODE_MARK] = true;
         if (shouldSkipTextNode(node)) return;
         const raw = String(node.textContent || '');
-        if (!raw.includes('magnet:?') && !/\.torrent/i.test(raw) && !SHARE115_REGEX.test(raw)) return;
-        SHARE115_REGEX.lastIndex = 0;
+        if (!hasDetectableSourceText(raw)) return;
+        DETECTABLE_LINK_REGEX.lastIndex = 0;
 
         const matches = Array.from(raw.matchAll(DETECTABLE_LINK_REGEX));
         if (!matches.length) return;
@@ -982,7 +1024,7 @@
             const textSpan = document.createElement('span');
             textSpan.textContent = match[0];
             wrap.appendChild(textSpan);
-            const actionBtn = isLikely115ShareUrl(link) ? createCopyButton(link) : createPushButton(link);
+            const actionBtn = isLikelyShareUrl(link) ? createCopyButton(link) : createPushButton(link);
             wrap.appendChild(actionBtn);
             fragment.appendChild(wrap);
 
@@ -1004,7 +1046,7 @@
         let button = null;
         if (/^magnet:\?/i.test(source) || isLikelyTorrentUrl(source)) {
             button = createPushButton(source);
-        } else if (isLikely115ShareUrl(source)) {
+        } else if (isLikelyShareUrl(source)) {
             button = createCopyButton(source);
         }
         if (!button) return;
@@ -1022,7 +1064,7 @@
         textNodes.forEach(processTextNode);
 
         document.querySelectorAll(
-            'a[href*="magnet:?"], a[href*=".torrent"], a[href*="info_hash="], a[href*="btih:"], a[href*="115.com/s/"], a[href*="115cdn.com/s/"], a[href*="anxia.com/s/"]'
+            'a[href*="magnet:?"], a[href*=".torrent"], a[href*="info_hash="], a[href*="btih:"], a[href*="115.com/s/"], a[href*="115cdn.com/s/"], a[href*="anxia.com/s/"], a[href*="pan.quark.cn/s/"], a[href*="www.quark.cn/s/"]'
         ).forEach(processAnchor);
     }
 
@@ -1184,7 +1226,7 @@
         overlay.innerHTML = `
             <div style="width:min(900px, calc(100vw - 24px));max-height:calc(100vh - 36px);overflow:auto;margin:0 auto;background:#020617;border:1px solid #334155;border-radius:14px;box-shadow:0 26px 60px rgba(0,0,0,.45);padding:16px 16px 18px 16px;color:#e2e8f0;font:13px/1.5 Arial,sans-serif;">
                 <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
-                    <div style="font-size:16px;font-weight:800;color:#f8fafc;">115云盘磁力助手 · 任务管理器</div>
+                    <div style="font-size:16px;font-weight:800;color:#f8fafc;">115-media-hub助手 · 任务管理器</div>
                     <button id="mh-manager-close" type="button" style="padding:6px 11px;border-radius:9px;border:1px solid #475569;background:#1e293b;color:#e2e8f0;cursor:pointer;">关闭</button>
                 </div>
                 <div style="margin-top:10px;padding:10px;border-radius:10px;background:rgba(30,41,59,.55);border:1px solid rgba(71,85,105,.5);color:#cbd5e1;">

@@ -1,11 +1,10 @@
 {
-  "version": "0.2.14",
-  "buildDate": "2026-04-27T16:16:56+08:00",
+  "version": "0.2.15",
+  "buildDate": "2026-04-27T16:57:49+08:00",
   "notes": [
-    "网盘分享导入优化：115 / Quark 分享解析新增关键阶段耗时展示，重复链接导入改为提示并允许二次确认继续创建任务。",
-    "订阅扫描增强：Quark 订阅任务支持一次性扫指定分享链接，115 / Quark 匹配共同支持 E+数字集数格式。",
-    "移动端交互修复：后台、登录页与油猴脚本的原生 alert / confirm / prompt 改为网页弹窗或 Toast，降低未认证页面的拦截风险。",
-    "订阅排除词：订阅任务新增自定义排除词，保存时统一中文/英文逗号，扫描候选命中排除词会直接跳过。"
+    "油猴脚本更名为 115-media-hub助手。",
+    "油猴脚本新增夸克分享链接复制按钮，支持 pan.quark.cn / www.quark.cn 分享链接。",
+    "保留原有 magnet / torrent / 115 分享链接识别与快捷操作。"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

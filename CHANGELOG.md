@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.2.15] - 2026-04-27
+- 油猴脚本更名为 `115-media-hub助手`，并补充夸克分享链接识别，会在 `pan.quark.cn` / `www.quark.cn` 分享链接旁生成复制按钮，保留原有 magnet / torrent / 115 行为。
+
 ## [0.2.14] - 2026-04-27
 - 网盘分享解析耗时观测：115 / Quark 分享链接打开与目录读取新增后端阶段耗时，并在资源导入界面展示关键流程用时，便于区分网盘解析、后端处理和前端等待。
 - 资源导入重复链接优化：115 / Quark 分享链接命中已有任务时不再直接拦截，改为提示已有任务并允许二次确认继续创建，适配同一个分享链接内分批转存不同文件。
