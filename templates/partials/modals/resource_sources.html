@@ -138,9 +138,13 @@
                         <div class="resource-source-manager-card">
                             <div class="resource-source-manager-card-title">测试分类</div>
                             <div class="resource-source-manager-test-row">
+                                <label class="resource-source-manager-test-sample">
+                                    <span>资源数</span>
+                                    <input id="resource-source-manager-test-sample-size" type="number" min="1" max="100" step="1" value="20" aria-label="测试频道分类采样资源数">
+                                </label>
                                 <button id="resource-source-manager-test-btn" type="button" onclick="testResourceSourceClassification()" class="resource-source-manager-primary-btn">测试全部频道分类</button>
                             </div>
-                            <div id="resource-source-manager-test-result" class="resource-source-manager-test-result">点击后会按当前配置并发测试频道分类（每个频道采样 20 条）。</div>
+                            <div id="resource-source-manager-test-result" class="resource-source-manager-test-result">点击后会按当前配置并发测试频道分类，资源数可按频道质量调整。</div>
                         </div>
 
                         <div class="resource-source-manager-card">

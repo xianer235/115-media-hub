@@ -48,6 +48,28 @@
             return primary && primary !== 'unknown' ? [primary] : [];
         }
 
+        function getResourceSourceTypeCount(profile, type) {
+            const normalized = String(type || '').trim().toLowerCase();
+            const counts = profile?.link_type_counts && typeof profile.link_type_counts === 'object'
+                ? profile.link_type_counts
+                : {};
+            const value = Number(counts[normalized] || 0);
+            return Number.isFinite(value) && value > 0 ? value : 0;
+        }
+
+        function renderResourceSourceTypeBadges(profile, types = []) {
+            const sourceTypes = sanitizeResourceLinkTypeList(types).filter(Boolean);
+            const safeTypes = sourceTypes.length ? sourceTypes : [getResourceSourcePrimaryLinkType(profile)];
+            return safeTypes
+                .slice(0, 4)
+                .map(type => {
+                    const count = getResourceSourceTypeCount(profile, type);
+                    const countText = count > 0 ? ` ${count}` : '';
+                    return `<span class="resource-source-manager-type-badge">${escapeHtml(getResourceLinkTypeLabel(type))}${escapeHtml(countText)}</span>`;
+                })
+                .join('');
+        }
+
         function getResourceSourceSectionIndex() {
             const index = {};
             (Array.isArray(resourceState.channel_sections) ? resourceState.channel_sections : []).forEach(section => {
@@ -495,9 +517,10 @@
             const mobileToolsTabEl = document.getElementById('resource-source-manager-mobile-tools-tab');
             const resultEl = document.getElementById('resource-source-manager-test-result');
             const testBtn = document.getElementById('resource-source-manager-test-btn');
+            const sampleInput = document.getElementById('resource-source-manager-test-sample-size');
             const selectAllBtn = document.getElementById('resource-source-manager-select-all-btn');
             const invertBtn = document.getElementById('resource-source-manager-invert-btn');
-            if (!shell || !typeFiltersEl || !statusFiltersEl || !activityFiltersEl || !searchInputEl || !sortSelectEl || !hintEl || !listEl || !selectedCountEl || !mobileFilteredCountEl || !mobileSelectedCountEl || !mobileListTabEl || !mobileToolsTabEl || !resultEl || !testBtn || !selectAllBtn || !invertBtn) return;
+            if (!shell || !typeFiltersEl || !statusFiltersEl || !activityFiltersEl || !searchInputEl || !sortSelectEl || !hintEl || !listEl || !selectedCountEl || !mobileFilteredCountEl || !mobileSelectedCountEl || !mobileListTabEl || !mobileToolsTabEl || !resultEl || !testBtn || !sampleInput || !selectAllBtn || !invertBtn) return;
 
             const sources = resourceState.sources || [];
             const sectionIndex = getResourceSourceSectionIndex();
@@ -581,20 +604,24 @@
                 const success = Number(resourceSourceTestResult.success || 0);
                 const failed = Number(resourceSourceTestResult.failed || 0);
                 const threads = Math.max(1, Number(resourceSourceTestResult.threads || 1));
+                const sampleSize = Math.max(1, Number(resourceSourceTestResult.sample_size || sampleInput.value || 20));
                 const lastName = String(resourceSourceTestResult.last_name || '').trim();
-                resultEl.textContent = `测试中：${done}/${total}，成功 ${success}，失败 ${failed}，线程 ${threads}${lastName ? `，当前 ${lastName}` : ''}`;
+                resultEl.textContent = `测试中：${done}/${total}，成功 ${success}，失败 ${failed}，线程 ${threads}，每频道资源数 ${sampleSize}${lastName ? `，当前 ${lastName}` : ''}`;
             } else if (Number(resourceSourceTestResult.total || 0) > 0) {
                 const threads = Math.max(1, Number(resourceSourceTestResult.threads || 1));
-                const base = `测试完成：共 ${resourceSourceTestResult.total} 个频道，成功 ${resourceSourceTestResult.success || 0}，失败 ${resourceSourceTestResult.failed || 0}，线程 ${threads}。`;
+                const sampleSize = Math.max(1, Number(resourceSourceTestResult.sample_size || sampleInput.value || 20));
+                const base = `测试完成：共 ${resourceSourceTestResult.total} 个频道，成功 ${resourceSourceTestResult.success || 0}，失败 ${resourceSourceTestResult.failed || 0}，线程 ${threads}，每频道资源数 ${sampleSize}。`;
                 const firstError = String(resourceSourceTestResult.error || '').trim();
                 resultEl.textContent = firstError ? `${base} 失败示例：${firstError}` : base;
             } else if (resourceSourceTestResult.error) {
                 resultEl.textContent = `测试失败：${resourceSourceTestResult.error}`;
             } else {
                 const defaultThreads = getCurrentTgChannelThreads();
-                resultEl.textContent = `点击后会按当前配置并发测试频道分类（线程 ${defaultThreads}，每个频道采样 20 条）。`;
+                const sampleSize = Math.max(1, Number(sampleInput.value || 20));
+                resultEl.textContent = `点击后会按当前配置并发测试频道分类（线程 ${defaultThreads}，每频道资源数 ${sampleSize}）。`;
             }
             testBtn.disabled = resourceSourceTestBusy || sources.length <= 0;
+            sampleInput.disabled = resourceSourceTestBusy;
 
             if (!filtered.length) {
                 listEl.innerHTML = '<div class="resource-source-empty"><div class="resource-source-empty-title">当前筛选无结果</div><div class="resource-source-empty-copy">可以切换资源类型、启用状态或活跃时间范围。</div></div>';
@@ -618,6 +645,8 @@
                 const supportText = supportSearched > 0
                     ? `订阅支持：${supportMatched}/${supportSearched}（命中率 ${supportHitRate}%） · 产出 ${supportItems} 条 · 异常 ${supportErrors} 次`
                     : '订阅支持：暂无订阅任务统计';
+                const typeBadges = renderResourceSourceTypeBadges(view.profile, view.sourceTypes);
+                const channelLink = String(view.channelUrl || (view.channelId ? `https://t.me/s/${view.channelId}` : '')).trim();
                 return `
                     <div class="resource-source-manager-row">
                         <label class="ui-checkbox">
@@ -627,8 +656,8 @@
                         <div class="resource-source-manager-row-main">
                             <div class="resource-source-manager-row-title">
                                 <span>${escapeHtml(view.source.name || view.channelId || '未命名频道')}</span>
-                                <span class="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">@${escapeHtml(view.channelId || '--')}</span>
-                                <span class="text-[10px] px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-200 border border-sky-500/20">${escapeHtml(getResourceLinkTypeLabel(view.primaryType))}</span>
+                                ${channelLink ? `<a href="${escapeHtml(channelLink)}" target="_blank" rel="noopener noreferrer" class="resource-source-manager-channel-link">@${escapeHtml(view.channelId || '--')}</a>` : `<span class="resource-source-manager-channel-link">@${escapeHtml(view.channelId || '--')}</span>`}
+                                ${typeBadges}
                                 <span class="text-[10px] px-2 py-0.5 rounded-full ${enabled ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20' : 'bg-slate-700 text-slate-300 border border-slate-600'}">${enabled ? '已启用' : '已停用'}</span>
                             </div>
                             <div class="resource-source-manager-row-meta">类型：${escapeHtml(typeText || getResourceLinkTypeLabel(view.primaryType || 'unknown'))} · 活跃度：${escapeHtml(getResourceSourceActivityBucketLabel(view.activityBucket))} · 最近：${escapeHtml(latestAge)}${latest ? `（${escapeHtml(formatTimeText(latest))}）` : ''} · ${escapeHtml(supportText)}</div>
@@ -659,6 +688,9 @@
                 return;
             }
 
+            const sampleInput = document.getElementById('resource-source-manager-test-sample-size');
+            const sampleSize = Math.max(1, Math.min(100, parseInt(sampleInput?.value || '20', 10) || 20));
+            if (sampleInput) sampleInput.value = String(sampleSize);
             const threadLimit = Math.min(getCurrentTgChannelThreads(), sourceEntries.length);
             resourceSourceTestBusy = true;
             resourceSourceTestResult = {
@@ -670,6 +702,7 @@
                 last_name: '',
                 error: '',
                 threads: threadLimit,
+                sample_size: sampleSize,
             };
             renderResourceSourceManagerModal();
             const nextProfiles = { ...(resourceState.channel_profiles || {}) };
@@ -689,7 +722,7 @@
                         try {
                             const data = await window.MediaHubApi.postJson('/resource/channels/classify', {
                                 channel_id: item.channel_id,
-                                sample_size: 20,
+                                sample_size: sampleSize,
                             });
                             const profile = data.profile && typeof data.profile === 'object' ? data.profile : {};
                             nextProfiles[item.channel_id] = profile;

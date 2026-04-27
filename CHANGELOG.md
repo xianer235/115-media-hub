@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.2.17] - 2026-04-27
+- 频道资源管理的分类测试新增资源数输入框，可在 `1-100` 之间调整每个频道的采样数量。
+- 频道管理列表支持同时展示多个资源类型标签，并在标签中显示当前采样内的类型计数。
+- 频道 ID 标签改为可点击链接，可直接跳转到对应 Telegram 频道页面。
+
 ## [0.2.16] - 2026-04-27
 - 频道订阅导入兼容 CloudSaver JSON 与盘搜 `export CHANNELS=...`；导出统一为 CloudSaver JSON，并改为先弹窗展示内容，再由用户手动复制或下载 JSON。
 - 文件夹监控新建任务默认值调整：目录列出后延时改为 `250ms`，并保留显式填写 `0` 的语义。

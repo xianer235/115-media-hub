@@ -1769,6 +1769,36 @@
             display: flex;
             align-items: center;
             justify-content: flex-start;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+        .resource-source-manager-test-sample {
+            min-height: 40px;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.38rem;
+            border-radius: 0.8rem;
+            border: 1px solid rgba(71, 85, 105, 0.76);
+            background: rgba(15, 23, 42, 0.68);
+            color: #cbd5e1;
+            padding: 0.35rem 0.5rem;
+            font-size: 0.72rem;
+            font-weight: 700;
+        }
+        .resource-source-manager-test-sample input {
+            width: 4.6rem;
+            min-height: 30px;
+            border-radius: 0.55rem;
+            border: 1px solid rgba(71, 85, 105, 0.75);
+            background: rgba(2, 6, 23, 0.58);
+            color: #f8fafc;
+            padding: 0.2rem 0.42rem;
+            font-size: 0.76rem;
+            font-weight: 800;
+        }
+        .resource-source-manager-test-sample input:disabled {
+            opacity: 0.65;
+            cursor: not-allowed;
         }
         .resource-source-manager-select {
             width: 100%;
@@ -2067,6 +2097,32 @@
             align-items: center;
             flex-wrap: wrap;
             gap: 0.36rem;
+        }
+        .resource-source-manager-type-badge {
+            font-size: 0.63rem;
+            line-height: 1;
+            padding: 0.28rem 0.46rem;
+            border-radius: 9999px;
+            background: rgba(14, 165, 233, 0.1);
+            color: #bae6fd;
+            border: 1px solid rgba(56, 189, 248, 0.24);
+            white-space: nowrap;
+        }
+        .resource-source-manager-channel-link {
+            font-size: 0.63rem;
+            line-height: 1;
+            padding: 0.28rem 0.46rem;
+            border-radius: 9999px;
+            background: rgba(15, 23, 42, 0.82);
+            color: #cbd5e1;
+            border: 1px solid rgba(71, 85, 105, 0.82);
+            text-decoration: none;
+            white-space: nowrap;
+        }
+        .resource-source-manager-channel-link:hover {
+            border-color: rgba(56, 189, 248, 0.58);
+            color: #e0f2fe;
+            background: rgba(14, 165, 233, 0.14);
         }
         .resource-source-manager-row-meta {
             font-size: 0.67rem;
@@ -5199,10 +5255,27 @@
         html.theme-day .resource-source-compact-btn,
         html.theme-day .resource-source-manager-filter-tab,
         html.theme-day .resource-source-manager-select,
+        html.theme-day .resource-source-manager-test-sample,
+        html.theme-day .resource-source-manager-test-sample input,
         html.theme-day .resource-source-manager-danger-btn {
             background: rgba(255, 255, 255, 0.92);
             border-color: var(--border);
             color: #334155;
+        }
+        html.theme-day .resource-source-manager-type-badge {
+            background: rgba(14, 165, 233, 0.09);
+            border-color: rgba(14, 165, 233, 0.24);
+            color: #0369a1;
+        }
+        html.theme-day .resource-source-manager-channel-link {
+            background: rgba(255, 255, 255, 0.92);
+            border-color: var(--border);
+            color: #334155;
+        }
+        html.theme-day .resource-source-manager-channel-link:hover {
+            border-color: #0ea5e9;
+            color: #0369a1;
+            background: rgba(14, 165, 233, 0.08);
         }
         html.theme-day .resource-source-compact-btn:hover,
         html.theme-day .resource-source-manager-filter-tab:hover {

@@ -424,7 +424,7 @@ async def classify_resource_channel_endpoint(request: Request) -> Dict[str, Any]
     if not channel_id:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "频道 ID 无效"})
 
-    sample_size = max(20, min(int(data.get("sample_size", 20) or 20), 100))
+    sample_size = max(1, min(int(data.get("sample_size", 20) or 20), 100))
     cfg = get_config()
     source = next(
         (item for item in cfg.get("resource_sources", []) if normalize_telegram_channel_id_from_input(item.get("channel_id", "")) == channel_id),
@@ -442,7 +442,7 @@ async def classify_resource_channel_endpoint(request: Request) -> Dict[str, Any]
             cfg,
             source,
             sample_size,
-            max(20, min(sample_size, 50)),
+            max(1, min(sample_size, 50)),
             RESOURCE_CHANNEL_TYPE_MAX_PAGES,
         )
     except Exception as exc:
