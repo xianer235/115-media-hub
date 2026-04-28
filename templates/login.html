@@ -10,13 +10,13 @@
     <style>
         :root {
             color-scheme: dark;
-            --login-bg: #08111f;
-            --login-panel: rgba(15, 23, 42, 0.94);
+            --login-bg: #0d1624;
+            --login-panel: rgba(18, 28, 44, 0.94);
             --login-panel-soft: rgba(14, 165, 233, 0.1);
-            --login-stroke: rgba(148, 163, 184, 0.2);
-            --login-stroke-strong: rgba(56, 189, 248, 0.28);
+            --login-stroke: rgba(158, 178, 205, 0.42);
+            --login-stroke-strong: rgba(87, 198, 248, 0.42);
             --login-text: #e5eefb;
-            --login-muted: #93a4bb;
+            --login-muted: #aebdd0;
             --login-primary: #0284c7;
             --login-primary-hover: #0ea5e9;
         }
@@ -38,8 +38,8 @@
             justify-content: center;
             padding: max(1rem, env(safe-area-inset-top)) 1rem max(1rem, env(safe-area-inset-bottom));
             background:
-                radial-gradient(circle at 50% -20%, rgba(14, 165, 233, 0.22), transparent 34rem),
-                linear-gradient(180deg, #0b1220 0%, var(--login-bg) 100%);
+                radial-gradient(circle at 50% -20%, rgba(14, 165, 233, 0.25), transparent 34rem),
+                linear-gradient(180deg, #111a29 0%, var(--login-bg) 100%);
             color: var(--login-text);
             font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         }
@@ -122,7 +122,7 @@
             min-height: 3.25rem;
             border: 1px solid var(--login-stroke);
             border-radius: 0.9rem;
-            background: rgba(2, 6, 23, 0.72);
+            background: linear-gradient(180deg, rgba(24, 34, 50, 0.96), rgba(17, 27, 43, 0.96));
             color: #f8fafc;
             font: inherit;
             font-size: 1rem;
@@ -132,13 +132,13 @@
         }
 
         .login-input::placeholder {
-            color: #64748b;
+            color: #aebdd0;
         }
 
         .login-input:focus {
             border-color: #38bdf8;
-            background: rgba(2, 6, 23, 0.9);
-            box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.12);
+            background: linear-gradient(180deg, rgba(28, 41, 60, 0.98), rgba(20, 32, 50, 0.98));
+            box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.18);
         }
 
         .login-submit {

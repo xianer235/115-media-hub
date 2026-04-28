@@ -7774,6 +7774,13 @@
             --glass-pill-stroke: rgba(184, 204, 230, 0.16);
             --glass-accent-fill: rgba(98, 187, 255, 0.18);
             --glass-accent-stroke: rgba(143, 211, 255, 0.34);
+            --night-field-fill: linear-gradient(180deg, rgba(24, 34, 50, 0.96), rgba(17, 27, 43, 0.96));
+            --night-field-stroke: rgba(151, 171, 198, 0.58);
+            --night-field-stroke-hover: rgba(177, 199, 226, 0.76);
+            --night-field-text: #f5f9ff;
+            --night-field-muted: #aebed2;
+            --night-soft-surface: rgba(18, 28, 44, 0.9);
+            --night-soft-stroke: rgba(139, 161, 190, 0.44);
             --shell-text-main: #f6f8fd;
             --shell-text-soft: #a6b3c4;
             --shell-text-muted: #778498;
@@ -7782,11 +7789,95 @@
         .app-body {
             font-family: var(--ios-font-stack);
             background:
-                radial-gradient(circle at 8% 8%, rgba(126, 183, 255, 0.16), transparent 22rem),
-                radial-gradient(circle at 100% 0%, rgba(102, 211, 255, 0.1), transparent 24rem),
-                radial-gradient(circle at 50% 100%, rgba(52, 86, 138, 0.1), transparent 30rem),
-                linear-gradient(180deg, #090d14 0%, #121822 42%, #070b12 100%);
+                radial-gradient(circle at 8% 8%, rgba(126, 183, 255, 0.18), transparent 22rem),
+                radial-gradient(circle at 100% 0%, rgba(102, 211, 255, 0.13), transparent 24rem),
+                radial-gradient(circle at 50% 100%, rgba(71, 103, 154, 0.14), transparent 30rem),
+                linear-gradient(180deg, #0d1420 0%, #172130 42%, #0b111c 100%);
             color: var(--shell-text-main);
+        }
+
+        html:not(.theme-day) input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+        html:not(.theme-day) select,
+        html:not(.theme-day) textarea,
+        html:not(.theme-day) .resource-source-manager-search,
+        html:not(.theme-day) .resource-source-manager-sort,
+        html:not(.theme-day) .subscription-link-scan-input,
+        html:not(.theme-day) .resource-share-search-input,
+        html:not(.theme-day) .resource-quick-link-input {
+            background: var(--night-field-fill) !important;
+            border-color: var(--night-field-stroke) !important;
+            color: var(--night-field-text) !important;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(10, 17, 29, 0.18) !important;
+            color-scheme: dark;
+        }
+
+        html:not(.theme-day) input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"])::placeholder,
+        html:not(.theme-day) textarea::placeholder,
+        html:not(.theme-day) .resource-search-input::placeholder,
+        html:not(.theme-day) .resource-source-manager-search::placeholder,
+        html:not(.theme-day) .subscription-link-scan-input::placeholder,
+        html:not(.theme-day) .resource-share-search-input::placeholder,
+        html:not(.theme-day) .resource-quick-link-input::placeholder {
+            color: var(--night-field-muted) !important;
+        }
+
+        html:not(.theme-day) input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):hover,
+        html:not(.theme-day) select:hover,
+        html:not(.theme-day) textarea:hover,
+        html:not(.theme-day) .resource-source-manager-search:hover,
+        html:not(.theme-day) .resource-source-manager-sort:hover,
+        html:not(.theme-day) .subscription-link-scan-input:hover,
+        html:not(.theme-day) .resource-share-search-input:hover,
+        html:not(.theme-day) .resource-quick-link-input:hover {
+            border-color: var(--night-field-stroke-hover) !important;
+        }
+
+        html:not(.theme-day) input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):focus,
+        html:not(.theme-day) select:focus,
+        html:not(.theme-day) textarea:focus,
+        html:not(.theme-day) .resource-source-manager-search:focus,
+        html:not(.theme-day) .resource-source-manager-sort:focus,
+        html:not(.theme-day) .subscription-link-scan-input:focus,
+        html:not(.theme-day) .resource-share-search-input:focus,
+        html:not(.theme-day) .resource-quick-link-input:focus {
+            border-color: rgba(125, 211, 252, 0.88) !important;
+            background: linear-gradient(180deg, rgba(28, 41, 60, 0.98), rgba(20, 32, 50, 0.98)) !important;
+            box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.1) !important;
+            outline: none !important;
+        }
+
+        html:not(.theme-day) .resource-search-input-wrap {
+            background: var(--night-field-fill) !important;
+            border-color: var(--night-field-stroke) !important;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(10, 17, 29, 0.18) !important;
+        }
+
+        html:not(.theme-day) .resource-search-input-wrap:focus-within {
+            border-color: rgba(125, 211, 252, 0.88) !important;
+            box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.1) !important;
+        }
+
+        html:not(.theme-day) .bg-slate-900,
+        html:not(.theme-day) .bg-slate-900\/80,
+        html:not(.theme-day) .bg-slate-900\/70,
+        html:not(.theme-day) .bg-slate-900\/60,
+        html:not(.theme-day) .bg-slate-900\/50,
+        html:not(.theme-day) .bg-slate-950,
+        html:not(.theme-day) .bg-slate-950\/85,
+        html:not(.theme-day) .bg-slate-950\/80,
+        html:not(.theme-day) .bg-slate-950\/70,
+        html:not(.theme-day) .bg-slate-950\/45 {
+            background-color: var(--night-soft-surface) !important;
+        }
+
+        html:not(.theme-day) .border-slate-700,
+        html:not(.theme-day) .border-slate-700\/90,
+        html:not(.theme-day) .border-slate-700\/80,
+        html:not(.theme-day) .border-slate-700\/70,
+        html:not(.theme-day) .border-slate-700\/60,
+        html:not(.theme-day) .border-slate-700\/50,
+        html:not(.theme-day) .border-slate-800 {
+            border-color: var(--night-soft-stroke) !important;
         }
 
         .app-shell {

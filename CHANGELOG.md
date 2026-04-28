@@ -3,6 +3,9 @@
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
+
+## [0.3.3] - 2026-04-29
+- 夜间模式整体底色和表单控件对比度微调，文本框、搜索框与常见弱边框更容易分辨。
 - 频道导入/导出入口移到参数配置页的 TG 订阅源“频道数据”区，频道管理弹窗只保留日常维护操作。
 - 频道管理新增专用排序模式，支持拖拽、上移/下移、排序草稿套用与保存/取消，避免在普通管理列表中误触调整真实顺序。
 - 频道排序拖动改为 Pointer Events 实现，桌面和移动端都可按住抓手移动频道顺序。
