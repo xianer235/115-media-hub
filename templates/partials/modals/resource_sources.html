@@ -118,15 +118,19 @@
                 <div class="resource-source-modal-header">
                     <div class="min-w-0">
                         <div class="resource-source-modal-eyebrow">Manage / Sort</div>
-                        <div class="resource-source-modal-title">频道管理中心</div>
-                        <div class="resource-source-modal-subtitle">统一管理频道筛选、分类测试、批量操作和频道顺序；排序查看不会自动改动真实顺序。</div>
+                        <div id="resource-source-manager-title" class="resource-source-modal-title">频道管理中心</div>
+                        <div id="resource-source-manager-subtitle" class="resource-source-modal-subtitle">管理频道筛选、分类测试、批量操作和频道顺序；导入导出已移到设置页的频道数据区。</div>
                     </div>
                     <button type="button" class="resource-source-modal-close" onclick="closeResourceSourceManagerModal()" aria-label="关闭频道管理弹窗">✕</button>
                 </div>
-                <div class="resource-source-manager-mobile-bar" aria-label="竖屏频道管理视图切换">
+                <div class="resource-source-manager-mobile-bar" aria-label="紧凑频道管理视图切换">
                     <div class="resource-source-manager-mobile-summary">
                         <div class="resource-source-manager-mobile-pill">筛选结果 <span id="resource-source-manager-mobile-filtered-count">0</span></div>
                         <div class="resource-source-manager-mobile-pill">已选频道 <span id="resource-source-manager-mobile-selected-count">0</span></div>
+                    </div>
+                    <div class="resource-source-manager-mobile-actions" aria-label="频道快捷操作">
+                        <button type="button" onclick="openResourceSourceModal()" class="resource-source-manager-primary-btn">添加频道</button>
+                        <button type="button" onclick="startResourceSourceSortMode()" class="resource-source-secondary-btn">排序频道</button>
                     </div>
                     <div class="resource-source-manager-mobile-tabs" role="tablist" aria-label="频道管理模式">
                         <button id="resource-source-manager-mobile-list-tab" type="button" data-resource-source-manager-panel="list" class="resource-source-manager-mobile-tab">频道列表</button>
@@ -147,12 +151,11 @@
                             <div id="resource-source-manager-test-result" class="resource-source-manager-test-result">点击后会按当前配置并发测试频道分类，资源数可按频道质量调整。</div>
                         </div>
 
-                        <div class="resource-source-manager-card">
+                        <div class="resource-source-manager-card resource-source-manager-maintenance-card">
                             <div class="resource-source-manager-card-title">频道维护</div>
                             <div class="resource-source-manager-maintenance-actions">
                                 <button type="button" onclick="openResourceSourceModal()" class="resource-source-manager-primary-btn">添加频道</button>
-                                <button type="button" onclick="openResourceSourceImportModal()" class="resource-source-secondary-btn">导入频道</button>
-                                <button type="button" onclick="exportResourceSources()" class="resource-source-secondary-btn">导出频道</button>
+                                <button type="button" onclick="startResourceSourceSortMode()" class="resource-source-secondary-btn">排序频道</button>
                             </div>
                         </div>
 
@@ -183,7 +186,6 @@
                                 </select>
                             </div>
                             <div id="resource-source-manager-sort-hint" class="resource-source-manager-filter-hint">当前为手动顺序。</div>
-                            <button id="resource-source-manager-apply-sort-btn" type="button" onclick="applyResourceSourceCurrentSortOrder()" class="resource-source-manager-primary-btn">应用当前排序为频道顺序</button>
                         </div>
 
                         <div class="resource-source-manager-card">
@@ -208,6 +210,28 @@
                     </div>
 
                     <div class="resource-source-manager-main">
+                        <div id="resource-source-manager-sort-panel" class="resource-source-manager-sort-panel hidden">
+                            <div class="resource-source-manager-sort-head">
+                                <div>
+                                    <div class="resource-source-manager-card-title">排序模式</div>
+                                    <div id="resource-source-manager-sort-summary" class="resource-source-manager-filter-hint">按住拖拽手柄调整顺序，也可以使用上移/下移。</div>
+                                </div>
+                                <div id="resource-source-manager-sort-dirty" class="resource-source-manager-sort-dirty">未调整</div>
+                            </div>
+                            <div class="resource-source-manager-sort-controls">
+                                <select id="resource-source-manager-sort-preset" class="resource-source-manager-sort">
+                                    <option value="manual">当前手动顺序</option>
+                                    <option value="recent">按最近发布时间</option>
+                                    <option value="activity">按活跃度分层</option>
+                                    <option value="support">按订阅支持度</option>
+                                    <option value="output">按产出次数</option>
+                                    <option value="name">按频道名称</option>
+                                </select>
+                                <button type="button" onclick="applyResourceSourceSortPresetToDraft()" class="resource-source-secondary-btn">套用到草稿</button>
+                                <button type="button" onclick="cancelResourceSourceSortMode()" class="resource-source-secondary-btn">取消</button>
+                                <button type="button" onclick="saveResourceSourceSortMode()" class="resource-source-manager-primary-btn">保存排序</button>
+                            </div>
+                        </div>
                         <div id="resource-source-manager-list" class="resource-source-manager-list"></div>
                     </div>
                 </div>

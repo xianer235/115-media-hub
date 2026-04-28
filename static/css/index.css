@@ -886,6 +886,36 @@
             line-height: 1.65;
             color: #cbd5e1;
         }
+        .resource-source-data-card {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 0.9rem;
+            align-items: center;
+            padding: 0.82rem 0.95rem;
+            border-radius: 1rem;
+            border: 1px solid rgba(71, 85, 105, 0.72);
+            background: rgba(15, 23, 42, 0.34);
+        }
+        .resource-source-data-copy {
+            min-width: 0;
+        }
+        .resource-source-data-title {
+            font-size: 0.82rem;
+            font-weight: 900;
+            color: #f8fafc;
+        }
+        .resource-source-data-desc {
+            margin-top: 0.26rem;
+            font-size: 0.72rem;
+            line-height: 1.6;
+            color: #94a3b8;
+        }
+        .resource-source-data-actions {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            gap: 0.55rem;
+        }
         #resource-source-list {
             max-height: 28rem;
             overflow: auto;
@@ -1693,6 +1723,18 @@
             flex-wrap: wrap;
             gap: 0.45rem;
         }
+        .resource-source-manager-mobile-actions {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.45rem;
+        }
+        .resource-source-manager-mobile-actions .resource-source-manager-primary-btn,
+        .resource-source-manager-mobile-actions .resource-source-secondary-btn {
+            width: 100%;
+            min-height: 40px;
+            border-radius: 0.9rem;
+            font-size: 0.74rem;
+        }
         .resource-source-manager-mobile-pill {
             min-height: 32px;
             border-radius: 9999px;
@@ -1748,6 +1790,9 @@
         .resource-source-manager-main {
             min-width: 0;
             min-height: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 0.62rem;
         }
         .resource-source-manager-card {
             border-radius: 1rem;
@@ -2065,7 +2110,46 @@
             grid-template-columns: 1fr;
             gap: 0.45rem;
         }
+        .resource-source-manager-sort-panel {
+            flex-shrink: 0;
+            border-radius: 1rem;
+            border: 1px solid rgba(56, 189, 248, 0.24);
+            background: rgba(14, 165, 233, 0.08);
+            padding: 0.72rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.62rem;
+        }
+        .resource-source-manager-sort-head {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 0.75rem;
+        }
+        .resource-source-manager-sort-dirty {
+            flex: 0 0 auto;
+            border-radius: 9999px;
+            border: 1px solid rgba(71, 85, 105, 0.72);
+            background: rgba(15, 23, 42, 0.62);
+            color: #94a3b8;
+            padding: 0.28rem 0.58rem;
+            font-size: 0.66rem;
+            font-weight: 800;
+            white-space: nowrap;
+        }
+        .resource-source-manager-sort-dirty-active {
+            border-color: rgba(16, 185, 129, 0.44);
+            background: rgba(16, 185, 129, 0.13);
+            color: #bbf7d0;
+        }
+        .resource-source-manager-sort-controls {
+            display: grid;
+            grid-template-columns: minmax(10rem, 1fr) repeat(3, auto);
+            gap: 0.48rem;
+            align-items: center;
+        }
         .resource-source-manager-list {
+            flex: 1 1 auto;
             border-radius: 1rem;
             border: 1px solid rgba(51, 65, 85, 0.8);
             background: rgba(2, 6, 23, 0.28);
@@ -2078,6 +2162,16 @@
             flex-direction: column;
             gap: 0.45rem;
         }
+        .resource-source-manager-shell-sorting .resource-source-manager-body {
+            grid-template-columns: minmax(0, 1fr);
+        }
+        .resource-source-manager-shell-sorting .resource-source-manager-side,
+        .resource-source-manager-shell-sorting .resource-source-manager-mobile-bar {
+            display: none;
+        }
+        .resource-source-manager-shell-sorting .resource-source-manager-main {
+            min-height: 0;
+        }
         .resource-source-manager-row {
             border-radius: 0.8rem;
             border: 1px solid rgba(51, 65, 85, 0.7);
@@ -2087,6 +2181,59 @@
             grid-template-columns: auto minmax(0, 1fr) auto;
             gap: 0.6rem;
             align-items: center;
+        }
+        .resource-source-manager-sort-row {
+            grid-template-columns: auto auto minmax(0, 1fr) auto;
+            cursor: default;
+        }
+        .resource-source-manager-sort-row-dragging {
+            opacity: 0.58;
+            border-color: rgba(56, 189, 248, 0.72);
+        }
+        .resource-source-manager-sort-row-over {
+            border-color: rgba(125, 211, 252, 0.82);
+            background: rgba(14, 165, 233, 0.14);
+        }
+        .resource-source-manager-drag-handle {
+            width: 2.1rem;
+            min-width: 2.1rem;
+            height: 2.1rem;
+            border-radius: 0.72rem;
+            border: 1px solid rgba(71, 85, 105, 0.78);
+            background: rgba(15, 23, 42, 0.64);
+            color: #cbd5e1;
+            font-size: 0.9rem;
+            font-weight: 900;
+            line-height: 1;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            cursor: grab;
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-touch-callout: none;
+        }
+        .resource-source-manager-drag-handle:hover {
+            border-color: rgba(125, 211, 252, 0.72);
+            color: #e0f2fe;
+        }
+        .resource-source-sort-pointer-active,
+        .resource-source-sort-pointer-active * {
+            cursor: grabbing !important;
+            user-select: none !important;
+            -webkit-user-select: none !important;
+        }
+        .resource-source-manager-sort-rank {
+            min-width: 3.1rem;
+            border-radius: 9999px;
+            border: 1px solid rgba(71, 85, 105, 0.72);
+            background: rgba(2, 6, 23, 0.24);
+            color: #7dd3fc;
+            padding: 0.25rem 0.5rem;
+            text-align: center;
+            font-size: 0.68rem;
+            font-weight: 900;
         }
         .resource-source-manager-row-main {
             min-width: 0;
@@ -4431,11 +4578,22 @@
                 grid-template-columns: 1fr;
                 gap: 0.45rem;
             }
+            .resource-source-manager-sort-row {
+                grid-template-columns: auto auto minmax(0, 1fr);
+                align-items: start;
+            }
             .resource-source-manager-row > .ui-checkbox {
                 order: 1;
             }
             .resource-source-manager-row-main {
                 order: 2;
+            }
+            .resource-source-manager-sort-row .resource-source-manager-row-main {
+                order: initial;
+            }
+            .resource-source-manager-sort-row .resource-source-manager-drag-handle,
+            .resource-source-manager-sort-row .resource-source-manager-sort-rank {
+                order: initial;
             }
             .resource-source-manager-row-actions {
                 order: 3;
@@ -4443,6 +4601,17 @@
                 display: grid;
                 grid-template-columns: repeat(3, minmax(0, 1fr));
                 gap: 0.38rem;
+            }
+            .resource-source-manager-sort-row .resource-source-manager-row-actions {
+                grid-column: 1 / -1;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+            .resource-source-manager-sort-controls {
+                grid-template-columns: 1fr;
+            }
+            .resource-source-manager-sort-controls .resource-source-secondary-btn,
+            .resource-source-manager-sort-controls .resource-source-manager-primary-btn {
+                width: 100%;
             }
             .resource-source-manager-row-actions .resource-source-compact-btn {
                 min-height: 36px;
@@ -4508,7 +4677,8 @@
             #subscription-modal,
             #resource-source-manager-modal,
             #resource-source-modal,
-            #resource-source-import-modal {
+            #resource-source-import-modal,
+            #resource-source-export-modal {
                 padding: 0 !important;
             }
             #monitor-modal .monitor-modal-shell,
@@ -4516,7 +4686,8 @@
             #resource-import-modal .modal-card,
             #resource-source-manager-modal .modal-card,
             #resource-source-modal .modal-card,
-            #resource-source-import-modal .modal-card {
+            #resource-source-import-modal .modal-card,
+            #resource-source-export-modal .modal-card {
                 width: 100vw;
                 max-width: 100vw;
                 margin-top: 0 !important;
@@ -4549,7 +4720,8 @@
             }
             #resource-source-manager-modal .modal-card,
             #resource-source-modal .modal-card,
-            #resource-source-import-modal .modal-card {
+            #resource-source-import-modal .modal-card,
+            #resource-source-export-modal .modal-card {
                 block-size: var(--app-vh, 100dvh);
                 max-block-size: var(--app-vh, 100dvh);
                 padding-bottom: calc(0.9rem + env(safe-area-inset-bottom));
@@ -4922,11 +5094,67 @@
             .resource-source-card-action-row {
                 align-items: flex-start;
             }
-            .resource-source-manager-body {
+            .resource-source-manager-mobile-bar {
+                display: flex;
+                flex-direction: column;
+                gap: 0.55rem;
+                margin-top: 0.72rem;
+            }
+            .resource-source-manager-shell.resource-source-manager-shell-mobile {
+                padding-bottom: calc(1rem + env(safe-area-inset-bottom));
+            }
+            .resource-source-manager-shell.resource-source-manager-shell-mobile .resource-source-manager-body {
+                margin-top: 0.65rem;
+                display: flex;
+                flex-direction: column;
+                gap: 0;
+            }
+            .resource-source-manager-shell.resource-source-manager-shell-mobile .resource-source-manager-side,
+            .resource-source-manager-shell.resource-source-manager-shell-mobile .resource-source-manager-main {
+                min-height: 0;
+                flex: 1 1 auto;
+            }
+            .resource-source-manager-shell.resource-source-manager-shell-mobile .resource-source-manager-main {
+                display: flex;
+                flex-direction: column;
+            }
+            .resource-source-manager-shell.resource-source-manager-shell-mobile.resource-source-manager-shell-mobile-list .resource-source-manager-side {
+                display: none;
+            }
+            .resource-source-manager-shell.resource-source-manager-shell-mobile.resource-source-manager-shell-mobile-tools .resource-source-manager-main {
+                display: none;
+            }
+            .resource-source-manager-shell.resource-source-manager-shell-mobile.resource-source-manager-shell-mobile-tools .resource-source-manager-side {
+                display: flex;
+                overflow: auto;
+                padding-right: 0;
+                padding-bottom: 0.1rem;
+            }
+            .resource-source-manager-shell.resource-source-manager-shell-mobile .resource-source-manager-card {
+                padding: 0.68rem;
+                gap: 0.52rem;
+            }
+            .resource-source-manager-shell.resource-source-manager-shell-mobile .resource-source-manager-maintenance-card {
+                display: none;
+            }
+            .resource-source-manager-shell.resource-source-manager-shell-mobile .resource-source-manager-list {
+                max-height: none;
+                height: 100%;
+                padding: 0.58rem;
+            }
+            .resource-source-manager-shell.resource-source-manager-shell-mobile .resource-source-manager-toolbar {
                 grid-template-columns: 1fr;
             }
-            .resource-source-manager-list {
-                max-height: 52vh;
+            .resource-source-manager-shell.resource-source-manager-shell-mobile .resource-source-manager-sort {
+                min-width: 0;
+                width: 100%;
+            }
+            .resource-source-manager-shell.resource-source-manager-shell-mobile .resource-source-manager-select-actions,
+            .resource-source-manager-shell.resource-source-manager-shell-mobile .resource-source-manager-bulk-actions {
+                grid-template-columns: 1fr;
+            }
+            .resource-source-manager-shell.resource-source-manager-shell-mobile .resource-source-manager-test-result {
+                font-size: 0.7rem;
             }
         }
         @media (max-width: 900px) {
@@ -4952,6 +5180,13 @@
                 flex-direction: column;
                 align-items: stretch;
             }
+            .resource-source-data-card {
+                grid-template-columns: 1fr;
+                align-items: stretch;
+            }
+            .resource-source-data-actions {
+                justify-content: flex-start;
+            }
             .resource-source-card-action-row .ui-switch-field {
                 width: 100%;
             }
@@ -4965,9 +5200,15 @@
             .resource-source-manager-row {
                 grid-template-columns: auto minmax(0, 1fr);
             }
+            .resource-source-manager-sort-row {
+                grid-template-columns: auto auto minmax(0, 1fr);
+            }
             .resource-source-manager-row-actions {
                 grid-column: 1 / -1;
                 justify-content: flex-start;
+            }
+            .resource-source-manager-sort-controls {
+                grid-template-columns: 1fr 1fr;
             }
         }
         @media (max-width: 767px) {
@@ -5000,7 +5241,11 @@
                 width: 100%;
             }
             .resource-source-secondary-btn,
-            .resource-source-add-btn {
+            .resource-source-add-btn,
+            .resource-source-data-actions .resource-source-secondary-btn {
+                width: 100%;
+            }
+            .resource-source-data-actions {
                 width: 100%;
             }
             .resource-source-panel-copy {
@@ -5043,67 +5288,6 @@
                 font-size: 0.96rem;
             }
         }
-        @media (orientation: portrait) and (max-width: 900px) {
-            .resource-source-manager-mobile-bar {
-                display: flex;
-                flex-direction: column;
-                gap: 0.55rem;
-                margin-top: 0.72rem;
-            }
-            .resource-source-manager-shell.resource-source-manager-shell-mobile {
-                padding-bottom: calc(1rem + env(safe-area-inset-bottom));
-            }
-            .resource-source-manager-shell.resource-source-manager-shell-mobile .resource-source-manager-body {
-                margin-top: 0.65rem;
-                display: flex;
-                flex-direction: column;
-                gap: 0;
-            }
-            .resource-source-manager-shell.resource-source-manager-shell-mobile .resource-source-manager-side,
-            .resource-source-manager-shell.resource-source-manager-shell-mobile .resource-source-manager-main {
-                min-height: 0;
-                flex: 1 1 auto;
-            }
-            .resource-source-manager-shell.resource-source-manager-shell-mobile .resource-source-manager-main {
-                display: flex;
-                flex-direction: column;
-            }
-            .resource-source-manager-shell.resource-source-manager-shell-mobile.resource-source-manager-shell-mobile-list .resource-source-manager-side {
-                display: none;
-            }
-            .resource-source-manager-shell.resource-source-manager-shell-mobile.resource-source-manager-shell-mobile-tools .resource-source-manager-main {
-                display: none;
-            }
-            .resource-source-manager-shell.resource-source-manager-shell-mobile.resource-source-manager-shell-mobile-tools .resource-source-manager-side {
-                display: flex;
-                overflow: auto;
-                padding-right: 0;
-                padding-bottom: 0.1rem;
-            }
-            .resource-source-manager-shell.resource-source-manager-shell-mobile .resource-source-manager-card {
-                padding: 0.68rem;
-                gap: 0.52rem;
-            }
-            .resource-source-manager-shell.resource-source-manager-shell-mobile .resource-source-manager-list {
-                max-height: none;
-                height: 100%;
-                padding: 0.58rem;
-            }
-            .resource-source-manager-shell.resource-source-manager-shell-mobile .resource-source-manager-toolbar {
-                grid-template-columns: 1fr;
-            }
-            .resource-source-manager-shell.resource-source-manager-shell-mobile .resource-source-manager-sort {
-                min-width: 0;
-                width: 100%;
-            }
-            .resource-source-manager-shell.resource-source-manager-shell-mobile .resource-source-manager-select-actions,
-            .resource-source-manager-shell.resource-source-manager-shell-mobile .resource-source-manager-bulk-actions {
-                grid-template-columns: 1fr;
-            }
-            .resource-source-manager-shell.resource-source-manager-shell-mobile .resource-source-manager-test-result {
-                font-size: 0.7rem;
-            }
-        }
         @media (orientation: landscape) and (min-width: 960px) and (max-height: 900px) {
             #resource-source-manager-modal {
                 padding: 0.55rem;
@@ -5117,6 +5301,12 @@
                 margin-top: 0.5rem;
                 gap: 0.62rem;
                 grid-template-columns: minmax(0, 19.5rem) minmax(0, 1fr);
+            }
+            .resource-source-manager-shell-sorting .resource-source-manager-body {
+                grid-template-columns: minmax(0, 1fr);
+            }
+            .resource-source-manager-shell-sorting .resource-source-manager-side {
+                display: none;
             }
             .resource-source-manager-side {
                 gap: 0.5rem;
@@ -5251,6 +5441,7 @@
         html.theme-day .resource-source-summary-card,
         html.theme-day .resource-source-summary-item,
         html.theme-day .resource-source-panel-note,
+        html.theme-day .resource-source-data-card,
         html.theme-day .resource-source-card,
         html.theme-day .resource-source-card-field,
         html.theme-day .resource-source-modal-shell {
@@ -5268,6 +5459,7 @@
         html.theme-day .settings-save-title,
         html.theme-day .settings-info-note-title,
         html.theme-day .resource-source-summary-value,
+        html.theme-day .resource-source-data-title,
         html.theme-day .resource-source-card-title,
         html.theme-day .resource-source-card-value,
         html.theme-day .resource-source-modal-title {
@@ -5277,6 +5469,7 @@
         html.theme-day .settings-info-note,
         html.theme-day .resource-source-panel-copy,
         html.theme-day .resource-source-panel-note,
+        html.theme-day .resource-source-data-desc,
         html.theme-day .resource-source-compact-meta,
         html.theme-day .resource-source-manager-row-meta,
         html.theme-day .resource-source-manager-filter-hint,
@@ -5307,6 +5500,7 @@
         }
         html.theme-day .resource-source-compact-row,
         html.theme-day .resource-source-manager-card,
+        html.theme-day .resource-source-manager-sort-panel,
         html.theme-day .resource-source-manager-list,
         html.theme-day .resource-source-manager-row {
             background: rgba(255, 255, 255, 0.92);
@@ -5330,14 +5524,27 @@
             color: var(--text);
         }
         html.theme-day .resource-source-compact-btn,
+        html.theme-day .resource-source-manager-drag-handle,
+        html.theme-day .resource-source-manager-sort-dirty,
+        html.theme-day .resource-source-manager-sort-rank,
         html.theme-day .resource-source-manager-filter-tab,
         html.theme-day .resource-source-manager-select,
+        html.theme-day .resource-source-manager-sort,
         html.theme-day .resource-source-manager-test-sample,
         html.theme-day .resource-source-manager-test-sample input,
         html.theme-day .resource-source-manager-danger-btn {
             background: rgba(255, 255, 255, 0.92);
             border-color: var(--border);
             color: #334155;
+        }
+        html.theme-day .resource-source-manager-sort-dirty-active {
+            background: rgba(16, 185, 129, 0.12);
+            border-color: rgba(16, 185, 129, 0.34);
+            color: #047857;
+        }
+        html.theme-day .resource-source-manager-sort-row-over {
+            background: rgba(14, 165, 233, 0.08);
+            border-color: rgba(14, 165, 233, 0.42);
         }
         html.theme-day .resource-source-manager-type-badge {
             background: rgba(14, 165, 233, 0.09);
@@ -5458,7 +5665,10 @@
         html.theme-day .resource-source-empty-copy,
         html.theme-day .resource-source-card-label,
         html.theme-day .resource-source-summary-label { color: var(--muted) !important; }
-        html.theme-day #resource-source-modal { background: rgba(15, 23, 42, 0.35) !important; }
+        html.theme-day #resource-source-modal,
+        html.theme-day #resource-source-import-modal,
+        html.theme-day #resource-source-export-modal,
+        html.theme-day #resource-source-manager-modal { background: rgba(15, 23, 42, 0.35) !important; }
         html.theme-day #resource-quick-link-modal { background: rgba(15, 23, 42, 0.35) !important; }
         html.theme-day .resource-source-modal-close {
             color: #475569;

@@ -309,6 +309,14 @@
             const action = String(btn.dataset.resourceSourceManagerAction || '').trim();
             const index = parseInt(btn.dataset.sourceIndex || '-1', 10);
             if (index < 0) return;
+            if (action === 'sort-up') {
+                moveResourceSourceSortDraftIndex(index, -1);
+                return;
+            }
+            if (action === 'sort-down') {
+                moveResourceSourceSortDraftIndex(index, 1);
+                return;
+            }
             if (action === 'edit') {
                 closeResourceSourceManagerModal();
                 openResourceSourceModal(index);
@@ -336,6 +344,35 @@
                     if (deleted) showToast(`已删除频道：${name}`, { tone: 'success', duration: 2400, placement: 'top-center' });
                 });
             }
+        });
+        document.getElementById('resource-source-manager-list')?.addEventListener('pointerdown', (e) => {
+            const handle = e.target.closest('[data-resource-source-sort-handle]');
+            if (!handle || !resourceSourceSortSessionActive) return;
+            const row = handle.closest('[data-resource-source-sort-index]');
+            const sourceIndex = parseInt(row?.dataset.resourceSourceSortIndex || '-1', 10);
+            if (sourceIndex < 0) return;
+            e.preventDefault();
+            beginResourceSourceSortPointerDrag(sourceIndex, e.pointerId ?? null);
+            try {
+                handle.setPointerCapture?.(e.pointerId);
+            } catch (err) {}
+        });
+        window.addEventListener('pointermove', (e) => {
+            if (!resourceSourceSortPointerActive) return;
+            if (resourceSourceSortPointerId !== null && e.pointerId !== resourceSourceSortPointerId) return;
+            e.preventDefault();
+            updateResourceSourceSortPointerDrag(e.clientX, e.clientY);
+        }, { passive: false });
+        window.addEventListener('pointerup', (e) => {
+            if (!resourceSourceSortPointerActive) return;
+            if (resourceSourceSortPointerId !== null && e.pointerId !== resourceSourceSortPointerId) return;
+            e.preventDefault();
+            endResourceSourceSortPointerDrag();
+        }, { passive: false });
+        window.addEventListener('pointercancel', (e) => {
+            if (!resourceSourceSortPointerActive) return;
+            if (resourceSourceSortPointerId !== null && e.pointerId !== resourceSourceSortPointerId) return;
+            endResourceSourceSortPointerDrag();
         });
         window.addEventListener('resize', () => {
             if (resourceSourceManagerOpen) renderResourceSourceManagerModal();

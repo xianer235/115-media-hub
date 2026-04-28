@@ -252,7 +252,17 @@
                             </div>
                         </div>
                         <div class="resource-source-panel-body">
-                            <div class="resource-source-panel-note">频道列表、分类检测、筛选排序、批量启停/删除和频道顺序调整统一收在“管理频道”弹窗里。</div>
+                            <div class="resource-source-panel-note">频道列表、分类检测、筛选、批量启停/删除和频道顺序调整统一收在“管理频道”弹窗里；频道导入导出属于数据维护，放在本设置区处理。</div>
+                            <div class="resource-source-data-card">
+                                <div class="resource-source-data-copy">
+                                    <div class="resource-source-data-title">频道数据</div>
+                                    <div class="resource-source-data-desc">用于备份、迁移或批量恢复频道源。导入会即时保存频道配置，导出会生成可下载的 JSON。</div>
+                                </div>
+                                <div class="resource-source-data-actions">
+                                    <button type="button" onclick="openResourceSourceImportModal()" class="resource-source-secondary-btn">导入频道</button>
+                                    <button type="button" onclick="exportResourceSources()" class="resource-source-secondary-btn">导出频道</button>
+                                </div>
+                            </div>
                             <div class="resource-source-panel-footer">
                                 <div class="resource-source-panel-footer-copy">频道订阅会即时保存；其余参数仍然需要点击页面底部悬浮的“保存全部配置”。</div>
                                 <div class="resource-source-footer-actions">

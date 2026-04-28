@@ -368,17 +368,195 @@
             return String(panel || '').trim().toLowerCase() === 'tools' ? 'tools' : 'list';
         }
 
-        function isCompactPortraitResourceSourceManager() {
-            return !!window.matchMedia && window.matchMedia('(orientation: portrait) and (max-width: 900px)').matches;
+        function isCompactResourceSourceManager() {
+            return !!window.matchMedia && window.matchMedia('(max-width: 1279px)').matches;
         }
 
         function setResourceSourceManagerMobilePanel(panel) {
             resourceSourceManagerMobilePanel = normalizeResourceSourceManagerMobilePanel(panel);
         }
 
+        function resetResourceSourceSortMode() {
+            resourceSourceSortSessionActive = false;
+            resourceSourceSortDraftIndexes = [];
+            resourceSourceSortDragIndex = -1;
+            resourceSourceSortPointerActive = false;
+            resourceSourceSortPointerId = null;
+            resourceSourceSortPointerIndex = -1;
+            document.body?.classList.remove('resource-source-sort-pointer-active');
+            document.querySelectorAll('.resource-source-manager-sort-row-over').forEach(row => {
+                row.classList.remove('resource-source-manager-sort-row-over');
+            });
+        }
+
+        function normalizeResourceSourceSortDraftIndexes() {
+            const sources = Array.isArray(resourceState.sources) ? resourceState.sources : [];
+            const validIndexes = new Set(sources.map((_, index) => index));
+            const seen = new Set();
+            const draft = [];
+            (Array.isArray(resourceSourceSortDraftIndexes) ? resourceSourceSortDraftIndexes : []).forEach(rawIndex => {
+                const index = Number(rawIndex);
+                if (!Number.isInteger(index) || !validIndexes.has(index) || seen.has(index)) return;
+                seen.add(index);
+                draft.push(index);
+            });
+            sources.forEach((_, index) => {
+                if (seen.has(index)) return;
+                seen.add(index);
+                draft.push(index);
+            });
+            resourceSourceSortDraftIndexes = draft;
+            return draft;
+        }
+
+        function getResourceSourceSortDraftViews() {
+            const sources = Array.isArray(resourceState.sources) ? resourceState.sources : [];
+            const sectionIndex = getResourceSourceSectionIndex();
+            const viewByIndex = new Map(getResourceSourceViewList(sources, sectionIndex).map(view => [view.index, view]));
+            return normalizeResourceSourceSortDraftIndexes()
+                .map(index => viewByIndex.get(index))
+                .filter(Boolean);
+        }
+
+        function isResourceSourceSortDraftChanged() {
+            const draft = normalizeResourceSourceSortDraftIndexes();
+            return draft.some((sourceIndex, position) => sourceIndex !== position);
+        }
+
+        function startResourceSourceSortMode() {
+            const sources = Array.isArray(resourceState.sources) ? resourceState.sources : [];
+            if (!sources.length) {
+                showToast('当前没有可排序的频道', { tone: 'warn', duration: 2400, placement: 'top-center' });
+                return;
+            }
+            resourceSourceSortSessionActive = true;
+            resourceSourceSortMode = 'manual';
+            resourceSourceSortDraftIndexes = sources.map((_, index) => index);
+            resourceSourceSortDragIndex = -1;
+            setResourceSourceManagerMobilePanel('list');
+            renderResourceSourceManagerModal();
+        }
+
+        function cancelResourceSourceSortMode() {
+            resetResourceSourceSortMode();
+            renderResourceSourceManagerModal();
+        }
+
+        function moveResourceSourceSortDraftIndex(sourceIndex, offset) {
+            const draft = normalizeResourceSourceSortDraftIndexes();
+            const currentPosition = draft.indexOf(sourceIndex);
+            const nextPosition = currentPosition + offset;
+            if (currentPosition < 0 || nextPosition < 0 || nextPosition >= draft.length) return false;
+            [draft[currentPosition], draft[nextPosition]] = [draft[nextPosition], draft[currentPosition]];
+            resourceSourceSortDraftIndexes = draft;
+            renderResourceSourceManagerModal();
+            return true;
+        }
+
+        function moveResourceSourceSortDraftRelative(sourceIndex, targetIndex, after = false) {
+            if (sourceIndex === targetIndex) return false;
+            const draft = normalizeResourceSourceSortDraftIndexes();
+            if (!draft.includes(sourceIndex) || !draft.includes(targetIndex)) return false;
+            const nextDraft = draft.filter(index => index !== sourceIndex);
+            let targetPosition = nextDraft.indexOf(targetIndex);
+            if (targetPosition < 0) return false;
+            if (after) targetPosition += 1;
+            nextDraft.splice(targetPosition, 0, sourceIndex);
+            const changed = nextDraft.some((value, index) => value !== draft[index]);
+            if (!changed) return false;
+            resourceSourceSortDraftIndexes = nextDraft;
+            renderResourceSourceManagerModal();
+            return true;
+        }
+
+        function beginResourceSourceSortPointerDrag(sourceIndex, pointerId = null) {
+            if (!resourceSourceSortSessionActive || sourceIndex < 0) return false;
+            resourceSourceSortPointerActive = true;
+            resourceSourceSortPointerId = pointerId;
+            resourceSourceSortPointerIndex = sourceIndex;
+            resourceSourceSortDragIndex = sourceIndex;
+            document.body?.classList.add('resource-source-sort-pointer-active');
+            const row = document.querySelector(`[data-resource-source-sort-index="${String(sourceIndex)}"]`);
+            row?.classList.add('resource-source-manager-sort-row-dragging');
+            return true;
+        }
+
+        function updateResourceSourceSortPointerDrag(clientX, clientY) {
+            if (!resourceSourceSortPointerActive || !resourceSourceSortSessionActive) return false;
+            const sourceIndex = Number(resourceSourceSortPointerIndex);
+            if (!Number.isInteger(sourceIndex) || sourceIndex < 0) return false;
+            const hit = document.elementFromPoint(Number(clientX || 0), Number(clientY || 0));
+            const row = hit?.closest?.('[data-resource-source-sort-index]');
+            document.querySelectorAll('.resource-source-manager-sort-row-over').forEach(item => {
+                if (item !== row) item.classList.remove('resource-source-manager-sort-row-over');
+            });
+            if (!row) return false;
+            const targetIndex = parseInt(row.dataset.resourceSourceSortIndex || '-1', 10);
+            if (targetIndex < 0 || targetIndex === sourceIndex) return false;
+            row.classList.add('resource-source-manager-sort-row-over');
+            const rect = row.getBoundingClientRect();
+            const placeAfter = Number(clientY || 0) > rect.top + rect.height / 2;
+            return moveResourceSourceSortDraftRelative(sourceIndex, targetIndex, placeAfter);
+        }
+
+        function endResourceSourceSortPointerDrag() {
+            if (!resourceSourceSortPointerActive && resourceSourceSortDragIndex < 0) return;
+            resourceSourceSortPointerActive = false;
+            resourceSourceSortPointerId = null;
+            resourceSourceSortPointerIndex = -1;
+            resourceSourceSortDragIndex = -1;
+            document.body?.classList.remove('resource-source-sort-pointer-active');
+            document.querySelectorAll('.resource-source-manager-sort-row-dragging, .resource-source-manager-sort-row-over').forEach(row => {
+                row.classList.remove('resource-source-manager-sort-row-dragging', 'resource-source-manager-sort-row-over');
+            });
+            renderResourceSourceManagerModal();
+        }
+
+        function applyResourceSourceSortPresetToDraft(mode = null) {
+            const sources = Array.isArray(resourceState.sources) ? resourceState.sources : [];
+            if (!sources.length) return;
+            const presetEl = document.getElementById('resource-source-manager-sort-preset');
+            const sortMode = String(mode || presetEl?.value || 'manual').trim().toLowerCase() || 'manual';
+            const sectionIndex = getResourceSourceSectionIndex();
+            resourceSourceSortDraftIndexes = sortResourceSourceViews(
+                getResourceSourceViewList(sources, sectionIndex),
+                sortMode
+            ).map(view => view.index);
+            resourceSourceSortDragIndex = -1;
+            renderResourceSourceManagerModal();
+        }
+
+        async function saveResourceSourceSortMode() {
+            const sources = Array.isArray(resourceState.sources) ? resourceState.sources : [];
+            if (!sources.length) {
+                resetResourceSourceSortMode();
+                renderResourceSourceManagerModal();
+                return;
+            }
+            const draft = normalizeResourceSourceSortDraftIndexes();
+            const nextSources = draft.map(index => sources[index]).filter(Boolean);
+            const changed = isResourceSourceSortDraftChanged();
+            if (!changed) {
+                resetResourceSourceSortMode();
+                renderResourceSourceManagerModal();
+                showToast('频道顺序未变化', { tone: 'info', duration: 2200, placement: 'top-center' });
+                return;
+            }
+            try {
+                const saveTask = persistResourceSources(nextSources, { immediate: true });
+                resetResourceSourceSortMode();
+                renderResourceSourceManagerModal();
+                showToast(`已保存 ${nextSources.length} 个频道的顺序`, { tone: 'success', duration: 2600, placement: 'top-center' });
+                reportResourceSourcePersistFailure(saveTask, '排序');
+            } catch (e) {
+                showToast(`排序保存失败：${e.message || '未知错误'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
+            }
+        }
+
         function openResourceSourceManagerModal() {
             switchTab('settings');
             resourceSourceManagerOpen = true;
+            resetResourceSourceSortMode();
             setResourceSourceManagerMobilePanel('list');
             normalizeResourceSourceBulkSelections();
             showLockedModal('resource-source-manager-modal');
@@ -387,6 +565,7 @@
 
         function closeResourceSourceManagerModal() {
             resourceSourceManagerOpen = false;
+            resetResourceSourceSortMode();
             hideLockedModal('resource-source-manager-modal');
         }
 
@@ -647,9 +826,13 @@
             const searchInputEl = document.getElementById('resource-source-manager-search');
             const sortSelectEl = document.getElementById('resource-source-manager-sort');
             const sortHintEl = document.getElementById('resource-source-manager-sort-hint');
-            const applySortBtn = document.getElementById('resource-source-manager-apply-sort-btn');
             const hintEl = document.getElementById('resource-source-manager-filter-hint');
             const listEl = document.getElementById('resource-source-manager-list');
+            const titleEl = document.getElementById('resource-source-manager-title');
+            const subtitleEl = document.getElementById('resource-source-manager-subtitle');
+            const sortPanelEl = document.getElementById('resource-source-manager-sort-panel');
+            const sortSummaryEl = document.getElementById('resource-source-manager-sort-summary');
+            const sortDirtyEl = document.getElementById('resource-source-manager-sort-dirty');
             const selectedCountEl = document.getElementById('resource-source-manager-selected-count');
             const mobileFilteredCountEl = document.getElementById('resource-source-manager-mobile-filtered-count');
             const mobileSelectedCountEl = document.getElementById('resource-source-manager-mobile-selected-count');
@@ -661,7 +844,7 @@
             const selectAllBtn = document.getElementById('resource-source-manager-select-all-btn');
             const invertBtn = document.getElementById('resource-source-manager-invert-btn');
             const syncNamesBtn = document.getElementById('resource-source-manager-sync-names-btn');
-            if (!shell || !typeFiltersEl || !statusFiltersEl || !activityFiltersEl || !searchInputEl || !sortSelectEl || !sortHintEl || !applySortBtn || !hintEl || !listEl || !selectedCountEl || !mobileFilteredCountEl || !mobileSelectedCountEl || !mobileListTabEl || !mobileToolsTabEl || !resultEl || !testBtn || !sampleInput || !selectAllBtn || !invertBtn || !syncNamesBtn) return;
+            if (!shell || !typeFiltersEl || !statusFiltersEl || !activityFiltersEl || !searchInputEl || !sortSelectEl || !sortHintEl || !hintEl || !listEl || !selectedCountEl || !mobileFilteredCountEl || !mobileSelectedCountEl || !mobileListTabEl || !mobileToolsTabEl || !resultEl || !testBtn || !sampleInput || !selectAllBtn || !invertBtn || !syncNamesBtn) return;
 
             const sources = resourceState.sources || [];
             const sectionIndex = getResourceSourceSectionIndex();
@@ -685,10 +868,8 @@
             searchInputEl.value = resourceSourceKeyword;
             sortSelectEl.value = sortMode;
             sortHintEl.textContent = sortMode === 'manual'
-                ? '当前为手动顺序，可用上移/下移或批量置顶置底调整真实顺序。'
-                : `当前按“${getResourceSourceSortModeLabel(sortMode)}”查看；点击应用后才会保存为真实频道顺序。`;
-            applySortBtn.disabled = sortMode === 'manual' || !sources.length;
-            applySortBtn.classList.toggle('btn-disabled', sortMode === 'manual' || !sources.length);
+                ? '当前按真实频道顺序查看。需要调整真实顺序时，请进入排序模式。'
+                : `当前按“${getResourceSourceSortModeLabel(sortMode)}”查看；这里只改变列表查看方式，不会改动真实顺序。`;
 
             typeFiltersEl.innerHTML = typeOptions.map(option => `
                 <button
@@ -719,11 +900,19 @@
 
             const selectedCount = Object.keys(resourceSourceBulkSelected || {}).filter(channelId => resourceSourceBulkSelected[channelId]).length;
             const selectedInFiltered = filtered.filter(view => !!resourceSourceBulkSelected[view.channelId]).length;
-            const compactPortrait = isCompactPortraitResourceSourceManager();
-            const activeMobilePanel = compactPortrait ? normalizeResourceSourceManagerMobilePanel(resourceSourceManagerMobilePanel) : 'list';
-            shell.classList.toggle('resource-source-manager-shell-mobile', compactPortrait);
-            shell.classList.toggle('resource-source-manager-shell-mobile-list', compactPortrait && activeMobilePanel === 'list');
-            shell.classList.toggle('resource-source-manager-shell-mobile-tools', compactPortrait && activeMobilePanel === 'tools');
+            const compactLayout = isCompactResourceSourceManager();
+            const activeMobilePanel = compactLayout ? normalizeResourceSourceManagerMobilePanel(resourceSourceManagerMobilePanel) : 'list';
+            shell.classList.toggle('resource-source-manager-shell-mobile', compactLayout);
+            shell.classList.toggle('resource-source-manager-shell-mobile-list', compactLayout && activeMobilePanel === 'list');
+            shell.classList.toggle('resource-source-manager-shell-mobile-tools', compactLayout && activeMobilePanel === 'tools');
+            shell.classList.toggle('resource-source-manager-shell-sorting', !!resourceSourceSortSessionActive);
+            if (titleEl) titleEl.textContent = resourceSourceSortSessionActive ? '频道排序' : '频道管理中心';
+            if (subtitleEl) {
+                subtitleEl.textContent = resourceSourceSortSessionActive
+                    ? '排序模式只保留顺序调整；保存前不会改动真实频道顺序。'
+                    : '管理频道筛选、分类测试、批量操作和频道顺序；导入导出已移到设置页的频道数据区。';
+            }
+            if (sortPanelEl) sortPanelEl.classList.toggle('hidden', !resourceSourceSortSessionActive);
 
             selectedCountEl.textContent = String(selectedInFiltered);
             mobileFilteredCountEl.textContent = String(filtered.length);
@@ -773,6 +962,61 @@
             testBtn.disabled = resourceSourceTestBusy || sources.length <= 0;
             sampleInput.disabled = resourceSourceTestBusy;
 
+            if (resourceSourceSortSessionActive) {
+                const draftViews = getResourceSourceSortDraftViews();
+                const changed = isResourceSourceSortDraftChanged();
+                mobileFilteredCountEl.textContent = String(draftViews.length);
+                mobileSelectedCountEl.textContent = changed ? '已调整' : '0';
+                if (sortSummaryEl) sortSummaryEl.textContent = `共 ${draftViews.length} 个频道。按住拖拽手柄调整顺序，手机端也可以直接使用上移/下移。`;
+                if (sortDirtyEl) {
+                    sortDirtyEl.textContent = changed ? '待保存' : '未调整';
+                    sortDirtyEl.classList.toggle('resource-source-manager-sort-dirty-active', changed);
+                }
+                if (!draftViews.length) {
+                    listEl.innerHTML = '<div class="resource-source-empty"><div class="resource-source-empty-title">当前没有频道</div><div class="resource-source-empty-copy">请先添加频道后再排序。</div></div>';
+                    return;
+                }
+                listEl.innerHTML = draftViews.map((view, position) => {
+                    const enabled = view.source.enabled !== false;
+                    const latestAge = view.latestPublishedMs ? formatResourceAgeText(view.latestPublishedMs) : '待同步';
+                    const typeText = (Array.isArray(view.sourceTypes) ? view.sourceTypes : [])
+                        .slice(0, 3)
+                        .map(type => getResourceLinkTypeLabel(type))
+                        .join(' / ');
+                    const typeBadges = renderResourceSourceTypeBadges(view.profile, view.sourceTypes);
+                    const upDisabled = position <= 0 ? 'btn-disabled' : '';
+                    const downDisabled = position >= draftViews.length - 1 ? 'btn-disabled' : '';
+                    return `
+                        <div
+                            class="resource-source-manager-row resource-source-manager-sort-row ${resourceSourceSortDragIndex === view.index ? 'resource-source-manager-sort-row-dragging' : ''}"
+                            data-resource-source-sort-index="${escapeHtml(String(view.index))}"
+                        >
+                            <button
+                                type="button"
+                                class="resource-source-manager-drag-handle"
+                                data-resource-source-sort-handle="1"
+                                aria-label="拖拽调整 ${escapeHtml(view.source.name || view.channelId || '频道')} 的顺序"
+                            >☰</button>
+                            <div class="resource-source-manager-sort-rank">#${escapeHtml(String(position + 1))}</div>
+                            <div class="resource-source-manager-row-main">
+                                <div class="resource-source-manager-row-title">
+                                    <span>${escapeHtml(view.source.name || view.channelId || '未命名频道')}</span>
+                                    <span class="resource-source-manager-channel-link">@${escapeHtml(view.channelId || '--')}</span>
+                                    ${typeBadges}
+                                    <span class="text-[10px] px-2 py-0.5 rounded-full ${enabled ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20' : 'bg-slate-700 text-slate-300 border border-slate-600'}">${enabled ? '已启用' : '已停用'}</span>
+                                </div>
+                                <div class="resource-source-manager-row-meta">类型：${escapeHtml(typeText || getResourceLinkTypeLabel(view.primaryType || 'unknown'))} · 最近：${escapeHtml(latestAge)}</div>
+                            </div>
+                            <div class="resource-source-manager-row-actions">
+                                <button type="button" data-resource-source-manager-action="sort-up" data-source-index="${view.index}" class="resource-source-compact-btn ${upDisabled}" ${position <= 0 ? 'disabled' : ''}>上移</button>
+                                <button type="button" data-resource-source-manager-action="sort-down" data-source-index="${view.index}" class="resource-source-compact-btn ${downDisabled}" ${position >= draftViews.length - 1 ? 'disabled' : ''}>下移</button>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+                return;
+            }
+
             if (!filtered.length) {
                 listEl.innerHTML = '<div class="resource-source-empty"><div class="resource-source-empty-title">当前筛选无结果</div><div class="resource-source-empty-copy">可以切换资源类型、启用状态或活跃时间范围。</div></div>';
                 return;
@@ -781,9 +1025,6 @@
             listEl.innerHTML = filtered.map(view => {
                 const checked = !!resourceSourceBulkSelected[view.channelId];
                 const enabled = view.source.enabled !== false;
-                const showManualMove = sortMode === 'manual';
-                const moveUpDisabled = view.index <= 0 ? 'btn-disabled' : '';
-                const moveDownDisabled = view.index >= sources.length - 1 ? 'btn-disabled' : '';
                 const latest = String(view.latestPublishedAt || '').trim();
                 const latestAge = view.latestPublishedMs ? formatResourceAgeText(view.latestPublishedMs) : '待同步';
                 const typeText = (Array.isArray(view.sourceTypes) ? view.sourceTypes : [])
@@ -816,8 +1057,6 @@
                             <div class="resource-source-manager-row-meta">类型：${escapeHtml(typeText || getResourceLinkTypeLabel(view.primaryType || 'unknown'))} · 活跃度：${escapeHtml(getResourceSourceActivityBucketLabel(view.activityBucket))} · 最近：${escapeHtml(latestAge)}${latest ? `（${escapeHtml(formatTimeText(latest))}）` : ''} · ${escapeHtml(supportText)}</div>
                         </div>
                         <div class="resource-source-manager-row-actions">
-                            ${showManualMove ? `<button type="button" data-resource-source-manager-action="move-up" data-source-index="${view.index}" class="resource-source-compact-btn ${moveUpDisabled}" ${view.index <= 0 ? 'disabled' : ''}>上移</button>` : ''}
-                            ${showManualMove ? `<button type="button" data-resource-source-manager-action="move-down" data-source-index="${view.index}" class="resource-source-compact-btn ${moveDownDisabled}" ${view.index >= sources.length - 1 ? 'disabled' : ''}>下移</button>` : ''}
                             <button type="button" data-resource-source-manager-action="toggle" data-source-index="${view.index}" data-enabled="${enabled ? '1' : '0'}" class="resource-source-compact-btn">${enabled ? '停用' : '启用'}</button>
                             <button type="button" data-resource-source-manager-action="edit" data-source-index="${view.index}" class="resource-source-compact-btn">编辑</button>
                             <button type="button" data-resource-source-manager-action="delete" data-source-index="${view.index}" class="resource-source-compact-btn resource-source-compact-btn-danger">删除</button>

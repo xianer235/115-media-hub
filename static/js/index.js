@@ -135,6 +135,12 @@
         let resourceSourceActivityFilter = 'all';
         let resourceSourceKeyword = '';
         let resourceSourceSortMode = 'manual';
+        let resourceSourceSortSessionActive = false;
+        let resourceSourceSortDraftIndexes = [];
+        let resourceSourceSortDragIndex = -1;
+        let resourceSourceSortPointerActive = false;
+        let resourceSourceSortPointerId = null;
+        let resourceSourceSortPointerIndex = -1;
         let resourceSourceBulkSelected = {};
         let resourceSourceManagerMobilePanel = 'list';
         let resourceSourcePersistToken = 0;

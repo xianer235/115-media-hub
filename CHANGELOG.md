@@ -3,6 +3,10 @@
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
+- 频道导入/导出入口移到参数配置页的 TG 订阅源“频道数据”区，频道管理弹窗只保留日常维护操作。
+- 频道管理新增专用排序模式，支持拖拽、上移/下移、排序草稿套用与保存/取消，避免在普通管理列表中误触调整真实顺序。
+- 频道排序拖动改为 Pointer Events 实现，桌面和移动端都可按住抓手移动频道顺序。
+- 频道管理在中等屏幕和移动端统一使用分段视图，顶部固定提供添加与排序入口，避免筛选和频道列表同时挤进抽屉。
 
 ## [0.3.2] - 2026-04-28
 - 参数配置页 TG 订阅源管理新增“每频道同步资源数（1-30）”，可控制点击“同步频道”时每个频道最多抓取的资源条数。
