@@ -143,6 +143,86 @@
             return normalizeSubscriptionProvider(provider, '115') === 'quark' ? '夸克' : '115';
         }
 
+        function normalizeResourceFavoriteDirsPayload(value = {}) {
+            const source = value && typeof value === 'object' ? value : {};
+            const normalizeItems = (items = []) => {
+                const seen = new Set();
+                return (Array.isArray(items) ? items : [])
+                    .map((item) => {
+                        const path = normalizeRelativePathInput(item?.path || item?.savepath || '');
+                        if (!path || seen.has(path)) return null;
+                        seen.add(path);
+                        const fallbackName = path.split('/').filter(Boolean).pop() || path;
+                        return {
+                            name: String(item?.name || fallbackName).trim().slice(0, 32) || fallbackName,
+                            path,
+                        };
+                    })
+                    .filter(Boolean)
+                    .slice(0, 12);
+            };
+            return {
+                '115': normalizeItems(source['115']),
+                quark: normalizeItems(source.quark),
+            };
+        }
+
+        function getResourceFavoriteDirs(provider = getCurrentResourceProvider()) {
+            const normalizedProvider = normalizeSubscriptionProvider(provider, '115') === 'quark' ? 'quark' : '115';
+            const favoriteDirs = normalizeResourceFavoriteDirsPayload(resourceState.favorite_dirs || {});
+            return favoriteDirs[normalizedProvider] || [];
+        }
+
+        function renderResourceFavoriteDirs() {
+            const panel = document.getElementById('resource-favorite-dir-panel');
+            const list = document.getElementById('resource-favorite-dir-list');
+            const providerEl = document.getElementById('resource-favorite-dir-provider');
+            if (!panel || !list) return;
+            const provider = getCurrentResourceProvider();
+            const providerLabel = getResourceProviderLabel(provider);
+            const dirs = getResourceFavoriteDirs(provider);
+            const currentPath = normalizeRelativePathInput(document.getElementById('resource_job_savepath')?.value || '');
+            if (providerEl) providerEl.textContent = providerLabel;
+            panel.classList.toggle('hidden', !dirs.length);
+            if (!dirs.length) {
+                list.innerHTML = '';
+                return;
+            }
+            list.innerHTML = dirs.map((item, index) => {
+                const active = currentPath && currentPath === item.path;
+                return `
+                    <button
+                        type="button"
+                        data-resource-favorite-dir-index="${index}"
+                        class="resource-favorite-dir-btn ${active ? 'resource-favorite-dir-btn-active' : ''}"
+                        title="${escapeHtml(item.path)}"
+                    >
+                        <span class="resource-favorite-dir-name">${escapeHtml(item.name || item.path)}</span>
+                        <span class="resource-favorite-dir-path">${escapeHtml(item.path)}</span>
+                    </button>
+                `;
+            }).join('');
+        }
+
+        function selectResourceFavoriteDir(index) {
+            const dirs = getResourceFavoriteDirs();
+            const item = dirs[Math.max(0, Number(index || 0))];
+            const path = normalizeRelativePathInput(item?.path || '');
+            if (!path) return;
+            resourceFolderTrail = [{ id: '0', name: '根目录' }];
+            resourceFolderEntries = [];
+            resourceFolderSummary = { folder_count: 0, file_count: 0 };
+            resourceFolderEntriesComplete = false;
+            resourceFolderShowAllFiles = false;
+            setSelectedResourceFolder('0', path, {
+                loadPreview: false,
+                persist: false,
+                trail: resourceFolderTrail,
+            });
+            renderResourceFavoriteDirs();
+            showToast(`已选择常用目录：${path}`, { tone: 'success', duration: 2200, placement: 'top-center' });
+        }
+
         function normalizeResourceSearchSource(value) {
             const normalized = String(value || 'tg').trim().toLowerCase();
             return normalized === 'pansou' ? 'pansou' : 'tg';
@@ -2001,6 +2081,9 @@
             const previousChannelSync = resourceState.channel_sync || {};
             const nextSources = Array.isArray(data.sources) ? data.sources : (resourceState.sources || []);
             const nextQuickLinks = Array.isArray(data.quick_links) ? data.quick_links : (resourceState.quick_links || []);
+            const nextFavoriteDirs = data.favorite_dirs && typeof data.favorite_dirs === 'object'
+                ? normalizeResourceFavoriteDirsPayload(data.favorite_dirs)
+                : normalizeResourceFavoriteDirsPayload(resourceState.favorite_dirs || {});
             const nextItems = hydrateResourceItems(Array.isArray(data.items) ? data.items : (resourceState.items || []));
             const nextJobs = Array.isArray(data.jobs) ? data.jobs : (resourceState.jobs || []);
             const nextActiveJobs = Array.isArray(data.active_jobs) ? data.active_jobs : (resourceState.active_jobs || []);
@@ -2024,6 +2107,7 @@
                 ...data,
                 sources: nextSources,
                 quick_links: nextQuickLinks,
+                favorite_dirs: nextFavoriteDirs,
                 items: nextItems,
                 jobs: nextJobs,
                 active_jobs: nextActiveJobs,
@@ -2097,6 +2181,7 @@
             renderResourceSearchFilters();
             syncResourceSourceSelect();
             syncResourceMonitorTaskOptions(document.getElementById('resource_job_savepath')?.value || '');
+            renderResourceFavoriteDirs();
             renderResourceOnboardingCard();
             renderResourceSources();
             if (resourceChannelManageModalOpen) {
@@ -2831,6 +2916,8 @@
             syncResourceSearchInputActions,
             syncResourceSourceSelect,
             syncResourceProviderUI,
+            renderResourceFavoriteDirs,
+            selectResourceFavoriteDir,
             syncResourceMonitorTaskOptions,
             renderResourceImportSummary,
             renderResourceImportStepper,

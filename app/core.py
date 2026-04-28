@@ -680,6 +680,7 @@ def default_config() -> Dict[str, Any]:
         "subscription_tasks": [],
         "resource_sources": [],
         "resource_quick_links": [],
+        "resource_favorite_dirs": {"115": [], "quark": []},
     }
 
 
@@ -1526,6 +1527,47 @@ def normalize_resource_quick_links(items: Any) -> List[Dict[str, Any]]:
     return normalized_links
 
 
+def normalize_resource_favorite_dir(item: Dict[str, Any]) -> Dict[str, str]:
+    payload = item if isinstance(item, dict) else {}
+    raw_path = payload.get("path", "") or payload.get("savepath", "") or payload.get("display_path", "")
+    path = "/".join(
+        part.strip()
+        for part in str(raw_path or "").replace("\\", "/").split("/")
+        if part.strip()
+    )
+    if not path:
+        return {}
+    name = str(payload.get("name", "") or payload.get("title", "")).strip()
+    if not name:
+        name = path.split("/")[-1] if path else ""
+    return {
+        "name": name[:32] or path,
+        "path": path,
+    }
+
+
+def normalize_resource_favorite_dirs(value: Any) -> Dict[str, List[Dict[str, str]]]:
+    source = value if isinstance(value, dict) else {}
+    result: Dict[str, List[Dict[str, str]]] = {"115": [], "quark": []}
+    for provider in ("115", "quark"):
+        raw_items = source.get(provider, [])
+        if not isinstance(raw_items, list):
+            raw_items = []
+        seen_paths: Set[str] = set()
+        for raw_item in raw_items:
+            item = normalize_resource_favorite_dir(raw_item or {})
+            if not item:
+                continue
+            path = str(item.get("path", "") or "").strip()
+            if not path or path in seen_paths:
+                continue
+            seen_paths.add(path)
+            result[provider].append(item)
+            if len(result[provider]) >= 12:
+                break
+    return result
+
+
 def normalize_sign115_cron_time(value: Any, fallback: str = "09:00") -> str:
     text = str(value or "").strip()
     if not text:
@@ -1759,6 +1801,8 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         merged["resource_sources"] = []
     if "resource_quick_links" not in merged or not isinstance(merged["resource_quick_links"], list):
         merged["resource_quick_links"] = []
+    if "resource_favorite_dirs" not in merged or not isinstance(merged["resource_favorite_dirs"], dict):
+        merged["resource_favorite_dirs"] = {"115": [], "quark": []}
 
     merged["trees"] = merged.get("trees") or [{"source_type": "tree_file", "path": "", "prefix": "", "exclude": 1}]
     if not str(merged.get("extensions", "")).strip() or merged.get("extensions") == LEGACY_DEFAULT_EXTENSIONS:
@@ -1813,6 +1857,7 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         normalized_sources.append(source)
     merged["resource_sources"] = normalized_sources
     merged["resource_quick_links"] = normalize_resource_quick_links(merged.get("resource_quick_links", []))
+    merged["resource_favorite_dirs"] = normalize_resource_favorite_dirs(merged.get("resource_favorite_dirs", {}))
     merged["mount_points"] = normalize_mount_points(merged.get("mount_points", []))
     merged["strm_proxy_base_url"] = normalize_http_base_url(merged.get("strm_proxy_base_url", ""))
     merged["api_115_rate_limit_seconds"] = _clamp_api_115_rate_limit_seconds(
@@ -3801,6 +3846,7 @@ def _build_resource_state_payload_snapshot(
     return {
         "sources": clone_jsonable(sources),
         "quick_links": clone_jsonable(cfg.get("resource_quick_links", [])),
+        "favorite_dirs": clone_jsonable(cfg.get("resource_favorite_dirs", {"115": [], "quark": []})),
         "items": clone_jsonable(items),
         "jobs": clone_jsonable(jobs),
         "active_jobs": clone_jsonable(active_jobs),

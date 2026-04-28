@@ -3641,8 +3641,8 @@
         .resource-import-side-shell {
             display: flex;
             flex-direction: column;
-            gap: 0.68rem;
-            padding: 0.82rem;
+            gap: 0.48rem;
+            padding: 0.68rem;
             background:
                 linear-gradient(180deg, rgba(15, 23, 42, 0.78), rgba(15, 23, 42, 0.68)),
                 radial-gradient(circle at top right, rgba(14, 165, 233, 0.08), transparent 28%);
@@ -3665,17 +3665,17 @@
         .resource-import-compact-meta {
             display: flex;
             flex-direction: column;
-            gap: 0.42rem;
-            margin-top: 0.55rem;
+            gap: 0.34rem;
+            margin-top: 0.46rem;
         }
         .resource-import-compact-item {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            gap: 0.75rem;
-            min-height: 34px;
-            padding: 0.46rem 0.68rem;
-            border-radius: 0.9rem;
+            gap: 0.58rem;
+            min-height: 30px;
+            padding: 0.34rem 0.58rem;
+            border-radius: 0.75rem;
             border: 1px solid rgba(51, 65, 85, 0.78);
             background: rgba(2, 6, 23, 0.16);
         }
@@ -3713,7 +3713,7 @@
             color: #94a3b8;
         }
         .resource-import-side-shell .resource-save-section {
-            padding: 0.74rem;
+            padding: 0.58rem;
         }
         .resource-detail-poster .resource-poster {
             width: 120px;
@@ -4176,13 +4176,13 @@
         .resource-save-layout {
             display: flex;
             flex-direction: column;
-            gap: 0.82rem;
+            gap: 0.54rem;
         }
         .resource-save-section {
-            border-radius: 0.95rem;
+            border-radius: 0.78rem;
             border: 1px solid rgba(51, 65, 85, 0.86);
             background: rgba(2, 6, 23, 0.24);
-            padding: 0.82rem;
+            padding: 0.64rem;
         }
         .resource-save-readonly {
             min-height: 48px;
@@ -4203,9 +4203,89 @@
         .resource-save-path-grid {
             display: grid;
             grid-template-columns: minmax(0, 1fr) auto;
-            gap: 0.6rem;
+            gap: 0.48rem;
             align-items: center;
-            margin-top: 0.55rem;
+            margin-top: 0.42rem;
+        }
+        #resource-import-save-panel .resource-save-path-grid input {
+            min-height: 40px;
+            padding-top: 0.58rem !important;
+            padding-bottom: 0.58rem !important;
+        }
+        #resource-import-save-panel .resource-save-path-grid button {
+            min-height: 40px;
+            padding: 0.58rem 0.82rem !important;
+        }
+        .resource-favorite-dir-panel {
+            margin-top: 0.54rem;
+            padding-top: 0.52rem;
+            border-top: 1px solid rgba(51, 65, 85, 0.78);
+        }
+        .resource-favorite-dir-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            color: #94a3b8;
+            font-size: 0.72rem;
+            font-weight: 800;
+            margin-bottom: 0.4rem;
+        }
+        .resource-favorite-dir-provider {
+            color: #7dd3fc;
+        }
+        .resource-favorite-dir-list {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.38rem;
+            max-height: 118px;
+            overflow-y: auto;
+            padding-right: 0.12rem;
+        }
+        .resource-favorite-dir-btn {
+            min-width: 0;
+            min-height: 34px;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            justify-content: center;
+            gap: 0;
+            border-radius: 0.68rem;
+            border: 1px solid rgba(51, 65, 85, 0.92);
+            background: rgba(15, 23, 42, 0.72);
+            color: #e2e8f0;
+            padding: 0.42rem 0.56rem;
+            text-align: left;
+            transition: border-color 0.16s ease, background 0.16s ease, transform 0.16s ease;
+        }
+        .resource-favorite-dir-btn:hover {
+            border-color: rgba(56, 189, 248, 0.52);
+            background: rgba(14, 165, 233, 0.14);
+        }
+        .resource-favorite-dir-btn:active {
+            transform: translateY(1px);
+        }
+        .resource-favorite-dir-btn-active {
+            border-color: rgba(16, 185, 129, 0.58);
+            background: rgba(16, 185, 129, 0.14);
+        }
+        .resource-favorite-dir-name,
+        .resource-favorite-dir-path {
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .resource-favorite-dir-name {
+            color: #f8fafc;
+            font-size: 0.74rem;
+            font-weight: 900;
+        }
+        .resource-favorite-dir-path {
+            display: none;
+            color: #94a3b8;
+            font-size: 0.68rem;
+            font-weight: 700;
         }
         .resource-save-options-grid {
             display: grid;
@@ -4266,6 +4346,12 @@
         }
         #resource-import-footer {
             grid-template-columns: minmax(0, 1fr) 200px;
+            position: sticky;
+            bottom: 0;
+            z-index: 16;
+            margin-top: 0.55rem;
+            padding-top: 0.68rem;
+            padding-bottom: 0.68rem;
         }
         #version-banner {
             border-radius: 1.25rem;
@@ -5019,6 +5105,9 @@
             .resource-save-path-grid,
             .resource-save-options-grid,
             .resource-save-delay-row {
+                grid-template-columns: 1fr;
+            }
+            .resource-favorite-dir-list {
                 grid-template-columns: 1fr;
             }
             .resource-import-side-grid,
@@ -6446,6 +6535,34 @@
         html.theme-day .resource-save-section {
             background: rgba(255,255,255,0.94);
             border-color: rgba(203, 213, 225, 0.88);
+        }
+        html.theme-day .resource-favorite-dir-panel {
+            border-top-color: rgba(203, 213, 225, 0.9);
+        }
+        html.theme-day .resource-favorite-dir-head {
+            color: #64748b;
+        }
+        html.theme-day .resource-favorite-dir-provider {
+            color: #0369a1;
+        }
+        html.theme-day .resource-favorite-dir-btn {
+            border-color: rgba(203, 213, 225, 0.9);
+            background: rgba(248, 250, 252, 0.96);
+            color: #0f172a;
+        }
+        html.theme-day .resource-favorite-dir-btn:hover {
+            border-color: rgba(14, 165, 233, 0.38);
+            background: rgba(224, 242, 254, 0.78);
+        }
+        html.theme-day .resource-favorite-dir-btn-active {
+            border-color: rgba(16, 185, 129, 0.42);
+            background: rgba(209, 250, 229, 0.82);
+        }
+        html.theme-day .resource-favorite-dir-name {
+            color: #0f172a;
+        }
+        html.theme-day .resource-favorite-dir-path {
+            color: #64748b;
         }
         html.theme-day .resource-save-readonly {
             background: rgba(255,255,255,0.98);

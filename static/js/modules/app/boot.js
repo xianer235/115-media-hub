@@ -44,6 +44,26 @@
             hideVersionBanner();
         }
 
+        function formatFavoriteDirSettingsLines(items = []) {
+            return (Array.isArray(items) ? items : [])
+                .map((item) => {
+                    const path = normalizeRelativePathInput(item?.path || item?.savepath || '');
+                    if (!path) return '';
+                    const name = String(item?.name || '').trim();
+                    return name ? `${name}=${path}` : path;
+                })
+                .filter(Boolean)
+                .join('\n');
+        }
+
+        function applyResourceFavoriteDirSettings(favoriteDirs = {}) {
+            const dirs = favoriteDirs && typeof favoriteDirs === 'object' ? favoriteDirs : {};
+            const input115 = document.getElementById('resource_favorite_dirs_115');
+            const inputQuark = document.getElementById('resource_favorite_dirs_quark');
+            if (input115) input115.value = formatFavoriteDirSettingsLines(dirs['115'] || []);
+            if (inputQuark) inputQuark.value = formatFavoriteDirSettingsLines(dirs.quark || []);
+        }
+
         async function refreshVersionInfo(force = false) {
             const aboutModule = await loadAboutTabModule();
             if (aboutModule?.refreshVersionInfo) {
@@ -91,6 +111,7 @@
                         else el.value = cfg[k];
                     }
                 });
+                applyResourceFavoriteDirSettings(cfg.resource_favorite_dirs || {});
                 applySensitiveConfigMeta(sensitiveMeta);
                 const tgThreadsInput = document.getElementById('tg_channel_threads');
                 if (tgThreadsInput) {
@@ -114,6 +135,7 @@
                     ...resourceState,
                     sources: cfg.resource_sources || [],
                     quick_links: cfg.resource_quick_links || [],
+                    favorite_dirs: cfg.resource_favorite_dirs || { '115': [], quark: [] },
                     monitor_tasks: cfg.monitor_tasks || [],
                     cookie_configured: !!sensitiveMeta.cookie_115,
                     quark_cookie_configured: !!sensitiveMeta.cookie_quark,
@@ -544,6 +566,11 @@
             if (e.key !== 'Enter') return;
             e.preventDefault();
             createResourceFolderInCurrent();
+        });
+        document.getElementById('resource-favorite-dir-list')?.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-resource-favorite-dir-index]');
+            if (!btn) return;
+            selectResourceFavoriteDir(btn.dataset.resourceFavoriteDirIndex || '0');
         });
         document.getElementById('subscription-folder-create-name')?.addEventListener('keydown', (e) => {
             if (e.key !== 'Enter') return;

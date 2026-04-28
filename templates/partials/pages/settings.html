@@ -300,6 +300,24 @@
                             当前支持 magnet 离线下载、115 分享链接转存与 Quark 分享转存；保存路径会自动映射到对应网盘目录。
                         </div>
 
+                        <div class="rounded-2xl border border-slate-700/80 bg-slate-900/50 p-4 space-y-4">
+                            <div>
+                                <div class="text-sm font-bold text-slate-100">保存常用目录</div>
+                                <div class="text-xs text-slate-500 leading-6 mt-1">每行一个快捷目录，格式为 `名称=网盘内路径`；也可以只写路径，系统会用最后一级目录名作为按钮名称。</div>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">115 常用目录</span>
+                                    <textarea id="resource_favorite_dirs_115" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 min-h-[110px]" placeholder="电影=影视/电影&#10;电视剧=影视/电视剧"></textarea>
+                                </label>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">Quark 常用目录</span>
+                                    <textarea id="resource_favorite_dirs_quark" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 min-h-[110px]" placeholder="电影=影视/电影&#10;电视剧=影视/电视剧"></textarea>
+                                </label>
+                            </div>
+                            <div class="text-xs text-slate-500 leading-6">保存后，在资源导入弹窗的“保存设置”里会按当前资源所属网盘显示这些快捷按钮。</div>
+                        </div>
+
                         <div class="rounded-2xl border border-slate-700/80 bg-slate-900/50 p-4 space-y-3">
                             <div class="flex flex-wrap justify-between gap-3 items-center">
                                 <div class="text-sm font-bold text-slate-100">Cookie 健康状态</div>

@@ -102,6 +102,13 @@
                                             <input id="resource_job_folder_path" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" value="根目录" readonly>
                                             <button type="button" onclick="openResourceFolderModal()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">浏览目录</button>
                                         </div>
+                                        <div id="resource-favorite-dir-panel" class="resource-favorite-dir-panel hidden">
+                                            <div class="resource-favorite-dir-head">
+                                                <span>常用目录</span>
+                                                <span id="resource-favorite-dir-provider" class="resource-favorite-dir-provider">115</span>
+                                            </div>
+                                            <div id="resource-favorite-dir-list" class="resource-favorite-dir-list"></div>
+                                        </div>
                                         <input id="resource_job_folder_id" class="hidden" value="0">
                                         <div class="resource-import-compact-meta">
                                             <div class="resource-import-compact-item">

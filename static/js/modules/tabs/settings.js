@@ -21,6 +21,44 @@ function randomAlphaNumericSecret(length = 32) {
     return out.join('');
 }
 
+function normalizeFavoriteDirPath(value = '') {
+    return String(value || '')
+        .split(/[\\/]+/)
+        .map(part => part.trim())
+        .filter(Boolean)
+        .join('/');
+}
+
+function parseFavoriteDirLines(value = '') {
+    const seen = new Set();
+    return String(value || '')
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(Boolean)
+        .map((line) => {
+            const separatorIndex = line.indexOf('=');
+            const rawName = separatorIndex >= 0 ? line.slice(0, separatorIndex).trim() : '';
+            const rawPath = separatorIndex >= 0 ? line.slice(separatorIndex + 1).trim() : line;
+            const path = normalizeFavoriteDirPath(rawPath);
+            if (!path || seen.has(path)) return null;
+            seen.add(path);
+            const fallbackName = path.split('/').filter(Boolean).pop() || path;
+            return {
+                name: (rawName || fallbackName).slice(0, 32),
+                path,
+            };
+        })
+        .filter(Boolean)
+        .slice(0, 12);
+}
+
+function collectResourceFavoriteDirs() {
+    return {
+        '115': parseFavoriteDirLines(document.getElementById('resource_favorite_dirs_115')?.value || ''),
+        quark: parseFavoriteDirLines(document.getElementById('resource_favorite_dirs_quark')?.value || ''),
+    };
+}
+
 function collectSettingsPayload({
     sensitiveSettingFields = [],
     getMonitorTasks,
@@ -76,6 +114,7 @@ function collectSettingsPayload({
     cfg.notify_monitor_enabled = !!document.getElementById('notify_monitor_enabled')?.checked;
     cfg.tmdb_enabled = !!document.getElementById('tmdb_enabled')?.checked;
     cfg.pansou_enabled = !!document.getElementById('pansou_enabled')?.checked;
+    cfg.resource_favorite_dirs = collectResourceFavoriteDirs();
 
     const rawTmdbCacheTtl = parseInt(document.getElementById('tmdb_cache_ttl_hours')?.value || '', 10);
     cfg.tmdb_cache_ttl_hours = Math.min(720, Math.max(1, Number.isFinite(rawTmdbCacheTtl) ? rawTmdbCacheTtl : 24));

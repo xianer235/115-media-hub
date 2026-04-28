@@ -34,6 +34,7 @@
             const batchCount = batchMode ? getResourceBatchMagnetItems().length : 0;
             if (!titleEl || !detailGrid || !rawCard || !savePanel || !saveHintEl || !footer || !submitBtn || !closeBtn) return;
             syncResourceProviderUI();
+            renderResourceFavoriteDirs();
 
             titleEl.innerText = importMode ? (batchMode ? '批量导入资源' : '导入资源') : '资源详情';
             detailGrid.className = importMode ? 'resource-import-layout' : 'grid grid-cols-1 gap-4';
