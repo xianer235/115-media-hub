@@ -149,6 +149,8 @@
         let resourceSourceTestResult = { total: 0, done: 0, success: 0, failed: 0, running: false, last_name: '', error: '' };
         let resourceHeavyRenderRafId = null;
         let resourceSubmitBusy = false;
+        let resourceSubmitBusyToken = 0;
+        let resourceSubmitRefreshToken = 0;
         let resourceJobFilter = 'all';
         let appMountPoints = [];
         let tgProxyTestState = { loading: false, ok: null, message: '', latency_ms: 0, mode: '', proxy_url: '', target_url: '' };

@@ -209,6 +209,52 @@
             return Boolean(error?.payload?.duplicate_confirm_required ?? true);
         }
 
+        function acquireResourceSubmitLock() {
+            if (resourceSubmitBusy) {
+                showToast('正在提交中，请勿重复点击', { tone: 'info', duration: 2200, placement: 'top-center' });
+                return 0;
+            }
+            resourceSubmitBusyToken += 1;
+            resourceSubmitBusy = true;
+            if (selectedResourceItem) renderResourceModalLayout(selectedResourceItem);
+            return resourceSubmitBusyToken;
+        }
+
+        function releaseResourceSubmitLock(lockToken, { render = true } = {}) {
+            if (!lockToken || lockToken !== resourceSubmitBusyToken) return false;
+            resourceSubmitBusy = false;
+            if (render && resourceModalMode === 'import' && selectedResourceItem) {
+                renderResourceModalLayout(selectedResourceItem);
+            }
+            return true;
+        }
+
+        function refreshResourceJobsAfterSubmit() {
+            const refreshToken = ++resourceSubmitRefreshToken;
+            Promise.resolve().then(async () => {
+                if (
+                    typeof buildResourceJobsStateUrl === 'function'
+                    && typeof applyResourceJobsState === 'function'
+                    && window.MediaHubApi?.getJson
+                ) {
+                    const data = await window.MediaHubApi.getJson(buildResourceJobsStateUrl({
+                        status: resourceJobFilter,
+                        offset: 0,
+                        limit: RESOURCE_JOB_PAGE_SIZE,
+                    }));
+                    if (refreshToken === resourceSubmitRefreshToken) {
+                        applyResourceJobsState(data);
+                    }
+                    return;
+                }
+                if (typeof refreshResourceJobsOnly === 'function') {
+                    await refreshResourceJobsOnly();
+                } else {
+                    await refreshResourceState({ allowSearch: false });
+                }
+            }).catch(() => {});
+        }
+
         async function createResourceJobWithDuplicateConfirm(payload, { providerLabel = '网盘' } = {}) {
             try {
                 return await window.MediaHubApi.postJson('/resource/jobs/create', payload);
@@ -231,13 +277,9 @@
         }
 
         async function submitResourceJob() {
-            if (resourceSubmitBusy) {
-                showToast('正在提交中，请勿重复点击', { tone: 'info', duration: 2200, placement: 'top-center' });
-                return;
-            }
             if (!selectedResourceItem) return showToast('未选择资源', { tone: 'warn', duration: 2400, placement: 'top-center' });
-            resourceSubmitBusy = true;
-            renderResourceModalLayout(selectedResourceItem);
+            const submitLockToken = acquireResourceSubmitLock();
+            if (!submitLockToken) return;
             try {
                 const batchMode = isResourceBatchImportMode();
                 const batchItems = batchMode ? getResourceBatchMagnetItems() : [];
@@ -326,7 +368,8 @@
 
                     rememberResourceRefreshDelaySeconds(refreshDelaySeconds);
                     closeResourceJobModal();
-                    await refreshResourceState();
+                    releaseResourceSubmitLock(submitLockToken, { render: false });
+                    refreshResourceJobsAfterSubmit();
 
                     const summaryParts = [];
                     if (createdJobIds.length) summaryParts.push(`已创建 ${createdJobIds.length} 条任务`);
@@ -386,7 +429,8 @@
                 }
                 rememberResourceRefreshDelaySeconds(refreshDelaySeconds);
                 closeResourceJobModal();
-                await refreshResourceState();
+                releaseResourceSubmitLock(submitLockToken, { render: false });
+                refreshResourceJobsAfterSubmit();
                 const matchedTaskName = String(data.monitor_task_name || '').trim();
                 const tail = currentProvider === 'quark'
                     ? '，夸克链路不联动文件夹监控'
@@ -397,10 +441,7 @@
                     );
                 showToast(`已创建导入任务 #${data.job_id}${tail}`, { tone: 'success', duration: 3000, placement: 'top-center' });
             } finally {
-                resourceSubmitBusy = false;
-                if (resourceModalMode === 'import' && selectedResourceItem) {
-                    renderResourceModalLayout(selectedResourceItem);
-                }
+                releaseResourceSubmitLock(submitLockToken);
             }
         }
 
