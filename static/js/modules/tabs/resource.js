@@ -11,6 +11,7 @@ export async function refreshResourceState({
     searchId = '',
     signal = null,
     getResourceState,
+    getResourceJobsStateRequest,
     isDirectImportInput,
     setResourceStateHydrated,
     applyResourceState,
@@ -29,6 +30,15 @@ export async function refreshResourceState({
         params.set('search_source', String(currentResourceState.search_source || 'tg').trim() || 'tg');
         params.set('provider_filter', 'all');
         if (searchId) params.set('search_id', String(searchId || '').trim());
+        const jobRequest = typeof getResourceJobsStateRequest === 'function'
+            ? (getResourceJobsStateRequest() || {})
+            : {};
+        const jobStatus = String(jobRequest.status || 'all').trim() || 'all';
+        const jobOffset = Math.max(0, Number(jobRequest.offset || 0) || 0);
+        const jobLimit = Math.max(1, Number(jobRequest.limit || 20) || 20);
+        params.set('job_status', jobStatus);
+        params.set('job_offset', String(jobOffset));
+        params.set('job_limit', String(jobLimit));
         const endpoint = params.toString() ? `/resource/state?${params.toString()}` : '/resource/state';
         const data = window.MediaHubApi?.getJson
             ? await window.MediaHubApi.getJson(endpoint, signal ? { signal } : undefined)
@@ -111,10 +121,13 @@ export function applyResourceJobsState(data, {
     }
 }
 
-export async function refreshResourceJobsOnly({ applyResourceJobsState, buildResourceJobsStateUrl } = {}) {
+export async function refreshResourceJobsOnly({ applyResourceJobsState, buildResourceJobsStateUrl, getResourceJobsStateRequest } = {}) {
     try {
+        const jobRequest = typeof getResourceJobsStateRequest === 'function'
+            ? (getResourceJobsStateRequest() || {})
+            : {};
         const endpoint = typeof buildResourceJobsStateUrl === 'function'
-            ? buildResourceJobsStateUrl()
+            ? buildResourceJobsStateUrl(jobRequest)
             : '/resource/jobs/state';
         const data = window.MediaHubApi?.getJson
             ? await window.MediaHubApi.getJson(endpoint)

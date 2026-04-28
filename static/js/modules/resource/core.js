@@ -2207,6 +2207,7 @@
                     searchId,
                     signal,
                     getResourceState: () => resourceState,
+                    getResourceJobsStateRequest,
                     isDirectImportInput,
                     setResourceStateHydrated: (nextValue) => {
                         resourceStateHydrated = !!nextValue;
@@ -2224,6 +2225,10 @@
                 params.set('search_source', normalizeResourceSearchSource(resourceSearchSource));
                 params.set('provider_filter', 'all');
                 if (searchId) params.set('search_id', String(searchId || '').trim());
+                const jobRequest = getResourceJobsStateRequest();
+                params.set('job_status', jobRequest.status);
+                params.set('job_offset', String(jobRequest.offset));
+                params.set('job_limit', String(jobRequest.limit));
                 const endpoint = params.toString() ? `/resource/state?${params.toString()}` : '/resource/state';
                 const data = await window.MediaHubApi.getJson(endpoint, signal ? { signal } : undefined);
                 resourceStateHydrated = true;
@@ -2257,6 +2262,24 @@
             params.set('offset', String(Math.max(0, Number(offset || 0) || 0)));
             params.set('limit', String(Math.max(1, Number(limit || RESOURCE_JOB_PAGE_SIZE) || RESOURCE_JOB_PAGE_SIZE)));
             return `/resource/jobs/state?${params.toString()}`;
+        }
+
+        function getResourceJobsStateRequest({ status = resourceJobFilter, offset = 0, limit = null } = {}) {
+            const pagination = resourceState?.job_pagination && typeof resourceState.job_pagination === 'object'
+                ? resourceState.job_pagination
+                : {};
+            const loadedCount = Math.max(
+                RESOURCE_JOB_PAGE_SIZE,
+                Number(pagination.loaded_count || 0) || 0,
+                Number(pagination.next_offset || 0) || 0,
+                Array.isArray(resourceState.jobs) ? resourceState.jobs.length : 0
+            );
+            const requestedLimit = limit == null ? loadedCount : Number(limit || RESOURCE_JOB_PAGE_SIZE) || RESOURCE_JOB_PAGE_SIZE;
+            return {
+                status: normalizeResourceJobFilter(status || pagination.status || resourceJobFilter),
+                offset: Math.max(0, Number(offset || 0) || 0),
+                limit: Math.max(1, Math.min(200, requestedLimit)),
+            };
         }
 
         function mergeResourceJobPages(existingJobs = [], incomingJobs = []) {
@@ -2380,14 +2403,11 @@
                 return resourceModule.refreshResourceJobsOnly({
                     applyResourceJobsState,
                     buildResourceJobsStateUrl,
+                    getResourceJobsStateRequest,
                 });
             }
             try {
-                const data = await window.MediaHubApi.getJson(buildResourceJobsStateUrl({
-                    status: resourceJobFilter,
-                    offset: 0,
-                    limit: RESOURCE_JOB_PAGE_SIZE,
-                }));
+                const data = await window.MediaHubApi.getJson(buildResourceJobsStateUrl(getResourceJobsStateRequest()));
                 applyResourceJobsState(data);
                 return data;
             } catch (e) {

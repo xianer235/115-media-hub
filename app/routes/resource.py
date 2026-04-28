@@ -317,14 +317,12 @@ async def run_resource_browse_io(func, *args, executor=None, include_diagnostics
 
 def _build_resource_jobs_state_snapshot(limit: int = 20, offset: int = 0, status_filter: str = "") -> Dict[str, Any]:
     cfg = get_config()
-    payload = build_resource_jobs_state_payload(limit=limit, cfg=cfg)
-    normalized_filter = normalize_resource_job_status_filter(status_filter)
-    normalized_offset = max(0, int(offset or 0))
-    if normalized_filter != "all" or normalized_offset > 0:
-        jobs_page = list_resource_jobs_page(limit=limit, offset=normalized_offset, status_filter=normalized_filter)
-        payload["jobs"] = jobs_page.get("jobs", [])
-        payload["pagination"] = jobs_page.get("pagination", {})
-    return payload
+    return build_resource_jobs_state_payload(
+        limit=limit,
+        cfg=cfg,
+        offset=max(0, int(offset or 0)),
+        status_filter=normalize_resource_job_status_filter(status_filter),
+    )
 
 
 def _import_resource_candidates_to_db(candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -352,6 +350,9 @@ async def get_resource_state(request: Request) -> Dict[str, Any]:
     search_source = normalize_resource_search_source(request.query_params.get("search_source", "tg"))
     provider_filter = normalize_resource_provider_filter(request.query_params.get("provider_filter", "all"))
     search_id = normalize_resource_search_id(request.query_params.get("search_id", ""))
+    job_limit = max(1, min(parse_int(request.query_params.get("job_limit", 20), default=20), 200))
+    job_offset = max(0, parse_int(request.query_params.get("job_offset", 0), default=0))
+    job_status_filter = normalize_resource_job_status_filter(request.query_params.get("job_status", "all"))
     sync_channels = request.query_params.get("sync") == "1"
     if sync_channels:
         submit_resource_channel_sync(force=False)
@@ -361,6 +362,9 @@ async def get_resource_state(request: Request) -> Dict[str, Any]:
             search_source=search_source,
             provider_filter=provider_filter,
             search_id=search_id,
+            job_limit=job_limit,
+            job_offset=job_offset,
+            job_status_filter=job_status_filter,
         )
     finally:
         clear_resource_search_cancel(search_id)
@@ -377,9 +381,9 @@ async def cancel_resource_search_endpoint(request: Request) -> JSONResponse:
 
 @router.get("/resource/jobs/state")
 async def get_resource_jobs_state(request: Request) -> Dict[str, Any]:
-    limit = max(1, min(int(request.query_params.get("limit", 20) or 20), 200))
-    offset = max(0, int(request.query_params.get("offset", 0) or 0))
-    status_filter = str(request.query_params.get("status", "all") or "all").strip().lower()
+    limit = max(1, min(parse_int(request.query_params.get("limit", 20), default=20), 200))
+    offset = max(0, parse_int(request.query_params.get("offset", 0), default=0))
+    status_filter = normalize_resource_job_status_filter(request.query_params.get("status", "all"))
     return await asyncio.to_thread(_build_resource_jobs_state_snapshot, limit, offset, status_filter)
 
 

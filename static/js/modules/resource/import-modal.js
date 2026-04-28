@@ -237,11 +237,14 @@
                     && typeof applyResourceJobsState === 'function'
                     && window.MediaHubApi?.getJson
                 ) {
-                    const data = await window.MediaHubApi.getJson(buildResourceJobsStateUrl({
-                        status: resourceJobFilter,
-                        offset: 0,
-                        limit: RESOURCE_JOB_PAGE_SIZE,
-                    }));
+                    const jobRequest = typeof getResourceJobsStateRequest === 'function'
+                        ? getResourceJobsStateRequest()
+                        : {
+                            status: resourceJobFilter,
+                            offset: 0,
+                            limit: RESOURCE_JOB_PAGE_SIZE,
+                        };
+                    const data = await window.MediaHubApi.getJson(buildResourceJobsStateUrl(jobRequest));
                     if (refreshToken === resourceSubmitRefreshToken) {
                         applyResourceJobsState(data);
                     }

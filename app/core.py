@@ -3692,9 +3692,14 @@ def build_resource_channel_sync_payload() -> Dict[str, Any]:
         return clone_jsonable(resource_channel_sync_status)
 
 
-def build_resource_jobs_state_payload(limit: int = 20, cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def build_resource_jobs_state_payload(
+    limit: int = 20,
+    cfg: Optional[Dict[str, Any]] = None,
+    offset: int = 0,
+    status_filter: str = "",
+) -> Dict[str, Any]:
     active_cfg = cfg or get_config()
-    jobs_page = list_resource_jobs_page(limit=limit, offset=0, status_filter="")
+    jobs_page = list_resource_jobs_page(limit=limit, offset=offset, status_filter=status_filter)
     jobs = jobs_page.get("jobs", [])
     counts = count_resource_jobs_by_status()
     active_jobs_page = list_resource_jobs_page(limit=80, offset=0, status_filter="active")
@@ -3747,13 +3752,21 @@ def _build_resource_state_payload_snapshot(
     search_meta: Dict[str, Any],
     search_source: str = "tg",
     provider_filter: str = "all",
+    job_limit: int = 20,
+    job_offset: int = 0,
+    job_status_filter: str = "",
 ) -> Dict[str, Any]:
     keyword = str(keyword or "").strip()
     normalized_search_source = normalize_resource_search_source(search_source)
     normalized_provider_filter = normalize_resource_provider_filter(provider_filter)
     items = search_meta.get("items", []) if keyword else []
     search_sections = search_meta.get("sections", []) if keyword else []
-    jobs_state = build_resource_jobs_state_payload(limit=20, cfg=cfg)
+    jobs_state = build_resource_jobs_state_payload(
+        limit=job_limit,
+        cfg=cfg,
+        offset=job_offset,
+        status_filter=job_status_filter,
+    )
     jobs = jobs_state.get("jobs", [])
     active_jobs = jobs_state.get("active_jobs", [])
     job_counts = jobs_state.get("job_counts", {})
@@ -3806,7 +3819,7 @@ def _build_resource_state_payload_snapshot(
             "has_sources": bool(enabled_sources),
             "has_monitor": bool(cfg.get("monitor_tasks", [])),
             "has_resource_data": total_item_count > 0,
-            "has_jobs": bool(jobs),
+            "has_jobs": total_job_count > 0,
         },
         "search": keyword,
         "search_source": normalized_search_source,
@@ -3849,6 +3862,9 @@ async def build_resource_state_payload(
     search_source: str = "tg",
     provider_filter: str = "all",
     search_id: str = "",
+    job_limit: int = 20,
+    job_offset: int = 0,
+    job_status_filter: str = "",
 ) -> Dict[str, Any]:
     cfg = get_config()
     await asyncio.to_thread(recover_resource_jobs_if_due)
@@ -3896,6 +3912,9 @@ async def build_resource_state_payload(
         search_meta,
         normalized_search_source,
         normalized_provider_filter,
+        job_limit,
+        job_offset,
+        job_status_filter,
     )
 
 
