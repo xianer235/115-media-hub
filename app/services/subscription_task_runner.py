@@ -11,6 +11,319 @@ globals().update(
 )
 
 
+def _format_subscription_share_scan_truncated_reason(reason: Any) -> str:
+    labels = {
+        "max_dirs": "目录数达到上限",
+        "max_entries": "条目数达到上限",
+        "provider_has_more": "网盘分页仍有更多内容",
+        "queue_pending": "仍有待扫目录",
+        "page_cap": "分页达到上限",
+    }
+    parts = [str(part or "").strip() for part in str(reason or "").split(",") if str(part or "").strip()]
+    if not parts:
+        return "未知原因"
+    return "、".join(labels.get(part, part) for part in unique_preserve_order(parts))
+
+
+def _format_subscription_share_scan_log_tail(stats: Dict[str, Any], *, include_candidates: bool = True) -> str:
+    payload = stats if isinstance(stats, dict) else {}
+    scanned_dirs = max(0, int(payload.get("scanned_dirs", 0) or 0))
+    scanned_entries = max(0, int(payload.get("scanned_entries", 0) or 0))
+    returned_entries = max(0, int(payload.get("returned_entries", scanned_entries) or 0))
+    provider_reported_entries = max(0, int(payload.get("provider_reported_entries", 0) or 0))
+    candidate_count = max(
+        0,
+        int(
+            payload.get(
+                "matched_file_count",
+                payload.get("file_count", payload.get("selected_count", 0)),
+            )
+            or 0
+        ),
+    )
+    parts = [
+        f"扫描目录 {scanned_dirs} 个",
+        f"返回条目 {returned_entries} 条",
+    ]
+    if provider_reported_entries > returned_entries:
+        parts.append(f"提供方统计 {provider_reported_entries} 条")
+    if include_candidates:
+        parts.append(f"候选文件 {candidate_count} 个")
+    if bool(payload.get("truncated", False)):
+        parts.append(
+            f"已截断：{_format_subscription_share_scan_truncated_reason(payload.get('truncated_reason', ''))}"
+        )
+    return "，".join(parts)
+
+
+def _build_subscription_candidate_manifest_cache_key(provider: str, candidate: Dict[str, Any]) -> str:
+    payload = candidate if isinstance(candidate, dict) else {}
+    item = payload.get("item", {}) if isinstance(payload.get("item"), dict) else {}
+    link_url = _normalize_subscription_candidate_link(item.get("link_url", ""))
+    if not link_url:
+        return ""
+    item_extra = item.get("extra") if isinstance(item.get("extra"), dict) else safe_json_loads(item.get("extra_json"), {})
+    receive_code = normalize_receive_code(item.get("receive_code", "")) or normalize_receive_code(
+        (item_extra or {}).get("receive_code", "")
+    )
+    normalized_provider = normalize_subscription_provider(provider, fallback="115")
+    if normalized_provider == "quark":
+        share_key = _build_subscription_quark_share_dedupe_key(
+            link_url,
+            item.get("raw_text", ""),
+            receive_code,
+        )
+        return share_key or f"url:{link_url.lower()}"
+    return f"{link_url.lower()}|{receive_code.lower()}"
+
+
+def _pick_subscription_candidate_manifest_prewarm_rows(
+    candidates: List[Dict[str, Any]],
+    provider: str,
+    max_candidates: int,
+    *,
+    allow_zero_resource_id: bool = False,
+) -> List[Dict[str, Any]]:
+    normalized_provider = normalize_subscription_provider(provider, fallback="115")
+    expected_link_type = "quark" if normalized_provider == "quark" else "115share"
+    limit = max(0, int(max_candidates or 0))
+    if limit <= 0:
+        return []
+    rows: List[Dict[str, Any]] = []
+    seen_keys: Set[str] = set()
+    for index, candidate in enumerate(candidates if isinstance(candidates, list) else [], start=1):
+        payload = candidate if isinstance(candidate, dict) else {}
+        item = payload.get("item", {}) if isinstance(payload.get("item"), dict) else {}
+        resource_id = max(0, int(item.get("id", 0) or 0))
+        if resource_id <= 0 and not allow_zero_resource_id:
+            continue
+        link_url = _normalize_subscription_candidate_link(item.get("link_url", ""))
+        link_type = resolve_resource_link_type(item.get("link_type", ""), link_url)
+        if link_type != expected_link_type:
+            continue
+        cache_key = _build_subscription_candidate_manifest_cache_key(normalized_provider, payload)
+        if not cache_key or cache_key in seen_keys:
+            continue
+        seen_keys.add(cache_key)
+        rows.append(
+            {
+                "index": index,
+                "candidate": payload,
+                "item": item,
+                "cache_key": cache_key,
+                "high_priority": index <= 3 or int(payload.get("score", 0) or 0) >= 90 or resource_id <= 0,
+            }
+        )
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+async def _prewarm_subscription_candidate_share_manifests(
+    *,
+    cookie: str,
+    task: Dict[str, Any],
+    candidates: List[Dict[str, Any]],
+    provider: str,
+    manifest_cache: Dict[str, Dict[str, Any]],
+    label: str,
+    share_subdir: str = "",
+    share_subdir_cid: str = "",
+    subdir_selection_cache: Optional[Dict[str, Dict[str, Any]]] = None,
+    subdir_selection_stats_cache: Optional[Dict[str, Dict[str, Any]]] = None,
+    allow_zero_resource_id: bool = False,
+    max_candidates: int = 0,
+) -> Dict[str, Any]:
+    if str((task or {}).get("media_type", "movie") or "movie").strip().lower() != "tv":
+        return {"enabled": False, "reason": "media_type_not_tv"}
+    normalized_cookie = str(cookie or "").strip()
+    if not normalized_cookie:
+        return {"enabled": False, "reason": "cookie_missing"}
+    normalized_provider = normalize_subscription_provider(provider, fallback="115")
+    configured_prefetch_limit = max(0, int(SUBSCRIPTION_CANDIDATE_SCAN_PREFETCH_LIMIT or 0))
+    if configured_prefetch_limit <= 0:
+        return {"enabled": False, "reason": "prefetch_disabled"}
+    requested_prefetch_limit = max(0, int(max_candidates or 0))
+    prefetch_limit = (
+        min(configured_prefetch_limit, requested_prefetch_limit)
+        if requested_prefetch_limit > 0
+        else configured_prefetch_limit
+    )
+    rows = _pick_subscription_candidate_manifest_prewarm_rows(
+        candidates,
+        normalized_provider,
+        prefetch_limit,
+        allow_zero_resource_id=allow_zero_resource_id,
+    )
+    rows = [row for row in rows if str(row.get("cache_key", "") or "") not in manifest_cache]
+    if not rows:
+        return {"enabled": False, "reason": "no_candidates"}
+
+    concurrency = (
+        int(SUBSCRIPTION_QUARK_CANDIDATE_SCAN_CONCURRENCY or 1)
+        if normalized_provider == "quark"
+        else int(SUBSCRIPTION_115_CANDIDATE_SCAN_CONCURRENCY or 1)
+    )
+    concurrency = max(1, min(6, concurrency))
+    normal_max_entries = max(0, int(SUBSCRIPTION_SHARE_SCAN_NORMAL_MAX_ENTRIES or 0))
+    high_max_entries = max(normal_max_entries, int(SUBSCRIPTION_SHARE_SCAN_HIGH_PRIORITY_MAX_ENTRIES or 0))
+    started_at = time.perf_counter()
+    await write_subscription_log(
+        (
+            f"{label}候选精查预热：准备并发读取 {len(rows)} 个分享清单，"
+            f"并发 {concurrency}，普通上限 {normal_max_entries or '不限制'} 条，"
+            f"高优先上限 {high_max_entries or '不限制'} 条"
+        ),
+        "info",
+    )
+
+    semaphore = asyncio.Semaphore(concurrency)
+    requested_subdir = normalize_relative_path(str(share_subdir or "").strip())
+    requested_subdir_cid = _normalize_subscription_share_subdir_cid(share_subdir_cid)
+
+    async def scan_one(row: Dict[str, Any]) -> Dict[str, Any]:
+        async with semaphore:
+            check_subscription_cancelled()
+            item = row.get("item", {}) if isinstance(row.get("item"), dict) else {}
+            max_entries = high_max_entries if bool(row.get("high_priority", False)) else normal_max_entries
+            try:
+                snapshot = await _scan_subscription_share_tree_snapshot(
+                    normalized_cookie,
+                    task,
+                    item,
+                    max_depth=5,
+                    max_entries=max_entries,
+                    per_request_timeout=max(12, int(SUBSCRIPTION_SHARE_SCAN_REQUEST_TIMEOUT_SECONDS or 12)),
+                    force_refresh=False,
+                )
+            except Exception as exc:
+                return {
+                    "cache_key": str(row.get("cache_key", "") or ""),
+                    "index": max(0, int(row.get("index", 0) or 0)),
+                    "failed": True,
+                    "reason": str(exc or "").strip() or exc.__class__.__name__,
+                }
+
+            manifest = snapshot
+            subdir_selection: Dict[str, Any] = {}
+            subdir_stats: Dict[str, Any] = {}
+            cache_subdir = False
+            if normalized_provider == "115" and (requested_subdir or requested_subdir_cid):
+                subdir_selection, subdir_stats = _build_subscription_share_selection_from_snapshot(
+                    snapshot,
+                    requested_subdir,
+                    requested_subdir_cid,
+                )
+                selected_ids = (
+                    subdir_selection.get("selected_ids", [])
+                    if isinstance(subdir_selection.get("selected_ids"), list)
+                    else []
+                )
+                reason = str((subdir_stats or {}).get("reason", "") or "").strip()
+                if selected_ids:
+                    manifest = _build_subscription_share_manifest_from_snapshot(snapshot, subdir_selection)
+                    cache_subdir = True
+                elif reason == "target_is_share_root":
+                    cache_subdir = True
+                else:
+                    manifest = {}
+
+            return {
+                "cache_key": str(row.get("cache_key", "") or ""),
+                "index": max(0, int(row.get("index", 0) or 0)),
+                "link_url": _normalize_subscription_candidate_link(item.get("link_url", "")),
+                "failed": False,
+                "manifest": manifest,
+                "subdir_selection": subdir_selection,
+                "subdir_stats": subdir_stats,
+                "cache_subdir": cache_subdir,
+                "scanned_dirs": int((manifest or snapshot).get("scanned_dirs", 0) or 0),
+                "scanned_entries": int((manifest or snapshot).get("scanned_entries", 0) or 0),
+                "returned_entries": int((manifest or snapshot).get("returned_entries", 0) or 0),
+                "file_count": int((manifest or snapshot).get("file_count", 0) or 0),
+                "truncated": bool((manifest or snapshot).get("truncated", False)),
+            }
+
+    results = await asyncio.gather(*(scan_one(row) for row in rows), return_exceptions=True)
+    cached_count = 0
+    failed_count = 0
+    truncated_count = 0
+    scanned_dirs = 0
+    scanned_entries = 0
+    returned_entries = 0
+    file_count = 0
+    for result in results:
+        if isinstance(result, Exception):
+            failed_count += 1
+            continue
+        payload = result if isinstance(result, dict) else {}
+        if bool(payload.get("failed", False)):
+            failed_count += 1
+            continue
+        cache_key = str(payload.get("cache_key", "") or "").strip()
+        manifest = payload.get("manifest") if isinstance(payload.get("manifest"), dict) else {}
+        if cache_key and manifest:
+            manifest_cache[cache_key] = manifest
+            cached_count += 1
+        if (
+            normalized_provider == "115"
+            and bool(payload.get("cache_subdir", False))
+            and cache_key
+            and isinstance(subdir_selection_cache, dict)
+            and isinstance(subdir_selection_stats_cache, dict)
+        ):
+            selection_payload = (
+                payload.get("subdir_selection", {})
+                if isinstance(payload.get("subdir_selection"), dict)
+                else {}
+            )
+            stats_payload = (
+                payload.get("subdir_stats", {})
+                if isinstance(payload.get("subdir_stats"), dict)
+                else {}
+            )
+            link_url = _normalize_subscription_candidate_link(payload.get("link_url", ""))
+            for subdir_cache_key in unique_preserve_order(
+                [
+                    f"{cache_key}|{requested_subdir}|{requested_subdir_cid}",
+                    f"{link_url}|{requested_subdir}|{requested_subdir_cid}" if link_url else "",
+                ]
+            ):
+                if not subdir_cache_key:
+                    continue
+                subdir_selection_cache[subdir_cache_key] = selection_payload
+                subdir_selection_stats_cache[subdir_cache_key] = stats_payload
+        truncated_count += 1 if bool(payload.get("truncated", False)) else 0
+        scanned_dirs += max(0, int(payload.get("scanned_dirs", 0) or 0))
+        scanned_entries += max(0, int(payload.get("scanned_entries", 0) or 0))
+        returned_entries += max(0, int(payload.get("returned_entries", 0) or 0))
+        file_count += max(0, int(payload.get("file_count", 0) or 0))
+
+    elapsed = max(0.0, time.perf_counter() - started_at)
+    await write_subscription_log(
+        (
+            f"{label}候选精查预热完成：清单缓存 {cached_count}/{len(rows)} 个，"
+            f"扫描目录 {scanned_dirs} 个，返回条目 {returned_entries or scanned_entries} 条，"
+            f"候选文件 {file_count} 个，截断 {truncated_count} 个，异常 {failed_count} 个，"
+            f"用时 {_format_elapsed_seconds(elapsed)}"
+        ),
+        "info" if failed_count <= 0 else "warn",
+    )
+    return {
+        "enabled": True,
+        "requested": len(rows),
+        "cached": cached_count,
+        "failed": failed_count,
+        "truncated": truncated_count,
+        "scanned_dirs": scanned_dirs,
+        "scanned_entries": scanned_entries,
+        "returned_entries": returned_entries,
+        "file_count": file_count,
+        "elapsed_seconds": elapsed,
+        "concurrency": concurrency,
+    }
+
+
 def _build_manual_quark_subscription_search_result(
     task: Dict[str, Any],
     task_name: str,
@@ -124,16 +437,24 @@ async def _write_subscription_search_diagnostics(search_stats: Dict[str, Any], l
     payload = search_stats if isinstance(search_stats, dict) else {}
     keyword_limit = int(payload.get("search_keyword_limit", 0) or 0)
     keyword_concurrency = int(payload.get("search_keyword_concurrency", 0) or 0)
+    episode_total = int(payload.get("search_episode_total", 0) or 0)
+    per_channel_limit = int(payload.get("search_limit_per_channel", 0) or 0)
+    total_limit = int(payload.get("search_total_limit", 0) or 0)
     max_pages = int(payload.get("search_max_pages", 0) or 0)
     request_timeout = int(payload.get("search_request_timeout_seconds", 0) or 0)
     channel_timeout = int(payload.get("search_channel_timeout_seconds", 0) or 0)
     thread_limit = int(payload.get("search_thread_limit", 0) or 0)
     if keyword_limit > 0 or max_pages > 0 or request_timeout > 0 or channel_timeout > 0 or thread_limit > 0:
+        total_limit_label = str(total_limit) if total_limit > 0 else "不截断"
+        episode_total_label = str(episode_total) if episode_total > 0 else "--"
         await write_subscription_log(
             (
                 f"{label}限速参数：关键词 {keyword_limit or '--'} 个，"
                 f"关键词并发 {keyword_concurrency or '--'}，"
                 f"频道并发 {thread_limit or '--'}，"
+                f"任务集数 {episode_total_label}，"
+                f"每频道候选 {per_channel_limit or '--'} 条，"
+                f"全频道候选 {total_limit_label}，"
                 f"每频道最多 {max_pages or '--'} 页，"
                 f"单请求 {request_timeout or '--'} 秒，"
                 f"单频道 {channel_timeout or '--'} 秒"
@@ -143,6 +464,14 @@ async def _write_subscription_search_diagnostics(search_stats: Dict[str, Any], l
     cached_items = int(payload.get("channel_cached_items", payload.get("cached_items", 0)) or 0)
     cache_queries = int(payload.get("channel_cache_queries", payload.get("cache_queries", 0)) or 0)
     cache_errors = int(payload.get("channel_cache_errors", payload.get("cache_errors", 0)) or 0)
+    channel_returned_items = int(payload.get("channel_returned_items", 0) or 0)
+    channel_candidate_count = int(payload.get("channel_candidate_count", 0) or 0)
+    channel_scored_items = int(payload.get("channel_scored_items", 0) or 0)
+    if keyword_limit > 0 or channel_returned_items > 0 or channel_scored_items > 0 or channel_candidate_count > 0:
+        await write_subscription_log(
+            f"{label}频道召回：返回 {channel_returned_items} 条，评分 {channel_scored_items} 条，入选候选 {channel_candidate_count} 条",
+            "info",
+        )
     if cached_items > 0:
         await write_subscription_log(
             f"{label}本地缓存召回：命中 {cached_items} 条历史频道资源（查询 {cache_queries or '--'} 组关键词）",
@@ -154,11 +483,19 @@ async def _write_subscription_search_diagnostics(search_stats: Dict[str, Any], l
             "warn",
         )
     pansou_items = int(payload.get("pansou_items", 0) or 0)
+    pansou_returned_items = int(payload.get("pansou_returned_items", pansou_items) or 0)
+    pansou_candidate_count = int(payload.get("pansou_candidate_count", 0) or 0)
+    pansou_scored_items = int(payload.get("pansou_scored_items", 0) or 0)
     pansou_errors = int(payload.get("pansou_errors", 0) or 0)
     if bool(payload.get("pansou_enabled", False)):
+        pansou_total_limit = int(payload.get("pansou_total_limit", 0) or 0)
         elapsed = max(0.0, float(payload.get("pansou_elapsed_seconds", 0.0) or 0.0))
         await write_subscription_log(
-            f"{label}盘搜召回：候选 {pansou_items} 条，异常 {pansou_errors} 次，用时 {elapsed:.1f} 秒",
+            (
+                f"{label}盘搜召回：返回 {pansou_returned_items} 条，评分 {pansou_scored_items} 条，"
+                f"入选候选 {pansou_candidate_count} 条，上限 {pansou_total_limit or '不截断'} 条，"
+                f"异常 {pansou_errors} 次，用时 {elapsed:.1f} 秒"
+            ),
             "info" if pansou_errors <= 0 else "warn",
         )
     slow_channels = payload.get("slow_channels", [])
@@ -376,6 +713,7 @@ async def _run_subscription_task_quark(
             task,
             last_episode=last_episode,
             trigger=trigger,
+            total_episodes=known_total,
         )
     search_duration_seconds = max(0.0, time.perf_counter() - search_started_at)
     search_stats = search_result.get("stats", {}) if isinstance(search_result.get("stats"), dict) else {}
@@ -691,6 +1029,7 @@ async def _run_subscription_task_quark(
     savepath_folder_id_cache: Dict[str, str] = {effective_savepath: str(folder_id or "").strip()}
     seen_candidate_share_keys: Set[str] = set()
     quark_manifest_cache: Dict[str, Dict[str, Any]] = {}
+    candidate_scan_prewarm_stats: Dict[str, Any] = {}
 
     def consume_background_task_result(task_obj: asyncio.Task) -> None:
         try:
@@ -702,6 +1041,16 @@ async def _run_subscription_task_quark(
 
     _subscription_stage_timer_enter(stage_timer, "import")
     candidate_queue = list(attempt_candidates)
+    if task["media_type"] == "tv" and candidate_queue:
+        candidate_scan_prewarm_stats = await _prewarm_subscription_candidate_share_manifests(
+            cookie=cookie_quark,
+            task=task,
+            candidates=candidate_queue,
+            provider="quark",
+            manifest_cache=quark_manifest_cache,
+            label="夸克",
+            max_candidates=min(len(candidate_queue), max_attempts),
+        )
     queue_index = 0
     while queue_index < len(candidate_queue):
         if attempted_candidates >= max_attempts:
@@ -865,17 +1214,38 @@ async def _run_subscription_task_quark(
                 continue
 
             if precise_missing_episode_values:
-                precise_selection, precise_stats = await _build_tv_share_selection_for_missing_episodes(
-                    cookie_quark,
-                    task,
-                    item,
-                    precise_missing_episode_values,
-                )
+                manifest_cache_key = candidate_share_key or candidate_link_url or f"resource:{resource_id}"
+                manifest_payload = quark_manifest_cache.get(manifest_cache_key)
+                if manifest_payload:
+                    precise_selection, precise_stats = _build_tv_share_selection_from_manifest(
+                        manifest_payload,
+                        precise_missing_episode_values,
+                        task=task,
+                    )
+                else:
+                    precise_selection, precise_stats = await _build_tv_share_selection_for_missing_episodes(
+                        cookie_quark,
+                        task,
+                        item,
+                        precise_missing_episode_values,
+                    )
                 precise_ids = (
                     precise_selection.get("selected_ids", [])
                     if isinstance(precise_selection.get("selected_ids"), list)
                     else []
                 )
+                if (not precise_ids) and manifest_payload and bool(manifest_payload.get("truncated", False)):
+                    precise_selection, precise_stats = await _build_tv_share_selection_for_missing_episodes(
+                        cookie_quark,
+                        task,
+                        item,
+                        precise_missing_episode_values,
+                    )
+                    precise_ids = (
+                        precise_selection.get("selected_ids", [])
+                        if isinstance(precise_selection.get("selected_ids"), list)
+                        else []
+                    )
                 fallback_used = False
                 fallback_missing_episode_values: Set[int] = set()
                 if not precise_ids:
@@ -883,7 +1253,6 @@ async def _run_subscription_task_quark(
                     scanned_dirs = int((precise_stats or {}).get("scanned_dirs", 0) or 0)
                     scanned_entries = int((precise_stats or {}).get("scanned_entries", 0) or 0)
                     if reason == "no_precise_episode_match":
-                        manifest_cache_key = candidate_share_key or candidate_link_url or f"resource:{resource_id}"
                         manifest_payload = quark_manifest_cache.get(manifest_cache_key)
                         if not manifest_payload:
                             manifest_payload = await _scan_subscription_share_tree_snapshot(
@@ -891,14 +1260,29 @@ async def _run_subscription_task_quark(
                                 task,
                                 item,
                                 max_depth=5,
-                                max_dirs=140,
-                                max_entries=5000,
                                 per_request_timeout=max(12, int(SUBSCRIPTION_SHARE_SCAN_REQUEST_TIMEOUT_SECONDS or 12)),
                                 force_refresh=False,
                             )
                             quark_manifest_cache[manifest_cache_key] = manifest_payload
                         scanned_dirs = max(scanned_dirs, int((manifest_payload or {}).get("scanned_dirs", 0) or 0))
                         scanned_entries = max(scanned_entries, int((manifest_payload or {}).get("scanned_entries", 0) or 0))
+                        if isinstance(precise_stats, dict):
+                            precise_stats = dict(precise_stats)
+                            precise_stats["scanned_dirs"] = scanned_dirs
+                            precise_stats["scanned_entries"] = scanned_entries
+                            for scan_key in (
+                                "returned_entries",
+                                "provider_reported_entries",
+                                "provider_pages_scanned",
+                                "file_count",
+                                "provider_truncated_dirs",
+                                "truncated_reason",
+                            ):
+                                if scan_key in (manifest_payload or {}):
+                                    precise_stats[scan_key] = (manifest_payload or {}).get(scan_key)
+                            precise_stats["truncated"] = bool(
+                                precise_stats.get("truncated", False) or (manifest_payload or {}).get("truncated", False)
+                            )
                         manifest_episodes = _clamp_episode_values(
                             {
                                 max(0, int(value or 0))
@@ -946,12 +1330,13 @@ async def _run_subscription_task_quark(
                 if not precise_ids:
                     skipped_precise_mismatch_candidates += 1
                     reason_label = _format_subscription_reason_chain(reason)
+                    scan_tail = _format_subscription_share_scan_log_tail(precise_stats)
                     archive_skipped = int((precise_stats or {}).get("skipped_archive_files", 0) or 0)
                     archive_tail = f"，已排除 zip/rar {archive_skipped} 个" if archive_skipped > 0 else ""
                     await write_subscription_log(
                         (
                             f"候选资源 #{index} 精细筛选未命中缺失集（目标 {_format_episode_preview(precise_missing_episode_values)}，"
-                            f"原因 {reason_label}，扫描目录 {scanned_dirs} 个，条目 {scanned_entries} 条{archive_tail}），"
+                            f"原因 {reason_label}，{scan_tail}{archive_tail}），"
                             "已跳过整包导入"
                         ),
                         "warn",
@@ -972,12 +1357,13 @@ async def _run_subscription_task_quark(
                 selected_share_file_samples = [sample for sample in selected_share_file_samples if sample]
                 dedupe_hits = int((precise_stats or {}).get("duplicate_bucket_hits", 0) or 0)
                 dedupe_tail = f"，同集/同范围已优选 {dedupe_hits} 条重复版本" if dedupe_hits > 0 else ""
+                scan_tail = _format_subscription_share_scan_log_tail(precise_stats)
                 if fallback_used:
                     await write_subscription_log(
                         (
                             f"候选资源 #{index} 原目标 {_format_episode_preview(precise_missing_episode_values)} 未命中，"
                             f"已按清单回退识别 {_format_episode_preview(fallback_missing_episode_values)} 并筛选 "
-                            f"{len(precise_ids)} 个文件后转存{dedupe_tail}"
+                            f"{len(precise_ids)} 个文件后转存（{scan_tail}）{dedupe_tail}"
                         ),
                         "info",
                     )
@@ -985,7 +1371,7 @@ async def _run_subscription_task_quark(
                     await write_subscription_log(
                         (
                             f"候选资源 #{index} 已按缺失集筛选 {len(precise_ids)} 个文件后转存"
-                            f"（目标 {_format_episode_preview(precise_missing_episode_values)}）{dedupe_tail}"
+                            f"（目标 {_format_episode_preview(precise_missing_episode_values)}，{scan_tail}）{dedupe_tail}"
                         ),
                         "info",
                     )
@@ -999,12 +1385,22 @@ async def _run_subscription_task_quark(
                         task,
                         item,
                         max_depth=5,
-                        max_dirs=140,
-                        max_entries=5000,
                         per_request_timeout=max(12, int(SUBSCRIPTION_SHARE_SCAN_REQUEST_TIMEOUT_SECONDS or 12)),
                         force_refresh=False,
                     )
                     quark_manifest_cache[manifest_cache_key] = manifest_payload
+                elif bool(manifest_payload.get("truncated", False)):
+                    refreshed_manifest_payload = await _scan_subscription_share_tree_snapshot(
+                        cookie_quark,
+                        task,
+                        item,
+                        max_depth=5,
+                        per_request_timeout=max(12, int(SUBSCRIPTION_SHARE_SCAN_REQUEST_TIMEOUT_SECONDS or 12)),
+                        force_refresh=False,
+                    )
+                    if refreshed_manifest_payload:
+                        manifest_payload = refreshed_manifest_payload
+                        quark_manifest_cache[manifest_cache_key] = manifest_payload
                 manifest_episodes = _clamp_episode_values(
                     {
                         max(0, int(value or 0))
@@ -1048,14 +1444,13 @@ async def _run_subscription_task_quark(
                     skipped_precise_mismatch_candidates += 1
                     reason = str((precise_stats or {}).get("reason", "") or "no_precise_episode_match").strip()
                     reason_label = _format_subscription_reason_chain(reason)
-                    scanned_dirs = int((precise_stats or {}).get("scanned_dirs", 0) or 0)
-                    scanned_entries = int((precise_stats or {}).get("scanned_entries", 0) or 0)
+                    scan_tail = _format_subscription_share_scan_log_tail(precise_stats)
                     archive_skipped = int((precise_stats or {}).get("skipped_archive_files", 0) or 0)
                     archive_tail = f"，已排除 zip/rar {archive_skipped} 个" if archive_skipped > 0 else ""
                     await write_subscription_log(
                         (
                             f"候选资源 #{index} 清单精查未能定位目标季剧集文件"
-                            f"（原因 {reason_label}，扫描目录 {scanned_dirs} 个，条目 {scanned_entries} 条{archive_tail}），"
+                            f"（原因 {reason_label}，{scan_tail}{archive_tail}），"
                             "已跳过整包导入"
                         ),
                         "warn",
@@ -1384,6 +1779,7 @@ async def _run_subscription_task_quark(
                 "title_hint_missing_targets": sorted(title_hint_missing_targets)[:120],
                 "scanned_candidates": scanned_candidates,
                 "max_attempts": max_attempts,
+                "candidate_scan_prewarm": candidate_scan_prewarm_stats,
                 **existing_episode_scan_stats,
                 **search_stats,
             },
@@ -1467,6 +1863,7 @@ async def _run_subscription_task_quark(
             "title_hint_missing_targets": sorted(title_hint_missing_targets)[:120],
             "scanned_candidates": scanned_candidates,
             "max_attempts": max_attempts,
+            "candidate_scan_prewarm": candidate_scan_prewarm_stats,
             **existing_episode_scan_stats,
             **search_stats,
         },
@@ -1738,6 +2135,7 @@ async def run_subscription_task(
                     task,
                     last_episode=last_episode,
                     trigger=trigger,
+                    total_episodes=known_total,
                 )
                 search_result = merge_subscription_search_results(search_result, channel_search_result)
         else:
@@ -1745,6 +2143,7 @@ async def run_subscription_task(
                 task,
                 last_episode=last_episode,
                 trigger=trigger,
+                total_episodes=known_total,
             )
         search_duration_seconds = max(0.0, time.perf_counter() - search_started_at)
         search_stats = search_result.get("stats", {}) if isinstance(search_result.get("stats"), dict) else {}
@@ -2238,11 +2637,13 @@ async def run_subscription_task(
         batch_created_job_ids: Set[int] = set()
         share_subdir_selection_cache: Dict[str, Dict[str, Any]] = {}
         share_subdir_selection_stats_cache: Dict[str, Dict[str, Any]] = {}
+        share_manifest_cache: Dict[str, Dict[str, Any]] = {}
         fixed_share_runtime_initialized = False
         fixed_share_runtime_selection: Dict[str, Any] = {}
         fixed_share_runtime_subdir_stats: Dict[str, Any] = {}
         fixed_share_runtime_manifest: Dict[str, Any] = {}
         savepath_folder_id_cache: Dict[str, str] = {effective_savepath: str(folder_id or "").strip()}
+        candidate_scan_prewarm_stats: Dict[str, Any] = {}
         batch_refresh_result: Dict[str, Any] = {
             "run_id": subscription_run_id,
             "created_jobs": 0,
@@ -2306,6 +2707,20 @@ async def run_subscription_task(
                 pass
 
         _subscription_stage_timer_enter(stage_timer, "import")
+        if task["media_type"] == "tv" and attempt_candidates:
+            candidate_scan_prewarm_stats = await _prewarm_subscription_candidate_share_manifests(
+                cookie=cookie_115,
+                task=task,
+                candidates=attempt_candidates,
+                provider="115",
+                manifest_cache=share_manifest_cache,
+                label="115",
+                share_subdir=task_share_subdir if not use_fixed_share_link else "",
+                share_subdir_cid=task_share_subdir_cid if not use_fixed_share_link else "",
+                subdir_selection_cache=share_subdir_selection_cache,
+                subdir_selection_stats_cache=share_subdir_selection_stats_cache,
+                max_candidates=min(len(attempt_candidates), max_scan_candidates),
+            )
         for index, candidate in enumerate(attempt_candidates, start=1):
             if attempted_candidates >= max_attempts:
                 break
@@ -2333,6 +2748,8 @@ async def run_subscription_task(
             episode_label = _format_candidate_episode_label(candidate)
             candidate_link_url = _normalize_subscription_candidate_link(item.get("link_url", ""))
             candidate_link_type = resolve_resource_link_type(item.get("link_type", ""), candidate_link_url)
+            candidate_manifest_cache_key = _build_subscription_candidate_manifest_cache_key("115", candidate)
+            candidate_manifest_payload = share_manifest_cache.get(candidate_manifest_cache_key)
             fixed_share_seed_candidate = (
                 use_fixed_share_link
                 and resource_id <= 0
@@ -2510,13 +2927,12 @@ async def run_subscription_task(
                     if bool((fixed_share_runtime_subdir_stats or {}).get("anchor_empty_fallback", False))
                     else ""
                 )
+                runtime_scan_tail = _format_subscription_share_scan_log_tail(fixed_share_runtime_manifest)
                 await write_subscription_log(
                     (
                         f"固定链接运行期缓存已刷新：定位子目录 {_format_elapsed_seconds(runtime_subdir_elapsed_seconds)}，"
                         f"识别目录 {runtime_subdir_reason_label}{runtime_subdir_fallback_tail}，"
-                        f"扫描目录 {int(fixed_share_runtime_manifest.get('scanned_dirs', 0) or 0)} 个，"
-                        f"条目 {int(fixed_share_runtime_manifest.get('scanned_entries', 0) or 0)} 条，"
-                        f"可识别剧集文件 {int(fixed_share_runtime_manifest.get('file_count', 0) or 0)} 个，"
+                        f"{runtime_scan_tail}，"
                         f"扫描耗时 {_format_elapsed_seconds(runtime_manifest_elapsed_seconds)}，"
                         f"并发 {SUBSCRIPTION_SHARE_SCAN_CONCURRENCY}，"
                         f"限速 {SUBSCRIPTION_SHARE_SCAN_RATE_LIMIT_SECONDS:g}s"
@@ -2863,11 +3279,12 @@ async def run_subscription_task(
                             ]
                             dedupe_hits = int((precise_stats or {}).get("duplicate_bucket_hits", 0) or 0)
                             dedupe_tail = f"，同集/同范围已优选 {dedupe_hits} 条重复版本" if dedupe_hits > 0 else ""
+                            scan_tail = _format_subscription_share_scan_log_tail(precise_stats)
                             await write_subscription_log(
                                 (
                                     f"候选资源 #{index} 固定链接模式已启用文件级筛选"
                                     f"{'（运行期缓存）' if bool((precise_stats or {}).get('from_runtime_cache', False)) else ''}，"
-                                    f"自动命中 {len(precise_ids)} 个剧集文件后再转存（避免整包导入）{dedupe_tail}"
+                                    f"自动命中 {len(precise_ids)} 个剧集文件后再转存（{scan_tail}，避免整包导入）{dedupe_tail}"
                                 ),
                                 "info",
                             )
@@ -2875,14 +3292,13 @@ async def run_subscription_task(
                             skipped_subdir_candidates += 1
                             selection_reason = str((precise_stats or {}).get("reason", "") or "").strip() or "unknown"
                             selection_reason_label = _format_subscription_reason_chain(selection_reason)
-                            scanned_dirs = int((precise_stats or {}).get("scanned_dirs", 0) or 0)
-                            scanned_entries = int((precise_stats or {}).get("scanned_entries", 0) or 0)
+                            scan_tail = _format_subscription_share_scan_log_tail(precise_stats)
                             covered_preview = _format_episode_preview(precise_missing_episode_values)
                             await write_subscription_log(
                                 (
                                     f"候选资源 #{index} 固定链接模式未能在订阅子目录中识别目标剧集文件，"
                                     f"已跳过避免整包导入（目标 {covered_preview}，原因 {selection_reason_label}，"
-                                    f"扫描目录 {scanned_dirs} 个，条目 {scanned_entries} 条）"
+                                    f"{scan_tail}）"
                                 ),
                                 "warn",
                             )
@@ -2925,6 +3341,12 @@ async def run_subscription_task(
                                 title_precise_episode_values,
                                 task=candidate_share_task,
                             )
+                        elif candidate_manifest_payload:
+                            title_precise_selection, title_precise_stats = _build_tv_share_selection_from_manifest(
+                                candidate_manifest_payload,
+                                title_precise_episode_values,
+                                task=candidate_share_task,
+                            )
                         else:
                             title_precise_selection, title_precise_stats = await _build_tv_share_selection_for_missing_episodes(
                                 cookie_115,
@@ -2938,6 +3360,23 @@ async def run_subscription_task(
                             if isinstance(title_precise_selection.get("selected_ids"), list)
                             else []
                         )
+                        if (
+                            (not title_precise_ids)
+                            and candidate_manifest_payload
+                            and bool(candidate_manifest_payload.get("truncated", False))
+                        ):
+                            title_precise_selection, title_precise_stats = await _build_tv_share_selection_for_missing_episodes(
+                                cookie_115,
+                                candidate_share_task,
+                                item,
+                                title_precise_episode_values,
+                                share_subdir_selection=resolved_subdir_selection,
+                            )
+                            title_precise_ids = (
+                                title_precise_selection.get("selected_ids", [])
+                                if isinstance(title_precise_selection.get("selected_ids"), list)
+                                else []
+                            )
                         if title_precise_ids:
                             job_payload["share_selection"] = title_precise_selection
                             forced_precise_selection_applied = True
@@ -2961,11 +3400,12 @@ async def run_subscription_task(
                             ]
                             dedupe_hits = int((title_precise_stats or {}).get("duplicate_bucket_hits", 0) or 0)
                             dedupe_tail = f"，同集/同范围已优选 {dedupe_hits} 条重复版本" if dedupe_hits > 0 else ""
+                            scan_tail = _format_subscription_share_scan_log_tail(title_precise_stats)
                             if candidate_season_mismatch_deferred:
                                 await write_subscription_log(
                                     (
                                         f"候选资源 #{index} 标题季号与订阅季不同，已改按目标季内容精细筛选 "
-                                        f"{len(title_precise_ids)} 个文件后转存{dedupe_tail}"
+                                        f"{len(title_precise_ids)} 个文件后转存（{scan_tail}）{dedupe_tail}"
                                     ),
                                     "info",
                                 )
@@ -2974,7 +3414,7 @@ async def run_subscription_task(
                                     (
                                         f"候选资源 #{index} 已按候选标题集数精细筛选 "
                                         f"{len(title_precise_ids)} 个文件后转存（目标 {_format_episode_preview(title_precise_episode_values)}）"
-                                        f"{dedupe_tail}"
+                                        f"（{scan_tail}）{dedupe_tail}"
                                     ),
                                     "info",
                                 )
@@ -2982,20 +3422,131 @@ async def run_subscription_task(
                             skipped_precise_mismatch_candidates += 1
                             selection_reason = str((title_precise_stats or {}).get("reason", "") or "").strip() or "unknown"
                             selection_reason_label = _format_subscription_reason_chain(selection_reason)
-                            scanned_dirs = int((title_precise_stats or {}).get("scanned_dirs", 0) or 0)
-                            scanned_entries = int((title_precise_stats or {}).get("scanned_entries", 0) or 0)
+                            scan_tail = _format_subscription_share_scan_log_tail(title_precise_stats)
                             archive_skipped = int((title_precise_stats or {}).get("skipped_archive_files", 0) or 0)
                             archive_tail = f"，已排除 zip/rar {archive_skipped} 个" if archive_skipped > 0 else ""
                             await write_subscription_log(
                                 (
                                     f"候选资源 #{index} 未能在分享内容中精细识别目标剧集文件，"
                                     f"已跳过避免整包导入（目标 {_format_episode_preview(title_precise_episode_values)}，"
-                                    f"原因 {selection_reason_label}，扫描目录 {scanned_dirs} 个，条目 {scanned_entries} 条{archive_tail}）"
+                                    f"原因 {selection_reason_label}，{scan_tail}{archive_tail}）"
                                 ),
                                 "warn",
                             )
                             await maybe_wait_between_attempts()
                             continue
+                if (
+                    task["media_type"] == "tv"
+                    and candidate_link_type == "115share"
+                    and (not candidate_episode_values)
+                    and (not forced_precise_selection_applied)
+                    and candidate_manifest_payload
+                ):
+                    manifest_episode_values = _clamp_episode_values(
+                        {
+                            max(0, int(value or 0))
+                            for value in (
+                                candidate_manifest_payload.get("covered_episodes", [])
+                                if isinstance(candidate_manifest_payload.get("covered_episodes"), list)
+                                else []
+                            )
+                            if max(0, int(value or 0)) > 0
+                        },
+                        episode_upper_bound=single_season_episode_upper_bound,
+                    )
+                    manifest_missing_episode_values = set(manifest_episode_values)
+                    if existing_episode_scan_ready and manifest_missing_episode_values:
+                        manifest_missing_episode_values = {
+                            episode_no
+                            for episode_no in manifest_missing_episode_values
+                            if episode_no not in existing_folder_episodes
+                        }
+                    elif last_episode > 0 and not completed_locked:
+                        manifest_missing_episode_values = {
+                            episode_no
+                            for episode_no in manifest_missing_episode_values
+                            if episode_no > baseline_last_episode
+                        }
+                    if manifest_missing_episode_values:
+                        manifest_selection, manifest_stats = _build_tv_share_selection_from_manifest(
+                            candidate_manifest_payload,
+                            manifest_missing_episode_values,
+                            task=candidate_share_task,
+                        )
+                        manifest_ids = (
+                            manifest_selection.get("selected_ids", [])
+                            if isinstance(manifest_selection.get("selected_ids"), list)
+                            else []
+                        )
+                        if (not manifest_ids) and bool(candidate_manifest_payload.get("truncated", False)):
+                            manifest_selection, manifest_stats = await _build_tv_share_selection_for_missing_episodes(
+                                cookie_115,
+                                candidate_share_task,
+                                item,
+                                manifest_missing_episode_values,
+                                share_subdir_selection=resolved_subdir_selection,
+                            )
+                            manifest_ids = (
+                                manifest_selection.get("selected_ids", [])
+                                if isinstance(manifest_selection.get("selected_ids"), list)
+                                else []
+                            )
+                        if manifest_ids:
+                            job_payload["share_selection"] = manifest_selection
+                            forced_precise_selection_applied = True
+                            selected_share_episode_values = {
+                                max(0, int(value or 0))
+                                for value in (
+                                    manifest_stats.get("covered_episodes", [])
+                                    if isinstance(manifest_stats, dict)
+                                    else []
+                                )
+                                if max(0, int(value or 0)) > 0
+                            }
+                            selected_share_file_samples = [
+                                str(sample or "").strip()
+                                for sample in (
+                                    manifest_stats.get("selected_file_samples", [])
+                                    if isinstance(manifest_stats, dict)
+                                    else []
+                                )
+                                if str(sample or "").strip()
+                            ]
+                            dedupe_hits = int((manifest_stats or {}).get("duplicate_bucket_hits", 0) or 0)
+                            dedupe_tail = f"，同集/同范围已优选 {dedupe_hits} 条重复版本" if dedupe_hits > 0 else ""
+                            scan_tail = _format_subscription_share_scan_log_tail(manifest_stats)
+                            await write_subscription_log(
+                                (
+                                    f"候选资源 #{index} 标题未给出明确集数，已按分享清单识别 "
+                                    f"{_format_episode_preview(selected_share_episode_values)} 并筛选 "
+                                    f"{len(manifest_ids)} 个文件后转存（{scan_tail}）{dedupe_tail}"
+                                ),
+                                "info",
+                            )
+                        elif not bool(candidate_manifest_payload.get("truncated", False)):
+                            skipped_precise_mismatch_candidates += 1
+                            reason = str((manifest_stats or {}).get("reason", "") or "no_precise_episode_match").strip()
+                            await write_subscription_log(
+                                (
+                                    f"候选资源 #{index} 分享清单识别到剧集但未能定位可转存文件"
+                                    f"（目标 {_format_episode_preview(manifest_missing_episode_values)}，"
+                                    f"原因 {_format_subscription_reason_chain(reason)}），已跳过整包导入"
+                                ),
+                                "warn",
+                            )
+                            await maybe_wait_between_attempts()
+                            continue
+                    elif manifest_episode_values and existing_episode_scan_ready:
+                        skipped_existing_candidates += 1
+                        await write_subscription_log(
+                            (
+                                f"候选资源 #{index} 分享清单识别到 "
+                                f"{_format_episode_preview(manifest_episode_values)}，目标目录已覆盖，已跳过"
+                            ),
+                            "info",
+                        )
+                        await maybe_wait_between_attempts()
+                        continue
                 if (
                     task["media_type"] == "tv"
                     and existing_episode_scan_ready
@@ -3017,6 +3568,12 @@ async def run_subscription_task(
                                 missing_for_candidate,
                                 task=candidate_share_task,
                             )
+                        elif candidate_manifest_payload:
+                            share_selection, selection_stats = _build_tv_share_selection_from_manifest(
+                                candidate_manifest_payload,
+                                missing_for_candidate,
+                                task=candidate_share_task,
+                            )
                         else:
                             share_selection, selection_stats = await _build_tv_share_selection_for_missing_episodes(
                                 cookie_115,
@@ -3026,6 +3583,19 @@ async def run_subscription_task(
                                 share_subdir_selection=resolved_subdir_selection,
                             )
                         selected_ids = share_selection.get("selected_ids", []) if isinstance(share_selection, dict) else []
+                        if (
+                            (not selected_ids)
+                            and candidate_manifest_payload
+                            and bool(candidate_manifest_payload.get("truncated", False))
+                        ):
+                            share_selection, selection_stats = await _build_tv_share_selection_for_missing_episodes(
+                                cookie_115,
+                                candidate_share_task,
+                                item,
+                                missing_for_candidate,
+                                share_subdir_selection=resolved_subdir_selection,
+                            )
+                            selected_ids = share_selection.get("selected_ids", []) if isinstance(share_selection, dict) else []
                         if selected_ids:
                             job_payload["share_selection"] = share_selection
                             selected_share_episode_values = {
@@ -3044,10 +3614,11 @@ async def run_subscription_task(
                             ]
                             dedupe_hits = int((selection_stats or {}).get("duplicate_bucket_hits", 0) or 0)
                             dedupe_tail = f"，同集/同范围已优选 {dedupe_hits} 条重复版本" if dedupe_hits > 0 else ""
+                            scan_tail = _format_subscription_share_scan_log_tail(selection_stats)
                             await write_subscription_log(
                                 (
                                     f"候选资源 #{index} 检测到大包与目录重叠，缺失 {_format_episode_preview(missing_for_candidate)}；"
-                                    f"已自动选中 {len(selected_ids)} 个文件精细转存{dedupe_tail}"
+                                    f"已自动选中 {len(selected_ids)} 个文件精细转存（{scan_tail}）{dedupe_tail}"
                                 ),
                                 "info",
                             )
@@ -3064,10 +3635,10 @@ async def run_subscription_task(
                                     "warn",
                                 )
                             else:
+                                scan_tail = _format_subscription_share_scan_log_tail(selection_stats)
                                 await write_subscription_log(
                                     (
-                                        f"候选资源 #{index} 尝试按缺失集精细转存未命中（扫描目录 {int(selection_stats.get('scanned_dirs', 0) or 0)} 个，"
-                                        f"条目 {int(selection_stats.get('scanned_entries', 0) or 0)} 条），回退整包转存"
+                                        f"候选资源 #{index} 尝试按缺失集精细转存未命中（{scan_tail}），回退整包转存"
                                     ),
                                     "warn",
                                 )
@@ -3743,6 +4314,7 @@ async def run_subscription_task(
                     "share_link_url": task_share_link_url if use_fixed_share_link else "",
                     "share_subdir": task_share_subdir,
                     "share_subdir_cid": task_share_subdir_cid,
+                    "candidate_scan_prewarm": candidate_scan_prewarm_stats,
                     **existing_episode_scan_stats,
                     **search_stats,
                 },
@@ -3887,6 +4459,7 @@ async def run_subscription_task(
                 "share_link_url": task_share_link_url if use_fixed_share_link else "",
                 "share_subdir": task_share_subdir,
                 "share_subdir_cid": task_share_subdir_cid,
+                "candidate_scan_prewarm": candidate_scan_prewarm_stats,
                 **existing_episode_scan_stats,
                 **search_stats,
             },

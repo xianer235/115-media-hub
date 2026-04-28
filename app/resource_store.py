@@ -263,8 +263,11 @@ def list_resource_items(search: str = "", status: str = "", channel_id: str = ""
     sql = "SELECT * FROM resource_items"
     if where_parts:
         sql += " WHERE " + " AND ".join(where_parts)
-    sql += " ORDER BY CASE WHEN published_at <> '' THEN published_at ELSE created_at END DESC, id DESC LIMIT ?"
-    params.append(max(1, min(limit, 500)))
+    sql += " ORDER BY CASE WHEN published_at <> '' THEN published_at ELSE created_at END DESC, id DESC"
+    result_limit = max(0, int(limit or 0))
+    if result_limit > 0:
+        sql += " LIMIT ?"
+        params.append(max(1, min(result_limit, 500)))
     cursor.execute(sql, params)
     rows = cursor.fetchall()
     conn.close()

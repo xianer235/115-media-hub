@@ -22,6 +22,51 @@ def _build_subscription_share_episode_context_paths(item: Dict[str, Any], share_
     return unique_preserve_order(candidates)
 
 
+def _normalize_subscription_share_scan_limit(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _subscription_share_scan_limit_reached(count: int, limit: int) -> bool:
+    normalized_limit = _normalize_subscription_share_scan_limit(limit)
+    return normalized_limit > 0 and max(0, int(count or 0)) >= normalized_limit
+
+
+def _subscription_share_scan_has_dir_room(scanned_dirs: int, pending_dirs: int, max_dirs: int) -> bool:
+    normalized_limit = _normalize_subscription_share_scan_limit(max_dirs)
+    return normalized_limit <= 0 or (max(0, int(scanned_dirs or 0)) + max(0, int(pending_dirs or 0))) < normalized_limit
+
+
+def _build_subscription_share_scan_truncation_stats(
+    queue: List[Any],
+    scanned_dirs: int,
+    scanned_entries: int,
+    max_dirs: int,
+    max_entries: int,
+    provider_truncated_dirs: int = 0,
+) -> Dict[str, Any]:
+    normalized_max_dirs = _normalize_subscription_share_scan_limit(max_dirs)
+    normalized_max_entries = _normalize_subscription_share_scan_limit(max_entries)
+    reasons: List[str] = []
+    if _subscription_share_scan_limit_reached(scanned_dirs, normalized_max_dirs):
+        reasons.append("max_dirs")
+    if _subscription_share_scan_limit_reached(scanned_entries, normalized_max_entries):
+        reasons.append("max_entries")
+    if max(0, int(provider_truncated_dirs or 0)) > 0:
+        reasons.append("provider_has_more")
+    if queue:
+        reasons.append("queue_pending")
+    return {
+        "max_dirs": normalized_max_dirs,
+        "max_entries": normalized_max_entries,
+        "provider_truncated_dirs": max(0, int(provider_truncated_dirs or 0)),
+        "truncated": bool(reasons),
+        "truncated_reason": ",".join(unique_preserve_order(reasons)),
+    }
+
+
 def _normalize_subscription_share_dir_match_key(name: str, drop_digits: bool = False) -> str:
     normalized = normalize_relative_path(name)
     if not normalized:
@@ -116,7 +161,7 @@ async def _refine_subscription_share_selection_for_task(
     selection: Dict[str, Any],
     per_request_timeout: int = 25,
     max_depth: int = 3,
-    max_dirs: int = 140,
+    max_dirs: int = 0,
     force_refresh: bool = False,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     stats: Dict[str, Any] = {
@@ -189,8 +234,9 @@ async def _refine_subscription_share_selection_for_task(
     queue: List[Tuple[str, int, str]] = [(start_cid, 0, start_path)]
     visited: Set[str] = set()
     scored_candidates: List[Tuple[int, Dict[str, Any]]] = []
+    max_dirs = _normalize_subscription_share_scan_limit(max_dirs)
 
-    while queue and int(stats.get("scanned_dirs", 0) or 0) < max(20, int(max_dirs or 140)):
+    while queue and not _subscription_share_scan_limit_reached(int(stats.get("scanned_dirs", 0) or 0), max_dirs):
         cid, depth, parent_path = queue.pop(0)
         normalized_cid = str(cid or "").strip()
         if not normalized_cid or normalized_cid in visited:
@@ -332,7 +378,7 @@ async def _find_subscription_share_dir_by_leaf_fallback(
     start_parent_path: str = "",
     per_request_timeout: int = 25,
     max_depth: int = 4,
-    max_dirs: int = 120,
+    max_dirs: int = 0,
     force_refresh: bool = False,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     stats: Dict[str, Any] = {
@@ -357,8 +403,9 @@ async def _find_subscription_share_dir_by_leaf_fallback(
     )]
     visited: Set[str] = set()
     scored_candidates: List[Tuple[int, Dict[str, Any]]] = []
+    max_dirs = _normalize_subscription_share_scan_limit(max_dirs)
 
-    while queue and int(stats.get("scanned_dirs", 0) or 0) < max(10, int(max_dirs or 120)):
+    while queue and not _subscription_share_scan_limit_reached(int(stats.get("scanned_dirs", 0) or 0), max_dirs):
         cid, depth, parent_path = queue.pop(0)
         normalized_cid = str(cid or "0").strip() or "0"
         if normalized_cid in visited:
@@ -706,7 +753,7 @@ async def _build_subscription_share_subdir_selection(
                 start_parent_path="/".join(matched_parts),
                 per_request_timeout=request_timeout,
                 max_depth=max(3, len(path_parts) - idx + 1),
-                max_dirs=180,
+                max_dirs=0,
                 force_refresh=force_refresh,
             )
             stats["fallback_reason"] = str((fallback_stats or {}).get("reason", "") or "").strip()
@@ -818,8 +865,8 @@ async def _build_tv_share_selection_for_missing_episodes(
     missing_episodes: Set[int],
     share_subdir_selection: Optional[Dict[str, Any]] = None,
     max_depth: int = 4,
-    max_dirs: int = 80,
-    max_entries: int = 3000,
+    max_dirs: int = 0,
+    max_entries: int = 0,
     per_request_timeout: int = 25,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     normalized_cookie = str(cookie or "").strip()
@@ -884,12 +931,23 @@ async def _build_tv_share_selection_for_missing_episodes(
     scanned_entries = 0
     failed_dirs = 0
     skipped_archive_files = 0
+    returned_entries = 0
+    provider_reported_entries = 0
+    provider_pages_scanned = 0
+    provider_truncated_dirs = 0
 
     request_timeout = max(10, int(per_request_timeout or 25))
     concurrency = max(1, int(SUBSCRIPTION_SHARE_SCAN_CONCURRENCY or 1))
-    while queue and scanned_dirs < max_dirs and scanned_entries < max_entries and covered_missing != target_missing:
+    max_dirs = _normalize_subscription_share_scan_limit(max_dirs)
+    max_entries = _normalize_subscription_share_scan_limit(max_entries)
+    while (
+        queue
+        and not _subscription_share_scan_limit_reached(scanned_dirs, max_dirs)
+        and not _subscription_share_scan_limit_reached(scanned_entries, max_entries)
+        and covered_missing != target_missing
+    ):
         batch: List[Tuple[str, int, str]] = []
-        while queue and len(batch) < concurrency and (scanned_dirs + len(batch)) < max_dirs:
+        while queue and len(batch) < concurrency and _subscription_share_scan_has_dir_room(scanned_dirs, len(batch), max_dirs):
             cid, depth, parent_path = queue.pop(0)
             normalized_cid = str(cid or "0").strip() or "0"
             if normalized_cid in visited:
@@ -925,8 +983,14 @@ async def _build_tv_share_selection_for_missing_episodes(
                 share_root_title = normalize_relative_path(str(branch.get("share_title", "") or ""))
             episode_contexts = _build_subscription_share_episode_context_paths(item, share_root_title)
             entries = branch.get("entries", []) if isinstance(branch.get("entries"), list) else []
+            returned_entries += len(entries)
+            reported_count = max(0, int(branch.get("count", 0) or 0))
+            provider_reported_entries += reported_count if reported_count > 0 else len(entries)
+            provider_pages_scanned += max(0, int(branch.get("pages_scanned", 0) or 0))
+            if bool(branch.get("has_more", False)):
+                provider_truncated_dirs += 1
             for entry in entries:
-                if scanned_entries >= max_entries:
+                if _subscription_share_scan_limit_reached(scanned_entries, max_entries):
                     break
                 scanned_entries += 1
                 entry_name = str(entry.get("name", "") or "").strip()
@@ -979,12 +1043,23 @@ async def _build_tv_share_selection_for_missing_episodes(
             if covered_missing == target_missing:
                 break
 
+    truncation_stats = _build_subscription_share_scan_truncation_stats(
+        [] if covered_missing == target_missing else queue,
+        scanned_dirs,
+        scanned_entries,
+        max_dirs,
+        max_entries,
+        provider_truncated_dirs=0 if covered_missing == target_missing else provider_truncated_dirs,
+    )
     stats = {
         "reason": "",
         "scanned_dirs": scanned_dirs,
         "scanned_entries": scanned_entries,
+        "returned_entries": returned_entries,
+        "provider_reported_entries": provider_reported_entries,
+        "provider_pages_scanned": provider_pages_scanned,
         "failed_dirs": failed_dirs,
-        "truncated": bool(queue) or scanned_dirs >= max_dirs or scanned_entries >= max_entries,
+        **truncation_stats,
         "missing_total": len(target_missing),
         "covered_total": len(covered_missing),
         "covered_episodes": sorted(covered_missing)[:300],
@@ -1013,6 +1088,7 @@ async def _build_tv_share_selection_for_missing_episodes(
     stats["covered_episodes"] = sorted(covered_missing)[:300]
     stats["covered_preview"] = _format_episode_preview(covered_missing) if covered_missing else "--"
     stats["selected_count"] = len(selected_ids)
+    stats["matched_file_count"] = len(matched_file_entries)
     stats["bucket_count"] = max(0, int(best_selection.get("bucket_count", 0) or 0))
     stats["duplicate_bucket_hits"] = max(0, int(best_selection.get("duplicate_bucket_hits", 0) or 0))
     stats["selected_file_samples"] = _build_subscription_selected_file_samples(
@@ -1045,8 +1121,8 @@ async def _scan_subscription_share_tree_snapshot(
     start_cid: str = "0",
     start_parent_path: str = "",
     max_depth: int = 5,
-    max_dirs: int = 180,
-    max_entries: int = 5000,
+    max_dirs: int = 0,
+    max_entries: int = 0,
     per_request_timeout: int = 25,
     force_refresh: bool = False,
 ) -> Dict[str, Any]:
@@ -1078,8 +1154,14 @@ async def _scan_subscription_share_tree_snapshot(
     failed_dirs = 0
     share_root_title = ""
     skipped_archive_files = 0
+    returned_entries = 0
+    provider_reported_entries = 0
+    provider_pages_scanned = 0
+    provider_truncated_dirs = 0
     request_timeout = max(10, int(per_request_timeout or 25))
     concurrency = max(1, int(SUBSCRIPTION_SHARE_SCAN_CONCURRENCY or 1))
+    max_dirs = _normalize_subscription_share_scan_limit(max_dirs)
+    max_entries = _normalize_subscription_share_scan_limit(max_entries)
 
     if normalized_start_parent_path and normalized_start_cid not in ("", "0"):
         dirs.append(
@@ -1094,9 +1176,13 @@ async def _scan_subscription_share_tree_snapshot(
         )
         seen_dir_ids.add(normalized_start_cid)
 
-    while queue and scanned_dirs < max_dirs and scanned_entries < max_entries:
+    while (
+        queue
+        and not _subscription_share_scan_limit_reached(scanned_dirs, max_dirs)
+        and not _subscription_share_scan_limit_reached(scanned_entries, max_entries)
+    ):
         batch: List[Tuple[str, int, str]] = []
-        while queue and len(batch) < concurrency and (scanned_dirs + len(batch)) < max_dirs:
+        while queue and len(batch) < concurrency and _subscription_share_scan_has_dir_room(scanned_dirs, len(batch), max_dirs):
             cid, depth, parent_path = queue.pop(0)
             normalized_cid = str(cid or "0").strip() or "0"
             if normalized_cid in visited:
@@ -1133,8 +1219,14 @@ async def _scan_subscription_share_tree_snapshot(
                 share_root_title = normalize_relative_path(str(branch.get("share_title", "") or "").strip())
             episode_contexts = _build_subscription_share_episode_context_paths(item, share_root_title)
             entries = branch.get("entries", []) if isinstance(branch.get("entries"), list) else []
+            returned_entries += len(entries)
+            reported_count = max(0, int(branch.get("count", 0) or 0))
+            provider_reported_entries += reported_count if reported_count > 0 else len(entries)
+            provider_pages_scanned += max(0, int(branch.get("pages_scanned", 0) or 0))
+            if bool(branch.get("has_more", False)):
+                provider_truncated_dirs += 1
             for entry in entries:
-                if scanned_entries >= max_entries:
+                if _subscription_share_scan_limit_reached(scanned_entries, max_entries):
                     break
                 scanned_entries += 1
                 entry_name = str(entry.get("name", "") or "").strip()
@@ -1194,6 +1286,14 @@ async def _scan_subscription_share_tree_snapshot(
                 if matched_episodes:
                     covered_episodes.update(matched_episodes)
 
+    truncation_stats = _build_subscription_share_scan_truncation_stats(
+        queue,
+        scanned_dirs,
+        scanned_entries,
+        max_dirs,
+        max_entries,
+        provider_truncated_dirs=provider_truncated_dirs,
+    )
     return {
         "reason": "ok",
         "share_root_title": share_root_title,
@@ -1207,8 +1307,11 @@ async def _scan_subscription_share_tree_snapshot(
         "dir_count": len(dirs),
         "scanned_dirs": scanned_dirs,
         "scanned_entries": scanned_entries,
+        "returned_entries": returned_entries,
+        "provider_reported_entries": provider_reported_entries,
+        "provider_pages_scanned": provider_pages_scanned,
         "failed_dirs": failed_dirs,
-        "truncated": bool(queue) or scanned_dirs >= max_dirs or scanned_entries >= max_entries,
+        **truncation_stats,
         "force_refresh": bool(force_refresh),
         "skipped_archive_files": skipped_archive_files,
     }
@@ -1430,8 +1533,8 @@ async def _scan_subscription_share_episode_manifest(
     item: Dict[str, Any],
     selection: Dict[str, Any],
     max_depth: int = 4,
-    max_dirs: int = 80,
-    max_entries: int = 3000,
+    max_dirs: int = 0,
+    max_entries: int = 0,
     per_request_timeout: int = 25,
     force_refresh: bool = False,
 ) -> Dict[str, Any]:
@@ -1474,10 +1577,20 @@ async def _scan_subscription_share_episode_manifest(
     share_root_title = normalize_relative_path(str(normalized_selection.get("share_root_title", "") or "").strip())
     concurrency = max(1, int(SUBSCRIPTION_SHARE_SCAN_CONCURRENCY or 1))
     skipped_archive_files = 0
+    returned_entries = 0
+    provider_reported_entries = 0
+    provider_pages_scanned = 0
+    provider_truncated_dirs = 0
+    max_dirs = _normalize_subscription_share_scan_limit(max_dirs)
+    max_entries = _normalize_subscription_share_scan_limit(max_entries)
 
-    while queue and scanned_dirs < max_dirs and scanned_entries < max_entries:
+    while (
+        queue
+        and not _subscription_share_scan_limit_reached(scanned_dirs, max_dirs)
+        and not _subscription_share_scan_limit_reached(scanned_entries, max_entries)
+    ):
         batch: List[Tuple[str, int, str]] = []
-        while queue and len(batch) < concurrency and (scanned_dirs + len(batch)) < max_dirs:
+        while queue and len(batch) < concurrency and _subscription_share_scan_has_dir_room(scanned_dirs, len(batch), max_dirs):
             batch.append(queue.pop(0))
         if not batch:
             break
@@ -1510,8 +1623,14 @@ async def _scan_subscription_share_episode_manifest(
                 share_root_title = normalize_relative_path(str(branch.get("share_title", "") or "").strip())
             episode_contexts = _build_subscription_share_episode_context_paths(item, share_root_title)
             entries = branch.get("entries", []) if isinstance(branch.get("entries"), list) else []
+            returned_entries += len(entries)
+            reported_count = max(0, int(branch.get("count", 0) or 0))
+            provider_reported_entries += reported_count if reported_count > 0 else len(entries)
+            provider_pages_scanned += max(0, int(branch.get("pages_scanned", 0) or 0))
+            if bool(branch.get("has_more", False)):
+                provider_truncated_dirs += 1
             for entry in entries:
-                if scanned_entries >= max_entries:
+                if _subscription_share_scan_limit_reached(scanned_entries, max_entries):
                     break
                 scanned_entries += 1
                 entry_name = str(entry.get("name", "") or "").strip()
@@ -1560,6 +1679,14 @@ async def _scan_subscription_share_episode_manifest(
                 )
                 covered_episodes.update(matched_episodes)
 
+    truncation_stats = _build_subscription_share_scan_truncation_stats(
+        queue,
+        scanned_dirs,
+        scanned_entries,
+        max_dirs,
+        max_entries,
+        provider_truncated_dirs=provider_truncated_dirs,
+    )
     return {
         "reason": "ok" if files else "no_episode_files",
         "share_root_title": share_root_title,
@@ -1571,8 +1698,11 @@ async def _scan_subscription_share_episode_manifest(
         "file_count": len(files),
         "scanned_dirs": scanned_dirs,
         "scanned_entries": scanned_entries,
+        "returned_entries": returned_entries,
+        "provider_reported_entries": provider_reported_entries,
+        "provider_pages_scanned": provider_pages_scanned,
         "failed_dirs": failed_dirs,
-        "truncated": bool(queue) or scanned_dirs >= max_dirs or scanned_entries >= max_entries,
+        **truncation_stats,
         "force_refresh": bool(force_refresh),
         "skipped_archive_files": skipped_archive_files,
     }
@@ -1613,8 +1743,13 @@ def _build_tv_share_selection_from_manifest(
         "file_count": max(0, int(payload.get("file_count", 0) or len(file_entries))),
         "scanned_dirs": max(0, int(payload.get("scanned_dirs", 0) or 0)),
         "scanned_entries": max(0, int(payload.get("scanned_entries", 0) or 0)),
+        "returned_entries": max(0, int(payload.get("returned_entries", payload.get("scanned_entries", 0)) or 0)),
+        "provider_reported_entries": max(0, int(payload.get("provider_reported_entries", 0) or 0)),
+        "provider_pages_scanned": max(0, int(payload.get("provider_pages_scanned", 0) or 0)),
         "failed_dirs": max(0, int(payload.get("failed_dirs", 0) or 0)),
         "truncated": bool(payload.get("truncated", False)),
+        "truncated_reason": str(payload.get("truncated_reason", "") or "").strip(),
+        "provider_truncated_dirs": max(0, int(payload.get("provider_truncated_dirs", 0) or 0)),
         "skipped_archive_files": max(0, int(payload.get("skipped_archive_files", 0) or 0)),
         "share_scope_cid": str(payload.get("share_scope_cid", "") or "").strip(),
         "share_scope_path": normalize_relative_path(str(payload.get("share_scope_path", "") or "").strip()),

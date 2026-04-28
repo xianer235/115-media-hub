@@ -377,7 +377,10 @@ def normalize_pansou_search_results(payload: Dict[str, Any], keyword: str, limit
         if item:
             items.append(item)
     deduped = dedupe_resource_item_dicts(items, identity_mode="link")
-    return deduped[: max(1, min(int(limit or PANSOU_SEARCH_TOTAL_LIMIT), PANSOU_SEARCH_TOTAL_LIMIT))]
+    result_limit = max(0, int(limit or 0))
+    if result_limit <= 0:
+        return deduped
+    return deduped[:result_limit]
 
 
 def request_pansou_search(
@@ -387,6 +390,7 @@ def request_pansou_search(
     timeout_seconds: int = PANSOU_SEARCH_TIMEOUT_SECONDS,
     *,
     include_magnet_for_115: bool = False,
+    limit: int = PANSOU_SEARCH_TOTAL_LIMIT,
 ) -> Dict[str, Any]:
     base_url = normalize_pansou_base_url(cfg.get("pansou_base_url", ""))
     query = str(keyword or "").strip()
@@ -435,7 +439,7 @@ def request_pansou_search(
             raise RuntimeError(_format_pansou_http_error(exc)) from exc
     elapsed_ms = max(1, int(round((time.perf_counter() - started) * 1000)))
     return {
-        "items": normalize_pansou_search_results(raw, query),
+        "items": normalize_pansou_search_results(raw, query, limit=limit),
         "raw": raw,
         "elapsed_ms": elapsed_ms,
         "payload": payload,

@@ -448,15 +448,34 @@ def score_subscription_candidate(
         range_start = max(0, int(meta.get("range_start", 0) or 0))
         range_end = max(0, int(meta.get("range_end", 0) or 0))
         if multi_season_mode and candidate_season > 0:
-            absolute_episode = convert_subscription_episode_to_absolute(task, candidate_season, candidate_episode)
-            if absolute_episode > 0:
-                candidate_episode = absolute_episode
-            absolute_range_start, absolute_range_end = convert_subscription_episode_range_to_absolute(
-                task, candidate_season, range_start, range_end
-            )
-            if absolute_range_end > 0:
-                range_start = absolute_range_start
-                range_end = absolute_range_end
+            season_map = normalize_tmdb_season_episode_map((task or {}).get("tmdb_season_episode_map", {}))
+            total_episodes_for_mapping = resolve_subscription_tv_total_episodes(task, state_total=0)
+            tmdb_total_seasons = max(0, int((task or {}).get("tmdb_total_seasons", 0) or 0))
+            season_total = max(0, int(season_map.get(str(candidate_season), 0) or 0)) if season_map else 0
+            range_upper = range_end or candidate_episode
+            range_lower = range_start if range_end > 0 else candidate_episode
+            if season_map and season_total > 0:
+                if 0 < range_upper <= season_total:
+                    absolute_episode = convert_subscription_episode_to_absolute(task, candidate_season, candidate_episode)
+                    if absolute_episode > 0:
+                        candidate_episode = absolute_episode
+                    absolute_range_start, absolute_range_end = convert_subscription_episode_range_to_absolute(
+                        task, candidate_season, range_start, range_end
+                    )
+                    if absolute_range_end > 0:
+                        range_start = absolute_range_start
+                        range_end = absolute_range_end
+                elif total_episodes_for_mapping > 0 and range_lower > 0 and range_upper <= total_episodes_for_mapping:
+                    # SxxExx 中的 Exx 超过该季集数时，按全剧连续编号理解。
+                    pass
+                else:
+                    candidate_episode = 0
+                    range_start = 0
+                    range_end = 0
+            elif season_map or (tmdb_total_seasons <= 1 and candidate_season > 1):
+                candidate_episode = 0
+                range_start = 0
+                range_end = 0
         has_episode_range = range_end > 0 and range_start > 0
         if episode_mode == "absolute":
             if candidate_season > 0:

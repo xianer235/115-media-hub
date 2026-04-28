@@ -1229,19 +1229,21 @@ def _collect_quark_share_entries_with_stoken(
     stoken: str,
     cid: str = "0",
     page_size: int = 200,
-    max_pages: int = 20,
+    max_pages: int = 0,
     folders_only: bool = False,
     force_refresh: bool = False,
     request_timeout: int = 45,
 ) -> Dict[str, Any]:
     current_cid = str(cid or "0").strip() or "0"
     page_limit = max(20, min(200, int(page_size or 200)))
-    max_pages_limit = max(1, int(max_pages or 20))
+    max_pages_limit = max(0, int(max_pages or 0))
     folder_only_mode = bool(folders_only)
     entries: List[Dict[str, Any]] = []
     pages_scanned = 0
     total_count = 0
     share_title = ""
+    last_has_more = False
+    reached_page_cap = False
 
     page_no = 1
     while True:
@@ -1264,9 +1266,11 @@ def _collect_quark_share_entries_with_stoken(
         share_info = page_payload.get("share", {}) if isinstance(page_payload.get("share"), dict) else {}
         if share_info and not share_title:
             share_title = str(share_info.get("title", "") or share_info.get("share_name", "") or "").strip()
-        if not bool(page_payload.get("has_more", False)):
+        last_has_more = bool(page_payload.get("has_more", False))
+        reached_page_cap = max_pages_limit > 0 and pages_scanned >= max_pages_limit
+        if not last_has_more:
             break
-        if pages_scanned >= max_pages_limit:
+        if reached_page_cap:
             break
         page_no += 1
 
@@ -1276,6 +1280,7 @@ def _collect_quark_share_entries_with_stoken(
         "share_title": share_title,
         "count": total_count or len(entries),
         "pages_scanned": pages_scanned,
+        "has_more": bool(last_has_more and reached_page_cap),
     }
 
 def list_quark_share_entries(
@@ -1346,8 +1351,10 @@ def list_quark_share_entries(
         pages_scanned = 0
         share_title = ""
 
-        if start_offset <= 0 and max_pages_limit <= 0 and (not folder_only_mode):
+        if start_offset <= 0:
             page_no = 1
+            last_has_more = False
+            reached_page_cap = False
             while True:
                 page_payload = _list_quark_share_page(
                     normalized_cookie,
@@ -1371,12 +1378,14 @@ def list_quark_share_entries(
                 share_info = page_payload.get("share", {}) if isinstance(page_payload.get("share"), dict) else {}
                 if share_info and not share_title:
                     share_title = str(share_info.get("title", "") or share_info.get("share_name", "") or "").strip()
-                if not bool(page_payload.get("has_more", False)):
+                last_has_more = bool(page_payload.get("has_more", False))
+                reached_page_cap = max_pages_limit > 0 and pages_scanned >= max_pages_limit
+                if not last_has_more:
                     break
-                if pages_scanned >= 20:
+                if reached_page_cap:
                     break
                 page_no += 1
-            has_more = False
+            has_more = bool(last_has_more and reached_page_cap)
             next_offset = len(entries)
         else:
             page_no = max(1, (start_offset // page_limit) + 1)
@@ -1425,6 +1434,8 @@ def list_quark_share_entries(
             "next_offset": next_offset,
             "has_more": bool(has_more),
             "pages_scanned": pages_scanned,
+            "truncated": bool(has_more),
+            "truncated_reason": "page_cap" if bool(has_more) else "",
             "stoken": stoken,
             "elapsed_ms": int((time.monotonic() - started_mono) * 1000),
             "timings": timings,
@@ -1483,7 +1494,7 @@ def prepare_quark_share_save(
             stoken,
             cid="0",
             page_size=200,
-            max_pages=20,
+            max_pages=0,
         )
         snapshot_entries = snapshot.get("entries", []) if isinstance(snapshot.get("entries"), list) else []
         normalized_ids = [str(entry.get("id", "")).strip() for entry in snapshot_entries if str(entry.get("id", "")).strip()]
@@ -1496,7 +1507,7 @@ def prepare_quark_share_save(
             }
         )
     else:
-        snapshot_token_map: Dict[str, str] = {}
+        snapshot_token_map: Dict[str, str] = dict(selected_entry_token_map)
         scan_cids: List[str] = ["0"]
         seen_scan_cids: Set[str] = {"0"}
         for entry in selected_entries or []:
@@ -1519,7 +1530,7 @@ def prepare_quark_share_save(
                     stoken,
                     cid=scan_cid,
                     page_size=200,
-                    max_pages=20,
+                    max_pages=0,
                 )
             except Exception:
                 continue

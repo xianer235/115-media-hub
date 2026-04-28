@@ -280,6 +280,10 @@ SUBSCRIPTION_SEARCH_KEYWORD_CONCURRENCY = max(
         int(os.environ.get("SUBSCRIPTION_SEARCH_KEYWORD_CONCURRENCY", SUBSCRIPTION_SEARCH_KEYWORD_LIMIT) or SUBSCRIPTION_SEARCH_KEYWORD_LIMIT),
     ),
 )
+SUBSCRIPTION_SEARCH_CHANNEL_MAX_PAGES = max(
+    1,
+    min(20, int(os.environ.get("SUBSCRIPTION_SEARCH_CHANNEL_MAX_PAGES", 6) or 6)),
+)
 SUBSCRIPTION_CHANNEL_WATERMARK_OVERLAP_POSTS = max(
     0,
     min(500, int(os.environ.get("SUBSCRIPTION_CHANNEL_WATERMARK_OVERLAP_POSTS", 30) or 30)),
@@ -2445,7 +2449,7 @@ def search_telegram_channel_resource_items(
     latest_scanned_published_ts = 0.0
     normalized_stop_cursor = max(0, int(stop_cursor or 0))
     target_limit = max(1, int(limit_per_channel or TG_SEARCH_MATCH_LIMIT_PER_CHANNEL))
-    fetch_limit = max(target_limit, max(1, int(page_size or TG_SEARCH_PAGE_LIMIT)))
+    fetch_limit = max(1, int(page_size or TG_SEARCH_PAGE_LIMIT))
 
     for _ in range(max(1, int(max_pages or TG_SEARCH_MAX_PAGES))):
         check_resource_search_cancelled(search_id)
@@ -2529,10 +2533,31 @@ async def search_resource_sources(
     incremental_since_cursor_by_channel: Optional[Dict[str, int]] = None,
     provider_filter: str = "all",
     search_id: str = "",
+    limit_per_channel: Optional[int] = None,
+    max_pages: Optional[int] = None,
+    page_size: Optional[int] = None,
+    total_limit: Optional[int] = None,
 ) -> Dict[str, Any]:
     query = str(keyword or "").strip()
     normalized_identity_mode = normalize_resource_identity_mode(identity_mode, fallback="message")
     normalized_provider_filter = normalize_resource_provider_filter(provider_filter)
+    channel_match_limit = max(
+        1,
+        int(limit_per_channel if limit_per_channel is not None else TG_SEARCH_MATCH_LIMIT_PER_CHANNEL),
+    )
+    channel_max_pages = max(
+        1,
+        int(max_pages if max_pages is not None else TG_SEARCH_MAX_PAGES),
+    )
+    channel_page_size = max(
+        1,
+        int(page_size if page_size is not None else TG_SEARCH_PAGE_LIMIT),
+    )
+    global_total_limit = (
+        int(total_limit)
+        if total_limit is not None
+        else int(TG_SEARCH_TOTAL_LIMIT or 60)
+    )
     normalized_incremental_cursors: Dict[str, int] = {}
     if isinstance(incremental_since_cursor_by_channel, dict):
         for raw_channel_id, raw_cursor in incremental_since_cursor_by_channel.items():
@@ -2556,6 +2581,10 @@ async def search_resource_sources(
             "incremental_stop_channels": 0,
             "channel_watermarks": {},
             "channel_stats": [],
+            "limit_per_channel": channel_match_limit,
+            "max_pages": channel_max_pages,
+            "page_size": channel_page_size,
+            "total_limit": global_total_limit,
         }
 
     semaphore = asyncio.Semaphore(tg_channel_threads)
@@ -2574,9 +2603,9 @@ async def search_resource_sources(
                         cfg,
                         source,
                         query,
-                        TG_SEARCH_MATCH_LIMIT_PER_CHANNEL,
-                        TG_SEARCH_MAX_PAGES,
-                        TG_SEARCH_PAGE_LIMIT,
+                        channel_match_limit,
+                        channel_max_pages,
+                        channel_page_size,
                         "",
                         normalized_identity_mode,
                         stop_cursor,
@@ -2687,8 +2716,11 @@ async def search_resource_sources(
 
     deduped_items = dedupe_resource_item_dicts(items, identity_mode=normalized_identity_mode)
     deduped_items.sort(key=get_resource_item_sort_key, reverse=True)
+    returned_items = deduped_items
+    if global_total_limit > 0:
+        returned_items = deduped_items[: max(1, global_total_limit)]
     return {
-        "items": deduped_items[: max(1, int(TG_SEARCH_TOTAL_LIMIT or 60))],
+        "items": returned_items,
         "sections": sections,
         "errors": errors,
         "searched_sources": len(sources),
@@ -2699,6 +2731,10 @@ async def search_resource_sources(
         "incremental_stop_channels": incremental_stop_channels,
         "channel_watermarks": channel_watermarks,
         "channel_stats": channel_stats,
+        "limit_per_channel": channel_match_limit,
+        "max_pages": channel_max_pages,
+        "page_size": channel_page_size,
+        "total_limit": global_total_limit,
     }
 
 
@@ -2708,9 +2744,15 @@ async def search_pansou_resource_sources(
     *,
     include_magnet_for_115: bool = False,
     search_id: str = "",
+    total_limit: Optional[int] = None,
 ) -> Dict[str, Any]:
     query = str(keyword or "").strip()
     normalized_provider_filter = normalize_resource_provider_filter(provider_filter)
+    resolved_total_limit = (
+        int(total_limit)
+        if total_limit is not None
+        else int(PANSOU_SEARCH_TOTAL_LIMIT or 80)
+    )
     cfg = get_config()
     enabled = bool(cfg.get("pansou_enabled", False))
     base_url = str(cfg.get("pansou_base_url", "") or "").strip()
@@ -2727,6 +2769,7 @@ async def search_pansou_resource_sources(
             "pansou_enabled": enabled,
             "pansou_items": 0,
             "pansou_elapsed_ms": 0,
+            "pansou_total_limit": resolved_total_limit,
         }
     if not enabled:
         return {
@@ -2741,6 +2784,7 @@ async def search_pansou_resource_sources(
             "pansou_enabled": False,
             "pansou_items": 0,
             "pansou_elapsed_ms": 0,
+            "pansou_total_limit": resolved_total_limit,
         }
     if not base_url:
         return {
@@ -2755,6 +2799,7 @@ async def search_pansou_resource_sources(
             "pansou_enabled": True,
             "pansou_items": 0,
             "pansou_elapsed_ms": 0,
+            "pansou_total_limit": resolved_total_limit,
         }
 
     check_resource_search_cancelled(search_id)
@@ -2765,6 +2810,7 @@ async def search_pansou_resource_sources(
             query,
             normalized_provider_filter,
             include_magnet_for_115=include_magnet_for_115,
+            limit=resolved_total_limit,
         )
         check_resource_search_cancelled(search_id)
     except Exception as exc:
@@ -2782,6 +2828,7 @@ async def search_pansou_resource_sources(
             "pansou_enabled": True,
             "pansou_items": 0,
             "pansou_elapsed_ms": 0,
+            "pansou_total_limit": resolved_total_limit,
         }
 
     items = filter_resource_items_by_provider(
@@ -2805,7 +2852,7 @@ async def search_pansou_resource_sources(
         "last_sync_at": time.time(),
         "last_error": "",
         "item_count": len(items),
-        "items": items[: max(1, min(int(PANSOU_SEARCH_TOTAL_LIMIT or 80), len(items) or 1))],
+        "items": items if resolved_total_limit <= 0 else items[: max(1, resolved_total_limit)],
         "next_before": "",
         "has_more": False,
         "channel_profile": {
@@ -2831,6 +2878,7 @@ async def search_pansou_resource_sources(
         "pansou_enabled": True,
         "pansou_items": len(items),
         "pansou_elapsed_ms": max(0, int(result.get("elapsed_ms", 0) or 0)) if isinstance(result, dict) else 0,
+        "pansou_total_limit": resolved_total_limit,
     }
 
 

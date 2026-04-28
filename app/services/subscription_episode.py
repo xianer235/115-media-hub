@@ -1,9 +1,30 @@
 import hashlib
 import os
 import re
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..core import *  # noqa: F401,F403
+
+
+@dataclass(frozen=True)
+class SubscriptionEpisodeEvidence:
+    source: str
+    season: int = 0
+    episode: int = 0
+    range_start: int = 0
+    range_end: int = 0
+    context: str = ""
+
+
+@dataclass(frozen=True)
+class SubscriptionEpisodeNormalization:
+    episodes: Set[int] = field(default_factory=set)
+    season: int = 0
+    source: str = ""
+    mode: str = ""
+    rejected: bool = False
+    reason: str = ""
 
 
 def _normalize_subscription_candidate_link(link_url: Any) -> str:
@@ -152,53 +173,111 @@ def _extract_subscription_season_from_contexts(context_paths: Optional[List[str]
     return 0
 
 
-def _convert_parent_season_episode_values(task: Dict[str, Any], parent_season: int, episodes: Set[int]) -> Set[int]:
-    normalized_parent_season = max(0, int(parent_season or 0))
-    if normalized_parent_season <= 0:
-        return episodes
-    converted: Set[int] = set()
-    for episode in sorted(_clamp_episode_values(episodes or set())):
-        absolute_episode = convert_subscription_episode_to_absolute(task, normalized_parent_season, episode)
-        if absolute_episode > 0:
-            converted.add(absolute_episode)
-    return converted or episodes
+def _subscription_known_total(task: Dict[str, Any]) -> int:
+    return resolve_subscription_tv_total_episodes(task, state_total=0)
+
+
+def _normalize_subscription_episode_evidence(
+    task: Dict[str, Any],
+    evidence: SubscriptionEpisodeEvidence,
+    max_expand: int = 400,
+) -> SubscriptionEpisodeNormalization:
+    source = str(evidence.source or "").strip() or "unknown"
+    season = max(0, int(evidence.season or 0))
+    episode = max(0, int(evidence.episode or 0))
+    range_start = max(0, int(evidence.range_start or 0))
+    range_end = max(0, int(evidence.range_end or 0))
+    if range_end > 0 and range_start <= 0:
+        range_start = range_end
+    if range_end > 0 and range_start > range_end:
+        range_start, range_end = range_end, range_start
+
+    def _from_absolute_values(mode: str) -> SubscriptionEpisodeNormalization:
+        values = _expand_episode_values(range_start, range_end, max_expand=max_expand) if range_end > 0 else set()
+        if episode > 0:
+            values.add(episode)
+        values = _clamp_episode_values(values)
+        return SubscriptionEpisodeNormalization(episodes=values, season=season, source=source, mode=mode)
+
+    if not is_subscription_multi_season_mode(task):
+        target_season = max(1, int(task.get("season", 1) or 1))
+        if season > 0 and season != target_season:
+            return SubscriptionEpisodeNormalization(season=season, source=source, rejected=True, reason="season_mismatch")
+        return _from_absolute_values("seasonal")
+
+    if season <= 0:
+        return _from_absolute_values("absolute")
+
+    season_map = normalize_tmdb_season_episode_map((task or {}).get("tmdb_season_episode_map", {}))
+    known_total = _subscription_known_total(task)
+    tmdb_total_seasons = max(0, int((task or {}).get("tmdb_total_seasons", 0) or 0))
+    season_total = max(0, int(season_map.get(str(season), 0) or 0)) if season_map else 0
+
+    if season_map and season_total > 0:
+        upper_value = range_end or episode
+        lower_value = range_start if range_end > 0 else episode
+        if upper_value > 0 and upper_value <= season_total:
+            if range_end > 0:
+                absolute_start, absolute_end = convert_subscription_episode_range_to_absolute(
+                    task, season, range_start, range_end
+                )
+                values = _expand_episode_values(absolute_start, absolute_end, max_expand=max_expand)
+                return SubscriptionEpisodeNormalization(
+                    episodes=values,
+                    season=season,
+                    source=source,
+                    mode="season_episode",
+                )
+            absolute_episode = convert_subscription_episode_to_absolute(task, season, episode)
+            return SubscriptionEpisodeNormalization(
+                episodes={absolute_episode} if absolute_episode > 0 else set(),
+                season=season,
+                source=source,
+                mode="season_episode",
+            )
+        if known_total > 0 and lower_value > 0 and upper_value <= known_total:
+            return _from_absolute_values("continuous_absolute_with_season_hint")
+        return SubscriptionEpisodeNormalization(
+            season=season,
+            source=source,
+            rejected=True,
+            reason="episode_out_of_bounds",
+        )
+
+    if season_map or (tmdb_total_seasons <= 1 and season > 1):
+        return SubscriptionEpisodeNormalization(
+            season=season,
+            source=source,
+            rejected=True,
+            reason="unknown_or_invalid_season",
+        )
+
+    return _from_absolute_values("absolute_with_unmapped_season_hint")
+
+
+def _extract_task_episode_normalization_from_name(
+    task: Dict[str, Any], name: str, max_expand: int = 400
+) -> SubscriptionEpisodeNormalization:
+    normalized_name = str(name or "").strip()
+    if not normalized_name:
+        return SubscriptionEpisodeNormalization(rejected=True, reason="empty_name")
+    meta = parse_resource_episode_meta({"title": normalized_name, "raw_text": normalized_name})
+    evidence = SubscriptionEpisodeEvidence(
+        source="name",
+        season=max(0, int(meta.get("season", 0) or 0)),
+        episode=max(0, int(meta.get("episode", 0) or 0)),
+        range_start=max(0, int(meta.get("range_start", 0) or 0)),
+        range_end=max(0, int(meta.get("range_end", 0) or 0)),
+        context=normalized_name,
+    )
+    return _normalize_subscription_episode_evidence(task, evidence, max_expand=max_expand)
 
 
 def _extract_task_episodes_from_name(task: Dict[str, Any], name: str, max_expand: int = 400) -> Set[int]:
-    normalized_name = str(name or "").strip()
-    if not normalized_name:
+    normalized = _extract_task_episode_normalization_from_name(task, name, max_expand=max_expand)
+    if normalized.rejected:
         return set()
-    meta = parse_resource_episode_meta({"title": normalized_name, "raw_text": normalized_name})
-    episode = max(0, int(meta.get("episode", 0) or 0))
-    range_start = max(0, int(meta.get("range_start", 0) or 0))
-    range_end = max(0, int(meta.get("range_end", 0) or 0))
-    season = max(0, int(meta.get("season", 0) or 0))
-    if is_subscription_multi_season_mode(task):
-        if season > 0:
-            absolute_episode = convert_subscription_episode_to_absolute(task, season, episode)
-            if absolute_episode > 0:
-                episode = absolute_episode
-            absolute_range_start, absolute_range_end = convert_subscription_episode_range_to_absolute(
-                task, season, range_start, range_end
-            )
-            if absolute_range_end > 0:
-                range_start = absolute_range_start
-                range_end = absolute_range_end
-        if range_end > 0:
-            expanded = _expand_episode_values(range_start, range_end, max_expand=max_expand)
-            if expanded:
-                return expanded
-        return {episode} if 0 < episode <= 5000 else set()
-
-    target_season = max(1, int(task.get("season", 1) or 1))
-    if season > 0 and season != target_season:
-        return set()
-    if range_end > 0:
-        expanded = _expand_episode_values(range_start, range_end, max_expand=max_expand)
-        if expanded:
-            return expanded
-        return {range_end} if 0 < range_end <= 5000 else set()
-    return {episode} if 0 < episode <= 5000 else set()
+    return normalized.episodes
 
 
 def _extract_numeric_episode_from_filename(file_name: str) -> int:
@@ -265,33 +344,44 @@ def _extract_task_episodes_from_file_entry(
             return set()
 
     for probe in (file_leaf, os.path.splitext(file_leaf)[0]):
-        parsed = _extract_task_episodes_from_name(task, probe)
-        if parsed:
-            probe_season = _extract_subscription_season_from_name(probe)
-            if probe_season <= 0 and effective_parent_season > 0:
-                if multi_season_mode:
-                    return _convert_parent_season_episode_values(task, effective_parent_season, parsed)
-                target_season = max(1, int(task.get("season", 1) or 1))
-                if effective_parent_season != target_season:
-                    return set()
-            return parsed
+        parsed_result = _extract_task_episode_normalization_from_name(task, probe)
+        if parsed_result.rejected or not parsed_result.episodes:
+            continue
+        probe_season = _extract_subscription_season_from_name(probe)
+        if probe_season <= 0 and effective_parent_season > 0:
+            evidence = SubscriptionEpisodeEvidence(
+                source="folder_structure",
+                season=effective_parent_season,
+                episode=max(parsed_result.episodes) if len(parsed_result.episodes) == 1 else 0,
+                range_start=min(parsed_result.episodes) if len(parsed_result.episodes) > 1 else 0,
+                range_end=max(parsed_result.episodes) if len(parsed_result.episodes) > 1 else 0,
+                context=normalize_relative_path(join_relative_path(normalized_parent, probe)),
+            )
+            folder_result = _normalize_subscription_episode_evidence(task, evidence)
+            if folder_result.rejected:
+                return set()
+            if folder_result.episodes:
+                return folder_result.episodes
+        return parsed_result.episodes
 
     numeric_episode = _extract_numeric_episode_from_filename(file_leaf)
     if numeric_episode > 0:
-        if multi_season_mode:
-            if effective_parent_season > 0:
-                absolute_episode = convert_subscription_episode_to_absolute(task, effective_parent_season, numeric_episode)
-                if absolute_episode > 0:
-                    return {absolute_episode}
-            return {numeric_episode}
-        target_season = max(1, int(task.get("season", 1) or 1))
-        if effective_parent_season > 0 and effective_parent_season != target_season:
+        evidence = SubscriptionEpisodeEvidence(
+            source="numeric_filename",
+            season=effective_parent_season,
+            episode=numeric_episode,
+            context=normalize_relative_path(join_relative_path(normalized_parent, file_leaf)),
+        )
+        numeric_result = _normalize_subscription_episode_evidence(task, evidence)
+        if numeric_result.rejected:
             return set()
-        return {numeric_episode}
+        if numeric_result.episodes:
+            return numeric_result.episodes
 
     if normalized_parent:
         full_name = normalize_relative_path(join_relative_path(normalized_parent, file_leaf))
-        full_path_values = _extract_task_episodes_from_name(task, full_name)
+        full_path_result = _extract_task_episode_normalization_from_name(task, full_name)
+        full_path_values = set() if full_path_result.rejected else full_path_result.episodes
         # 父目录区间（如 E01-E24）会让每个子文件都命中整段范围，容易造成整包误选。
         # 仅在全路径能明确到单集时才回退使用。
         if len(full_path_values) == 1:
@@ -301,7 +391,8 @@ def _extract_task_episodes_from_file_entry(
         if not normalized_context:
             continue
         full_context_name = normalize_relative_path(join_relative_path(normalized_context, normalized_file_name))
-        context_values = _extract_task_episodes_from_name(task, full_context_name)
+        context_result = _extract_task_episode_normalization_from_name(task, full_context_name)
+        context_values = set() if context_result.rejected else context_result.episodes
         if len(context_values) == 1:
             return context_values
     return set()
@@ -1004,9 +1095,13 @@ def _prune_tv_candidates_without_new_episodes(
 
 
 __all__ = [
+    "SubscriptionEpisodeEvidence",
+    "SubscriptionEpisodeNormalization",
     "_expand_episode_values",
     "_clamp_episode_values",
     "_is_subscription_skipped_archive_file",
+    "_normalize_subscription_episode_evidence",
+    "_extract_task_episode_normalization_from_name",
     "_extract_task_episodes_from_name",
     "_extract_numeric_episode_from_filename",
     "_extract_subscription_season_from_contexts",

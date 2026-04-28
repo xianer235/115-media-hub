@@ -894,6 +894,52 @@ def _build_subscription_search_keywords(task: Dict[str, Any], limit: int = 4) ->
     return normalized_keywords[: max(1, int(limit or 6))]
 
 
+def _resolve_subscription_search_episode_total(task: Dict[str, Any], total_episodes: int = 0) -> int:
+    payload = task if isinstance(task, dict) else {}
+    if str(payload.get("media_type", "movie") or "movie").strip().lower() != "tv":
+        return 0
+    explicit_total = max(0, int(total_episodes or 0))
+    if explicit_total > 0:
+        return explicit_total
+    return max(0, int(resolve_subscription_tv_total_episodes(payload, state_total=0) or 0))
+
+
+def _build_subscription_search_limits(task: Dict[str, Any], total_episodes: int = 0) -> Dict[str, int]:
+    episode_total = _resolve_subscription_search_episode_total(task, total_episodes=total_episodes)
+    page_size = max(1, int(TG_SEARCH_PAGE_LIMIT or 20))
+    configured_max_pages = max(1, int(SUBSCRIPTION_SEARCH_CHANNEL_MAX_PAGES or TG_SEARCH_MAX_PAGES or 3))
+    if episode_total > 0:
+        channel_limit = max(1, episode_total * 5)
+        pansou_limit = max(1, episode_total * 10)
+        max_pages = min(configured_max_pages, max(1, (channel_limit + page_size - 1) // page_size))
+        return {
+            "episode_total": episode_total,
+            "channel_limit_per_keyword": channel_limit,
+            "channel_max_pages": max_pages,
+            "channel_page_size": page_size,
+            "channel_total_limit": 0,
+            "pansou_limit_per_keyword": pansou_limit,
+        }
+    return {
+        "episode_total": 0,
+        "channel_limit_per_keyword": max(1, int(TG_SEARCH_MATCH_LIMIT_PER_CHANNEL or 12)),
+        "channel_max_pages": min(configured_max_pages, max(1, int(TG_SEARCH_MAX_PAGES or 3))),
+        "channel_page_size": page_size,
+        "channel_total_limit": 0,
+        "pansou_limit_per_keyword": max(1, int(PANSOU_SEARCH_TOTAL_LIMIT or 80)),
+    }
+
+
+def _classify_subscription_search_source(item: Dict[str, Any]) -> str:
+    payload = item if isinstance(item, dict) else {}
+    source_type = str(payload.get("source_type", "") or "").strip().lower()
+    if source_type == "pansou":
+        return "pansou"
+    if source_type == "tg":
+        return "channel"
+    return "other"
+
+
 def _merge_subscription_search_errors(errors: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     merged: List[Dict[str, str]] = []
     seen: Set[str] = set()
@@ -921,6 +967,7 @@ def _load_subscription_cached_search_items(
     task: Dict[str, Any],
     keywords: List[str],
     identity_mode: str,
+    limit_per_query: int = 0,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     provider = normalize_subscription_provider(task.get("provider", "115"), fallback="115")
     if provider not in {"115", "quark"}:
@@ -950,12 +997,7 @@ def _load_subscription_cached_search_items(
     search_terms = unique_preserve_order(search_terms)
 
     normalized_identity_mode = normalize_resource_identity_mode(identity_mode, fallback="message")
-    per_keyword_limit = (
-        int(SUBSCRIPTION_QUARK_SEARCH_CANDIDATE_LIMIT)
-        if provider == "quark"
-        else int(SUBSCRIPTION_115_SEARCH_CANDIDATE_LIMIT)
-    )
-    per_keyword_limit = max(80, min(500, per_keyword_limit * 4))
+    per_keyword_limit = max(0, int(limit_per_query or 0))
     cached_items: List[Dict[str, Any]] = []
     seen_keys: Set[str] = set()
     cache_errors = 0
@@ -991,6 +1033,7 @@ def _load_subscription_cached_search_items(
         "cached_items": len(cached_items),
         "cache_queries": len(search_terms),
         "cache_errors": cache_errors,
+        "cache_limit_per_query": per_keyword_limit,
     }
 
 
@@ -1000,6 +1043,7 @@ async def find_subscription_task_match_candidate_by_search(
     task: Dict[str, Any],
     last_episode: int = 0,
     trigger: str = "",
+    total_episodes: int = 0,
 ) -> Dict[str, Any]:
     provider = normalize_subscription_provider(task.get("provider", "115"), fallback="115")
     title_first_search_enabled = provider in {"115", "quark"}
@@ -1040,12 +1084,14 @@ async def find_subscription_task_match_candidate_by_search(
         return {"candidate": {}, "keywords": [], "stats": {}, "errors": []}
 
     keywords = _build_subscription_search_keywords(task, limit=SUBSCRIPTION_SEARCH_KEYWORD_LIMIT)
+    search_limits = _build_subscription_search_limits(task, total_episodes=total_episodes)
     all_items: List[Dict[str, Any]] = []
     all_errors: List[Dict[str, Any]] = []
     searched_sources = 0
     matched_channels = 0
     pages_scanned = 0
     search_thread_limit = 0
+    channel_returned_items = 0
     pansou_items = 0
     pansou_errors = 0
     pansou_elapsed_seconds = 0.0
@@ -1064,6 +1110,11 @@ async def find_subscription_task_match_candidate_by_search(
                 incremental_since_cursor_by_channel=(
                     incremental_since_cursor_by_channel if incremental_search_enabled else None
                 ),
+                provider_filter=provider,
+                limit_per_channel=int(search_limits.get("channel_limit_per_keyword", 0) or 0),
+                max_pages=int(search_limits.get("channel_max_pages", 0) or 0),
+                page_size=int(search_limits.get("channel_page_size", 0) or 0),
+                total_limit=int(search_limits.get("channel_total_limit", 0) or 0),
             )
             if isinstance(search_meta, dict):
                 search_meta["keyword"] = keyword
@@ -1081,7 +1132,9 @@ async def find_subscription_task_match_candidate_by_search(
             all_errors.append({"channel_id": "", "name": keyword, "message": str(raw_search_meta)})
             continue
         _, search_meta = raw_search_meta
-        all_items.extend(search_meta.get("items", []) if isinstance(search_meta.get("items"), list) else [])
+        search_items = search_meta.get("items", []) if isinstance(search_meta.get("items"), list) else []
+        channel_returned_items += len(search_items)
+        all_items.extend(search_items)
         all_errors.extend(search_meta.get("errors", []) if isinstance(search_meta.get("errors"), list) else [])
         searched_sources += max(0, int(search_meta.get("searched_sources", 0) or 0))
         matched_channels += max(0, int(search_meta.get("matched_channels", 0) or 0))
@@ -1187,6 +1240,7 @@ async def find_subscription_task_match_candidate_by_search(
                     keyword,
                     provider_filter=provider,
                     include_magnet_for_115=False,
+                    total_limit=int(search_limits.get("pansou_limit_per_keyword", 0) or 0),
                 )
                 if isinstance(search_meta, dict):
                     search_meta["keyword"] = keyword
@@ -1474,17 +1528,31 @@ async def find_subscription_task_match_candidate_by_search(
             ),
             reverse=True,
         )
-        candidates = relaxed_candidates[: min(int(SUBSCRIPTION_115_SEARCH_CANDIDATE_LIMIT), len(relaxed_candidates))]
+        candidates = relaxed_candidates
         relaxed_score_mode = True
 
-    candidate_limit = (
-        int(SUBSCRIPTION_QUARK_SEARCH_CANDIDATE_LIMIT)
-        if provider == "quark"
-        else int(SUBSCRIPTION_115_SEARCH_CANDIDATE_LIMIT)
-    )
+    candidate_source_counts = {
+        "channel": 0,
+        "pansou": 0,
+        "other": 0,
+    }
+    scored_source_counts = {
+        "channel": 0,
+        "pansou": 0,
+        "other": 0,
+    }
+    for candidate in candidates:
+        item = candidate.get("item", {}) if isinstance(candidate.get("item"), dict) else {}
+        source_key = _classify_subscription_search_source(item)
+        candidate_source_counts[source_key] = int(candidate_source_counts.get(source_key, 0) or 0) + 1
+    for candidate in scored_candidates:
+        item = candidate.get("item", {}) if isinstance(candidate.get("item"), dict) else {}
+        source_key = _classify_subscription_search_source(item)
+        scored_source_counts[source_key] = int(scored_source_counts.get(source_key, 0) or 0) + 1
+
     return {
         "candidate": candidates[0] if candidates else {},
-        "candidates": candidates[: min(candidate_limit, len(candidates))],
+        "candidates": candidates,
         "keywords": keywords,
         "errors": merged_errors,
         "stats": {
@@ -1492,14 +1560,18 @@ async def find_subscription_task_match_candidate_by_search(
             "search_keyword_limit": int(SUBSCRIPTION_SEARCH_KEYWORD_LIMIT),
             "search_keyword_concurrency": int(SUBSCRIPTION_SEARCH_KEYWORD_CONCURRENCY),
             "search_keyword_elapsed_seconds": keyword_search_elapsed_seconds,
-            "search_max_pages": int(TG_SEARCH_MAX_PAGES),
-            "search_page_limit": int(TG_SEARCH_PAGE_LIMIT),
+            "search_episode_total": int(search_limits.get("episode_total", 0) or 0),
+            "search_limit_per_channel": int(search_limits.get("channel_limit_per_keyword", 0) or 0),
+            "search_total_limit": int(search_limits.get("channel_total_limit", 0) or 0),
+            "search_max_pages": int(search_limits.get("channel_max_pages", 0) or 0),
+            "search_page_limit": int(search_limits.get("channel_page_size", 0) or 0),
             "search_channel_timeout_seconds": int(TG_SEARCH_CHANNEL_TIMEOUT_SECONDS),
             "search_request_timeout_seconds": int(TG_SEARCH_REQUEST_TIMEOUT_SECONDS),
             "search_thread_limit": search_thread_limit,
             "searched_sources": searched_sources,
             "matched_channels": matched_channels,
             "pages_scanned": pages_scanned,
+            "channel_returned_items": channel_returned_items,
             "raw_items": len(all_items),
             "live_raw_items": live_raw_items,
             "cached_items": int(cache_stats.get("cached_items", 0) or 0),
@@ -1519,6 +1591,12 @@ async def find_subscription_task_match_candidate_by_search(
             "target_season": target_season if single_season_tv else 0,
             "scored_items": len(scored_candidates),
             "scored_candidates": len(candidates),
+            "channel_scored_items": int(scored_source_counts.get("channel", 0) or 0),
+            "pansou_scored_items": int(scored_source_counts.get("pansou", 0) or 0),
+            "other_scored_items": int(scored_source_counts.get("other", 0) or 0),
+            "channel_candidate_count": int(candidate_source_counts.get("channel", 0) or 0),
+            "pansou_candidate_count": int(candidate_source_counts.get("pansou", 0) or 0),
+            "other_candidate_count": int(candidate_source_counts.get("other", 0) or 0),
             "relaxed_score_mode": relaxed_score_mode,
             "relaxed_candidates": len(relaxed_candidates),
             "search_errors": len(merged_errors),
@@ -1540,6 +1618,8 @@ async def find_subscription_task_match_candidate_by_search(
             "channel_support_rows_updated": int(channel_support_rows_updated or 0),
             "slow_channels": slow_channel_rows[:5],
             "pansou_enabled": bool(cfg.get("pansou_enabled", False)),
+            "pansou_total_limit": int(search_limits.get("pansou_limit_per_keyword", 0) or 0),
+            "pansou_returned_items": pansou_items,
             "pansou_items": pansou_items,
             "pansou_errors": pansou_errors,
             "pansou_elapsed_seconds": pansou_elapsed_seconds,
@@ -1645,6 +1725,7 @@ def merge_subscription_search_results(
         "pages_scanned",
         "raw_items",
         "live_raw_items",
+        "channel_returned_items",
         "cached_items",
         "cache_queries",
         "cache_errors",
@@ -1658,6 +1739,12 @@ def merge_subscription_search_results(
         "season_guard_deferred",
         "scored_items",
         "scored_candidates",
+        "channel_scored_items",
+        "pansou_scored_items",
+        "other_scored_items",
+        "channel_candidate_count",
+        "pansou_candidate_count",
+        "other_candidate_count",
         "relaxed_candidates",
         "search_errors",
         "title_blocked_candidates",
@@ -1665,12 +1752,14 @@ def merge_subscription_search_results(
         "title_match_media_relaxed_pass",
         "quark_low_score_kept",
         "quark_media_relaxed_pass",
+        "search_episode_total",
         "incremental_stop_channels",
         "incremental_channel_watermarks_loaded",
         "incremental_channel_watermarks_observed",
         "incremental_channel_watermarks_error_channels",
         "incremental_channel_watermarks_advanced",
         "channel_support_rows_updated",
+        "pansou_returned_items",
         "pansou_items",
         "pansou_errors",
     )
@@ -1726,6 +1815,10 @@ def merge_subscription_search_results(
         float(fixed_stats.get("pansou_elapsed_seconds", 0.0) or 0.0),
         float(channel_stats.get("pansou_elapsed_seconds", 0.0) or 0.0),
     )
+    merged_stats["pansou_total_limit"] = max(
+        int(fixed_stats.get("pansou_total_limit", 0) or 0),
+        int(channel_stats.get("pansou_total_limit", 0) or 0),
+    )
     merged_stats["incremental_watermark_overlap_posts"] = max(
         int(fixed_stats.get("incremental_watermark_overlap_posts", 0) or 0),
         int(channel_stats.get("incremental_watermark_overlap_posts", 0) or 0),
@@ -1741,6 +1834,7 @@ def merge_subscription_search_results(
     merged_stats["channel_pages_scanned"] = int(channel_stats.get("pages_scanned", 0) or 0)
     merged_stats["channel_raw_items"] = int(channel_stats.get("raw_items", 0) or 0)
     merged_stats["channel_live_raw_items"] = int(channel_stats.get("live_raw_items", 0) or 0)
+    merged_stats["channel_returned_items"] = int(channel_stats.get("channel_returned_items", 0) or 0)
     merged_stats["channel_cached_items"] = int(channel_stats.get("cached_items", 0) or 0)
     merged_stats["channel_cache_queries"] = int(channel_stats.get("cache_queries", 0) or 0)
     merged_stats["channel_cache_errors"] = int(channel_stats.get("cache_errors", 0) or 0)
@@ -1749,6 +1843,8 @@ def merge_subscription_search_results(
     merged_stats["channel_unsupported_items"] = int(channel_stats.get("unsupported_items", 0) or 0)
     for key in (
         "search_keyword_limit",
+        "search_limit_per_channel",
+        "search_total_limit",
         "search_max_pages",
         "search_page_limit",
         "search_channel_timeout_seconds",
@@ -1775,19 +1871,13 @@ def merge_subscription_search_results(
         channel_stats.get("provider", fixed_stats.get("provider", "115")),
         fallback="115",
     )
-    candidate_limit = (
-        int(SUBSCRIPTION_QUARK_SEARCH_CANDIDATE_LIMIT)
-        if provider == "quark"
-        else int(SUBSCRIPTION_115_SEARCH_CANDIDATE_LIMIT)
-    )
-
     merged_errors = merge_errors(fixed_payload, channel_payload)
     merged_stats["search_errors"] = len(merged_errors)
     merged_stats["provider"] = provider
 
     return {
         "candidate": merged_candidates[0] if merged_candidates else {},
-        "candidates": merged_candidates[: min(candidate_limit, len(merged_candidates))],
+        "candidates": merged_candidates,
         "keywords": merge_keywords(fixed_payload, channel_payload),
         "errors": merged_errors,
         "stats": merged_stats,
