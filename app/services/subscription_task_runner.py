@@ -4331,9 +4331,8 @@ async def run_subscription_task(
         total_detected = max(0, int(candidate.get("total", 0) or 0))
         selected_season = max(0, int(candidate.get("season", 0) or 0))
         job_id = int(selected_job_id or 0)
-        auto_refresh = bool(selected_auto_refresh)
-        if batch_refresh_enabled and int(batch_refresh_result.get("triggered_groups", 0) or 0) > 0:
-            auto_refresh = True
+        batch_triggered_groups = int(batch_refresh_result.get("triggered_groups", 0) or 0)
+        auto_refresh = bool(selected_auto_refresh or (batch_refresh_enabled and batch_triggered_groups > 0))
         imported_episode_list = sorted(imported_episodes)
         matched_display_title = pick_subscription_display_title(task, item, fallback=f"资源#{resource_id}")
         import_type_label = format_resource_link_type_label(item.get("link_type", ""), item.get("link_url", ""))
@@ -4378,26 +4377,24 @@ async def run_subscription_task(
                 f"命中「{matched_display_title}」"
                 f"（评分 {score}，方式 {import_type_label}），{action_text} #{job_id}，保存到 {selected_job_savepath}"
             )
-        if selected_auto_refresh:
-            if batch_refresh_enabled:
-                triggered_groups = int(batch_refresh_result.get("triggered_groups", 0) or 0)
-                successful_jobs = int(batch_refresh_result.get("successful_jobs", 0) or 0)
-                refresh_eligible_jobs = int(batch_refresh_result.get("refresh_eligible_jobs", 0) or 0)
-                missing_jobs = int(batch_refresh_result.get("missing_monitor_task_jobs", 0) or 0)
-                if triggered_groups > 0:
-                    detail += "；批次收口已统一触发监控任务"
-                elif missing_jobs > 0:
-                    detail += "；批次收口未触发监控（目标监控任务不存在）"
-                elif successful_jobs > 0 and refresh_eligible_jobs <= 0:
-                    detail += "；本批次成功入库但未命中监控任务，未触发监控"
-                elif successful_jobs > 0:
-                    detail += "；批次收口未触发监控"
-                elif int(batch_refresh_result.get("created_jobs", 0) or 0) > 0:
-                    detail += "；本批次无成功入库任务，未触发监控"
-                else:
-                    detail += "；未创建新导入任务，沿用历史任务状态"
+        if batch_refresh_enabled:
+            successful_jobs = int(batch_refresh_result.get("successful_jobs", 0) or 0)
+            refresh_eligible_jobs = int(batch_refresh_result.get("refresh_eligible_jobs", 0) or 0)
+            missing_jobs = int(batch_refresh_result.get("missing_monitor_task_jobs", 0) or 0)
+            if batch_triggered_groups > 0:
+                detail += "；批次收口已统一触发监控任务"
+            elif missing_jobs > 0:
+                detail += "；批次收口未触发监控（目标监控任务不存在）"
+            elif successful_jobs > 0 and refresh_eligible_jobs <= 0:
+                detail += "；本批次成功入库但未命中监控任务，未触发监控"
+            elif successful_jobs > 0:
+                detail += "；批次收口未触发监控"
+            elif int(batch_refresh_result.get("created_jobs", 0) or 0) > 0:
+                detail += "；本批次无成功入库任务，未触发监控"
             else:
-                detail += "；自动触发监控任务"
+                detail += "；未创建新导入任务，沿用历史任务状态"
+        elif selected_auto_refresh:
+            detail += "；自动触发监控任务"
         else:
             detail += "；当前目录未命中文件夹监控任务"
 
