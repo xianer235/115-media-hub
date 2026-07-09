@@ -1,11 +1,19 @@
 import asyncio
-from typing import Any, Dict
+import os
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from ..background import submit_background
-from ..core import parse_int
+from ..core import (
+    get_config,
+    _get_provider_or_none,
+    http_request_json,
+    normalize_relative_path,
+    parse_int,
+    throttle_115_api_requests,
+)
 from ..services.scraper import (
     build_scraper_providers_payload,
     build_scraper_rename_plan,
@@ -29,6 +37,81 @@ router = APIRouter()
 
 def _error_response(exc: Exception, status_code: int = 400) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"ok": False, "msg": str(exc)})
+
+
+def _resolve_path_to_entry_ids(provider: str, path: str) -> List[str]:
+    """Resolve a human-readable path to entry_ids for 115 operations.
+
+    Traverses the 115 directory tree to find the file/directory matching
+    the given path, and returns a list containing its entry_id (fid or cid).
+    """
+    normalized_path = normalize_relative_path(path)
+    if not normalized_path:
+        raise RuntimeError("路径无效")
+    cfg = get_config()
+    cookie = str(cfg.get("cookie_115", "")).strip()
+    if not cookie:
+        raise RuntimeError("115 Cookie 未配置")
+    provider_obj = _get_provider_or_none(provider or "115")
+    if not provider_obj:
+        raise RuntimeError(f"提供商 {provider} 不存在")
+
+    parent_rel = normalize_relative_path(os.path.dirname(normalized_path))
+    file_name = str(os.path.basename(normalized_path) or "").strip()
+    if not file_name:
+        raise RuntimeError("路径必须包含文件名或目录名")
+
+    # Resolve parent CID by traversing path components
+    parent_cid = "0"
+    if parent_rel:
+        parts = [p for p in parent_rel.split("/") if p]
+        for part in parts:
+            throttle_115_api_requests()
+            url = (
+                "https://aps.115.com/natsort/files.php"
+                f"?aid=1&cid={parent_cid}&offset=0&limit=300&show_dir=1&natsort=1&format=json"
+            )
+            headers = {"Cookie": cookie, "Accept": "application/json", "Referer": "https://115.com/"}
+            result = http_request_json(url, extra_headers=headers, timeout=30)
+            if not isinstance(result, dict) or not result.get("state"):
+                raise RuntimeError(f"目录 {part} 不存在或无权限访问")
+            raw_items = result.get("data") or []
+            found = False
+            for raw in raw_items:
+                name = str(raw.get("n", "") or raw.get("name", "") or "").strip()
+                cid = str(raw.get("cid", "") or "").strip()
+                if name == part and cid:
+                    parent_cid = cid
+                    found = True
+                    break
+            if not found:
+                raise RuntimeError(f"未找到子目录: {part}")
+
+    # Find the target file/directory in parent
+    throttle_115_api_requests()
+    url = (
+        "https://aps.115.com/natsort/files.php"
+        f"?aid=1&cid={parent_cid}&offset=0&limit=300&show_dir=1&natsort=1&format=json"
+    )
+    headers = {"Cookie": cookie, "Accept": "application/json", "Referer": "https://115.com/"}
+    result = http_request_json(url, extra_headers=headers, timeout=30)
+    if not isinstance(result, dict) or not result.get("state"):
+        raise RuntimeError("无法读取目录内容")
+    raw_items = result.get("data") or []
+    entry_id = ""
+    for raw in raw_items:
+        name = str(raw.get("n", "") or raw.get("name", "") or "").strip()
+        if name == file_name:
+            fid = str(raw.get("fid", "") or raw.get("id", "") or "").strip()
+            cid = str(raw.get("cid", "") or "").strip()
+            if fid:
+                entry_id = fid
+            elif cid:
+                entry_id = cid
+            break
+    if not entry_id:
+        raise RuntimeError(f"未找到文件/目录: {normalized_path}")
+    return [entry_id]
 
 
 @router.get("/scraper/providers")
@@ -69,8 +152,18 @@ async def rename_scraper_entry_endpoint(provider: str, request: Request) -> Dict
     entry_id = str(data.get("entry_id", "") or "").strip()
     parent_id = str(data.get("parent_id", "") or "").strip()
     name = str(data.get("name", "") or "").strip()
+    # Support path-based input for CLI
+    path = str(data.get("path", "") or "").strip()
     if not entry_id:
-        return JSONResponse(status_code=400, content={"ok": False, "msg": "文件 ID 不能为空"})
+        if path:
+            try:
+                entry_ids = await asyncio.to_thread(_resolve_path_to_entry_ids, provider, path)
+                if entry_ids:
+                    entry_id = entry_ids[0]
+            except Exception as exc:
+                return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
+        else:
+            return JSONResponse(status_code=400, content={"ok": False, "msg": "文件 ID 或路径不能为空"})
     if not name:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "新名称不能为空"})
     try:
@@ -96,12 +189,29 @@ async def check_scraper_folder_rename_warning_endpoint(provider: str, request: R
 async def move_scraper_entries_endpoint(provider: str, request: Request) -> Dict[str, Any]:
     data = await request.json()
     entry_ids = data.get("entry_ids", [])
-    target_cid = str(data.get("target_cid", "") or "").strip()
-    source_cid = str(data.get("source_cid", "") or "").strip()
+    # Support path-based input for CLI
+    path = str(data.get("path", "") or "").strip()
     if not isinstance(entry_ids, list) or not entry_ids:
-        return JSONResponse(status_code=400, content={"ok": False, "msg": "请选择要移动的条目"})
+        if path:
+            try:
+                entry_ids = await asyncio.to_thread(_resolve_path_to_entry_ids, provider, path)
+            except Exception as exc:
+                return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
+        else:
+            return JSONResponse(status_code=400, content={"ok": False, "msg": "请选择要移动的条目"})
+    target_cid = str(data.get("target_cid", "") or "").strip()
+    dest = str(data.get("dest", "") or "").strip()
+    if not target_cid and dest:
+        # Resolve destination path to CID
+        try:
+            dest_ids = await asyncio.to_thread(_resolve_path_to_entry_ids, provider, dest)
+            if dest_ids:
+                target_cid = dest_ids[0]
+        except Exception:
+            pass
     if not target_cid:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "目标目录不能为空"})
+    source_cid = str(data.get("source_cid", "") or "").strip()
     try:
         return await asyncio.to_thread(move_scraper_entries, provider, entry_ids, target_cid, source_cid)
     except Exception as exc:
@@ -112,12 +222,28 @@ async def move_scraper_entries_endpoint(provider: str, request: Request) -> Dict
 async def copy_scraper_entries_endpoint(provider: str, request: Request) -> Dict[str, Any]:
     data = await request.json()
     entry_ids = data.get("entry_ids", [])
-    target_cid = str(data.get("target_cid", "") or "").strip()
-    source_cid = str(data.get("source_cid", "") or "").strip()
+    # Support path-based input for CLI
+    path = str(data.get("path", "") or "").strip()
     if not isinstance(entry_ids, list) or not entry_ids:
-        return JSONResponse(status_code=400, content={"ok": False, "msg": "请选择要复制的条目"})
+        if path:
+            try:
+                entry_ids = await asyncio.to_thread(_resolve_path_to_entry_ids, provider, path)
+            except Exception as exc:
+                return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
+        else:
+            return JSONResponse(status_code=400, content={"ok": False, "msg": "请选择要复制的条目"})
+    target_cid = str(data.get("target_cid", "") or "").strip()
+    dest = str(data.get("dest", "") or "").strip()
+    if not target_cid and dest:
+        try:
+            dest_ids = await asyncio.to_thread(_resolve_path_to_entry_ids, provider, dest)
+            if dest_ids:
+                target_cid = dest_ids[0]
+        except Exception:
+            pass
     if not target_cid:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "目标目录不能为空"})
+    source_cid = str(data.get("source_cid", "") or "").strip()
     try:
         return await asyncio.to_thread(copy_scraper_entries, provider, entry_ids, target_cid, source_cid)
     except Exception as exc:
@@ -128,9 +254,17 @@ async def copy_scraper_entries_endpoint(provider: str, request: Request) -> Dict
 async def delete_scraper_entries_endpoint(provider: str, request: Request) -> Dict[str, Any]:
     data = await request.json()
     entry_ids = data.get("entry_ids", [])
-    parent_id = str(data.get("parent_id", "") or "").strip()
+    # Support path-based input for CLI
+    path = str(data.get("path", "") or "").strip()
     if not isinstance(entry_ids, list) or not entry_ids:
-        return JSONResponse(status_code=400, content={"ok": False, "msg": "请选择要删除的条目"})
+        if path:
+            try:
+                entry_ids = await asyncio.to_thread(_resolve_path_to_entry_ids, provider, path)
+            except Exception as exc:
+                return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
+        else:
+            return JSONResponse(status_code=400, content={"ok": False, "msg": "请选择要删除的条目"})
+    parent_id = str(data.get("parent_id", "") or "").strip()
     try:
         return await asyncio.to_thread(delete_scraper_entries, provider, entry_ids, parent_id)
     except Exception as exc:
