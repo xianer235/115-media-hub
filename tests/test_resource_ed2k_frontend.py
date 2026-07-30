@@ -167,6 +167,16 @@ class ResourceEd2kFrontendLogicTest(unittest.TestCase):
         self.assertEqual(result["sharedTokens"], result["ed2kTokens"])
         self.assertEqual(result["sharedTitle"], result["ed2kTitle"])
 
+    def test_title_tokenizer_splits_dot_connected_english_words(self):
+        tokens = run_ed2k_frontend(
+            "api.tokenizeTitle('Xiao.Fang.S01.2026.2160p.WEB-DL.H265.DDP5.1-BlackTV').map(item => item.text)"
+        )
+
+        self.assertEqual(
+            tokens,
+            ["Xiao", "Fang", "S01", "2026", "2160p", "WEB-DL", "H265", "DDP5", "1-BlackTV"],
+        )
+
     def test_drag_range_selects_and_deselects_contiguous_tokens(self):
         result = run_ed2k_frontend(
             "(() => { let selected = api.applySelectionRange([], 3, 9, true); "

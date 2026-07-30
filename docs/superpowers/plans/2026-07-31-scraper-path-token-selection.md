@@ -55,7 +55,7 @@ Expose one immutable global API:
     'use strict';
 
     const CJK_TOKEN_REGEX = /^[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]$/u;
-    const TEXT_TOKEN_REGEX = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]|[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*/gu;
+    const TEXT_TOKEN_REGEX = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]|[A-Za-z0-9]+(?:[_-][A-Za-z0-9]+)*/gu;
 
     function tokenize(value) {
         const source = String(value || '');
