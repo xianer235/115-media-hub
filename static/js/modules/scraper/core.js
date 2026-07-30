@@ -35,6 +35,8 @@ const state = {
     identifyResult: null,
     identifySelectionKey: '',
     identifyRequestSeq: 0,
+    identifyPathSelection: createEmptyIdentifyPathSelection(),
+    identifyPathGesture: null,
     tmdb: null,
     manualBusy: false,
     manualResults: [],
@@ -319,11 +321,28 @@ function isWholeFolderSelection(entries = getSelectedEntries()) {
     return getSelectionMode(entries) === 'folder';
 }
 
+function createEmptyIdentifyPathSelection() {
+    return {
+        source: '',
+        tokens: [],
+        selectedIndexes: [],
+        expanded: true,
+    };
+}
+
+function createIdentifyPathSelection(entries) {
+    const pathSelection = window.ScraperPathSelection;
+    if (!pathSelection) throw new Error('ScraperPathSelection 尚未加载');
+    return pathSelection.createSelection(entries, currentParentPath());
+}
+
 function resetIdentifyContext({ resetInputs = false } = {}) {
     state.identifyRequestSeq += 1;
     state.identifyBusy = false;
     state.identifyResult = null;
     state.identifySelectionKey = '';
+    state.identifyPathSelection = createEmptyIdentifyPathSelection();
+    state.identifyPathGesture = null;
     state.tmdb = null;
     state.manualResults = [];
     state.manualMediaTypeTouched = false;
@@ -337,10 +356,6 @@ function resetIdentifyContext({ resetInputs = false } = {}) {
 
 function applyIdentifyManualSearchDefaults(identifyResult = {}) {
     const data = identifyResult && typeof identifyResult === 'object' ? identifyResult : {};
-    const manualInput = $('scraper-manual-query');
-    if (manualInput && !String(manualInput.value || '').trim() && data.query) {
-        manualInput.value = String(data.query || '');
-    }
     const mediaSelect = $('scraper-manual-media-type');
     if (mediaSelect && data.media_type && !state.manualMediaTypeTouched) {
         mediaSelect.value = data.media_type === 'tv' ? 'tv' : 'movie';
@@ -379,7 +394,6 @@ function openIdentifyPanel() {
     if (!panel) return;
     panel.classList.remove('hidden');
     panel.classList.add('is-open');
-    setTimeout(() => $('scraper-manual-query')?.focus(), 30);
 }
 
 function closeIdentifyPanel() {
@@ -1040,23 +1054,149 @@ function setEntrySort(key) {
     renderEntries();
 }
 
-function renderKeywordSuggestions(identifyResult = {}) {
-    const keywords = Array.isArray(identifyResult.keywords) ? identifyResult.keywords : [];
-    if (!keywords.length) return '';
-    return `
-        <div class="scraper-keyword-group">
-            ${keywords.slice(0, 5).map(item => `
-                <button
-                    type="button"
-                    class="scraper-keyword-chip"
-                    data-scraper-keyword="${escapeHtml(item.keyword || '')}"
-                    title="${escapeHtml(item.source || '识别关键词')}"
-                >
-                    ${escapeHtml(item.keyword || '--')}
-                </button>
-            `).join('')}
+function renderIdentifyPathSelection() {
+    const candidates = $('scraper-candidate-list');
+    if (!candidates) return;
+    if (state.identifyBusy) {
+        candidates.innerHTML = '<div class="scraper-empty-small">正在读取完整路径...</div>';
+        return;
+    }
+    const selection = state.identifyPathSelection || createEmptyIdentifyPathSelection();
+    const source = String(selection.source || '').trim();
+    const tokens = Array.isArray(selection.tokens) ? selection.tokens : [];
+    if (!source || !tokens.length) {
+        candidates.innerHTML = '<div class="scraper-empty-small">当前选择没有可用的文件夹路径，可直接在下方输入影视名称。</div>';
+        return;
+    }
+    const selectedIndexes = Array.isArray(selection.selectedIndexes) ? selection.selectedIndexes : [];
+    const selected = new Set(selectedIndexes.map(Number));
+    const query = window.ScraperPathSelection?.composeQuery(selection) || '';
+    if (selection.expanded === false) {
+        candidates.innerHTML = `
+            <div class="scraper-path-selector is-collapsed">
+                <div class="scraper-path-collapsed">
+                    <div class="scraper-path-result">
+                        <span>已填入搜索框</span>
+                        <strong>${escapeHtml(query || '尚未选择标题')}</strong>
+                    </div>
+                    <button
+                        type="button"
+                        class="scraper-path-reselect"
+                        data-scraper-action="reopen-path-selection"
+                        title="重新选择 TMDB 搜索标题"
+                        aria-label="重新选择 TMDB 搜索标题"
+                    >
+                        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <path d="M12 20h9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                            <path d="M16.5 3.5a2.12 2.12 0 013 3L8 18l-4 1 1-4L16.5 3.5z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        `;
+        return;
+    }
+    candidates.innerHTML = `
+        <div class="scraper-path-selector">
+            <div class="scraper-path-heading">
+                <span>完整路径</span>
+                <span>${selected.size ? `已选择 ${selected.size} 个词块` : '请选择影视标题'}</span>
+            </div>
+            <div class="scraper-path-source" title="${escapeHtml(source)}">${escapeHtml(source)}</div>
+            <div class="scraper-path-tokens" role="listbox" aria-label="完整路径标题选词">
+                ${tokens.map((token, index) => `
+                    <button
+                        type="button"
+                        class="scraper-path-token ${selected.has(index) ? 'is-selected' : ''}"
+                        data-scraper-path-token-index="${index}"
+                        role="option"
+                        aria-selected="${selected.has(index) ? 'true' : 'false'}"
+                    >${escapeHtml(token.text || '')}</button>
+                `).join('')}
+            </div>
+            <div class="scraper-path-actions">
+                <button type="button" class="scraper-compact-btn" data-scraper-action="clear-path-selection" ${selected.size ? '' : 'disabled'}>清空</button>
+                <button type="button" class="scraper-compact-btn scraper-primary-soft" data-scraper-action="complete-path-selection" ${selected.size ? '' : 'disabled'}>完成选词</button>
+            </div>
         </div>
     `;
+}
+
+function beginIdentifyPathSelection(event, index) {
+    const selection = state.identifyPathSelection;
+    const tokenIndex = Number(index);
+    if (!selection || !Number.isInteger(tokenIndex) || tokenIndex < 0) return;
+    event.preventDefault();
+    const selectedIndexes = Array.isArray(selection.selectedIndexes) ? selection.selectedIndexes : [];
+    state.identifyPathGesture = {
+        pointerId: event.pointerId,
+        startIndex: tokenIndex,
+        lastIndex: tokenIndex,
+        baseSelection: selectedIndexes.slice(),
+        shouldSelect: !selectedIndexes.includes(tokenIndex),
+    };
+    selection.selectedIndexes = window.MediaHubTextSelection.applySelectionRange(
+        state.identifyPathGesture.baseSelection,
+        tokenIndex,
+        tokenIndex,
+        state.identifyPathGesture.shouldSelect
+    );
+    renderIdentifyPathSelection();
+}
+
+function continueIdentifyPathSelection(event, index) {
+    const gesture = state.identifyPathGesture;
+    const tokenIndex = Number(index);
+    if (
+        !gesture
+        || gesture.pointerId !== event.pointerId
+        || !Number.isInteger(tokenIndex)
+        || tokenIndex < 0
+        || gesture.lastIndex === tokenIndex
+    ) return;
+    gesture.lastIndex = tokenIndex;
+    state.identifyPathSelection.selectedIndexes = window.MediaHubTextSelection.applySelectionRange(
+        gesture.baseSelection,
+        gesture.startIndex,
+        tokenIndex,
+        gesture.shouldSelect
+    );
+    renderIdentifyPathSelection();
+}
+
+function clearIdentifyPathSelection() {
+    state.identifyPathSelection.selectedIndexes = [];
+    state.identifyPathSelection.expanded = true;
+    renderIdentifyPathSelection();
+}
+
+function completeIdentifyPathSelection() {
+    const query = window.ScraperPathSelection?.composeQuery(state.identifyPathSelection) || '';
+    if (!query) {
+        showToast('请先选择影视标题文字', { tone: 'warn', duration: 2200, placement: 'top-center' });
+        return;
+    }
+    const input = $('scraper-manual-query');
+    if (input) input.value = query;
+    state.identifyPathSelection.expanded = false;
+    state.manualResults = [];
+    renderIdentify();
+    if (input) {
+        input.focus();
+        input.setSelectionRange?.(query.length, query.length);
+    }
+}
+
+function reopenIdentifyPathSelection() {
+    if (!state.identifyPathSelection?.tokens?.length) return;
+    state.identifyPathSelection.expanded = true;
+    renderIdentifyPathSelection();
+    requestAnimationFrame(() => {
+        const container = $('scraper-candidate-list');
+        container?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        const selectedIndex = state.identifyPathSelection.selectedIndexes?.[0] ?? 0;
+        container?.querySelector(`[data-scraper-path-token-index="${selectedIndex}"]`)?.focus();
+    });
 }
 
 function renderPoster(item = {}) {
@@ -1081,21 +1221,13 @@ function renderIdentify() {
             summary.innerHTML = `已绑定 <strong>${escapeHtml(typeLabel)} #${escapeHtml(String(state.tmdb.tmdb_id || state.tmdb.id || 0))}</strong>：${escapeHtml(getTmdbDisplayTitle())}${seasonText}`;
         } else if (identifyResult.msg) {
             summary.textContent = identifyResult.msg;
-        } else if (identifyResult.query) {
-            summary.textContent = `已根据选中条目推荐关键词，请点击关键词填入 TMDB 搜索框后手动搜索绑定。`;
+        } else if (identifyResult.query || state.identifyPathSelection?.source) {
+            summary.textContent = '已读取所选资源的完整文件夹路径，请选择影视标题后搜索并绑定 TMDB。';
         } else {
             summary.textContent = '等待选择文件或文件夹。';
         }
     }
-    if (candidates) {
-        if (state.identifyBusy) {
-            candidates.innerHTML = '<div class="scraper-empty-small">识别中...</div>';
-        } else if (!Array.isArray(identifyResult.keywords) || !identifyResult.keywords.length) {
-            candidates.innerHTML = '';
-        } else {
-            candidates.innerHTML = renderKeywordSuggestions(identifyResult);
-        }
-    }
+    if (candidates) renderIdentifyPathSelection();
     if (manualResults) {
         if (state.manualBusy) {
             manualResults.innerHTML = '<div class="scraper-empty-small">搜索中...</div>';
@@ -1582,6 +1714,7 @@ async function identifySelected() {
         return;
     }
     resetIdentifyContext({ resetInputs: true });
+    state.identifyPathSelection = createIdentifyPathSelection(entries);
     state.identifyBusy = true;
     state.identifySelectionKey = selectionKey;
     clearPlan();
@@ -1598,7 +1731,7 @@ async function identifySelected() {
         state.tmdb = null;
         state.identifySelectionKey = selectionKey;
         applyIdentifyManualSearchDefaults(data || {});
-        showToast('已推荐关键词，请手动搜索并绑定 TMDB 条目', {
+        showToast('请选择完整路径中的影视标题，再搜索并绑定 TMDB 条目', {
             tone: 'info',
             duration: 2600,
             placement: 'top-center',
@@ -1884,6 +2017,27 @@ function selectRangeBetweenChecked() {
     showToast(`已补齐选择 ${end - start + 1} 项`, { tone: 'success', duration: 2200, placement: 'top-center' });
 }
 
+function handlePointerDown(event) {
+    const token = event.target.closest('[data-scraper-path-token-index]');
+    if (!token) return;
+    beginIdentifyPathSelection(event, Number(token.dataset.scraperPathTokenIndex));
+}
+
+function handleGlobalPointerMove(event) {
+    const gesture = state.identifyPathGesture;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    const token = document.elementFromPoint(event.clientX, event.clientY)
+        ?.closest?.('[data-scraper-path-token-index]');
+    if (!token) return;
+    continueIdentifyPathSelection(event, Number(token.dataset.scraperPathTokenIndex));
+}
+
+function endIdentifyPathGesture(event) {
+    if (state.identifyPathGesture?.pointerId === event.pointerId) {
+        state.identifyPathGesture = null;
+    }
+}
+
 function handleClick(event) {
     if (event.target?.id === 'scraper-identify-panel') {
         closeIdentifyPanel();
@@ -1907,17 +2061,6 @@ function handleClick(event) {
     const sortButton = event.target.closest('[data-scraper-sort]');
     if (sortButton) {
         setEntrySort(sortButton.dataset.scraperSort);
-        return;
-    }
-    const keywordButton = event.target.closest('[data-scraper-keyword]');
-    if (keywordButton) {
-        const keyword = String(keywordButton.dataset.scraperKeyword || '').trim();
-        const input = $('scraper-manual-query');
-        if (input && keyword) {
-            input.value = keyword;
-            input.focus();
-            input.select();
-        }
         return;
     }
     const manualButton = event.target.closest('[data-scraper-manual-index]');
@@ -1967,6 +2110,9 @@ function handleClick(event) {
         }
     }
     if (action === 'close-identify') closeIdentifyPanel();
+    if (action === 'clear-path-selection') clearIdentifyPathSelection();
+    if (action === 'complete-path-selection') completeIdentifyPathSelection();
+    if (action === 'reopen-path-selection') reopenIdentifyPathSelection();
     if (action === 'manual-search') void manualSearchTmdb();
     if (action === 'build-plan') void buildPlan();
     if (action === 'clear-plan') {
@@ -2049,12 +2195,16 @@ function bindEvents() {
     root.dataset.scraperBound = '1';
     root.addEventListener('click', handleClick);
     root.addEventListener('change', handleChange);
+    root.addEventListener('pointerdown', handlePointerDown);
     window.addEventListener('scroll', syncScraperBackTopButton, { passive: true });
     window.addEventListener('resize', () => {
         syncScraperBackTopButton();
         syncScraperBrowserHeight();
     });
     document.addEventListener('keydown', handleGlobalKeydown);
+    document.addEventListener('pointermove', handleGlobalPointerMove, { passive: true });
+    document.addEventListener('pointerup', endIdentifyPathGesture, { passive: true });
+    document.addEventListener('pointercancel', endIdentifyPathGesture, { passive: true });
     window.syncScraperBackTopButton = syncScraperBackTopButton;
     window.syncScraperBrowserHeight = syncScraperBrowserHeight;
     $('scraper-search-input')?.addEventListener('keydown', (event) => {

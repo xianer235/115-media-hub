@@ -6,6 +6,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+TEXT_SELECTION_PATH = ROOT / "static/js/modules/app/text-selection.js"
 MODULE_PATH = ROOT / "static/js/modules/resource/ed2k-import.js"
 MODAL_MODULE_PATH = ROOT / "static/js/modules/resource/import-modal.js"
 BROWSER_MODULE_PATH = ROOT / "static/js/modules/resource/browser.js"
@@ -47,7 +48,9 @@ const fs = require('fs');
 const vm = require('vm');
 const context = {{ window: {{}} }};
 vm.createContext(context);
+vm.runInContext(fs.readFileSync({json.dumps(str(TEXT_SELECTION_PATH))}, 'utf8'), context);
 vm.runInContext(fs.readFileSync({json.dumps(str(MODULE_PATH))}, 'utf8'), context);
+const sharedApi = context.window.MediaHubTextSelection;
 const api = context.window.ResourceEd2kImport;
 const result = ({expression});
 process.stdout.write(JSON.stringify(result));
@@ -152,6 +155,17 @@ class ResourceEd2kFrontendLogicTest(unittest.TestCase):
                 "2024", "S03E01-E08", "完", "结",
             ],
         )
+
+    def test_ed2k_title_selection_uses_shared_text_selection_api(self):
+        result = run_ed2k_frontend(
+            "({ sharedTokens: sharedApi.tokenize('摇滚兄弟 S03').map(item => item.text), "
+            "ed2kTokens: api.tokenizeTitle('摇滚兄弟 S03').map(item => item.text), "
+            "sharedTitle: sharedApi.compose(sharedApi.tokenize('摇滚兄弟 S03'), [0,1,2,3,4]), "
+            "ed2kTitle: api.composeFolderName(api.tokenizeTitle('摇滚兄弟 S03'), [0,1,2,3,4]) })"
+        )
+
+        self.assertEqual(result["sharedTokens"], result["ed2kTokens"])
+        self.assertEqual(result["sharedTitle"], result["ed2kTitle"])
 
     def test_drag_range_selects_and_deselects_contiguous_tokens(self):
         result = run_ed2k_frontend(
