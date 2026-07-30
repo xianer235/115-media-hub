@@ -44,6 +44,7 @@ const state = {
     planBusy: false,
     plan: null,
     planSelections: new Set(),
+    planEpisodeOverrides: {},
     planRequestSeq: 0,
     executeBusy: false,
     jobs: [],
@@ -346,6 +347,7 @@ function resetIdentifyContext({ resetInputs = false } = {}) {
     state.tmdb = null;
     state.manualResults = [];
     state.manualMediaTypeTouched = false;
+    state.planEpisodeOverrides = {};
     if (resetInputs) {
         const manualInput = $('scraper-manual-query');
         if (manualInput) manualInput.value = '';
@@ -566,6 +568,39 @@ function getPlanActions() {
     return state.plan && Array.isArray(state.plan.actions) ? state.plan.actions : [];
 }
 
+function parseManualEpisode(value) {
+    const episode = Number(value);
+    return Number.isInteger(episode) && episode > 0 ? episode : 0;
+}
+
+function getPlanEpisodeOverrides() {
+    return Object.fromEntries(
+        Object.entries(state.planEpisodeOverrides)
+            .map(([entryId, episode]) => [String(entryId || '').trim(), parseManualEpisode(episode)])
+            .filter(([entryId, episode]) => entryId && episode > 0),
+    );
+}
+
+function getPlanAction(actionIndex) {
+    const normalizedIndex = Number(actionIndex || 0) || 0;
+    return getPlanActions().find(action => Number(action.action_index || 0) === normalizedIndex) || null;
+}
+
+function renderManualEpisodeEditor(action) {
+    const actionIndex = Number(action.action_index || 0) || 0;
+    const entryId = String(action.entry_id || '').trim();
+    const manualEpisode = parseManualEpisode(action.manual_episode || state.planEpisodeOverrides[entryId]);
+    if (!actionIndex || !entryId || (!action.manual_episode_allowed && manualEpisode <= 0)) return '';
+    return `
+        <div class="scraper-preview-manual-episode">
+            <label for="scraper-manual-episode-${escapeHtml(String(actionIndex))}">手动集数</label>
+            <input id="scraper-manual-episode-${escapeHtml(String(actionIndex))}" type="number" min="1" step="1" inputmode="numeric" class="scraper-input" data-scraper-manual-episode-input="${escapeHtml(String(actionIndex))}" value="${manualEpisode ? escapeHtml(String(manualEpisode)) : ''}" placeholder="如 12">
+            <button type="button" class="scraper-compact-btn scraper-primary-soft" data-scraper-action="apply-manual-episode" data-scraper-action-index="${escapeHtml(String(actionIndex))}">应用</button>
+            ${manualEpisode ? `<button type="button" class="scraper-compact-btn" data-scraper-action="clear-manual-episode" data-scraper-action-index="${escapeHtml(String(actionIndex))}">清除</button>` : ''}
+        </div>
+    `;
+}
+
 function getSelectedReadyPlanCount() {
     return getPlanActions().filter(action => action.ready && state.planSelections.has(Number(action.action_index || 0))).length;
 }
@@ -776,6 +811,7 @@ function renderEntries() {
                         </div>
                         ${action.issue ? `<em>${escapeHtml(action.issue)}</em>` : ''}
                         ${action.warning ? `<em class="scraper-plan-warning">${escapeHtml(action.warning)}</em>` : ''}
+                        ${renderManualEpisodeEditor(action)}
                     </div>
                     <label class="scraper-preview-check">
                         <input type="checkbox" class="ui-checkbox ui-checkbox-sm" data-scraper-plan-check="${escapeHtml(String(actionIndex))}" ${checked ? 'checked' : ''} ${action.ready ? '' : 'disabled'}>
@@ -1804,65 +1840,138 @@ async function manualSearchTmdb() {
     }
 }
 
-async function buildPlan() {
-    if (state.planBusy) return;
+function buildPlanRequestPayload() {
     const entries = getEffectiveSelectedEntries();
-    if (!entries.length) {
-        showToast('请先选择要刮削的文件或文件夹', { tone: 'warn', duration: 2400, placement: 'top-center' });
-        return;
-    }
+    if (!entries.length) throw new Error('请先选择要刮削的文件或文件夹');
     if (!state.tmdb || Number(state.tmdb.tmdb_id || state.tmdb.id || 0) <= 0) {
-        showToast('请先绑定 TMDB 条目', { tone: 'warn', duration: 2400, placement: 'top-center' });
-        return;
+        throw new Error('请先绑定 TMDB 条目');
     }
-    clearPlan();
-    state.planBusy = true;
-    showToast('正在识别文件并生成预览...', { tone: 'info', duration: 1800, placement: 'top-center' });
-    renderPlan();
+    const options = collectOptions();
+    const tmdb = { ...state.tmdb };
+    if (options.episode_mode && options.episode_mode !== 'auto') {
+        tmdb.tmdb_episode_mode = options.episode_mode;
+    }
+    const payload = {
+        provider: state.provider,
+        base_cid: state.cid,
+        base_path: currentParentPath(),
+        entries,
+        tmdb,
+        options,
+    };
+    const episodeOverrides = getPlanEpisodeOverrides();
+    if (Object.keys(episodeOverrides).length) payload.episode_overrides = episodeOverrides;
+    return payload;
+}
+
+function applyPlanResponse(data) {
+    state.plan = data;
+    const actions = Array.isArray(data.actions) ? data.actions : [];
+    state.planSelections = new Set(
+        actions
+            .filter(action => action.ready)
+            .map(action => Number(action.action_index || 0) || 0)
+            .filter(Boolean),
+    );
+    state.planEpisodeOverrides = Object.fromEntries(
+        actions
+            .map(action => [String(action.entry_id || '').trim(), parseManualEpisode(action.manual_episode)])
+            .filter(([entryId, episode]) => entryId && episode > 0),
+    );
+}
+
+async function requestPlan(payload, { resetPlan = false } = {}) {
+    state.planRequestSeq += 1;
     const requestSeq = state.planRequestSeq;
+    state.planBusy = true;
+    if (resetPlan) {
+        state.plan = null;
+        state.planSelections.clear();
+    }
+    renderPlan();
+    renderEntries();
     try {
-        const options = collectOptions();
-        const tmdb = state.tmdb ? { ...state.tmdb } : null;
-        if (tmdb && options.episode_mode && options.episode_mode !== 'auto') {
-            tmdb.tmdb_episode_mode = options.episode_mode;
-        }
-        const data = await window.MediaHubApi.postJson('/scraper/rename-plan', {
-            provider: state.provider,
-            base_cid: state.cid,
-            base_path: currentParentPath(),
-            entries,
-            tmdb: tmdb || state.tmdb,
-            options,
-        });
-        if (state.planRequestSeq !== requestSeq) return;
-        state.plan = data;
-        state.planSelections = new Set(
-            (Array.isArray(data.actions) ? data.actions : [])
-                .filter(action => action.ready)
-                .map(action => Number(action.action_index || 0) || 0)
-                .filter(Boolean)
-        );
-        const warningCount = Array.isArray(data.warnings) ? data.warnings.length : 0;
-        showToast(
-            Number(data.ready_count || 0) > 0
-                ? (warningCount > 0 ? `预览已生成，含 ${warningCount} 个提醒` : '预览已生成，请勾选确认后执行')
-                : '预览没有可执行项，请处理冲突后再试',
-            {
-                tone: Number(data.ready_count || 0) > 0 ? (warningCount > 0 ? 'warn' : 'success') : 'warn',
-                duration: 2800,
-                placement: 'top-center',
-            },
-        );
-        closeIdentifyPanel();
-    } catch (error) {
-        if (state.planRequestSeq !== requestSeq) return;
-        showToast(`生成预览失败：${error.message || '未知错误'}`, { tone: 'error', duration: 3600, placement: 'top-center' });
+        const data = await window.MediaHubApi.postJson('/scraper/rename-plan', payload);
+        if (state.planRequestSeq !== requestSeq) return null;
+        applyPlanResponse(data);
+        return data;
     } finally {
         if (state.planRequestSeq === requestSeq) {
             state.planBusy = false;
             renderPlan();
             renderEntries();
         }
+    }
+}
+
+function showPlanReadyToast(data) {
+    const warningCount = Array.isArray(data.warnings) ? data.warnings.length : 0;
+    showToast(
+        Number(data.ready_count || 0) > 0
+            ? (warningCount > 0 ? `预览已生成，含 ${warningCount} 个提醒` : '预览已生成，请勾选确认后执行')
+            : '预览没有可执行项，请处理冲突后再试',
+        {
+            tone: Number(data.ready_count || 0) > 0 ? (warningCount > 0 ? 'warn' : 'success') : 'warn',
+            duration: 2800,
+            placement: 'top-center',
+        },
+    );
+}
+
+async function buildPlan() {
+    if (state.planBusy) return;
+    let payload;
+    try {
+        payload = buildPlanRequestPayload();
+    } catch (error) {
+        showToast(error.message || '无法生成预览', { tone: 'warn', duration: 2400, placement: 'top-center' });
+        return;
+    }
+    showToast('正在识别文件并生成预览...', { tone: 'info', duration: 1800, placement: 'top-center' });
+    try {
+        const data = await requestPlan(payload, { resetPlan: true });
+        if (!data) return;
+        showPlanReadyToast(data);
+        closeIdentifyPanel();
+    } catch (error) {
+        showToast(`生成预览失败：${error.message || '未知错误'}`, { tone: 'error', duration: 3600, placement: 'top-center' });
+    }
+}
+
+async function updateManualEpisode(actionIndex, { clear = false } = {}) {
+    if (state.planBusy) return;
+    const action = getPlanAction(actionIndex);
+    const entryId = String(action?.entry_id || '').trim();
+    if (!action || !entryId) return;
+    const previousOverrides = { ...state.planEpisodeOverrides };
+    if (clear) {
+        delete state.planEpisodeOverrides[entryId];
+    } else {
+        const input = document.querySelector(`[data-scraper-manual-episode-input="${Number(actionIndex || 0)}"]`);
+        const episode = parseManualEpisode(input?.value);
+        if (episode <= 0) {
+            showToast('请输入大于 0 的集数', { tone: 'warn', duration: 2400, placement: 'top-center' });
+            input?.focus();
+            return;
+        }
+        state.planEpisodeOverrides[entryId] = episode;
+    }
+    let payload;
+    try {
+        payload = buildPlanRequestPayload();
+    } catch (error) {
+        state.planEpisodeOverrides = previousOverrides;
+        showToast(error.message || '无法更新预览', { tone: 'warn', duration: 2400, placement: 'top-center' });
+        return;
+    }
+    showToast(clear ? '正在恢复自动识别...' : '正在按手动集数更新预览...', { tone: 'info', duration: 1800, placement: 'top-center' });
+    try {
+        const data = await requestPlan(payload);
+        if (!data) return;
+        showToast(clear ? '已恢复自动识别' : '已应用手动集数', { tone: 'success', duration: 2200, placement: 'top-center' });
+    } catch (error) {
+        state.planEpisodeOverrides = previousOverrides;
+        showToast(`更新预览失败：${error.message || '未知错误'}`, { tone: 'error', duration: 3600, placement: 'top-center' });
     }
 }
 
@@ -1914,6 +2023,7 @@ async function executePlan() {
         }
         state.plan = null;
         state.planSelections.clear();
+        state.planEpisodeOverrides = {};
         await refreshJobs();
         scheduleJobsPoll();
         await loadEntries({ force: true });
@@ -2115,6 +2225,8 @@ function handleClick(event) {
     if (action === 'reopen-path-selection') reopenIdentifyPathSelection();
     if (action === 'manual-search') void manualSearchTmdb();
     if (action === 'build-plan') void buildPlan();
+    if (action === 'apply-manual-episode') void updateManualEpisode(actionButton.dataset.scraperActionIndex);
+    if (action === 'clear-manual-episode') void updateManualEpisode(actionButton.dataset.scraperActionIndex, { clear: true });
     if (action === 'clear-plan') {
         clearPlan();
         renderSelection();

@@ -13337,6 +13337,27 @@
             color: #fcd34d;
         }
 
+        .scraper-preview-manual-episode {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.4rem;
+            color: #cbd5e1;
+            font-size: 0.74rem;
+        }
+
+        .scraper-preview-manual-episode .scraper-input {
+            width: 5.4rem;
+            min-height: 30px;
+            padding: 0.25rem 0.42rem;
+        }
+
+        .scraper-preview-manual-episode .scraper-compact-btn {
+            min-height: 30px;
+            padding: 0.22rem 0.46rem;
+            font-size: 0.72rem;
+        }
+
         .scraper-plan-badge {
             flex: 0 0 auto;
             border: 1px solid rgba(71, 85, 105, 0.78);
@@ -14248,6 +14269,10 @@
 
         html.theme-day .scraper-preview-target em.scraper-plan-warning {
             color: #92400e;
+        }
+
+        html.theme-day .scraper-preview-manual-episode {
+            color: #475569;
         }
 
         html.theme-day .scraper-breadcrumb,

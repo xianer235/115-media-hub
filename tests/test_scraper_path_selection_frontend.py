@@ -145,6 +145,13 @@ class ScraperPathSelectionIntegrationTest(unittest.TestCase):
         self.assertIn("state.manualResults = [];", function_body)
         self.assertIn("renderIdentify();", function_body)
 
+    def test_preview_allows_manual_episode_override_for_unrecognized_files(self):
+        source = SCRAPER_CORE_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("data-scraper-manual-episode-input", source)
+        self.assertIn("apply-manual-episode", source)
+        self.assertIn("clear-manual-episode", source)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,8 +1,9 @@
 {
-  "version": "0.4.11",
-  "buildDate": "2026-06-30T00:00:00+08:00",
+  "version": "0.5.0",
+  "buildDate": "2026-07-31T00:00:00+08:00",
   "notes": [
-    "订阅任务新增可自定义排除文件类型配置"
+    "刮削预览支持为无法识别集数的电视剧文件手动输入集数并执行标准命名",
+    "新增 ED2K 整季文件解析与 115 批量保存，导入弹窗支持连续路径选词"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

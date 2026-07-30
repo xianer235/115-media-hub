@@ -171,6 +171,10 @@ def _extract_subscription_season_values_from_segment(segment: str) -> Set[int]:
         season_no = max(0, int(meta.get("season", 0) or 0))
         if season_no > 0:
             values.add(season_no)
+    for matched in re.finditer(r"\bS(?:0|O)?(\d{1,2})\b", normalized_segment, re.IGNORECASE):
+        season_no = max(0, int(str(matched.group(1) or "0") or 0))
+        if season_no > 0:
+            values.add(season_no)
     return values
 
 
