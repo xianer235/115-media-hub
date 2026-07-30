@@ -869,6 +869,13 @@
                 RESOURCE_FOLDER_FILE_PREVIEW_LIMIT,
                 get resourceModalMode() { return resourceModalMode; },
                 get resourceModalLinkType() { return resourceModalLinkType; },
+                get showResourceShareBrowser() {
+                    if (resourceModalMode !== 'import') return false;
+                    return !(
+                        isResourceEd2kImportCandidate(selectedResourceItem)
+                        || isResourceEd2kImportActive()
+                    );
+                },
                 get resourceShareSelected() { return resourceShareSelected || {}; },
                 get resourceShareLoading() { return resourceShareLoading; },
                 get resourceShareError() { return resourceShareError; },

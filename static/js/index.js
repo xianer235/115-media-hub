@@ -115,6 +115,23 @@
         let resourceChannelNoMore = {};
         let resourceTempIdSeed = -1;
         let resourceBatchImportItems = [];
+        let resourceEd2kState = {
+            active: false,
+            loading: false,
+            error: '',
+            requestToken: 0,
+            sourceUrl: '',
+            pageTitle: '',
+            titleText: '',
+            titleTokens: [],
+            selectedTitleIndexes: [],
+            titleExpanded: true,
+            items: [],
+            selectedItemIds: [],
+            createFolder: true,
+            folderName: '',
+        };
+        let resourceEd2kTitleGesture = null;
         let resourceClientIdSeed = -100000;
         let resourceClientIdsByIdentity = {};
         let resourceJobModalOpen = false;

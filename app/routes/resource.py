@@ -9,12 +9,21 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
+from requests import RequestException
 
 from ..background import submit_background
 from ..core import *  # noqa: F401,F403
 from ..memory import release_process_memory
 from ..providers.registry import get_or_none as get_provider_or_none
-from ..services.resource import cancel_resource_job, retry_resource_job, run_resource_job, trigger_resource_job_refresh
+from ..resource_ed2k import parse_ed2k_link, resolve_ed2k_page
+from ..services.resource import (
+    cancel_resource_job,
+    is_resource_offline_link_type,
+    retry_resource_job,
+    run_offline_resource_job_batch,
+    run_resource_job,
+    trigger_resource_job_refresh,
+)
 
 router = APIRouter()
 resource_job_create_lock = asyncio.Lock()
@@ -980,6 +989,147 @@ async def preview_resource_text(request: Request) -> Dict[str, Any]:
     return {"ok": True, "items": candidates}
 
 
+@router.post("/resource/ed2k/resolve")
+async def resolve_resource_ed2k_endpoint(request: Request) -> Dict[str, Any]:
+    data = await request.json()
+    if not isinstance(data, dict):
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "请求数据格式无效"})
+    url = str(data.get("url", "") or "").strip()
+    if not url:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "请填写 ED2K 资源外链"})
+    fallback_title = str(
+        data.get("resource_title", "") or data.get("fallback_title", "") or ""
+    ).strip()
+    try:
+        result = await asyncio.to_thread(
+            resolve_ed2k_page,
+            url,
+            get_config(),
+            fallback_title=fallback_title,
+        )
+    except (ValueError, RuntimeError) as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
+    except RequestException as exc:
+        detail = str(exc).strip() or "未知网络错误"
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "msg": f"资源外链请求失败：{detail}"},
+        )
+    return {"ok": True, **result}
+
+
+@router.post("/resource/ed2k/jobs/create-batch")
+async def create_resource_ed2k_batch_endpoint(request: Request) -> Dict[str, Any]:
+    data = await request.json()
+    if not isinstance(data, dict):
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "请求数据格式无效"})
+    raw_items = data.get("items", [])
+    if not isinstance(raw_items, list) or not raw_items:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "请至少选择一个 ED2K 文件"})
+
+    items = []
+    seen = set()
+    for raw_item in raw_items:
+        link_url = str((raw_item or {}).get("link_url", "") if isinstance(raw_item, dict) else raw_item or "").strip()
+        try:
+            item = parse_ed2k_link(link_url)
+        except ValueError as exc:
+            return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
+        identity = (item["file_hash"], item["size_bytes"])
+        if identity in seen:
+            continue
+        seen.add(identity)
+        items.append(item)
+    if not items:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "未找到可保存的 ED2K 文件"})
+
+    cfg = get_config()
+    provider_name = "115"
+    provider = get_provider_or_none(provider_name)
+    if not provider or not provider.supports_offline:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "115 暂不支持离线下载"})
+    if not provider.get_cookie(cfg):
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "请先在参数配置中填写 115 认证信息"})
+
+    parent_savepath = normalize_relative_path(data.get("parent_savepath", data.get("savepath", "")))
+    create_folder = bool(data.get("create_folder", True))
+    folder_name = sanitize_115_folder_name(data.get("folder_name", ""), fallback="") if create_folder else ""
+    if create_folder and not folder_name:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "请填写新建文件夹名称"})
+    savepath = normalize_relative_path("/".join(part for part in (parent_savepath, folder_name) if part))
+    parent_folder_id = str(data.get("parent_folder_id", data.get("folder_id", "")) or "").strip()
+    target_folder_id = "" if create_folder else parent_folder_id
+    if not savepath and not target_folder_id:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "请选择父保存目录"})
+
+    matched_monitor = match_monitor_task_for_savepath(cfg, savepath, provider=provider_name)
+    monitor_task_name = str(matched_monitor.get("task_name", "") or "").strip()
+    auto_refresh = bool(data.get("auto_refresh", True)) and bool(monitor_task_name)
+    refresh_delay_seconds = max(0, int(data.get("refresh_delay_seconds", 0) or 0))
+    source_url = str(data.get("source_url", data.get("original_url", "")) or "").strip()
+    resource_title = str(data.get("resource_title", "") or "").strip()
+    page_title = str(data.get("page_title", "") or "").strip()
+
+    job_entries = []
+    async with resource_job_create_lock:
+        for item in items:
+            resource = {
+                "id": 0,
+                "title": item["filename"],
+                "link_url": item["link_url"],
+                "link_type": "ed2k",
+                "message_url": source_url,
+                "extra": {
+                    "source_url": source_url,
+                    "source_resource_title": resource_title,
+                    "source_page_title": page_title,
+                },
+            }
+            job_entries.append(
+                (
+                    resource,
+                    {
+                        "folder_id": target_folder_id,
+                        "savepath": savepath,
+                        "sharetitle": "",
+                        "monitor_task_name": monitor_task_name,
+                        "refresh_delay_seconds": refresh_delay_seconds,
+                        "auto_refresh": auto_refresh,
+                        "extra": {
+                            "job_source": "manual_import",
+                            "offline_provider": provider_name,
+                            "offline_provider_label": provider.label,
+                            "source_url": source_url,
+                            "source_resource_title": resource_title,
+                            "source_page_title": page_title,
+                        },
+                    },
+                )
+            )
+        job_ids = create_resource_jobs(job_entries)
+
+    submit_background(
+        run_offline_resource_job_batch,
+        job_ids,
+        provider_name=provider_name,
+        savepath=savepath,
+        create_folder=create_folder,
+        folder_id=target_folder_id,
+        label="resource-ed2k-batch",
+    )
+    return {
+        "ok": True,
+        "job_ids": job_ids,
+        "item_count": len(job_ids),
+        "savepath": savepath,
+        "folder_name": folder_name,
+        "create_folder": create_folder,
+        "monitor_task_name": monitor_task_name,
+        "auto_refresh": auto_refresh,
+        "monitor_scan_path": matched_monitor.get("full_path", ""),
+    }
+
+
 @router.post("/resource/items/delete")
 async def delete_resource_item_endpoint(request: Request) -> Dict[str, Any]:
     data = await request.json()
@@ -1013,27 +1163,30 @@ async def create_resource_job_endpoint(request: Request) -> Dict[str, Any]:
 
     share_provider = _registry_get_by_link_type(link_type)
     is_share_receive_link = bool(share_provider and share_provider.supports_share_receive)
-    if link_type != "magnet" and not is_share_receive_link:
-        return JSONResponse(status_code=400, content={"ok": False, "msg": "当前仅支持 magnet 下载和已启用网盘的分享转存"})
+    is_offline_link = is_resource_offline_link_type(link_type)
+    if not is_offline_link and not is_share_receive_link:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "当前仅支持离线下载和已启用网盘的分享转存"})
     receive_code_raw = str(data.get("receive_code", "") or "").strip()
     receive_code = normalize_receive_code(receive_code_raw)
     if is_share_receive_link and receive_code_raw and not receive_code:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "提取码格式不正确，请输入 1-16 位字母或数字"})
 
     cfg = get_config()
-    magnet_provider = ""
-    if link_type == "magnet":
-        requested_magnet_provider = str(data.get("magnet_provider", "") or "").strip().lower()
-        if requested_magnet_provider:
-            mp = get_provider_or_none(requested_magnet_provider)
+    offline_provider_name = ""
+    if is_offline_link:
+        requested_offline_provider = str(
+            data.get("offline_provider", "") or data.get("magnet_provider", "") or ""
+        ).strip().lower()
+        if requested_offline_provider:
+            mp = get_provider_or_none(requested_offline_provider)
             if not mp:
                 return JSONResponse(status_code=400, content={"ok": False, "msg": "所选网盘不存在"})
             if not mp.supports_offline:
-                return JSONResponse(status_code=400, content={"ok": False, "msg": f"{mp.label} 暂不支持 magnet 离线下载"})
-            magnet_provider = mp.name
+                return JSONResponse(status_code=400, content={"ok": False, "msg": f"{mp.label} 暂不支持离线下载"})
+            offline_provider_name = mp.name
         else:
-            magnet_provider = normalize_magnet_provider(cfg.get("default_magnet_provider", "115"))
-            mp = get_provider_or_none(magnet_provider)
+            offline_provider_name = normalize_magnet_provider(cfg.get("default_magnet_provider", "115"))
+            mp = get_provider_or_none(offline_provider_name)
         if not mp or not mp.supports_offline:
             return JSONResponse(status_code=400, content={"ok": False, "msg": "所选网盘不支持离线下载"})
         if not mp.get_cookie(cfg):
@@ -1074,8 +1227,8 @@ async def create_resource_job_endpoint(request: Request) -> Dict[str, Any]:
 
         matched_monitor: Dict[str, Any] = {}
         monitor_task_name = ""
-        if link_type == "magnet":
-            matched_monitor = match_monitor_task_for_savepath(cfg, savepath, provider=magnet_provider)
+        if is_offline_link:
+            matched_monitor = match_monitor_task_for_savepath(cfg, savepath, provider=offline_provider_name)
             monitor_task_name = matched_monitor.get("task_name", "")
         elif share_provider and share_provider.supports_monitor:
             matched_monitor = match_monitor_task_for_savepath(cfg, savepath, provider=share_provider.name)
@@ -1093,8 +1246,10 @@ async def create_resource_job_endpoint(request: Request) -> Dict[str, Any]:
             "auto_refresh": auto_refresh_requested and bool(monitor_task_name),
             "extra": {
                 "job_source": "manual_import",
-                "magnet_provider": magnet_provider,
-                "magnet_provider_label": mp.label if link_type == "magnet" and mp else "115",
+                "offline_provider": offline_provider_name,
+                "offline_provider_label": mp.label if is_offline_link and mp else "115",
+                "magnet_provider": offline_provider_name,
+                "magnet_provider_label": mp.label if is_offline_link and mp else "115",
             },
         }
         if is_share_receive_link:

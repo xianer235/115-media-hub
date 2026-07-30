@@ -14856,3 +14856,265 @@
                 font-size: 0.84rem !important;
             }
         }
+
+        .resource-ed2k-card {
+            display: grid;
+            gap: 1rem;
+        }
+        .resource-ed2k-card.hidden,
+        .resource-ed2k-section.hidden,
+        .resource-ed2k-folder-section.hidden,
+        .resource-ed2k-status.hidden {
+            display: none;
+        }
+        .resource-ed2k-status {
+            min-height: 52px;
+            border: 1px solid rgba(56, 189, 248, 0.24);
+            border-radius: 8px;
+            background: rgba(14, 165, 233, 0.08);
+            color: #bae6fd;
+            padding: 0.8rem 0.9rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            font-size: 0.82rem;
+            line-height: 1.5;
+        }
+        .resource-ed2k-status.is-error {
+            border-color: rgba(248, 113, 113, 0.3);
+            background: rgba(127, 29, 29, 0.18);
+            color: #fecaca;
+        }
+        .resource-ed2k-status button,
+        .resource-ed2k-quiet-btn {
+            min-height: 34px;
+            border: 1px solid rgba(148, 163, 184, 0.28);
+            border-radius: 7px;
+            background: rgba(51, 65, 85, 0.76);
+            color: #e2e8f0;
+            padding: 0.36rem 0.72rem;
+            font-size: 0.74rem;
+            font-weight: 800;
+            white-space: nowrap;
+        }
+        .resource-ed2k-section + .resource-ed2k-section {
+            border-top: 1px solid rgba(148, 163, 184, 0.18);
+            padding-top: 1rem;
+        }
+        .resource-ed2k-section-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.8rem;
+            margin-bottom: 0.75rem;
+        }
+        .resource-ed2k-title-source {
+            margin-top: 0.28rem;
+            color: #94a3b8;
+            font-size: 0.72rem;
+            line-height: 1.5;
+            overflow-wrap: anywhere;
+        }
+        .resource-ed2k-title-selector.hidden { display: none; }
+        .resource-ed2k-title-tokens {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.42rem;
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        .resource-ed2k-title-token {
+            min-width: 34px;
+            min-height: 34px;
+            border: 1px solid rgba(100, 116, 139, 0.5);
+            border-radius: 7px;
+            background: rgba(15, 23, 42, 0.74);
+            color: #cbd5e1;
+            padding: 0.35rem 0.58rem;
+            font-size: 0.78rem;
+            font-weight: 750;
+            line-height: 1.15;
+        }
+        .resource-ed2k-title-token.is-selected {
+            border-color: rgba(56, 189, 248, 0.72);
+            background: rgba(14, 165, 233, 0.2);
+            color: #e0f2fe;
+            box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.18);
+        }
+        .resource-ed2k-title-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 0.55rem;
+            margin-top: 0.8rem;
+        }
+        .resource-ed2k-title-done {
+            min-height: 36px;
+            border: 1px solid rgba(56, 189, 248, 0.5);
+            border-radius: 7px;
+            background: #0284c7;
+            color: #fff;
+            padding: 0.42rem 0.9rem;
+            font-size: 0.76rem;
+            font-weight: 850;
+        }
+        .resource-ed2k-title-done:disabled,
+        .resource-ed2k-reselect-btn:disabled {
+            cursor: not-allowed;
+            opacity: 0.45;
+        }
+        .resource-ed2k-check-all,
+        .resource-ed2k-folder-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.48rem;
+            color: #cbd5e1;
+            font-size: 0.78rem;
+            font-weight: 750;
+        }
+        .resource-ed2k-file-header,
+        .resource-ed2k-file-row {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 96px;
+            gap: 0.85rem;
+            align-items: center;
+        }
+        .resource-ed2k-file-header {
+            padding: 0 0.65rem 0.45rem;
+            color: #64748b;
+            font-size: 0.68rem;
+            font-weight: 800;
+        }
+        .resource-ed2k-file-header span:last-child { text-align: right; }
+        .resource-ed2k-file-list {
+            max-height: min(42vh, 430px);
+            overflow-y: auto;
+            border-top: 1px solid rgba(148, 163, 184, 0.16);
+        }
+        .resource-ed2k-file-row {
+            min-height: 54px;
+            padding: 0.65rem;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+            cursor: pointer;
+        }
+        .resource-ed2k-file-row:hover { background: rgba(30, 41, 59, 0.5); }
+        .resource-ed2k-file-main {
+            min-width: 0;
+            display: flex;
+            align-items: flex-start;
+            gap: 0.65rem;
+        }
+        .resource-ed2k-file-name {
+            min-width: 0;
+            color: #e2e8f0;
+            font-size: 0.78rem;
+            line-height: 1.45;
+            overflow-wrap: anywhere;
+        }
+        .resource-ed2k-file-size {
+            color: #94a3b8;
+            font-size: 0.74rem;
+            font-variant-numeric: tabular-nums;
+            text-align: right;
+            white-space: nowrap;
+        }
+        .resource-ed2k-folder-section {
+            display: grid;
+            gap: 0.65rem;
+            margin-top: 0.85rem;
+            padding-top: 0.85rem;
+            border-top: 1px solid rgba(148, 163, 184, 0.16);
+        }
+        .resource-ed2k-folder-title-section {
+            margin-top: 0.15rem;
+            padding: 0.75rem 0;
+            border-top: 1px solid rgba(148, 163, 184, 0.14);
+            border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+        }
+        .resource-ed2k-folder-input-row {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 42px;
+            gap: 0.55rem;
+        }
+        .resource-ed2k-folder-input {
+            min-width: 0;
+            min-height: 44px;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            background: #0f172a;
+            color: #f8fafc;
+            padding: 0.65rem 0.8rem;
+            font-size: 0.82rem;
+        }
+        .resource-ed2k-folder-input:disabled { opacity: 0.5; }
+        .resource-ed2k-reselect-btn {
+            width: 42px;
+            height: 42px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid rgba(56, 189, 248, 0.34);
+            border-radius: 8px;
+            background: rgba(14, 165, 233, 0.12);
+            color: #7dd3fc;
+        }
+        .resource-ed2k-reselect-btn svg { width: 18px; height: 18px; }
+
+        html.theme-day .resource-ed2k-status {
+            border-color: rgba(2, 132, 199, 0.24);
+            background: rgba(224, 242, 254, 0.78);
+            color: #075985;
+        }
+        html.theme-day .resource-ed2k-status.is-error {
+            border-color: rgba(220, 38, 38, 0.24);
+            background: rgba(254, 226, 226, 0.82);
+            color: #991b1b;
+        }
+        html.theme-day .resource-ed2k-status button,
+        html.theme-day .resource-ed2k-quiet-btn {
+            border-color: rgba(100, 116, 139, 0.24);
+            background: rgba(241, 245, 249, 0.94);
+            color: #334155;
+        }
+        html.theme-day .resource-ed2k-title-source,
+        html.theme-day .resource-ed2k-file-size { color: #64748b; }
+        html.theme-day .resource-ed2k-title-token {
+            border-color: rgba(100, 116, 139, 0.3);
+            background: rgba(248, 250, 252, 0.96);
+            color: #334155;
+        }
+        html.theme-day .resource-ed2k-title-token.is-selected {
+            border-color: rgba(2, 132, 199, 0.55);
+            background: rgba(224, 242, 254, 0.95);
+            color: #075985;
+        }
+        html.theme-day .resource-ed2k-file-row:hover { background: rgba(241, 245, 249, 0.8); }
+        html.theme-day .resource-ed2k-file-name,
+        html.theme-day .resource-ed2k-check-all,
+        html.theme-day .resource-ed2k-folder-toggle { color: #334155; }
+        html.theme-day .resource-ed2k-folder-input {
+            border-color: #cbd5e1;
+            background: #fff;
+            color: #0f172a;
+        }
+
+        @media (max-width: 640px) {
+            .resource-ed2k-section-head { align-items: flex-start; }
+            .resource-ed2k-file-header { display: none; }
+            .resource-ed2k-file-list { max-height: min(48vh, 390px); }
+            .resource-ed2k-file-row {
+                grid-template-columns: minmax(0, 1fr);
+                gap: 0.25rem;
+                padding: 0.72rem 0.2rem;
+            }
+            .resource-ed2k-file-size {
+                padding-left: 1.9rem;
+                text-align: left;
+            }
+            .resource-ed2k-title-token {
+                min-width: 36px;
+                min-height: 36px;
+            }
+            .resource-ed2k-title-actions > * { flex: 1; }
+        }

@@ -1,3 +1,331 @@
+        function createEmptyResourceEd2kState(requestToken = 0) {
+            return {
+                active: false,
+                loading: false,
+                error: '',
+                requestToken,
+                sourceUrl: '',
+                pageTitle: '',
+                titleText: '',
+                titleTokens: [],
+                selectedTitleIndexes: [],
+                titleExpanded: true,
+                items: [],
+                selectedItemIds: [],
+                createFolder: true,
+                folderName: '',
+            };
+        }
+
+        function resetResourceEd2kState() {
+            const nextToken = Number(resourceEd2kState?.requestToken || 0) + 1;
+            resourceEd2kState = createEmptyResourceEd2kState(nextToken);
+            resourceEd2kTitleGesture = null;
+        }
+
+        function isResourceEd2kImportCandidate(item) {
+            const linkType = getEffectiveResourceLinkType(item);
+            const linkUrl = String(item?.link_url || '').trim();
+            return linkType === 'ed2k' || (linkType === 'link' && /^https?:\/\//i.test(linkUrl));
+        }
+
+        function isResourceEd2kReady() {
+            if (!isResourceEd2kImportActive() || resourceEd2kState.loading || resourceEd2kState.error) return false;
+            if (!Array.isArray(resourceEd2kState.selectedItemIds) || !resourceEd2kState.selectedItemIds.length) return false;
+            return resourceEd2kState.createFolder === false || !!String(resourceEd2kState.folderName || '').trim();
+        }
+
+        function formatResourceEd2kSize(value) {
+            let size = Number(value || 0);
+            if (!Number.isFinite(size) || size <= 0) return '--';
+            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+            let unitIndex = 0;
+            while (size >= 1024 && unitIndex < units.length - 1) {
+                size /= 1024;
+                unitIndex += 1;
+            }
+            const digits = unitIndex >= 3 ? 2 : (unitIndex >= 1 ? 1 : 0);
+            return `${size.toFixed(digits)} ${units[unitIndex]}`;
+        }
+
+        function applyResourceEd2kResolvedData(item, data) {
+            const items = Array.isArray(data?.items) ? data.items.filter(entry => entry && entry.link_url) : [];
+            const titleText = String(item?.title || data?.title || 'ED2K 资源').trim() || 'ED2K 资源';
+            resourceEd2kState.loading = false;
+            resourceEd2kState.error = '';
+            resourceEd2kState.pageTitle = String(data?.title || '').trim();
+            resourceEd2kState.titleText = titleText;
+            resourceEd2kState.titleTokens = window.ResourceEd2kImport?.tokenizeTitle(titleText) || [];
+            resourceEd2kState.selectedTitleIndexes = [];
+            resourceEd2kState.titleExpanded = true;
+            resourceEd2kState.items = items;
+            resourceEd2kState.selectedItemIds = items.map(entry => String(entry.id || entry.link_url));
+            resourceEd2kState.createFolder = true;
+            resourceEd2kState.folderName = '';
+            const folderNameInput = document.getElementById('resource-ed2k-folder-name');
+            const createFolderInput = document.getElementById('resource-ed2k-create-folder');
+            if (folderNameInput) folderNameInput.value = '';
+            if (createFolderInput) createFolderInput.checked = true;
+        }
+
+        async function initializeResourceEd2kImport(item) {
+            if (resourceModalMode !== 'import' || !isResourceEd2kImportCandidate(item)) return;
+            resetResourceEd2kState();
+            const requestToken = resourceEd2kState.requestToken;
+            const linkUrl = String(item?.link_url || '').trim();
+            resourceEd2kState.active = true;
+            resourceEd2kState.loading = true;
+            resourceEd2kState.sourceUrl = linkUrl;
+            renderResourceModalLayout(item);
+            try {
+                const linkType = getEffectiveResourceLinkType(item);
+                const data = linkType === 'ed2k'
+                    ? {
+                        title: String(item?.title || '').trim(),
+                        source_url: linkUrl,
+                        final_url: linkUrl,
+                        items: [window.ResourceEd2kImport.parseEd2kLink(linkUrl)],
+                    }
+                    : await window.MediaHubApi.postJson('/resource/ed2k/resolve', {
+                        url: linkUrl,
+                        resource_title: String(item?.title || '').trim(),
+                    });
+                if (requestToken !== resourceEd2kState.requestToken || selectedResourceItem !== item) return;
+                applyResourceEd2kResolvedData(item, data);
+            } catch (error) {
+                if (requestToken !== resourceEd2kState.requestToken || selectedResourceItem !== item) return;
+                resourceEd2kState.loading = false;
+                resourceEd2kState.error = String(error?.message || '资源外链解析失败').trim() || '资源外链解析失败';
+            }
+            syncResourceMonitorTaskOptions(document.getElementById('resource_job_savepath')?.value || '');
+            renderResourceModalLayout(item);
+        }
+
+        function renderResourceEd2kTitleTokens() {
+            const container = document.getElementById('resource-ed2k-title-tokens');
+            if (!container) return;
+            const selected = new Set(resourceEd2kState.selectedTitleIndexes || []);
+            container.innerHTML = (resourceEd2kState.titleTokens || []).map((token, index) => `
+                <button
+                    type="button"
+                    class="resource-ed2k-title-token ${selected.has(index) ? 'is-selected' : ''}"
+                    data-ed2k-title-index="${index}"
+                    role="option"
+                    aria-selected="${selected.has(index) ? 'true' : 'false'}"
+                    onpointerdown="beginResourceEd2kTitleSelection(event, ${index})"
+                    onpointerenter="continueResourceEd2kTitleSelection(event, ${index})"
+                >${escapeHtml(token.text)}</button>
+            `).join('');
+            const doneBtn = document.getElementById('resource-ed2k-title-done');
+            if (doneBtn) doneBtn.disabled = !(resourceEd2kState.selectedTitleIndexes || []).length;
+        }
+
+        function syncResourceEd2kSubmitButton() {
+            if (!isResourceEd2kImportActive()) return;
+            const submitBtn = document.getElementById('resource-submit-btn');
+            if (!submitBtn) return;
+            const canSubmit = isLinkTypeCookieConfigured('ed2k') && isResourceEd2kReady() && !resourceSubmitBusy;
+            submitBtn.disabled = !canSubmit;
+            submitBtn.className = canSubmit
+                ? 'resource-import-submit-btn'
+                : 'resource-import-submit-btn resource-import-submit-btn-disabled';
+            if (resourceSubmitBusy) {
+                submitBtn.textContent = '正在创建保存任务...';
+                return;
+            }
+            const selectedCount = Array.isArray(resourceEd2kState.selectedItemIds)
+                ? resourceEd2kState.selectedItemIds.length
+                : 0;
+            submitBtn.textContent = resourceEd2kState.loading ? '正在解析资源外链...' : `保存 ${selectedCount} 个文件`;
+        }
+
+        function syncResourceEd2kFileSelectionControls() {
+            const selectedIds = new Set(resourceEd2kState.selectedItemIds || []);
+            document.querySelectorAll('#resource-ed2k-file-list [data-ed2k-file-index]').forEach(input => {
+                const entry = resourceEd2kState.items?.[Number(input.dataset.ed2kFileIndex)];
+                input.checked = !!entry && selectedIds.has(String(entry.id || entry.link_url));
+            });
+            const checkAll = document.getElementById('resource-ed2k-check-all');
+            if (checkAll) {
+                checkAll.checked = !!resourceEd2kState.items.length && selectedIds.size === resourceEd2kState.items.length;
+                checkAll.indeterminate = selectedIds.size > 0 && selectedIds.size < resourceEd2kState.items.length;
+            }
+        }
+
+        function syncResourceEd2kFolderControls() {
+            const createFolderInput = document.getElementById('resource-ed2k-create-folder');
+            const folderNameInput = document.getElementById('resource-ed2k-folder-name');
+            const reselectBtn = document.querySelector('.resource-ed2k-reselect-btn');
+            if (createFolderInput) createFolderInput.checked = resourceEd2kState.createFolder !== false;
+            if (folderNameInput) {
+                if (document.activeElement !== folderNameInput && folderNameInput.value !== resourceEd2kState.folderName) {
+                    folderNameInput.value = resourceEd2kState.folderName || '';
+                }
+                folderNameInput.disabled = resourceEd2kState.createFolder === false;
+            }
+            if (reselectBtn) reselectBtn.disabled = resourceEd2kState.createFolder === false || !resourceEd2kState.titleTokens.length;
+        }
+
+        function renderResourceEd2kImport() {
+            const card = document.getElementById('resource-ed2k-card');
+            const folderSection = document.getElementById('resource-ed2k-folder-section');
+            if (!card || !folderSection) return;
+            const active = isResourceEd2kImportActive();
+            card.classList.toggle('hidden', !active);
+            folderSection.classList.toggle('hidden', !active);
+            if (!active) return;
+
+            const statusEl = document.getElementById('resource-ed2k-status');
+            const titleSection = document.getElementById('resource-ed2k-title-section');
+            const filesSection = document.getElementById('resource-ed2k-files-section');
+            const ready = !resourceEd2kState.loading && !resourceEd2kState.error && resourceEd2kState.items.length > 0;
+            const showTitleSelector = window.ResourceEd2kImport.shouldShowTitleSelector(
+                active,
+                ready,
+                resourceEd2kState.createFolder !== false
+            );
+            statusEl.classList.toggle('hidden', ready);
+            if (resourceEd2kState.loading) {
+                statusEl.className = 'resource-ed2k-status is-loading';
+                statusEl.textContent = '正在解析资源外链...';
+            } else if (resourceEd2kState.error) {
+                statusEl.className = 'resource-ed2k-status is-error';
+                statusEl.innerHTML = `<span>${escapeHtml(resourceEd2kState.error)}</span><button type="button" onclick="retryResourceEd2kResolve()">重试</button>`;
+            }
+            titleSection.classList.toggle('hidden', !showTitleSelector);
+            filesSection.classList.toggle('hidden', !ready);
+
+            const titleSource = document.getElementById('resource-ed2k-title-source');
+            const selector = document.getElementById('resource-ed2k-title-selector');
+            const collapseBtn = document.getElementById('resource-ed2k-title-collapse');
+            const doneBtn = document.getElementById('resource-ed2k-title-done');
+            if (titleSource) titleSource.textContent = resourceEd2kState.titleText || resourceEd2kState.pageTitle || '--';
+            if (selector) selector.classList.toggle('hidden', !resourceEd2kState.titleExpanded);
+            if (collapseBtn) collapseBtn.textContent = resourceEd2kState.titleExpanded ? '收起' : '展开';
+            if (doneBtn) doneBtn.disabled = !(resourceEd2kState.selectedTitleIndexes || []).length;
+            renderResourceEd2kTitleTokens();
+
+            const selectedIds = new Set(resourceEd2kState.selectedItemIds || []);
+            const fileList = document.getElementById('resource-ed2k-file-list');
+            if (fileList) {
+                const previousScrollTop = fileList.scrollTop;
+                fileList.innerHTML = resourceEd2kState.items.map((entry, index) => {
+                    const identity = String(entry.id || entry.link_url);
+                    return `
+                        <label class="resource-ed2k-file-row">
+                            <span class="resource-ed2k-file-main">
+                                <input type="checkbox" class="ui-checkbox ui-checkbox-sm" data-ed2k-file-index="${index}" ${selectedIds.has(identity) ? 'checked' : ''} onchange="setResourceEd2kFileChecked(${index}, this.checked)">
+                                <span class="resource-ed2k-file-name">${escapeHtml(entry.filename || entry.title || '未命名文件')}</span>
+                            </span>
+                            <span class="resource-ed2k-file-size">${escapeHtml(formatResourceEd2kSize(entry.size_bytes))}</span>
+                        </label>
+                    `;
+                }).join('');
+                fileList.scrollTop = previousScrollTop;
+            }
+            syncResourceEd2kFileSelectionControls();
+            syncResourceEd2kFolderControls();
+            syncResourceEd2kSubmitButton();
+        }
+
+        function beginResourceEd2kTitleSelection(event, index) {
+            if (!isResourceEd2kImportActive()) return;
+            event.preventDefault();
+            const selected = resourceEd2kState.selectedTitleIndexes || [];
+            resourceEd2kTitleGesture = {
+                pointerId: event.pointerId,
+                startIndex: index,
+                baseSelection: selected.slice(),
+                shouldSelect: !selected.includes(index),
+            };
+            resourceEd2kState.selectedTitleIndexes = window.ResourceEd2kImport.applySelectionRange(
+                resourceEd2kTitleGesture.baseSelection,
+                index,
+                index,
+                resourceEd2kTitleGesture.shouldSelect
+            );
+            renderResourceEd2kTitleTokens();
+        }
+
+        function continueResourceEd2kTitleSelection(event, index) {
+            if (!resourceEd2kTitleGesture || resourceEd2kTitleGesture.pointerId !== event.pointerId) return;
+            resourceEd2kState.selectedTitleIndexes = window.ResourceEd2kImport.applySelectionRange(
+                resourceEd2kTitleGesture.baseSelection,
+                resourceEd2kTitleGesture.startIndex,
+                index,
+                resourceEd2kTitleGesture.shouldSelect
+            );
+            renderResourceEd2kTitleTokens();
+        }
+
+        function clearResourceEd2kTitleSelection() {
+            resourceEd2kState.selectedTitleIndexes = [];
+            renderResourceEd2kImport();
+        }
+
+        function toggleResourceEd2kTitleSelector() {
+            resourceEd2kState.titleExpanded = !resourceEd2kState.titleExpanded;
+            renderResourceEd2kImport();
+        }
+
+        function completeResourceEd2kTitleSelection() {
+            const folderName = window.ResourceEd2kImport.composeFolderName(
+                resourceEd2kState.titleTokens,
+                resourceEd2kState.selectedTitleIndexes
+            );
+            if (!folderName) return showToast('请先选择文件夹标题文字', { tone: 'warn', duration: 2400, placement: 'top-center' });
+            resourceEd2kState.folderName = folderName;
+            resourceEd2kState.titleExpanded = false;
+            syncResourceMonitorTaskOptions(document.getElementById('resource_job_savepath')?.value || '');
+            renderResourceModalLayout(selectedResourceItem);
+        }
+
+        function reopenResourceEd2kTitleSelector() {
+            resourceEd2kState.titleExpanded = true;
+            renderResourceEd2kImport();
+            document.getElementById('resource-ed2k-title-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        function updateResourceEd2kFolderName(value) {
+            resourceEd2kState.folderName = String(value || '');
+            syncResourceMonitorTaskOptions(document.getElementById('resource_job_savepath')?.value || '');
+            syncResourceEd2kSubmitButton();
+        }
+
+        function setResourceEd2kCreateFolder(checked) {
+            resourceEd2kState.createFolder = !!checked;
+            syncResourceMonitorTaskOptions(document.getElementById('resource_job_savepath')?.value || '');
+            renderResourceEd2kImport();
+        }
+
+        function setResourceEd2kFileChecked(index, checked) {
+            const entry = resourceEd2kState.items?.[Number(index)];
+            if (!entry) return;
+            const identity = String(entry.id || entry.link_url);
+            const selected = new Set(resourceEd2kState.selectedItemIds || []);
+            if (checked) selected.add(identity);
+            else selected.delete(identity);
+            resourceEd2kState.selectedItemIds = Array.from(selected);
+            syncResourceEd2kFileSelectionControls();
+            renderResourceImportBehaviorHint(document.getElementById('resource_job_savepath')?.value || '');
+            renderResourceImportSummary();
+            syncResourceEd2kSubmitButton();
+        }
+
+        function setAllResourceEd2kFilesChecked(checked) {
+            resourceEd2kState.selectedItemIds = checked
+                ? resourceEd2kState.items.map(entry => String(entry.id || entry.link_url))
+                : [];
+            syncResourceEd2kFileSelectionControls();
+            renderResourceImportBehaviorHint(document.getElementById('resource_job_savepath')?.value || '');
+            renderResourceImportSummary();
+            syncResourceEd2kSubmitButton();
+        }
+
+        function retryResourceEd2kResolve() {
+            if (selectedResourceItem) initializeResourceEd2kImport(selectedResourceItem);
+        }
+
         function buildResourceImportLinkActions(item) {
             const actions = [];
             const messageUrl = String(item?.message_url || '').trim();
@@ -31,6 +359,7 @@
             const closeBtn = document.getElementById('resource-close-btn');
             const importMode = resourceModalMode === 'import';
             const batchMode = importMode && isResourceBatchImportMode();
+            const ed2kMode = importMode && (isResourceEd2kImportCandidate(item) || isResourceEd2kImportActive());
             const batchCount = batchMode ? getResourceBatchMagnetItems().length : 0;
             if (!titleEl || !detailGrid || !rawCard || !savePanel || !saveHintEl || !footer || !submitBtn || !closeBtn) return;
 
@@ -42,7 +371,9 @@
             syncResourceProviderUI();
             renderResourceFavoriteDirs();
 
-            titleEl.innerText = importMode ? (batchMode ? '批量导入资源' : '导入资源') : '资源详情';
+            titleEl.innerText = importMode
+                ? (ed2kMode ? '保存 ED2K 资源' : (batchMode ? '批量导入资源' : '导入资源'))
+                : '资源详情';
             detailGrid.className = importMode ? 'resource-import-layout' : 'grid grid-cols-1 gap-4';
             renderResourceImportStepper(item, importMode, resourceSubmitBusy);
             rawCard.classList.toggle('hidden', importMode);
@@ -50,7 +381,9 @@
             closeBtn.innerText = importMode ? '取消' : '关闭';
 
             const canOpenImport = canOpenResourceImport(item);
-            const canSubmitNow = canImportResource(item);
+            const canSubmitNow = ed2kMode
+                ? (isLinkTypeCookieConfigured('ed2k') && isResourceEd2kReady())
+                : canImportResource(item);
             const canSubmit = canSubmitNow && !resourceSubmitBusy;
             const showPrimaryAction = importMode ? true : canOpenImport;
             footer.className = showPrimaryAction
@@ -72,7 +405,14 @@
                     : 'resource-import-submit-btn resource-import-submit-btn-disabled';
             }
             if (importMode && resourceSubmitBusy) {
-                submitBtn.innerText = batchMode ? `批量提交中（${batchCount} 条）...` : '提交中...';
+                submitBtn.innerText = ed2kMode
+                    ? '正在创建保存任务...'
+                    : (batchMode ? `批量提交中（${batchCount} 条）...` : '提交中...');
+            } else if (importMode && ed2kMode) {
+                const selectedCount = Array.isArray(resourceEd2kState.selectedItemIds)
+                    ? resourceEd2kState.selectedItemIds.length
+                    : 0;
+                submitBtn.innerText = resourceEd2kState.loading ? '正在解析资源外链...' : `保存 ${selectedCount} 个文件`;
             } else if (importMode && batchMode) {
                 submitBtn.innerText = `批量下载到 ${currentProviderLabel}（${batchCount} 条）`;
             } else {
@@ -80,6 +420,7 @@
             }
 
             if (!importMode) {
+                renderResourceEd2kImport();
                 saveHintEl.classList.add('hidden');
                 saveHintEl.innerHTML = '';
                 return;
@@ -117,10 +458,12 @@
             renderResourceImportSummary();
             syncResourceProviderUI();
             renderResourceFavoriteDirs();
+            renderResourceEd2kImport();
         }
 
         function openResourceItemModal(item, mode = 'detail') {
             if (!item) return;
+            resetResourceEd2kState();
             selectedResourceId = Number(item?.id || 0);
             selectedResourceItem = item;
             resourceModalMode = mode === 'import' ? 'import' : 'detail';
@@ -180,6 +523,9 @@
             } else if (resourceModalMode === 'import' && isCurrentResource115Share() && isLinkTypeCookieConfigured(resourceModalLinkType)) {
                 loadResourceShareBranch(selectedResourceId, '0', { resetSelection: true });
             }
+            if (resourceModalMode === 'import' && isResourceEd2kImportCandidate(item)) {
+                initializeResourceEd2kImport(item);
+            }
         }
 
         function openResourceModal(resourceId, mode = 'detail') {
@@ -203,6 +549,7 @@
             selectedResourceItem = null;
             resourceModalMode = 'detail';
             resourceModalLinkType = '';
+            resetResourceEd2kState();
             setResourceBatchImportItems([]);
             resetResourceShareState();
             hideLockedModal('resource-import-modal');
@@ -321,6 +668,55 @@
                     document.getElementById('resource_job_refresh_delay_seconds').value,
                     0
                 );
+                if (isResourceEd2kImportActive()) {
+                    if (!isResourceEd2kReady()) {
+                        const message = resourceEd2kState.error
+                            ? '资源外链解析失败，请重试'
+                            : (!resourceEd2kState.selectedItemIds.length ? '请至少选择一个 ED2K 文件' : '请填写新建文件夹名称');
+                        showToast(message, { tone: 'warn', duration: 2800, placement: 'top-center' });
+                        return;
+                    }
+                    const selectedIds = new Set(resourceEd2kState.selectedItemIds || []);
+                    const selectedItems = resourceEd2kState.items.filter(entry => selectedIds.has(String(entry.id || entry.link_url)));
+                    const folderName = String(resourceEd2kState.folderName || '').trim();
+                    let data = {};
+                    try {
+                        data = await window.MediaHubApi.postJson('/resource/ed2k/jobs/create-batch', {
+                            items: selectedItems.map(entry => ({ link_url: entry.link_url })),
+                            parent_savepath: savepath,
+                            parent_folder_id: folderId,
+                            create_folder: resourceEd2kState.createFolder !== false,
+                            folder_name: folderName,
+                            refresh_delay_seconds: refreshDelaySeconds,
+                            auto_refresh: !!((window.providerMeta || []).find(meta => meta.name === '115')?.supports_monitor),
+                            source_url: resourceEd2kState.sourceUrl || selectedResourceItem?.link_url || '',
+                            resource_title: String(selectedResourceItem?.title || '').trim(),
+                            page_title: resourceEd2kState.pageTitle,
+                        });
+                    } catch (error) {
+                        showToast(`提交失败：${error?.message || '网络请求失败'}`, { tone: 'error', duration: 3400, placement: 'top-center' });
+                        return;
+                    }
+                    if (!data?.ok) {
+                        showToast(`提交失败：${data?.msg || '请稍后重试'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
+                        return;
+                    }
+                    rememberResourceRefreshDelaySeconds(refreshDelaySeconds);
+                    closeResourceJobModal();
+                    releaseResourceSubmitLock(submitLockToken, { render: false });
+                    refreshResourceJobsAfterSubmit();
+                    const taskCount = Number(data.item_count || selectedItems.length || 0);
+                    const targetPath = String(data.savepath || '').trim();
+                    const monitorTail = data.monitor_task_name
+                        ? (data.auto_refresh ? `，保存后会自动触发“${data.monitor_task_name}”` : `，已匹配“${data.monitor_task_name}”`)
+                        : '，当前目录不会自动生成 strm';
+                    showToast(`已创建 ${taskCount} 个保存任务${targetPath ? `，目标：${targetPath}` : ''}${monitorTail}`, {
+                        tone: 'success',
+                        duration: 3800,
+                        placement: 'top-center'
+                    });
+                    return;
+                }
                 if (batchMode) {
                     if (!batchItems.length) {
                         showToast('批量导入队列为空，请重新粘贴磁力链接后再试', { tone: 'warn', duration: 3200, placement: 'top-center' });
@@ -689,6 +1085,23 @@
             closeResourceFolderModal();
         }
 
+        if (!window.__resourceEd2kPointerHandlersBound) {
+            window.__resourceEd2kPointerHandlersBound = true;
+            document.addEventListener('pointermove', (event) => {
+                if (!resourceEd2kTitleGesture || resourceEd2kTitleGesture.pointerId !== event.pointerId) return;
+                const target = document.elementFromPoint(event.clientX, event.clientY)?.closest?.('[data-ed2k-title-index]');
+                if (!target) return;
+                continueResourceEd2kTitleSelection(event, Number(target.dataset.ed2kTitleIndex));
+            }, { passive: true });
+            const endGesture = (event) => {
+                if (resourceEd2kTitleGesture && resourceEd2kTitleGesture.pointerId === event.pointerId) {
+                    resourceEd2kTitleGesture = null;
+                }
+            };
+            document.addEventListener('pointerup', endGesture, { passive: true });
+            document.addEventListener('pointercancel', endGesture, { passive: true });
+        }
+
         Object.assign(window, {
             openResourceModal,
             openResourceDetailModal,
@@ -706,4 +1119,15 @@
             openResourceFolderChild,
             createResourceFolderInCurrent,
             selectCurrentResourceFolder,
+            beginResourceEd2kTitleSelection,
+            clearResourceEd2kTitleSelection,
+            completeResourceEd2kTitleSelection,
+            continueResourceEd2kTitleSelection,
+            reopenResourceEd2kTitleSelector,
+            retryResourceEd2kResolve,
+            setAllResourceEd2kFilesChecked,
+            setResourceEd2kCreateFolder,
+            setResourceEd2kFileChecked,
+            toggleResourceEd2kTitleSelector,
+            updateResourceEd2kFolderName,
         });

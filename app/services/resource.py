@@ -10,6 +10,28 @@ class ResourceJobCancelledError(RuntimeError):
     pass
 
 
+RESOURCE_OFFLINE_LINK_TYPES = frozenset(("magnet", "ed2k"))
+
+
+def is_resource_offline_link_type(link_type: Any) -> bool:
+    return str(link_type or "").strip().lower() in RESOURCE_OFFLINE_LINK_TYPES
+
+
+def _get_resource_offline_provider(job: Dict[str, Any], cfg: Dict[str, Any]):
+    extra = job.get("extra") if isinstance(job.get("extra"), dict) else safe_json_loads(job.get("extra_json"), {})
+    provider_name = str(
+        extra.get("offline_provider", "")
+        or extra.get("magnet_provider", "")
+        or normalize_magnet_provider((cfg or {}).get("default_magnet_provider", "115"))
+    ).strip().lower()
+    provider = get_provider_or_none(provider_name)
+    if not provider:
+        raise RuntimeError("离线下载网盘配置无效")
+    if not provider.supports_offline:
+        raise RuntimeError(f"{provider.label} 暂不支持离线下载")
+    return provider
+
+
 def _mark_resource_job_failed(job_id: int, resource_id: int, detail: str) -> None:
     fail_detail = str(detail or "资源导入失败").strip() or "资源导入失败"
     update_resource_job(job_id, status="failed", status_detail=fail_detail, finished_at=now_text())
@@ -26,16 +48,28 @@ def _build_retry_resource_from_job(job: Dict[str, Any]) -> Dict[str, Any]:
     if resource and str(resource.get("link_url", "")).strip():
         return resource
     extra = payload.get("extra") if isinstance(payload.get("extra"), dict) else {}
+    snapshot = payload.get("_snapshot") if isinstance(payload.get("_snapshot"), dict) else {}
+    source_extra = {}
+    for key in ("source_url", "source_resource_title", "source_page_title"):
+        value = str(snapshot.get(key, "") or extra.get(key, "") or "").strip()
+        if value:
+            source_extra[key] = value
     return {
         "id": resource_id,
         "title": str(payload.get("title", "") or "").strip() or f"资源#{resource_id or '--'}",
         "link_url": str(payload.get("link_url", "") or "").strip(),
         "link_type": str(payload.get("link_type", "") or "").strip(),
-        "message_url": str(payload.get("message_url", "") or "").strip(),
+        "message_url": str(
+            payload.get("message_url", "")
+            or snapshot.get("message_url", "")
+            or snapshot.get("source_url", "")
+            or ""
+        ).strip(),
         "source_post_id": str(payload.get("source_post_id", "") or "").strip(),
         "extra": {
             "source_post_id": str(payload.get("source_post_id", "") or "").strip(),
             "receive_code": str(extra.get("receive_code", "") or "").strip(),
+            **source_extra,
         },
     }
 
@@ -159,7 +193,18 @@ async def retry_resource_job(job_id: int, reason: str = "manual") -> Dict[str, A
         "auto_refresh": bool(job.get("auto_refresh")),
         "extra": {},
     }
-    for key in ("job_source", "webhook_task_name", "refresh_target_type"):
+    for key in (
+        "job_source",
+        "webhook_task_name",
+        "refresh_target_type",
+        "offline_provider",
+        "offline_provider_label",
+        "magnet_provider",
+        "magnet_provider_label",
+        "source_url",
+        "source_resource_title",
+        "source_page_title",
+    ):
         value = str(job_extra.get(key, "") or "").strip()
         if value:
             payload["extra"][key] = value
@@ -182,6 +227,55 @@ async def retry_resource_job(job_id: int, reason: str = "manual") -> Dict[str, A
     resource_job_cancel_requested.discard(new_job_id)
     submit_background(run_resource_job, new_job_id, label="resource-job-retry")
     return {"ok": True, "job_id": new_job_id}
+
+
+async def run_offline_resource_job_batch(
+    job_ids: List[int],
+    *,
+    provider_name: str,
+    savepath: str,
+    create_folder: bool,
+    folder_id: str = "",
+) -> None:
+    normalized_job_ids = [max(0, int(job_id or 0)) for job_id in (job_ids or [])]
+    normalized_job_ids = [job_id for job_id in normalized_job_ids if job_id > 0]
+    if not normalized_job_ids:
+        return
+    try:
+        cfg = get_config()
+        provider = get_provider_or_none(str(provider_name or "").strip().lower())
+        if not provider or not provider.supports_offline:
+            raise RuntimeError("离线下载网盘配置无效")
+        cookie = provider.get_cookie(cfg)
+        if not cookie:
+            raise RuntimeError(f"请先在参数配置中填写 {provider.label} 认证信息")
+
+        target_folder_id = str(folder_id or "").strip()
+        if not target_folder_id:
+            prepare_folder = provider.ensure_folder_id_by_path if create_folder else provider.resolve_folder_id_by_path
+            target_folder_id = await asyncio.wait_for(
+                asyncio.to_thread(prepare_folder, cookie, normalize_relative_path(savepath)),
+                timeout=min(max(10, int(RESOURCE_IMPORT_TIMEOUT_SECONDS or 90)), 60),
+            )
+            target_folder_id = str(target_folder_id or "").strip()
+        if not target_folder_id:
+            raise RuntimeError("未获取到目标文件夹 ID")
+
+        for job_id in normalized_job_ids:
+            update_resource_job(
+                job_id,
+                folder_id=target_folder_id,
+                status="pending",
+                status_detail=f"目标目录已准备，等待提交到 {provider.label}",
+            )
+        for job_id in normalized_job_ids:
+            await run_resource_job(job_id)
+    except Exception as exc:
+        detail = f"批量目标目录准备失败：{exc}"
+        for job_id in normalized_job_ids:
+            job = get_resource_job(job_id, include_private=True)
+            resource_id = max(0, int((job or {}).get("resource_id", 0) or 0))
+            _mark_resource_job_failed(job_id, resource_id, detail)
 
 
 async def trigger_resource_job_refresh(job_id: int, reason: str = "manual") -> Dict[str, Any]:
@@ -283,33 +377,21 @@ async def run_resource_job(job_id: int) -> None:
         link_type = resolve_resource_link_type(job.get("link_type", ""), job.get("link_url", ""))
         share_provider = _get_share_receive_provider_by_link_type(link_type)
         is_share_receive_link = bool(share_provider)
-        if link_type != "magnet" and not is_share_receive_link:
-            raise RuntimeError("当前仅支持 magnet 下载和已启用网盘的分享转存")
+        is_offline_link = is_resource_offline_link_type(link_type)
+        if not is_offline_link and not is_share_receive_link:
+            raise RuntimeError("当前仅支持离线下载和已启用网盘的分享转存")
         cfg = get_config()
         provider_cookie = ""
         provider_label = "115"
-        mp = None  # provider instance for magnet offline tasks
+        mp = None  # provider instance for offline tasks
         if is_share_receive_link:
             provider_label = str(getattr(share_provider, "label", "") or share_provider.name).strip()
             enabled_map = cfg.get("provider_enabled", {}) if isinstance(cfg.get("provider_enabled", {}), dict) else {}
             if not bool(enabled_map.get(share_provider.name, share_provider.name in ("115", "quark"))):
                 raise RuntimeError(f"{provider_label} 未启用")
             provider_cookie = share_provider.get_cookie(cfg)
-        elif link_type == "magnet":
-            raw_magnet_provider = str((job.get("extra") or {}).get("magnet_provider", "") or "").strip().lower()
-            if raw_magnet_provider:
-                mp = get_provider_or_none(raw_magnet_provider)
-                if not mp:
-                    raise RuntimeError("离线下载网盘配置无效")
-                if not mp.supports_offline:
-                    raise RuntimeError(f"{mp.label} 暂不支持 magnet 离线下载")
-            else:
-                magnet_provider_name = normalize_magnet_provider(cfg.get("default_magnet_provider", "115"))
-                mp = get_provider_or_none(magnet_provider_name)
-                if not mp:
-                    raise RuntimeError("离线下载网盘配置无效")
-                if not mp.supports_offline:
-                    raise RuntimeError("所选网盘不支持离线下载")
+        elif is_offline_link:
+            mp = _get_resource_offline_provider(job, cfg)
             provider_cookie = mp.get_cookie(cfg)
             provider_label = mp.label
             if not provider_cookie:
@@ -326,7 +408,7 @@ async def run_resource_job(job_id: int) -> None:
                 started_at=now_text(),
             )
             try:
-                if link_type == "magnet":
+                if is_offline_link:
                     folder_id = await asyncio.wait_for(
                         asyncio.to_thread(
                             mp.resolve_folder_id_by_path,
@@ -364,7 +446,7 @@ async def run_resource_job(job_id: int) -> None:
                 conn.commit()
         ensure_not_cancelled("提交前")
 
-        if link_type == "magnet":
+        if is_offline_link:
             try:
                 response = await asyncio.wait_for(
                     asyncio.to_thread(

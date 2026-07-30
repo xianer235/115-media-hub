@@ -124,6 +124,9 @@ def build_resource_job_snapshot(resource: Dict[str, Any], link_type: str = "", r
     snapshot = {
         "message_url": str(resource.get("message_url", "") or "").strip(),
         "source_post_id": str((extra or {}).get("source_post_id", "") or "").strip(),
+        "source_url": str((extra or {}).get("source_url", "") or resource.get("message_url", "") or "").strip(),
+        "source_resource_title": str((extra or {}).get("source_resource_title", "") or "").strip(),
+        "source_page_title": str((extra or {}).get("source_page_title", "") or "").strip(),
     }
     resolved_link_type = resolve_resource_link_type(link_type or resource.get("link_type", ""), resource.get("link_url", ""))
     if resolved_link_type == "115share":
@@ -216,6 +219,9 @@ def serialize_resource_job_row(row: Optional[sqlite3.Row], include_private: bool
     data["snapshot"] = {
         "message_url": str(snapshot.get("message_url", "") or "").strip(),
         "source_post_id": str(snapshot.get("source_post_id", "") or "").strip(),
+        "source_url": str(snapshot.get("source_url", "") or "").strip(),
+        "source_resource_title": str(snapshot.get("source_resource_title", "") or "").strip(),
+        "source_page_title": str(snapshot.get("source_page_title", "") or "").strip(),
     }
     if include_private:
         data["_snapshot"] = snapshot

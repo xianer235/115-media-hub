@@ -3028,7 +3028,7 @@ def resource_item_matches_provider_filter(item: Dict[str, Any], provider_filter:
     payload = item if isinstance(item, dict) else {}
     link_type = resolve_resource_link_type(payload.get("link_type", ""), payload.get("link_url", ""))
     if normalized_filter == "magnet":
-        return link_type == "magnet"
+        return link_type in ("magnet", "ed2k")
     p = _get_provider_or_none(normalized_filter)
     if p:
         return link_type == p.link_type
@@ -6721,6 +6721,7 @@ from .resource_jobs import (
     count_resource_jobs,
     count_resource_jobs_by_status,
     create_resource_job,
+    create_resource_jobs,
     delete_resource_item,
     find_existing_resource_job,
     get_resource_job,

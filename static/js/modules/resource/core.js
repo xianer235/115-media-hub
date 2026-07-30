@@ -244,6 +244,7 @@
         function getResourceProviderForLinkType(linkType) {
             const normalized = String(linkType || '').trim().toLowerCase();
             if (normalized === 'magnet') return getResourceSelectedMagnetProvider();
+            if (normalized === 'ed2k' || normalized === 'link') return '115';
             return getResourceProviderByLinkType(normalized);
         }
 
@@ -405,7 +406,7 @@
 
         function getResourceProviderFilterLabel(value = resourceProviderFilter) {
             const normalized = normalizeResourceProviderFilter(value);
-            if (normalized === 'magnet') return '磁力';
+            if (normalized === 'magnet') return '离线';
             const p = getProviderByName(normalized);
             if (p) return p.label;
             return '全部';
@@ -415,7 +416,7 @@
             const normalized = normalizeResourceProviderFilter(providerFilter);
             if (normalized === 'all') return true;
             const linkType = getEffectiveResourceLinkType(item);
-            if (normalized === 'magnet') return linkType === 'magnet';
+            if (normalized === 'magnet') return linkType === 'magnet' || linkType === 'ed2k';
             const p = getProviderByName(normalized);
             if (p) return linkType === p.link_type;
             return false;
@@ -1170,7 +1171,13 @@
 
         function canOpenResourceImport(item) {
             const linkType = getEffectiveResourceLinkType(item);
-            return !!String(item?.link_url || '').trim() && (linkType === 'magnet' || isResourceShareLinkType(linkType));
+            const linkUrl = String(item?.link_url || '').trim();
+            return !!linkUrl && (
+                linkType === 'magnet'
+                || linkType === 'ed2k'
+                || (linkType === 'link' && /^https?:\/\//i.test(linkUrl))
+                || isResourceShareLinkType(linkType)
+            );
         }
 
         function canImportResource(item) {
@@ -1182,7 +1189,7 @@
             const linkType = getEffectiveResourceLinkType(item);
             if (!String(item?.link_url || '').trim()) return '暂无可导入链接';
             if (isResourceShareLinkType(linkType)) return '转存';
-            if (linkType === 'magnet') {
+            if (linkType === 'magnet' || linkType === 'ed2k' || linkType === 'link') {
                 return '下载';
             }
             return '当前不可导入';
@@ -1781,10 +1788,29 @@
             };
         }
 
+        function isResourceEd2kImportActive() {
+            return resourceModalMode === 'import' && !!resourceEd2kState?.active;
+        }
+
+        function getResourceImportTargetSavepath(savepath = '') {
+            const parentSavepath = normalizeRelativePathInput(savepath);
+            if (!isResourceEd2kImportActive()) return parentSavepath;
+            const createFolder = resourceEd2kState.createFolder !== false;
+            const folderName = String(
+                document.getElementById('resource-ed2k-folder-name')?.value
+                || resourceEd2kState.folderName
+                || ''
+            ).trim();
+            if (window.ResourceEd2kImport?.buildTargetSavepath) {
+                return window.ResourceEd2kImport.buildTargetSavepath(parentSavepath, folderName, createFolder);
+            }
+            return createFolder ? joinRelativePathInput(parentSavepath, folderName) : parentSavepath;
+        }
+
         function syncResourceSavepathPreview(savepath = '') {
             const previewEl = document.getElementById('resource_job_savepath_preview');
             if (!previewEl) return;
-            const normalizedSavepath = normalizeRelativePathInput(savepath);
+            const normalizedSavepath = getResourceImportTargetSavepath(savepath);
             if (normalizedSavepath) {
                 previewEl.textContent = normalizedSavepath;
             } else {
@@ -1796,6 +1822,12 @@
             const linkType = String(resourceModalLinkType || '').trim().toLowerCase();
             const provider = getResourceProviderByLinkType(linkType);
             const providerLabel = getResourceProviderLabel(provider);
+            if (isResourceEd2kImportActive()) {
+                const selectedCount = Array.isArray(resourceEd2kState.selectedItemIds)
+                    ? resourceEd2kState.selectedItemIds.length
+                    : 0;
+                return selectedCount ? `当前选择 ${selectedCount} 个 ED2K 文件。` : '当前未选择 ED2K 文件。';
+            }
             if (isResourceBatchImportMode()) {
                 const batchCount = getResourceBatchMagnetItems().length;
                 return `当前为批量模式，将按同一保存目录依次导入 ${batchCount} 条磁力链接。`;
@@ -1826,7 +1858,8 @@
                 return;
             }
 
-            const match = resolveResourceMonitorTaskMatch(savepath || document.getElementById('resource_job_savepath')?.value || '');
+            const parentSavepath = savepath || document.getElementById('resource_job_savepath')?.value || '';
+            const match = resolveResourceMonitorTaskMatch(getResourceImportTargetSavepath(parentSavepath));
             if (!match.savepath) {
                 hintEl.innerText = `请选择一个非根目录的${providerLabel}保存目录。`;
                 return;
@@ -1863,8 +1896,9 @@
                 return;
             }
 
-            const match = resolveResourceMonitorTaskMatch(savepath);
-            syncResourceSavepathPreview(match.savepath);
+            const targetSavepath = getResourceImportTargetSavepath(savepath);
+            const match = resolveResourceMonitorTaskMatch(targetSavepath);
+            syncResourceSavepathPreview(savepath);
 
             if (!match.savepath) {
                 hiddenInput.value = '';
@@ -1879,7 +1913,7 @@
                 displayInput.textContent = `${providerLabel}链路不绑定监控`;
                 delayInput.value = '0';
                 delayInput.disabled = true;
-                renderResourceImportBehaviorHint(match.savepath);
+                renderResourceImportBehaviorHint(savepath);
                 renderResourceImportSummary();
                 return;
             }
@@ -1893,7 +1927,7 @@
             }
             delayInput.disabled = false;
 
-            renderResourceImportBehaviorHint(match.savepath);
+            renderResourceImportBehaviorHint(savepath);
             renderResourceImportSummary();
         }
 
@@ -1913,6 +1947,13 @@
             const selectionState = getResourceShareSelectionState();
             const isShare = isCurrentResource115Share();
             let selectionText = '整条资源';
+
+            if (isResourceEd2kImportActive()) {
+                const selectedCount = Array.isArray(resourceEd2kState.selectedItemIds)
+                    ? resourceEd2kState.selectedItemIds.length
+                    : 0;
+                selectionText = resourceEd2kState.loading ? '解析中' : `${selectedCount} 个文件`;
+            }
 
             if (!isShare && isResourceBatchImportMode()) {
                 selectionText = `${getResourceBatchMagnetItems().length} 条磁力`;
@@ -3070,12 +3111,12 @@
             const raw = String(value || '').trim();
             if (!raw) return false;
             if (/magnet:\?/i.test(raw)) return true;
-            if (/ed2k:\/\/[^\s<>'"]+/i.test(raw)) return true;
+            if (/ed2k:\/\/\|file\|/i.test(raw)) return true;
             if (/(?:^|[\s(（【\[])(?:https?:\/\/)?(?:115cdn|115|anxia)\.com\/s\/[a-z0-9]+(?:\?[^\s<>'"]*)?/i.test(raw)) return true;
             const links = raw.match(/https?:\/\/[^\s<>'"]+/gi) || [];
             return links.some(link => {
                 const linkType = detectResourceLinkTypeByUrl(link);
-                return linkType !== 'unknown' && linkType !== 'link';
+                return linkType !== 'unknown';
             });
         }
 
@@ -3087,7 +3128,7 @@
             const importableItems = items
                 .filter(item => canOpenResourceImport(item))
                 .map(item => createTransientResourceItem(item));
-            if (!importableItems.length) throw new Error('未在文本中识别到可导入的 magnet 或已启用网盘分享链接');
+            if (!importableItems.length) throw new Error('未在文本中识别到可导入的离线链接、资源外链或已启用网盘分享链接');
 
             const magnetItems = importableItems.filter(item => getEffectiveResourceLinkType(item) === 'magnet');
             const hasShareItems = importableItems.some(item => isResourceShareLinkType(getEffectiveResourceLinkType(item)));

@@ -9,7 +9,11 @@ from .media_tags import format_media_tag_summary
 
 RESOURCE_MAGNET_REGEX = re.compile(r"magnet:\?xt=urn:btih:[A-Za-z0-9]{32,40}[^\s<>'\"]*", re.IGNORECASE)
 RESOURCE_MAGNET_HASH_REGEX = re.compile(r"xt=urn:btih:([A-Za-z0-9]{32,40})", re.IGNORECASE)
-RESOURCE_ED2K_REGEX = re.compile(r"ed2k://[^\s<>'\"]+", re.IGNORECASE)
+RESOURCE_ED2K_REGEX = re.compile(
+    r"ed2k://\|file\|[^\r\n|<>'\"]+\|\d+\|[a-f0-9]{32}\|"
+    r"(?:[^/|\r\n<>'\"][^|\r\n<>'\"]*\|)*/",
+    re.IGNORECASE,
+)
 RESOURCE_URL_REGEX = re.compile(r"https?://[^\s<>'\"]+", re.IGNORECASE)
 RESOURCE_115_SHARE_URL_REGEX = re.compile(
     r"(?:https?://)?(?:115cdn|115|anxia)\.com/s/[A-Za-z0-9]+(?:\?[^\s<>'\"#]*)?(?:#[A-Za-z0-9]{1,16})?",

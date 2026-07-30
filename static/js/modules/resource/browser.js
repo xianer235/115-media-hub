@@ -258,6 +258,9 @@
         };
 
         const importMode = ctx.resourceModalMode === 'import';
+        const showShareBrowser = typeof ctx.showResourceShareBrowser === 'boolean'
+            ? ctx.showResourceShareBrowser
+            : importMode;
         const isShare = ctx.isCurrentResource115Share();
         const providerLabel = ctx.getResourceProviderLabel(ctx.getCurrentResourceProvider());
         const selectionState = typeof window.getResourceShareSelectionState === 'function'
@@ -283,13 +286,13 @@
                 });
             }
         };
-        card.classList.toggle('hidden', !importMode);
+        card.classList.toggle('hidden', !showShareBrowser);
         if (selectedCountEl) {
-            selectedCountEl.classList.toggle('hidden', !importMode || !isShare);
+            selectedCountEl.classList.toggle('hidden', !showShareBrowser || !isShare);
             selectedCountEl.textContent = selectedLabel;
         }
         ctx.syncResourceShareReceiveCodeSection();
-        if (!importMode) {
+        if (!showShareBrowser) {
             ctx.renderResourceImportBehaviorHint();
             ctx.renderResourceImportSummary();
             return;

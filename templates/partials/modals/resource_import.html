@@ -33,6 +33,23 @@
                                     </div>
                                 </div>
                             </div>
+                            <div id="resource-ed2k-card" class="resource-detail-card resource-ed2k-card hidden">
+                                <div id="resource-ed2k-status" class="resource-ed2k-status hidden"></div>
+                                <section id="resource-ed2k-files-section" class="resource-ed2k-section hidden">
+                                    <div class="resource-ed2k-section-head">
+                                        <div class="text-sm font-black text-white">文件选择</div>
+                                        <label class="resource-ed2k-check-all">
+                                            <input id="resource-ed2k-check-all" type="checkbox" class="ui-checkbox ui-checkbox-sm" onchange="setAllResourceEd2kFilesChecked(this.checked)">
+                                            <span>全选</span>
+                                        </label>
+                                    </div>
+                                    <div class="resource-ed2k-file-header" aria-hidden="true">
+                                        <span>文件名</span>
+                                        <span>大小</span>
+                                    </div>
+                                    <div id="resource-ed2k-file-list" class="resource-ed2k-file-list"></div>
+                                </section>
+                            </div>
                             <div id="resource-import-raw-card" class="resource-detail-card">
                                 <div class="flex items-center justify-between gap-3 mb-3">
                                     <div>
@@ -110,6 +127,37 @@
                                             <div id="resource-favorite-dir-list" class="resource-favorite-dir-list"></div>
                                         </div>
                                         <input id="resource_job_folder_id" class="hidden" value="0">
+                                        <div id="resource-ed2k-folder-section" class="resource-ed2k-folder-section hidden">
+                                            <label class="resource-ed2k-folder-toggle">
+                                                <input id="resource-ed2k-create-folder" type="checkbox" class="ui-checkbox" checked onchange="setResourceEd2kCreateFolder(this.checked)">
+                                                <span>新建文件夹</span>
+                                            </label>
+                                            <section id="resource-ed2k-title-section" class="resource-ed2k-section resource-ed2k-folder-title-section hidden">
+                                                <div class="resource-ed2k-section-head">
+                                                    <div>
+                                                        <div class="text-sm font-black text-white">文件夹标题</div>
+                                                        <div id="resource-ed2k-title-source" class="resource-ed2k-title-source"></div>
+                                                    </div>
+                                                    <button id="resource-ed2k-title-collapse" type="button" class="resource-ed2k-quiet-btn" onclick="toggleResourceEd2kTitleSelector()">收起</button>
+                                                </div>
+                                                <div id="resource-ed2k-title-selector" class="resource-ed2k-title-selector">
+                                                    <div id="resource-ed2k-title-tokens" class="resource-ed2k-title-tokens" role="listbox" aria-label="文件夹标题选词"></div>
+                                                    <div class="resource-ed2k-title-actions">
+                                                        <button id="resource-ed2k-title-clear" type="button" class="resource-ed2k-quiet-btn" onclick="clearResourceEd2kTitleSelection()">清空</button>
+                                                        <button id="resource-ed2k-title-done" type="button" class="resource-ed2k-title-done" onclick="completeResourceEd2kTitleSelection()">完成选词</button>
+                                                    </div>
+                                                </div>
+                                            </section>
+                                            <div class="resource-ed2k-folder-input-row">
+                                                <input id="resource-ed2k-folder-name" class="resource-ed2k-folder-input" placeholder="文件夹名称" oninput="updateResourceEd2kFolderName(this.value)">
+                                                <button type="button" class="resource-ed2k-reselect-btn" onclick="reopenResourceEd2kTitleSelector()" title="重新选择标题文字" aria-label="重新选择标题文字">
+                                                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                                        <path d="M12 20h9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                                                        <path d="M16.5 3.5a2.12 2.12 0 013 3L8 18l-4 1 1-4L16.5 3.5z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                                                    </svg>
+                                                </button>
+                                            </div>
+                                        </div>
                                         <div class="resource-import-compact-meta">
                                             <div class="resource-import-compact-item">
                                                 <div class="resource-import-compact-label">提交路径</div>
