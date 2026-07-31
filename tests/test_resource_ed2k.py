@@ -12,6 +12,7 @@ from app.resource_ed2k import (
     resolve_ed2k_page,
 )
 from app.resource_linking import extract_resource_candidates, extract_resource_links
+from app.resource_tg import parse_telegram_posts_page
 from app.routes import resource as resource_routes
 
 
@@ -211,6 +212,37 @@ class ResourceEd2kLinkingRegressionTest(unittest.TestCase):
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0]["link_url"], page_url)
         self.assertEqual(candidates[0]["link_type"], "link")
+
+    def test_tg_channel_post_recognizes_direct_single_file_ed2k(self):
+        link = (
+            "ed2k://|file|寒战1994 (2026) - 2160p.WEB-DL.DV.H265.DTS."
+            "{tmdb-1499071}.mkv|28700476657|01aae290682a3cd7a041c0b0a4634ca2|/"
+        )
+        raw_text = "\n".join(
+            (
+                "🎬 电影：寒战1994 (2026)",
+                "🍿 TMDB ID: 1499071",
+                "🔗 链接:",
+                link,
+                "#华语电影",
+            )
+        )
+        html = (
+            '<div class="tgme_widget_message" data-post="movies/1">'
+            f'<div class="tgme_widget_message_text">{raw_text.replace(chr(10), "<br>")}</div>'
+            "</div>"
+        )
+
+        post = parse_telegram_posts_page(
+            html,
+            {"channel_id": "movies", "name": "电影频道"},
+            limit=10,
+        )["posts"][0]
+
+        self.assertEqual(post["link_url"], link)
+        self.assertEqual(post["link_type"], "ed2k")
+        self.assertEqual(post["title"], "🎬 电影：寒战1994 (2026)")
+        self.assertIn(link, post["extra"]["all_links"])
 
 
 class FakeJsonRequest:
