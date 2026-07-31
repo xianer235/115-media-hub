@@ -640,14 +640,14 @@ function renderSelection() {
     }
     const checkAll = $('scraper-check-all');
     if (checkAll) {
-        const selectable = state.entries;
+        const selectable = getDisplayEntries();
         const selectedInCurrent = selectable.filter(item => state.selected.has(item.id)).length;
         checkAll.checked = selectable.length > 0 && selectedInCurrent === selectable.length;
         checkAll.indeterminate = selectedInCurrent > 0 && selectedInCurrent < selectable.length;
         checkAll.disabled = state.loading || selectable.length <= 0;
     }
     const hasSelection = selectedEntries.length > 0;
-    const selectedInCurrent = state.entries.filter(item => state.selected.has(item.id)).length;
+    const selectedInCurrent = getDisplayEntries().filter(item => state.selected.has(item.id)).length;
     const renameButton = document.querySelector('[data-scraper-action="rename-selected"]');
     if (renameButton) {
         const canRename = supportsProviderOperation('rename') && selectedEntries.length === 1 && !hasPlan;
@@ -1035,15 +1035,19 @@ function syncFolderScopedControls() {
 
 function getDisplayEntries() {
     const manager = getFileManager();
+    const keyword = String(state.search || '').trim().toLowerCase();
+    const entries = keyword
+        ? state.entries.filter(entry => String(entry.name || '').toLowerCase().includes(keyword))
+        : state.entries;
     if (manager?.sortEntries) {
-        return manager.sortEntries(state.entries, state.entrySort, {
+        return manager.sortEntries(entries, state.entrySort, {
             foldersFirst: true,
             entryFilter: 'all',
         });
     }
     const sortKey = ['name', 'size', 'modified_at'].includes(state.entrySort?.key) ? state.entrySort.key : 'name';
     const direction = state.entrySort?.direction === 'desc' ? -1 : 1;
-    return state.entries.slice().sort((a, b) => {
+    return entries.slice().sort((a, b) => {
         if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
         let result = 0;
         if (sortKey === 'size') {
@@ -2098,10 +2102,11 @@ function setSelected(entryId, checked) {
 }
 
 function toggleAll(checked) {
+    const visibleEntries = getDisplayEntries();
     if (checked) {
-        state.entries.forEach(entry => state.selected.set(entry.id, entry));
+        visibleEntries.forEach(entry => state.selected.set(entry.id, entry));
     } else {
-        clearSelection();
+        visibleEntries.forEach(entry => state.selected.delete(entry.id));
     }
     invalidateSelectionContext();
     renderEntries();
@@ -2194,14 +2199,14 @@ function handleClick(event) {
     if (action === 'search') {
         state.search = String($('scraper-search-input')?.value || '').trim();
         closeToolPopovers();
-        void loadEntries();
+        renderEntries();
     }
     if (action === 'clear-search') {
         state.search = '';
         const input = $('scraper-search-input');
         if (input) input.value = '';
         closeToolPopovers();
-        void loadEntries({ keepSearch: false });
+        renderEntries();
     }
     if (action === 'create-folder') void createFolder();
     if (action === 'select-range') selectRangeBetweenChecked();
@@ -2322,7 +2327,8 @@ function bindEvents() {
     $('scraper-search-input')?.addEventListener('keydown', (event) => {
         if (event.key !== 'Enter' || event.isComposing) return;
         state.search = String(event.target.value || '').trim();
-        void loadEntries();
+        closeToolPopovers();
+        renderEntries();
     });
     $('scraper-new-folder-name')?.addEventListener('keydown', (event) => {
         if (event.key !== 'Enter' || event.isComposing) return;

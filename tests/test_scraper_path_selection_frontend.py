@@ -162,6 +162,27 @@ class ScraperPathSelectionIntegrationTest(unittest.TestCase):
         self.assertIn("apply-manual-episode", source)
         self.assertIn("clear-manual-episode", source)
 
+    def test_scraper_search_filters_loaded_entries_without_remote_reload(self):
+        source = SCRAPER_CORE_PATH.read_text(encoding="utf-8")
+        template = SCRAPER_TEMPLATE_PATH.read_text(encoding="utf-8")
+
+        display_start = source.index("function getDisplayEntries()")
+        display_end = source.index("\nfunction renderSortButton", display_start)
+        display_body = source[display_start:display_end]
+        self.assertIn("state.search", display_body)
+        self.assertIn("state.entries", display_body)
+
+        search_start = source.index("if (action === 'search')")
+        search_end = source.index("if (action === 'clear-search')", search_start)
+        clear_end = source.index("closeToolPopovers();", search_end) + len("closeToolPopovers();")
+        search_body = source[search_start:clear_end]
+        self.assertNotIn("loadEntries(", search_body)
+
+        keydown_start = source.index("$('scraper-search-input')?.addEventListener('keydown'")
+        keydown_end = source.index("});", keydown_start) + len("});")
+        self.assertNotIn("loadEntries(", source[keydown_start:keydown_end])
+        self.assertIn('placeholder="筛选已加载条目"', template)
+
 
 if __name__ == "__main__":
     unittest.main()
