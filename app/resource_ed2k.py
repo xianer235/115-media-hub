@@ -20,6 +20,32 @@ ED2K_PAGE_ALLOWED_CONTENT_TYPES = (
     "text/plain",
     "application/xhtml+xml",
 )
+ED2K_FOLDER_CHARACTER_REPLACEMENTS = str.maketrans(
+    {
+        "*": "＊",
+        "?": "？",
+        '"': "＂",
+        "<": "＜",
+        ">": "＞",
+        "|": "｜",
+    }
+)
+
+
+def _clean_ed2k_folder_name(value: Any) -> str:
+    cleaned = re.sub(r"[\x00-\x1f\x7f]+", "", str(value or ""))
+    cleaned = re.sub(r"[\\/]+", " ", cleaned)
+    cleaned = cleaned.translate(ED2K_FOLDER_CHARACTER_REPLACEMENTS)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def normalize_ed2k_folder_name(value: Any, fallback: Any = "") -> str:
+    cleaned = _clean_ed2k_folder_name(value)
+    if not cleaned or cleaned in (".", ".."):
+        cleaned = _clean_ed2k_folder_name(fallback)
+    if not cleaned or cleaned in (".", ".."):
+        return ""
+    return cleaned[:120]
 
 
 def parse_ed2k_link(value: Any) -> Dict[str, Any]:
@@ -251,6 +277,7 @@ def resolve_ed2k_page(
 __all__ = [
     "extract_ed2k_items",
     "extract_ed2k_page_title",
+    "normalize_ed2k_folder_name",
     "parse_ed2k_link",
     "resolve_ed2k_page",
     "validate_public_http_url",

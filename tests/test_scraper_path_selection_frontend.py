@@ -89,6 +89,16 @@ class ScraperPathSelectionLogicTest(unittest.TestCase):
         self.assertEqual(result["selectedIndexes"], [3, 4, 5])
         self.assertEqual(result["query"], "小芳 2026")
 
+    def test_query_preserves_title_punctuation_but_flattens_path_separators(self):
+        result = run_path_selection(
+            "(() => { const selection = api.createSelection(["
+            "{ is_dir: true, path: '电视剧/欧美/S.W.A.T. (2017)', parent_path: '电视剧/欧美' }"
+            "], '电视剧/欧美'); selection.selectedIndexes = selection.tokens.map((_, index) => index); "
+            "return api.composeQuery(selection); })()"
+        )
+
+        self.assertEqual(result, "电视剧 欧美 S.W.A.T. (2017)")
+
 
 class ScraperPathSelectionIntegrationTest(unittest.TestCase):
     def test_scraper_template_labels_the_full_path_selector_region(self):

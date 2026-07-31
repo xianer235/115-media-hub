@@ -32,7 +32,8 @@
         function isResourceEd2kReady() {
             if (!isResourceEd2kImportActive() || resourceEd2kState.loading || resourceEd2kState.error) return false;
             if (!Array.isArray(resourceEd2kState.selectedItemIds) || !resourceEd2kState.selectedItemIds.length) return false;
-            return resourceEd2kState.createFolder === false || !!String(resourceEd2kState.folderName || '').trim();
+            return resourceEd2kState.createFolder === false
+                || !!window.ResourceEd2kImport?.normalizeFolderName(resourceEd2kState.folderName);
         }
 
         function formatResourceEd2kSize(value) {
@@ -269,9 +270,11 @@
         }
 
         function completeResourceEd2kTitleSelection() {
-            const folderName = window.ResourceEd2kImport.composeFolderName(
-                resourceEd2kState.titleTokens,
-                resourceEd2kState.selectedTitleIndexes
+            const folderName = window.ResourceEd2kImport.normalizeFolderName(
+                window.ResourceEd2kImport.composeFolderName(
+                    resourceEd2kState.titleTokens,
+                    resourceEd2kState.selectedTitleIndexes
+                )
             );
             if (!folderName) return showToast('请先选择文件夹标题文字', { tone: 'warn', duration: 2400, placement: 'top-center' });
             resourceEd2kState.folderName = folderName;
@@ -678,7 +681,13 @@
                     }
                     const selectedIds = new Set(resourceEd2kState.selectedItemIds || []);
                     const selectedItems = resourceEd2kState.items.filter(entry => selectedIds.has(String(entry.id || entry.link_url)));
-                    const folderName = String(resourceEd2kState.folderName || '').trim();
+                    const folderName = resourceEd2kState.createFolder === false
+                        ? ''
+                        : window.ResourceEd2kImport.normalizeFolderName(resourceEd2kState.folderName);
+                    resourceEd2kState.folderName = folderName;
+                    const folderNameInput = document.getElementById('resource-ed2k-folder-name');
+                    if (folderNameInput) folderNameInput.value = folderName;
+                    syncResourceMonitorTaskOptions(document.getElementById('resource_job_savepath')?.value || '');
                     let data = {};
                     try {
                         data = await window.MediaHubApi.postJson('/resource/ed2k/jobs/create-batch', {

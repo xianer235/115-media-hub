@@ -360,6 +360,30 @@ class ResourceEd2kBatchRouteTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["folder_id"], "")
         self.assertEqual(len(submitted), 1)
 
+    async def test_batch_normalizes_folder_name_without_losing_colon(self):
+        endpoint = self.batch_endpoint()
+        provider = FakeOfflineProvider()
+
+        with mock.patch.object(resource_routes, "get_config", return_value={}), mock.patch.object(
+            resource_routes, "get_provider_or_none", return_value=provider
+        ), mock.patch.object(
+            resource_routes, "match_monitor_task_for_savepath", return_value={}
+        ), mock.patch.object(
+            resource_routes, "create_resource_jobs", return_value=[72]
+        ), mock.patch.object(resource_routes, "submit_background"):
+            response = await endpoint(
+                FakeJsonRequest(
+                    {
+                        "items": [{"link_url": SAMPLE_LINK}],
+                        "parent_savepath": "电影",
+                        "folder_name": '碟中谍: 最终清算 / *?"<>|',
+                    }
+                )
+            )
+
+        self.assertEqual(response["folder_name"], "碟中谍: 最终清算 ＊？＂＜＞｜")
+        self.assertEqual(response["savepath"], "电影/碟中谍: 最终清算 ＊？＂＜＞｜")
+
     async def test_multiple_files_can_save_directly_to_selected_parent(self):
         endpoint = self.batch_endpoint()
         provider = FakeOfflineProvider()

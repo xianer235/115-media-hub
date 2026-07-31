@@ -5,6 +5,7 @@ from unittest import mock
 import requests
 
 
+from app import resource_ed2k as resource_ed2k_module
 from app.resource_ed2k import (
     extract_ed2k_items,
     extract_ed2k_page_title,
@@ -175,6 +176,27 @@ class ResourceEd2kParsingTest(unittest.TestCase):
             )
 
         self.assertEqual(len(session.calls), 1)
+
+
+class ResourceEd2kFolderNameTest(unittest.TestCase):
+    def normalizer(self):
+        normalizer = getattr(resource_ed2k_module, "normalize_ed2k_folder_name", None)
+        self.assertIsNotNone(normalizer, "缺少 ED2K 文件夹名称规范化函数")
+        return normalizer
+
+    def test_preserves_colon_and_replaces_cross_platform_unsafe_characters(self):
+        self.assertEqual(
+            self.normalizer()('  碟中谍: 最终清算 / *?"<>|  '),
+            "碟中谍: 最终清算 ＊？＂＜＞｜",
+        )
+
+    def test_handles_controls_fallback_and_length(self):
+        normalize = self.normalizer()
+
+        self.assertEqual(normalize("片\x01名"), "片名")
+        self.assertEqual(normalize(".."), "")
+        self.assertEqual(normalize("..", fallback="未命名"), "未命名")
+        self.assertEqual(normalize("片" * 121), "片" * 120)
 
 
 class ResourceEd2kLinkingRegressionTest(unittest.TestCase):

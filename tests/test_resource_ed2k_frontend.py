@@ -151,8 +151,8 @@ class ResourceEd2kFrontendLogicTest(unittest.TestCase):
         self.assertEqual(
             tokens,
             [
-                "电", "视", "剧", "摇", "滚", "兄", "弟", "私", "生", "活",
-                "2024", "S03E01-E08", "完", "结",
+                "电", "视", "剧", "：", "摇", "滚", "兄", "弟", "私", "生", "活",
+                "(", "2024", ")", "-", "S03E01", "-", "E08", "(", "完", "结", ")",
             ],
         )
 
@@ -167,14 +167,30 @@ class ResourceEd2kFrontendLogicTest(unittest.TestCase):
         self.assertEqual(result["sharedTokens"], result["ed2kTokens"])
         self.assertEqual(result["sharedTitle"], result["ed2kTitle"])
 
-    def test_title_tokenizer_splits_dot_connected_english_words(self):
+    def test_tokenizer_exposes_legal_punctuation_as_independent_tokens(self):
+        result = run_ed2k_frontend(
+            "api.tokenizeTitle('🎬 电影：奇谭：纸刃渡荒墟 (2026)').map(item => item.text)"
+        )
+
+        self.assertEqual(
+            result,
+            [
+                "电", "影", "：", "奇", "谭", "：", "纸", "刃", "渡", "荒", "墟",
+                "(", "2026", ")",
+            ],
+        )
+
+    def test_title_tokenizer_exposes_dot_and_hyphen_as_independent_tokens(self):
         tokens = run_ed2k_frontend(
             "api.tokenizeTitle('Xiao.Fang.S01.2026.2160p.WEB-DL.H265.DDP5.1-BlackTV').map(item => item.text)"
         )
 
         self.assertEqual(
             tokens,
-            ["Xiao", "Fang", "S01", "2026", "2160p", "WEB-DL", "H265", "DDP5", "1-BlackTV"],
+            [
+                "Xiao", ".", "Fang", ".", "S01", ".", "2026", ".", "2160p", ".",
+                "WEB", "-", "DL", ".", "H265", ".", "DDP5", ".", "1", "-", "BlackTV",
+            ],
         )
 
     def test_drag_range_selects_and_deselects_contiguous_tokens(self):
@@ -188,10 +204,108 @@ class ResourceEd2kFrontendLogicTest(unittest.TestCase):
     def test_selected_title_tokens_compose_readable_folder_name(self):
         result = run_ed2k_frontend(
             "(() => { const tokens = api.tokenizeTitle('📺 电视剧：摇滚兄弟私生活 (2024) - S03E01-E08(完结)'); "
-            "return api.composeFolderName(tokens, [3,4,5,6,7,8,9,10,11]); })()"
+            "return api.composeFolderName(tokens, Array.from({ length: 14 }, (_, index) => index + 4)); })()"
         )
 
-        self.assertEqual(result, "摇滚兄弟私生活 2024 S03E01-E08")
+        self.assertEqual(result, "摇滚兄弟私生活 (2024) - S03E01-E08")
+
+    def test_title_composer_preserves_colon_and_balanced_parentheses(self):
+        result = run_ed2k_frontend(
+            "(() => { const tokens = api.tokenizeTitle('碟中谍：最终清算 (2025)'); "
+            "return { full: api.composeFolderName(tokens, tokens.map((_, index) => index)), "
+            "year: api.composeFolderName(tokens, [9]), "
+            "yearWithBrackets: api.composeFolderName(tokens, [8,9,10]) }; })()"
+        )
+
+        self.assertEqual(result["full"], "碟中谍：最终清算 (2025)")
+        self.assertEqual(result["year"], "2025")
+        self.assertEqual(result["yearWithBrackets"], "(2025)")
+
+    def test_title_composer_preserves_balanced_square_brackets(self):
+        result = run_ed2k_frontend(
+            "(() => { const tokens = api.tokenizeTitle('标题 [tmdbid-123]'); "
+            "return { open: api.composeFolderName(tokens, [2]), "
+            "full: api.composeFolderName(tokens, [2,3,4,5,6]) }; })()"
+        )
+
+        self.assertEqual(result["open"], "[")
+        self.assertEqual(result["full"], "[tmdbid-123]")
+
+    def test_title_composer_preserves_chinese_bracket_pairs(self):
+        result = run_ed2k_frontend(
+            "(() => { const roundTokens = api.tokenizeTitle('标题（2025）'); "
+            "const squareTokens = api.tokenizeTitle('标题【tmdbid-123】'); "
+            "return { round: api.composeFolderName(roundTokens, [2,3,4]), "
+            "square: api.composeFolderName(squareTokens, [2,3,4,5,6]) }; })()"
+        )
+
+        self.assertEqual(result["round"], "（2025）")
+        self.assertEqual(result["square"], "【tmdbid-123】")
+
+    def test_title_composer_omits_punctuation_across_unselected_words(self):
+        result = run_ed2k_frontend(
+            "(() => { const tokens = api.tokenizeTitle('标题：广告：正片'); "
+            "return api.composeFolderName(tokens, [0,1,6,7]); })()"
+        )
+
+        self.assertEqual(result, "标题 正片")
+
+    def test_title_composer_does_not_restore_unselectable_characters(self):
+        result = run_ed2k_frontend(
+            "(() => { const tokens = api.tokenizeTitle('片*名🎬/正?文'); "
+            "return { tokens: tokens.map(item => item.text), "
+            "folderName: api.composeFolderName(tokens, tokens.map((_, index) => index)) }; })()"
+        )
+
+        self.assertEqual(result["tokens"], ["片", "名", "正", "文"])
+        self.assertEqual(result["folderName"], "片名 正文")
+
+    def test_folder_name_normalizer_preserves_colon_and_replaces_unsafe_characters(self):
+        result = run_ed2k_frontend(
+            "typeof api.normalizeFolderName === 'function' "
+            "? api.normalizeFolderName('  碟中谍: 最终清算 / *?\"<>|  ') : null"
+        )
+
+        self.assertEqual(result, "碟中谍: 最终清算 ＊？＂＜＞｜")
+
+    def test_folder_name_normalizer_handles_controls_fallback_and_length(self):
+        result = run_ed2k_frontend(
+            "typeof api.normalizeFolderName === 'function' ? ({ "
+            "control: api.normalizeFolderName('片' + String.fromCharCode(1) + '名'), "
+            "dot: api.normalizeFolderName('..'), "
+            "fallback: api.normalizeFolderName('..', '未命名'), "
+            "long: api.normalizeFolderName('片'.repeat(121)) }) : null"
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "control": "片名",
+                "dot": "",
+                "fallback": "未命名",
+                "long": "片" * 120,
+            },
+        )
+
+    def test_title_completion_normalizes_the_folder_name(self):
+        body = self.modal_function_body("completeResourceEd2kTitleSelection")
+
+        self.assertIn("normalizeFolderName", body)
+
+    def test_submit_normalizes_and_writes_back_the_folder_name(self):
+        source = MODAL_MODULE_PATH.read_text(encoding="utf-8")
+        start = source.index("                if (isResourceEd2kImportActive()) {")
+        end = source.index("rememberResourceRefreshDelaySeconds", start)
+        submit_body = source[start:end]
+
+        self.assertIn("normalizeFolderName", submit_body)
+        self.assertIn("resourceEd2kState.folderName = folderName;", submit_body)
+        self.assertIn("folderNameInput.value = folderName;", submit_body)
+        self.assertIn("syncResourceMonitorTaskOptions", submit_body)
+        self.assertLess(
+            submit_body.index("syncResourceMonitorTaskOptions"),
+            submit_body.index("postJson('/resource/ed2k/jobs/create-batch'"),
+        )
 
     def test_target_path_uses_optional_child_folder(self):
         result = run_ed2k_frontend(

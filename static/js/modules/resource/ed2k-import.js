@@ -3,6 +3,14 @@
 
     const textSelection = global.MediaHubTextSelection;
     if (!textSelection) throw new Error('MediaHubTextSelection 尚未加载');
+    const FOLDER_CHARACTER_REPLACEMENTS = Object.freeze({
+        '*': '＊',
+        '?': '？',
+        '"': '＂',
+        '<': '＜',
+        '>': '＞',
+        '|': '｜',
+    });
 
     function normalizeRelativePath(value) {
         return String(value || '')
@@ -22,6 +30,22 @@
 
     function composeFolderName(tokens, selectedIndexes) {
         return textSelection.compose(tokens, selectedIndexes);
+    }
+
+    function cleanFolderName(value) {
+        return String(value || '')
+            .replace(/[\u0000-\u001f\u007f]+/gu, '')
+            .replace(/[\\/]+/gu, ' ')
+            .replace(/[*?"<>|]/gu, character => FOLDER_CHARACTER_REPLACEMENTS[character] || '')
+            .replace(/\s+/gu, ' ')
+            .trim();
+    }
+
+    function normalizeFolderName(value, fallback = '') {
+        let cleaned = cleanFolderName(value);
+        if (!cleaned || cleaned === '.' || cleaned === '..') cleaned = cleanFolderName(fallback);
+        if (!cleaned || cleaned === '.' || cleaned === '..') return '';
+        return Array.from(cleaned).slice(0, 120).join('');
     }
 
     function buildTargetSavepath(parentSavepath, folderName, createFolder = true) {
@@ -72,6 +96,7 @@
         applySelectionRange,
         buildTargetSavepath,
         composeFolderName,
+        normalizeFolderName,
         normalizeRelativePath,
         parseEd2kLink,
         shouldShowTitleSelector,
