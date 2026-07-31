@@ -1,9 +1,9 @@
 {
-  "version": "0.5.0",
-  "buildDate": "2026-07-31T00:00:00+08:00",
+  "version": "0.5.1",
+  "buildDate": "2026-08-01T00:00:00+08:00",
   "notes": [
-    "刮削预览支持为无法识别集数的电视剧文件手动输入集数并执行标准命名",
-    "新增 ED2K 整季文件解析与 115 批量保存，导入弹窗支持连续路径选词"
+    "文件夹监控按首层目录修改时间校验，只深扫新增、变化或待补扫分支",
+    "关闭目录时间校验时完整递归扫描，以发现未更新首层目录时间的深层变化"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"
