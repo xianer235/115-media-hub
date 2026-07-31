@@ -3,6 +3,8 @@
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
+- 修复文件夹监控按父目录最大修改时间跳过时可能遗漏兄弟目录变化的问题：开启目录时间校验后固定读取监控目录第一层，逐个判断直接文件和文件夹，只对新增、变化或待补扫的第一层文件夹执行完整递归扫描。
+- 关闭目录时间校验后会完整递归扫描整个监控目录，用于发现没有同步更新第一层文件夹时间的深层变化；旧目录时间缓存升级后首次运行会安全重建首层基线。
 
 ## [0.5.0] - 2026-07-31
 - 刮削命名预览支持为无法识别集数的电视剧文件手动输入集数，应用后继续复用服务端标准命名、冲突检查和任务提交流程。

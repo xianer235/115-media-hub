@@ -137,6 +137,7 @@ def ensure_db() -> None:
                     task_name TEXT NOT NULL,
                     dir_rel_path TEXT NOT NULL,
                     remote_modified TEXT,
+                    entry_modified TEXT NOT NULL DEFAULT '',
                     needs_rescan INTEGER NOT NULL DEFAULT 0,
                     missing_confirmations INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY (task_name, dir_rel_path)
@@ -391,6 +392,8 @@ def ensure_db() -> None:
                 cursor.execute("ALTER TABLE monitor_dirs ADD COLUMN needs_rescan INTEGER NOT NULL DEFAULT 0")
             if "missing_confirmations" not in monitor_dir_columns:
                 cursor.execute("ALTER TABLE monitor_dirs ADD COLUMN missing_confirmations INTEGER NOT NULL DEFAULT 0")
+            if "entry_modified" not in monitor_dir_columns:
+                cursor.execute("ALTER TABLE monitor_dirs ADD COLUMN entry_modified TEXT NOT NULL DEFAULT ''")
             cursor.execute("PRAGMA table_info(resource_jobs)")
             job_columns = {str(row[1]) for row in cursor.fetchall()}
             if "extra_json" not in job_columns:

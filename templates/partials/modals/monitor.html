@@ -48,9 +48,9 @@
                     <label class="flex items-center gap-3 cursor-pointer text-sm">
                         <input type="checkbox" id="monitor_skip_by_dir_mtime" class="ui-checkbox">
                         <span>按文件夹修改时间校验（未变化目录跳过更新）</span>
-                        <button type="button" class="info-dot" onclick="showHelp('开启后会按文件夹修改时间判断是否刷新；未变化且没有待补扫记录的目录会跳过更新，以减少无效扫描。若某个目录上次读取失败，后续成功出现时会自动补扫；若连续 2 次确认该目录已不存在，则会自动释放补扫记录。')">i</button>
+                        <button type="button" class="info-dot" onclick="showHelp('开启后，每次读取监控目录第一层，只深入扫描新增、发生变化或待补扫的第一层文件夹。更深层变化若没有同步更新第一层文件夹时间，可能无法自动发现；需要关闭本开关后手动运行一次完整扫描。读取失败的目录会自动保留待补扫状态。')">i</button>
                     </label>
-                    <div class="text-xs text-slate-500 pl-8 -mt-2">备注：未变化且无待补扫目录时会直接跳过；失败目录后续会自动补扫，连续 2 次确认不存在后自动释放。</div>
+                    <div class="text-xs text-slate-500 pl-8 -mt-2">备注：只按第一层判断；深层遗漏时关闭本开关后手动完整扫描。</div>
                     <label class="block">
                         <span class="text-xs text-slate-500">STRM 写入模式</span>
                         <select id="monitor_strm_write_mode" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none">

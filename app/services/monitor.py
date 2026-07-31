@@ -9,6 +9,11 @@ from .strm_files import delete_managed_strm_file, managed_strm_file_path, remove
 MONITOR_DIR_MISSING_RELEASE_CONFIRMATIONS = 2
 
 
+def _sql_like_descendant_pattern(path: str) -> str:
+    escaped = str(path or "").replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"{escaped}/%"
+
+
 def write_strm_file(target_file: str, url: str, force: bool = False) -> bool:
     next_url = str(url or "").strip()
     old_content = None
@@ -29,14 +34,14 @@ async def mark_cached_dir_as_seen(
     local_prefix: str,
 ) -> None:
     cursor = conn.cursor()
-    like_prefix = f"{local_prefix}/%" if local_prefix else "%"
+    like_prefix = _sql_like_descendant_pattern(local_prefix) if local_prefix else "%"
     retry_sqlite_locked(
         lambda: cursor.execute(
             """
             INSERT OR REPLACE INTO current_scan (local_rel_path, remote_rel_path, remote_modified, file_size)
             SELECT local_rel_path, remote_rel_path, remote_modified, file_size
             FROM monitor_files
-            WHERE task_name = ? AND (local_rel_path = ? OR local_rel_path LIKE ?)
+            WHERE task_name = ? AND (local_rel_path = ? OR local_rel_path LIKE ? ESCAPE '\\')
             """,
             (task_name, local_prefix, like_prefix),
         )
@@ -59,7 +64,7 @@ def _remote_dir_from_rel(task_scan_path: str, dir_rel_path: str) -> str:
 def _load_monitor_dir_state(cursor: sqlite3.Cursor, task_name: str, dir_rel_path: str) -> Dict[str, Any]:
     cursor.execute(
         """
-        SELECT remote_modified, needs_rescan, missing_confirmations
+        SELECT remote_modified, entry_modified, needs_rescan, missing_confirmations
         FROM monitor_dirs
         WHERE task_name = ? AND dir_rel_path = ?
         """,
@@ -70,14 +75,16 @@ def _load_monitor_dir_state(cursor: sqlite3.Cursor, task_name: str, dir_rel_path
         return {
             "exists": False,
             "remote_modified": "",
+            "entry_modified": "",
             "needs_rescan": False,
             "missing_confirmations": 0,
         }
     return {
         "exists": True,
         "remote_modified": str(row[0] or ""),
-        "needs_rescan": bool(int(row[1] or 0)),
-        "missing_confirmations": max(0, int(row[2] or 0)),
+        "entry_modified": str(row[1] or ""),
+        "needs_rescan": bool(int(row[2] or 0)),
+        "missing_confirmations": max(0, int(row[3] or 0)),
     }
 
 
@@ -86,7 +93,14 @@ def _mark_monitor_dir_success(
     task_name: str,
     dir_rel_path: str,
     remote_modified: str,
+    entry_modified: Optional[str] = None,
 ) -> None:
+    state = _load_monitor_dir_state(cursor, task_name, dir_rel_path)
+    next_entry_modified = (
+        state["entry_modified"]
+        if entry_modified is None
+        else str(entry_modified or "")
+    )
     retry_sqlite_locked(
         lambda: cursor.execute(
             """
@@ -94,11 +108,17 @@ def _mark_monitor_dir_success(
                 task_name,
                 dir_rel_path,
                 remote_modified,
+                entry_modified,
                 needs_rescan,
                 missing_confirmations
-            ) VALUES (?, ?, ?, 0, 0)
+            ) VALUES (?, ?, ?, ?, 0, 0)
             """,
-            (task_name, dir_rel_path, str(remote_modified or "")),
+            (
+                task_name,
+                dir_rel_path,
+                str(remote_modified or ""),
+                next_entry_modified,
+            ),
         )
     )
 
@@ -112,19 +132,51 @@ def _mark_monitor_dir_dirty(cursor: sqlite3.Cursor, task_name: str, dir_rel_path
                 task_name,
                 dir_rel_path,
                 remote_modified,
+                entry_modified,
                 needs_rescan,
                 missing_confirmations
-            ) VALUES (?, ?, ?, 1, ?)
+            ) VALUES (?, ?, ?, ?, 1, ?)
             """,
             (
                 task_name,
                 dir_rel_path,
                 state["remote_modified"],
+                state["entry_modified"],
                 state["missing_confirmations"],
             ),
         )
 
     retry_sqlite_locked(write_dirty)
+
+
+def _record_monitor_dir_scan_progress(
+    cursor: sqlite3.Cursor,
+    task_name: str,
+    dir_rel_path: str,
+    remote_modified: str,
+) -> None:
+    state = _load_monitor_dir_state(cursor, task_name, dir_rel_path)
+    retry_sqlite_locked(
+        lambda: cursor.execute(
+            """
+            INSERT OR REPLACE INTO monitor_dirs(
+                task_name,
+                dir_rel_path,
+                remote_modified,
+                entry_modified,
+                needs_rescan,
+                missing_confirmations
+            ) VALUES (?, ?, ?, ?, 1, ?)
+            """,
+            (
+                task_name,
+                dir_rel_path,
+                str(remote_modified or ""),
+                state["entry_modified"],
+                state["missing_confirmations"],
+            ),
+        )
+    )
 
 
 def _reset_monitor_dir_missing_confirmations(cursor: sqlite3.Cursor, task_name: str, dir_rel_path: str) -> None:
@@ -142,14 +194,14 @@ def _reset_monitor_dir_missing_confirmations(cursor: sqlite3.Cursor, task_name: 
 
 def _monitor_dir_has_dirty_subtree(cursor: sqlite3.Cursor, task_name: str, dir_rel_path: str) -> bool:
     if dir_rel_path:
-        scope_like = f"{dir_rel_path}/%"
+        scope_like = _sql_like_descendant_pattern(dir_rel_path)
         cursor.execute(
             """
             SELECT 1
             FROM monitor_dirs
             WHERE task_name = ?
             AND needs_rescan = 1
-            AND (dir_rel_path = ? OR dir_rel_path LIKE ?)
+            AND (dir_rel_path = ? OR dir_rel_path LIKE ? ESCAPE '\\')
             LIMIT 1
             """,
             (task_name, dir_rel_path, scope_like),
@@ -171,15 +223,16 @@ def _monitor_dir_has_dirty_subtree(cursor: sqlite3.Cursor, task_name: str, dir_r
 def _list_dirty_direct_children(cursor: sqlite3.Cursor, task_name: str, parent_dir_rel: str) -> List[str]:
     if parent_dir_rel:
         prefix = f"{parent_dir_rel}/"
+        scope_like = _sql_like_descendant_pattern(parent_dir_rel)
         cursor.execute(
             """
             SELECT dir_rel_path
             FROM monitor_dirs
             WHERE task_name = ?
             AND needs_rescan = 1
-            AND dir_rel_path LIKE ?
+            AND dir_rel_path LIKE ? ESCAPE '\\'
             """,
-            (task_name, f"{prefix}%"),
+            (task_name, scope_like),
         )
     else:
         prefix = ""
@@ -208,14 +261,31 @@ def _list_dirty_direct_children(cursor: sqlite3.Cursor, task_name: str, parent_d
     return sorted(direct_children)
 
 
+def _list_tracked_first_level_dirs(cursor: sqlite3.Cursor, task_name: str) -> List[str]:
+    cursor.execute(
+        """
+        SELECT dir_rel_path
+        FROM monitor_dirs
+        WHERE task_name = ? AND COALESCE(entry_modified, '') <> ''
+        """,
+        (task_name,),
+    )
+    first_level_dirs = set()
+    for row in cursor.fetchall():
+        rel_path = normalize_relative_path(str(row[0] or ""))
+        if rel_path:
+            first_level_dirs.add(rel_path.split("/", 1)[0])
+    return sorted(first_level_dirs)
+
+
 def _delete_monitor_dir_subtree(cursor: sqlite3.Cursor, task_name: str, dir_rel_path: str) -> None:
-    scope_like = f"{dir_rel_path}/%"
+    scope_like = _sql_like_descendant_pattern(dir_rel_path)
     retry_sqlite_locked(
         lambda: cursor.execute(
             """
             DELETE FROM monitor_dirs
             WHERE task_name = ?
-            AND (dir_rel_path = ? OR dir_rel_path LIKE ?)
+            AND (dir_rel_path = ? OR dir_rel_path LIKE ? ESCAPE '\\')
             """,
             (task_name, dir_rel_path, scope_like),
         )
@@ -235,14 +305,16 @@ def _bump_missing_monitor_dir(cursor: sqlite3.Cursor, task_name: str, dir_rel_pa
                 task_name,
                 dir_rel_path,
                 remote_modified,
+                entry_modified,
                 needs_rescan,
                 missing_confirmations
-            ) VALUES (?, ?, ?, 1, ?)
+            ) VALUES (?, ?, ?, ?, 1, ?)
             """,
             (
                 task_name,
                 dir_rel_path,
                 state["remote_modified"],
+                state["entry_modified"],
                 next_missing,
             ),
         )
@@ -294,6 +366,9 @@ async def run_monitor_task(
         "deleted_files": 0,
         "deleted_dirs": 0,
         "success_dirs": 0,
+        "scanned_branches": 0,
+        "skipped_first_level_dirs": 0,
+        "rescan_branches": 0,
     }
     generated_strm_paths: List[str] = []
     force_strm_rewrite = str(task.get("strm_write_mode", "incremental") or "incremental").strip().lower() == "full"
@@ -355,19 +430,26 @@ async def run_monitor_task(
             return join_relative_path(task_root, local_sub_path)
 
         start_local_rel = build_local_dir_rel(start_remote_path)
-        queue: List[Tuple[str, str]] = [(start_remote_path, start_local_rel)]
+        queue: List[Tuple[str, str, Optional[str]]] = [(start_remote_path, start_local_rel, None)]
         scanned_dirs = set()
         fallback_guard_expected_path = ""
         fallback_guard_parent_path = ""
         active_dir_rel = ""
         active_dir_active = False
         visited_dir_rels: Set[str] = set()
+        pending_first_level_success: Dict[str, Tuple[str, Optional[str]]] = {}
         monitor_file_index_replaced = False
+
+        if start_local_rel != task_root:
+            start_dir_rel = _dir_rel_from_local(task_root, start_local_rel)
+            first_level_dir_rel = start_dir_rel.split("/", 1)[0] if start_dir_rel else ""
+            if first_level_dir_rel:
+                _mark_monitor_dir_dirty(cursor, task_name, first_level_dir_rel)
 
         await write_monitor_section("扫描生成")
 
         while queue:
-            remote_dir, local_dir_rel = queue.pop(0)
+            remote_dir, local_dir_rel, first_level_entry_modified = queue.pop(0)
             check_monitor_cancelled()
             if remote_dir in scanned_dirs:
                 continue
@@ -399,7 +481,7 @@ async def run_monitor_task(
                         start_remote_path = fallback_remote_path
                         start_local_rel = build_local_dir_rel(start_remote_path)
                         if not any(item[0] == start_remote_path for item in queue):
-                            queue.insert(0, (start_remote_path, start_local_rel))
+                            queue.insert(0, (start_remote_path, start_local_rel, None))
                         await write_monitor_log(
                             f"{refresh_source_label} 起始目录暂不可见，回退父目录重试: {start_remote_path}",
                             "warn",
@@ -413,26 +495,13 @@ async def run_monitor_task(
                 continue
             scanned_dirs.add(remote_dir)
 
-            dir_state = _load_monitor_dir_state(cursor, task_name, dir_rel)
-            if (
-                task["skip_by_dir_mtime"]
-                and modified
-                and dir_state["remote_modified"]
-                and dir_state["remote_modified"] >= modified
-                and not _monitor_dir_has_dirty_subtree(cursor, task_name, dir_rel)
-            ):
-                _reset_monitor_dir_missing_confirmations(cursor, task_name, dir_rel)
-                stats["skipped_dirs"] += 1
-                await mark_cached_dir_as_seen(conn, task_name, local_dir_rel)
-                await write_monitor_log(f"跳过目录: {remote_dir}", "warn")
-                active_dir_rel = ""
-                active_dir_active = False
-                if task["list_delay_ms"] > 0:
-                    await sleep_interruptible(task["list_delay_ms"] / 1000)
-                continue
-
             fallback_target_branch_found = False
             present_child_dir_rels = set()
+            is_task_root = remote_dir == task_scan_path
+            force_first_level_rescan = (
+                is_task_root
+                and _load_monitor_dir_state(cursor, task_name, dir_rel)["needs_rescan"]
+            )
             for item in items:
                 check_monitor_cancelled()
                 name = item.get("name") or ""
@@ -456,25 +525,38 @@ async def run_monitor_task(
                             fallback_target_branch_found = True
                     child_dir_rel = _dir_rel_from_local(task_root, item_local_rel)
                     present_child_dir_rels.add(child_dir_rel)
-                    if remote_dir == fallback_guard_parent_path and fallback_guard_expected_path:
-                        _reset_monitor_dir_missing_confirmations(cursor, task_name, child_dir_rel)
+                    _reset_monitor_dir_missing_confirmations(cursor, task_name, child_dir_rel)
 
                     child_state = _load_monitor_dir_state(cursor, task_name, child_dir_rel)
                     child_has_dirty = _monitor_dir_has_dirty_subtree(cursor, task_name, child_dir_rel)
                     if (
-                        task["skip_by_dir_mtime"]
+                        is_task_root
+                        and task["skip_by_dir_mtime"]
+                        and not refresh_source_label
                         and modified_at
-                        and child_state["remote_modified"]
-                        and child_state["remote_modified"] >= modified_at
+                        and child_state["entry_modified"]
+                        and child_state["entry_modified"] == modified_at
                         and not child_has_dirty
+                        and not force_first_level_rescan
                     ):
-                        _reset_monitor_dir_missing_confirmations(cursor, task_name, child_dir_rel)
                         stats["skipped_dirs"] += 1
+                        stats["skipped_first_level_dirs"] += 1
                         await mark_cached_dir_as_seen(conn, task_name, item_local_rel)
                         await write_monitor_log(f"跳过目录: {item_remote_path}", "warn")
                         continue
 
-                    queue.append((item_remote_path, item_local_rel))
+                    if is_task_root:
+                        stats["scanned_branches"] += 1
+                        if child_has_dirty or force_first_level_rescan:
+                            stats["rescan_branches"] += 1
+                        _mark_monitor_dir_dirty(cursor, task_name, child_dir_rel)
+                    queue.append(
+                        (
+                            item_remote_path,
+                            item_local_rel,
+                            modified_at if is_task_root else None,
+                        )
+                    )
                     continue
 
                 if fallback_guard_expected_path and not is_subpath(item_remote_path, fallback_guard_expected_path):
@@ -508,8 +590,10 @@ async def run_monitor_task(
                     (item_local_rel, remote_rel, modified_at, size),
                 )
 
-            dirty_child_rels = _list_dirty_direct_children(cursor, task_name, dir_rel)
-            for child_dir_rel in dirty_child_rels:
+            tracked_child_rels = set(_list_dirty_direct_children(cursor, task_name, dir_rel))
+            if is_task_root:
+                tracked_child_rels.update(_list_tracked_first_level_dirs(cursor, task_name))
+            for child_dir_rel in sorted(tracked_child_rels):
                 child_remote_path = _remote_dir_from_rel(task_scan_path, child_dir_rel)
                 if fallback_guard_expected_path:
                     in_target_tree = is_subpath(child_remote_path, fallback_guard_expected_path)
@@ -543,7 +627,23 @@ async def run_monitor_task(
                     "warn",
                 )
 
-            _mark_monitor_dir_success(cursor, task_name, dir_rel, modified)
+            is_first_level_dir = bool(dir_rel) and "/" not in dir_rel
+            if is_first_level_dir:
+                _record_monitor_dir_scan_progress(
+                    cursor,
+                    task_name,
+                    dir_rel,
+                    modified,
+                )
+                pending_first_level_success[dir_rel] = (modified, first_level_entry_modified)
+            else:
+                _mark_monitor_dir_success(
+                    cursor,
+                    task_name,
+                    dir_rel,
+                    modified,
+                    entry_modified=first_level_entry_modified,
+                )
             visited_dir_rels.add(dir_rel)
             active_dir_rel = ""
             active_dir_active = False
@@ -567,12 +667,12 @@ async def run_monitor_task(
                     (task_name,),
                 )
             else:
-                scope_like = f"{start_local_rel}/%"
+                scope_like = _sql_like_descendant_pattern(start_local_rel)
                 cursor.execute(
                     """
                     SELECT local_rel_path FROM monitor_files
                     WHERE task_name = ?
-                    AND (local_rel_path = ? OR local_rel_path LIKE ?)
+                    AND (local_rel_path = ? OR local_rel_path LIKE ? ESCAPE '\\')
                     AND local_rel_path NOT IN (SELECT local_rel_path FROM current_scan)
                     """,
                     (task_name, start_local_rel, scope_like),
@@ -594,11 +694,11 @@ async def run_monitor_task(
                     if start_local_rel == task_root:
                         cursor.execute("DELETE FROM monitor_files WHERE task_name = ?", (task_name,))
                     else:
-                        scope_like = f"{start_local_rel}/%"
+                        scope_like = _sql_like_descendant_pattern(start_local_rel)
                         cursor.execute(
                             """
                             DELETE FROM monitor_files
-                            WHERE task_name = ? AND (local_rel_path = ? OR local_rel_path LIKE ?)
+                            WHERE task_name = ? AND (local_rel_path = ? OR local_rel_path LIKE ? ESCAPE '\\')
                             """,
                             (task_name, start_local_rel, scope_like),
                         )
@@ -617,6 +717,15 @@ async def run_monitor_task(
                     """,
                     (task_name,),
                 )
+                # Only publish first-level baselines with the file index they describe.
+                for dir_rel, (remote_modified, entry_modified) in pending_first_level_success.items():
+                    _mark_monitor_dir_success(
+                        cursor,
+                        task_name,
+                        dir_rel,
+                        remote_modified,
+                        entry_modified=entry_modified,
+                    )
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -844,10 +953,10 @@ def _merge_monitor_queue_payload(existing: Optional[Dict[str, Any]], incoming: O
 def _pick_monitor_trigger(existing_trigger: str, new_trigger: str) -> str:
     trigger_priority = {
         "queued": 0,
-        "resource": 1,
-        "webhook": 2,
-        "cron": 3,
-        "manual": 4,
+        "cron": 1,
+        "manual": 2,
+        "resource": 3,
+        "webhook": 4,
     }
     existing = str(existing_trigger or "").strip().lower() or "queued"
     incoming = str(new_trigger or "").strip().lower() or "queued"

@@ -1,6 +1,6 @@
 # 文件夹监控首层修改时间校验实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 将文件夹监控的目录时间剪枝改为固定读取监控根目录第一层，并且只跳过时间未变化、没有待补扫状态的第一层文件夹。
 
@@ -27,7 +27,7 @@
 - Modify: `app/services/monitor.py:59-127,225-251`
 - Test: `tests/test_monitor_dir_rescan.py:79-135,225-256`
 
-- [ ] **Step 1: 扩展测试辅助函数并写迁移失败测试**
+- [x] **Step 1: 扩展测试辅助函数并写迁移失败测试**
 
 让 `_insert_monitor_dir()` 接受 `entry_modified`，让 `_fetch_monitor_dir()` 返回四列，并要求旧数据库迁移后包含新字段且默认值为空：
 
@@ -89,10 +89,10 @@ with sqlite3.connect(legacy_db_path) as conn:
     default_value = conn.execute(
         "SELECT entry_modified FROM monitor_dirs WHERE dir_rel_path = 'Legacy'"
     ).fetchone()
-self.assertEqual(default_value, (None,))
+self.assertEqual(default_value, ("",))
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run:
 
@@ -102,24 +102,24 @@ Run:
 
 Expected: FAIL，`entry_modified` 不在 `monitor_dirs` 字段集合中。
 
-- [ ] **Step 3: 实现 SQLite 创建和增量迁移**
+- [x] **Step 3: 实现 SQLite 创建和增量迁移**
 
 新表结构加入：
 
 ```sql
-entry_modified TEXT
+entry_modified TEXT NOT NULL DEFAULT ''
 ```
 
 旧表迁移加入：
 
 ```python
 if "entry_modified" not in monitor_dir_columns:
-    cursor.execute("ALTER TABLE monitor_dirs ADD COLUMN entry_modified TEXT")
+    cursor.execute("ALTER TABLE monitor_dirs ADD COLUMN entry_modified TEXT NOT NULL DEFAULT ''")
 ```
 
-保持迁移值为 `NULL`，不从旧 `remote_modified` 推导，确保升级后第一轮不能错误跳过。
+保持迁移值为空字符串，不从旧 `remote_modified` 推导，确保升级后第一轮不能错误跳过。
 
-- [ ] **Step 4: 让目录状态读写完整保留新字段**
+- [x] **Step 4: 让目录状态读写完整保留新字段**
 
 `_load_monitor_dir_state()` 返回：
 
@@ -153,7 +153,7 @@ def _mark_monitor_dir_success(
 
 写回时同时包含 `entry_modified`；`_mark_monitor_dir_dirty()` 和 `_bump_missing_monitor_dir()` 也必须从旧状态原样写回该字段，不能因 `INSERT OR REPLACE` 清空成功基线。
 
-- [ ] **Step 5: 运行迁移和现有监控测试**
+- [x] **Step 5: 运行迁移和现有监控测试**
 
 Run:
 
@@ -176,7 +176,7 @@ git commit -m "增加监控首层目录时间状态"
 - Modify: `app/services/monitor.py:351-551`
 - Test: `tests/test_monitor_dir_rescan.py:258-310`
 
-- [ ] **Step 1: 写父目录最大值不变的失败测试**
+- [x] **Step 1: 写父目录最大值不变的失败测试**
 
 建立两个第一层文件夹：`SeasonA` 仍为最大时间且未变化，`SeasonB` 的时间从更早值变化但仍小于 `SeasonA`。根目录旧汇总值和本轮汇总值保持相同：
 
@@ -215,7 +215,7 @@ def test_first_level_change_is_scanned_when_parent_max_time_is_unchanged(self):
     self.assertEqual(call_log, ["/115/Library", "/115/Library/SeasonB"])
 ```
 
-- [ ] **Step 2: 写变化分支必须完整递归的失败测试**
+- [x] **Step 2: 写变化分支必须完整递归的失败测试**
 
 让第一层 `SeriesA` 发生变化，但第二层 `Season01` 的旧时间等于当前时间。预期仍读取第二层：
 
@@ -260,7 +260,7 @@ def test_changed_first_level_branch_does_not_prune_deeper_directories(self):
     )
 ```
 
-- [ ] **Step 3: 运行两个测试确认失败**
+- [x] **Step 3: 运行两个测试确认失败**
 
 Run:
 
@@ -272,7 +272,7 @@ Run:
 
 Expected: 第一个测试只记录根目录，第二个测试不读取 `Season01`。
 
-- [ ] **Step 4: 重构扫描队列和首层判断**
+- [x] **Step 4: 重构扫描队列和首层判断**
 
 队列项携带第一层文件夹自身时间；根目录和深层目录使用 `None`：
 
@@ -315,7 +315,7 @@ queue.append(
 
 深层目录始终进入队列。目录成功处理时把队列携带的首层时间传入 `_mark_monitor_dir_success()`；`None` 表示保留原首层基线。
 
-- [ ] **Step 5: 更新队列回退路径**
+- [x] **Step 5: 更新队列回退路径**
 
 Webhook/资源起始目录暂不可见、回退父目录时，插入三元组：
 
@@ -325,7 +325,7 @@ queue.insert(0, (start_remote_path, start_local_rel, None))
 
 明确刷新请求通过 `refresh_source_label` 禁止首层跳过，继续只扫描目标祖先链和目标子树。
 
-- [ ] **Step 6: 运行首层扫描测试**
+- [x] **Step 6: 运行首层扫描测试**
 
 Run:
 
@@ -349,7 +349,7 @@ git commit -m "重构监控首层目录扫描"
 - Modify: `app/core.py:6665-6670`
 - Test: `tests/test_monitor_dir_rescan.py`
 
-- [ ] **Step 1: 写旧缓存首次重建和关闭开关测试**
+- [x] **Step 1: 写旧缓存首次重建和关闭开关测试**
 
 覆盖 `entry_modified` 为空时，即使旧 `remote_modified` 相同也必须扫描；关闭开关时，即使首层基线相同也必须完整递归。两次成功扫描后分别断言 `entry_modified` 已刷新：
 
@@ -360,15 +360,15 @@ self.assertEqual(
 )
 ```
 
-- [ ] **Step 2: 写空时间、时间回退和 dirty 覆盖测试**
+- [x] **Step 2: 写空时间、时间回退和 dirty 覆盖测试**
 
 分别让第一层当前时间为空、当前时间小于历史基线、后代 `needs_rescan=1`，三种情况都必须进入分支。时间回退测试必须证明判断使用 `==` 而不是 `>=`。
 
-- [ ] **Step 3: 写普通第一层目录缺失两次的测试**
+- [x] **Step 3: 写普通第一层目录缺失两次的测试**
 
 不预设 `needs_rescan`，只给第一层目录写入 `entry_modified`。第一次成功根目录列表缺失后断言状态为 dirty 且 `missing_confirmations=1`；第二次仍缺失后断言整个状态子树删除。
 
-- [ ] **Step 4: 运行新增测试确认失败**
+- [x] **Step 4: 运行新增测试确认失败**
 
 Run:
 
@@ -378,7 +378,7 @@ Run:
 
 Expected: 新增的普通缺失目录测试失败，因为当前实现只枚举 dirty 子目录；其余失败应与尚未完整实现的首层基线规则对应。
 
-- [ ] **Step 5: 将首层已跟踪目录纳入缺失确认**
+- [x] **Step 5: 将首层已跟踪目录纳入缺失确认**
 
 新增查询任务所有已建立 `entry_modified` 的第一层目录辅助函数，并与 `_list_dirty_direct_children()` 的结果合并：
 
@@ -406,7 +406,7 @@ def _list_tracked_first_level_dirs(
 
 仅在处理监控根目录时合并该集合。出现的目录重置缺失次数；未出现的目录调用 `_bump_missing_monitor_dir()`，第二次确认后删除状态子树。
 
-- [ ] **Step 6: 增加首层统计日志**
+- [x] **Step 6: 增加首层统计日志**
 
 `stats` 新增：
 
@@ -424,7 +424,7 @@ f"跳过文件夹 {stats.get('skipped_first_level_dirs', 0)} | "
 f"待补扫分支 {stats.get('rescan_branches', 0)}"
 ```
 
-- [ ] **Step 7: 运行监控与数据库相关测试**
+- [x] **Step 7: 运行监控与数据库相关测试**
 
 Run:
 
@@ -451,7 +451,7 @@ git commit -m "完善监控首层补扫与缺失处理"
 - Modify: `CHANGELOG.md`
 - Modify: `docs/superpowers/handoff.md`
 
-- [ ] **Step 1: 更新监控弹窗说明**
+- [x] **Step 1: 更新监控弹窗说明**
 
 帮助文案改为：
 
@@ -465,11 +465,11 @@ git commit -m "完善监控首层补扫与缺失处理"
 备注：只按第一层判断；深层遗漏时关闭本开关后手动完整扫描。
 ```
 
-- [ ] **Step 2: 更新变更记录和 handoff**
+- [x] **Step 2: 更新变更记录和 handoff**
 
 在当前版本的 `CHANGELOG.md` 增加首层逐项判断、变化分支完整递归和关闭开关恢复说明。`docs/superpowers/handoff.md` 追加时间、分支、实现内容、实际验证命令和下一步真实 115 观察事项。
 
-- [ ] **Step 3: 运行完整自动验证**
+- [x] **Step 3: 运行完整自动验证**
 
 Run:
 
@@ -482,7 +482,7 @@ git diff --check
 
 Expected: `compileall` 成功、完整 unittest 全部 PASS、`git diff --check` 无输出。
 
-- [ ] **Step 4: 检查前端模板和工作区差异**
+- [x] **Step 4: 检查前端模板和工作区差异**
 
 Run:
 

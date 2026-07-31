@@ -6667,6 +6667,14 @@ async def write_monitor_task_summary(stats: Dict[str, int], cleanup_enabled: Opt
         f"生成汇总: 新增/更新 {stats['generated']} | 跳过文件 {stats['skipped']} | 跳过目录 {stats['skipped_dirs']} | 失败目录 {stats['failed_dirs']}",
         "info",
     )
+    await write_monitor_log(
+        (
+            f"首层汇总: 深扫分支 {stats.get('scanned_branches', 0)} | "
+            f"跳过文件夹 {stats.get('skipped_first_level_dirs', 0)} | "
+            f"待补扫分支 {stats.get('rescan_branches', 0)}"
+        ),
+        "info",
+    )
     cleanup_label = "未配置" if cleanup_enabled is None else format_monitor_bool(bool(cleanup_enabled))
     await write_monitor_log(
         f"清理汇总: 清理过期 STRM {cleanup_label} | 删除 STRM {stats['deleted_files']} | 删除空目录 {stats['deleted_dirs']}",

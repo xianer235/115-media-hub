@@ -32,6 +32,7 @@ RESOURCE_LINK_TYPE_PATTERNS: List[Tuple[str, re.Pattern[str]]] = [
     ("115share", re.compile(r"https?://(?:115cdn|115|anxia)\.com/s/[a-z0-9]+", re.IGNORECASE)),
     ("aliyun", re.compile(r"https?://(?:www\.)?(?:aliyundrive|alipan)\.com/s/[a-z0-9]+", re.IGNORECASE)),
     ("quark", re.compile(r"https?://(?:pan|www)\.quark\.cn/s/[a-z0-9]+", re.IGNORECASE)),
+    ("guangya", re.compile(r"https?://(?:www\.)?guangyapan\.com/(?:share|s|link|download)/[a-z0-9_-]+", re.IGNORECASE)),
     ("baidu", re.compile(r"https?://(?:pan|yun)\.baidu\.com/(?:s/|share/)", re.IGNORECASE)),
     ("xunlei", re.compile(r"https?://(?:pan|xlpan)\.xunlei\.com/s/[a-z0-9]+", re.IGNORECASE)),
     ("uc", re.compile(r"https?://drive\.uc\.cn/s/[a-z0-9]+", re.IGNORECASE)),

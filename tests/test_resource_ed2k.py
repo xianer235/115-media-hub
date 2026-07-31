@@ -12,7 +12,11 @@ from app.resource_ed2k import (
     parse_ed2k_link,
     resolve_ed2k_page,
 )
-from app.resource_linking import extract_resource_candidates, extract_resource_links
+from app.resource_linking import (
+    detect_resource_link_type,
+    extract_resource_candidates,
+    extract_resource_links,
+)
 from app.resource_tg import parse_telegram_posts_page
 from app.routes import resource as resource_routes
 
@@ -200,6 +204,16 @@ class ResourceEd2kFolderNameTest(unittest.TestCase):
 
 
 class ResourceEd2kLinkingRegressionTest(unittest.TestCase):
+    def test_detect_resource_link_type_recognizes_guangya_share_urls(self):
+        for url in (
+            "https://www.guangyapan.com/share/abc_123",
+            "https://guangyapan.com/s/abc-123?pwd=1234",
+            "https://www.guangyapan.com/link/abc123",
+            "https://guangyapan.com/download/abc123",
+        ):
+            self.assertEqual(detect_resource_link_type(url), "guangya")
+        self.assertEqual(detect_resource_link_type("https://www.guangyapan.com/"), "link")
+
     def test_extract_resource_links_keeps_ed2k_filename_spaces(self):
         links = extract_resource_links(f"资源如下：\n{SAMPLE_LINK}")
 
