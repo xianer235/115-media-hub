@@ -204,14 +204,14 @@ class ResourceEd2kFolderNameTest(unittest.TestCase):
 
 
 class ResourceEd2kLinkingRegressionTest(unittest.TestCase):
-    def test_detect_resource_link_type_recognizes_guangya_share_urls(self):
+    def test_guangya_share_urls_remain_generic_links_for_operations(self):
         for url in (
             "https://www.guangyapan.com/share/abc_123",
             "https://guangyapan.com/s/abc-123?pwd=1234",
             "https://www.guangyapan.com/link/abc123",
             "https://guangyapan.com/download/abc123",
         ):
-            self.assertEqual(detect_resource_link_type(url), "guangya")
+            self.assertEqual(detect_resource_link_type(url), "link")
         self.assertEqual(detect_resource_link_type("https://www.guangyapan.com/"), "link")
 
     def test_extract_resource_links_keeps_ed2k_filename_spaces(self):

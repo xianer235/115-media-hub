@@ -1,5 +1,7 @@
 # Guangya Link Recognition Implementation Plan
 
+> **状态：已取代。** 本计划的后端全局分类做法已由 [频道资源类型标签与光鸭展示识别实施计划](./2026-08-02-resource-link-tag-palette.md) 取代，请勿继续按本文步骤实现。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Recognize Guangya share URLs as `guangya` without enabling an unimplemented provider.

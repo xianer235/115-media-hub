@@ -275,6 +275,23 @@
             return map[normalized] || normalized || '待识别';
         }
 
+        function getResourceDisplayLinkType(item) {
+            return window.ResourceLinkTags.resolveDisplayType(item);
+        }
+
+        function getResourceDisplayLinkTypeLabel(linkType) {
+            return window.ResourceLinkTags.getTagMeta(linkType).label;
+        }
+
+        function getResourceDisplayLinkTypeBadgeClass(linkType) {
+            const tone = window.ResourceLinkTags.getTagMeta(linkType).tone;
+            return `resource-link-tag resource-link-tag--${tone}`;
+        }
+
+        function buildResourceDisplayProfile(items, fallbackProfile = {}) {
+            return window.ResourceLinkTags.summarize(items, fallbackProfile);
+        }
+
         function getResourceProviderByLinkType(linkType) {
             if (linkType === 'magnet') {
                 return getResourceSelectedMagnetProvider();
@@ -630,33 +647,11 @@
         }
 
         function detectResourceLinkTypeByUrl(url) {
-            const raw = String(url || '').trim();
-            const lowered = raw.toLowerCase();
-            if (!lowered) return 'unknown';
-            if (lowered.startsWith('magnet:?')) return 'magnet';
-            if (lowered.startsWith('ed2k://')) return 'ed2k';
-            if (/(?:https?:\/\/)?(?:115cdn|115|anxia)\.com\/s\/[a-z0-9]+/i.test(raw)) return '115share';
-            if (/https?:\/\/(?:pan|www)\.quark\.cn\/s\/[a-z0-9]+/i.test(raw)) return 'quark';
-            if (/https?:\/\/(?:www\.)?(?:aliyundrive|alipan)\.com\/s\/[a-z0-9]+/i.test(raw)) return 'aliyun';
-            if (/https?:\/\/(?:pan|yun)\.baidu\.com\/(?:s\/|share\/)/i.test(raw)) return 'baidu';
-            if (/https?:\/\/(?:pan|xlpan)\.xunlei\.com\/s\/[a-z0-9]+/i.test(raw)) return 'xunlei';
-            if (/https?:\/\/drive\.uc\.cn\/s\/[a-z0-9]+/i.test(raw)) return 'uc';
-            if (/https?:\/\/(?:www\.)?(?:123pan|123684|123865|123912)\.(?:com|cn)\/s\/[a-z0-9_-]+(?:\.html?)?/i.test(raw)) return '123pan';
-            if (/https?:\/\/cloud\.189\.cn\/(?:t\/|web\/share)/i.test(raw)) return 'tianyi';
-            if (/https?:\/\/(?:www\.)?(?:mypikpak|pikpak)\.com\/s\/[a-z0-9]+/i.test(raw)) return 'pikpak';
-            if (/https?:\/\/(?:www\.)?lanzou[a-z0-9]*\.[a-z.]+\/[a-z0-9]+/i.test(raw)) return 'lanzou';
-            if (/https?:\/\/drive\.google\.com\//i.test(raw)) return 'google_drive';
-            if (/https?:\/\/(?:1drv\.ms|onedrive\.live\.com)\//i.test(raw)) return 'onedrive';
-            if (/https?:\/\/mega\.nz\//i.test(raw)) return 'mega';
-            if (lowered.startsWith('http://') || lowered.startsWith('https://')) return 'link';
-            return 'unknown';
+            return window.ResourceLinkTags.resolveActionType({ link_url: url });
         }
 
         function getEffectiveResourceLinkType(item) {
-            const rawType = String(item?.link_type || '').trim().toLowerCase();
-            const detected = detectResourceLinkTypeByUrl(item?.link_url || '');
-            if (detected !== 'unknown') return detected;
-            return rawType || 'unknown';
+            return window.ResourceLinkTags.resolveActionType(item);
         }
 
         function getResourceRefreshTargetLabel(targetType) {
@@ -1699,6 +1694,7 @@
         }
 
         function buildResourceCard(item) {
+            const displayType = getResourceDisplayLinkType(item);
             const importOpenable = canOpenResourceImport(item);
             const importClass = importOpenable ? 'resource-card-action-primary' : 'resource-card-action-secondary resource-card-action-disabled';
             const copyDisabled = String(item?.link_url || item?.raw_text || item?.title || '').trim() ? '' : 'resource-card-action-disabled';
@@ -1712,7 +1708,7 @@
                             <button type="button" data-resource-action="preview" data-resource-id="${item.id}" class="resource-card-title break-words text-left bg-transparent border-none p-0 hover:text-sky-700 transition-colors">${escapeHtml(item?.title || '未命名资源')}</button>
                             <div class="resource-card-badges">
                                 ${buildResourceStatusBadge(getResourceDisplayStatus(item))}
-                                <span class="${escapeHtml(getResourceLinkTypeBadgeClass(getEffectiveResourceLinkType(item)))}">${escapeHtml(getResourceLinkTypeLabel(getEffectiveResourceLinkType(item)))}</span>
+                                <span class="${escapeHtml(getResourceDisplayLinkTypeBadgeClass(displayType))}">${escapeHtml(getResourceDisplayLinkTypeLabel(displayType))}</span>
                                 ${item?.quality ? `<span class="text-[10px] px-3 py-1 rounded-full bg-sky-500/15 text-sky-300 border border-sky-500/20">${escapeHtml(item.quality)}</span>` : ''}
                                 ${item?.year ? `<span class="text-[10px] px-3 py-1 rounded-full bg-violet-500/15 text-violet-300 border border-violet-500/20">${escapeHtml(item.year)}</span>` : ''}
                             </div>
@@ -2118,7 +2114,14 @@
             const secondaryBadge = isSearchSection
                 ? (isPansouSection ? '外部搜索' : `${escapeHtml(String(section?.pages_scanned || 0))} 页`)
                 : `缓存 ${escapeHtml(String(section.item_count || (section.items || []).length || 0))}`;
-            const primaryType = getResourceLinkTypeLabel(section?.primary_link_type || section?.channel_profile?.primary_link_type || 'unknown');
+            const fallbackDisplayProfile = {
+                ...(section?.channel_profile && typeof section.channel_profile === 'object' ? section.channel_profile : {}),
+                primary_link_type: section?.primary_link_type || section?.channel_profile?.primary_link_type || 'unknown',
+                dominant_link_types: section?.dominant_link_types || section?.channel_profile?.dominant_link_types || [],
+                link_type_counts: section?.link_type_counts || section?.channel_profile?.link_type_counts || {},
+            };
+            const displayProfile = buildResourceDisplayProfile(sectionItems, fallbackDisplayProfile);
+            const primaryDisplayType = String(displayProfile?.primary_link_type || 'unknown').trim().toLowerCase() || 'unknown';
             const latestPublishedAt = String(section?.latest_published_at || section?.channel_profile?.latest_published_at || '').trim();
             const subtleText = isSearchSection
                 ? (isPansouSection ? `关键词「${escapeHtml(keyword)}」 · 类型 ${escapeHtml(getResourceProviderFilterLabel())}` : `关键词「${escapeHtml(keyword)}」`)
@@ -2139,7 +2142,7 @@
                                 ${isPansouSection ? '<span class="resource-section-chip resource-section-chip-accent">PanSou</span>' : `<span class="resource-section-chip">@${escapeHtml(section.channel_id || '--')}</span>`}
                                 <span class="resource-section-chip resource-section-chip-accent">${primaryBadge}</span>
                                 <span class="resource-section-chip">${secondaryBadge}</span>
-                                ${!isSearchSection ? `<span class="resource-section-chip">${escapeHtml(primaryType)}</span>` : ''}
+                                ${!isSearchSection ? `<span class="${escapeHtml(getResourceDisplayLinkTypeBadgeClass(primaryDisplayType))}">${escapeHtml(getResourceDisplayLinkTypeLabel(primaryDisplayType))}</span>` : ''}
                                 ${!isSearchSection && section.last_error ? '<span class="resource-section-chip resource-section-chip-warn">同步异常</span>' : ''}
                             </div>
                             <div class="resource-section-subtle">${subtleText}</div>
@@ -3576,6 +3579,10 @@
             getResourceSelectedMagnetProvider,
             getResourceProviderByLinkType,
             getEffectiveResourceLinkType,
+            buildResourceDisplayProfile,
+            getResourceDisplayLinkType,
+            getResourceDisplayLinkTypeBadgeClass,
+            getResourceDisplayLinkTypeLabel,
             isLinkTypeCookieConfigured,
             isProviderCookieConfigured,
             normalizeReceiveCodeInput,

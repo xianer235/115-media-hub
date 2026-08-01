@@ -65,7 +65,7 @@
                 .sort((a, b) => {
                     const countDiff = Number(b[1]) - Number(a[1]);
                     if (countDiff !== 0) return countDiff;
-                    return String(getResourceLinkTypeLabel(a[0])).localeCompare(String(getResourceLinkTypeLabel(b[0])));
+                    return window.ResourceLinkTags.getTagMeta(a[0]).order - window.ResourceLinkTags.getTagMeta(b[0]).order;
                 })
                 .map(([type]) => type);
             const nonUnknown = sorted.filter(type => type !== 'unknown');
@@ -95,7 +95,7 @@
                 .map(type => {
                     const count = getResourceSourceTypeCount(profile, type);
                     const countText = count > 0 ? ` ${count}` : '';
-                    return `<span class="resource-source-manager-type-badge">${escapeHtml(getResourceLinkTypeLabel(type))}${escapeHtml(countText)}</span>`;
+                    return `<span class="${escapeHtml(getResourceDisplayLinkTypeBadgeClass(type))}">${escapeHtml(getResourceDisplayLinkTypeLabel(type))}${escapeHtml(countText)}</span>`;
                 })
                 .join('');
         }
@@ -131,10 +131,28 @@
             const profileFromState = resourceState?.channel_profiles && typeof resourceState.channel_profiles === 'object'
                 ? resourceState.channel_profiles[channelId]
                 : null;
-            if (profileFromState && typeof profileFromState === 'object') return profileFromState;
             const section = sectionIndex[channelId];
-            if (section?.channel_profile && typeof section.channel_profile === 'object') return section.channel_profile;
-            return {};
+            const sectionProfile = section?.channel_profile && typeof section.channel_profile === 'object'
+                ? section.channel_profile
+                : {};
+            const fallbackProfile = {
+                ...sectionProfile,
+                ...(profileFromState && typeof profileFromState === 'object' ? profileFromState : {}),
+                primary_link_type: profileFromState?.primary_link_type
+                    || section?.primary_link_type
+                    || sectionProfile.primary_link_type
+                    || 'unknown',
+                dominant_link_types: profileFromState?.dominant_link_types
+                    || section?.dominant_link_types
+                    || sectionProfile.dominant_link_types
+                    || [],
+                link_type_counts: profileFromState?.link_type_counts
+                    || section?.link_type_counts
+                    || sectionProfile.link_type_counts
+                    || {},
+            };
+            const sectionItems = Array.isArray(section?.items) ? section.items : [];
+            return buildResourceDisplayProfile(sectionItems, fallbackProfile);
         }
 
         function parseResourceTimeMs(value) {
@@ -316,12 +334,12 @@
                 .sort((a, b) => {
                     const countDiff = Number(b[1] || 0) - Number(a[1] || 0);
                     if (countDiff !== 0) return countDiff;
-                    return String(getResourceLinkTypeLabel(a[0])).localeCompare(String(getResourceLinkTypeLabel(b[0])));
+                    return window.ResourceLinkTags.getTagMeta(a[0]).order - window.ResourceLinkTags.getTagMeta(b[0]).order;
                 })
                 .forEach(([type, count]) => {
                     options.push({
                         value: String(type),
-                        label: getResourceLinkTypeLabel(type),
+                        label: getResourceDisplayLinkTypeLabel(type),
                         count: Number(count || 0),
                     });
                 });
@@ -1180,7 +1198,7 @@
                     const latestAge = view.latestPublishedMs ? formatResourceAgeText(view.latestPublishedMs) : '待同步';
                     const typeText = (Array.isArray(view.sourceTypes) ? view.sourceTypes : [])
                         .slice(0, 3)
-                        .map(type => getResourceLinkTypeLabel(type))
+                        .map(type => getResourceDisplayLinkTypeLabel(type))
                         .join(' / ');
                     const typeBadges = renderResourceSourceTypeBadges(view.profile, view.sourceTypes);
                     const upDisabled = position <= 0 ? 'btn-disabled' : '';
@@ -1209,7 +1227,7 @@
                                     ${typeBadges}
                                     <span class="text-[10px] px-2 py-0.5 rounded-full ${usageBadgeClass}">${escapeHtml(usageLabel)}</span>
                                 </div>
-                                <div class="resource-source-manager-row-meta">类型：${escapeHtml(typeText || getResourceLinkTypeLabel(view.primaryType || 'unknown'))} · 最近：${escapeHtml(latestAge)}</div>
+                                <div class="resource-source-manager-row-meta">类型：${escapeHtml(typeText || getResourceDisplayLinkTypeLabel(view.primaryType || 'unknown'))} · 最近：${escapeHtml(latestAge)}</div>
                             </div>
                             <div class="resource-source-manager-row-actions">
                                 <button type="button" data-resource-source-manager-action="sort-up" data-source-index="${view.index}" class="resource-source-compact-btn ${upDisabled}" ${position <= 0 ? 'disabled' : ''}>上移</button>
@@ -1236,7 +1254,7 @@
                 const latestAge = view.latestPublishedMs ? formatResourceAgeText(view.latestPublishedMs) : '待同步';
                 const typeText = (Array.isArray(view.sourceTypes) ? view.sourceTypes : [])
                     .slice(0, 3)
-                    .map(type => getResourceLinkTypeLabel(type))
+                    .map(type => getResourceDisplayLinkTypeLabel(type))
                     .join(' / ');
                 const supportSearched = Math.max(0, Number(view?.support?.searched_runs || 0));
                 const supportMatched = Math.max(0, Number(view?.support?.matched_runs || 0));
@@ -1261,7 +1279,7 @@
                                 ${typeBadges}
                                 <span class="text-[10px] px-2 py-0.5 rounded-full ${usageBadgeClass}">${escapeHtml(usageLabel)}</span>
                             </div>
-                            <div class="resource-source-manager-row-meta">类型：${escapeHtml(typeText || getResourceLinkTypeLabel(view.primaryType || 'unknown'))} · 活跃度：${escapeHtml(getResourceSourceActivityBucketLabel(view.activityBucket))} · 最近：${escapeHtml(latestAge)}${latest ? `（${escapeHtml(formatTimeText(latest))}）` : ''} · ${escapeHtml(supportText)}</div>
+                            <div class="resource-source-manager-row-meta">类型：${escapeHtml(typeText || getResourceDisplayLinkTypeLabel(view.primaryType || 'unknown'))} · 活跃度：${escapeHtml(getResourceSourceActivityBucketLabel(view.activityBucket))} · 最近：${escapeHtml(latestAge)}${latest ? `（${escapeHtml(formatTimeText(latest))}）` : ''} · ${escapeHtml(supportText)}</div>
                         </div>
                         <div class="resource-source-manager-row-actions">
                             <select data-resource-source-usage-select="1" data-source-index="${view.index}" class="resource-source-usage-select" aria-label="设置 ${escapeHtml(view.source.name || view.channelId || '频道')} 的用途">
