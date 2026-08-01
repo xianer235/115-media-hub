@@ -12354,6 +12354,26 @@
             }
         }
 
+        @media (max-width: 640px) and (orientation: portrait) {
+            .resource-card {
+                grid-template-areas:
+                    "poster main"
+                    "actions actions";
+            }
+
+            .resource-card-actions {
+                display: grid;
+                grid-template-columns: repeat(4, minmax(0, 1fr));
+                width: 100%;
+            }
+
+            .resource-card-actions button,
+            .resource-card-actions a {
+                min-width: 0;
+                padding-inline: 0.35rem;
+            }
+        }
+
         html.theme-day {
             --bg: #eef4fb;
             --surface: #f8fbff;
