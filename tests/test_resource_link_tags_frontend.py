@@ -236,8 +236,8 @@ class ResourceLinkTagsIntegrationTest(unittest.TestCase):
         self.assertIn("const displayType = getResourceDisplayLinkType(item);", card_body)
         self.assertIn("getResourceDisplayLinkTypeBadgeClass(displayType)", card_body)
         self.assertIn("getResourceDisplayLinkTypeLabel(displayType)", card_body)
-        self.assertIn("buildResourceDisplayProfile(sectionItems", section_body)
-        self.assertIn("getResourceDisplayLinkTypeBadgeClass(primaryDisplayType)", section_body)
+        self.assertNotIn("buildResourceDisplayProfile(sectionItems", section_body)
+        self.assertNotIn("getResourceDisplayLinkTypeBadgeClass(primaryDisplayType)", section_body)
 
     def test_resource_core_exports_display_helpers_for_channel_manager(self):
         source = CORE_PATH.read_text(encoding="utf-8")

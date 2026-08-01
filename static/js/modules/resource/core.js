@@ -2114,14 +2114,6 @@
             const secondaryBadge = isSearchSection
                 ? (isPansouSection ? '外部搜索' : `${escapeHtml(String(section?.pages_scanned || 0))} 页`)
                 : `缓存 ${escapeHtml(String(section.item_count || (section.items || []).length || 0))}`;
-            const fallbackDisplayProfile = {
-                ...(section?.channel_profile && typeof section.channel_profile === 'object' ? section.channel_profile : {}),
-                primary_link_type: section?.primary_link_type || section?.channel_profile?.primary_link_type || 'unknown',
-                dominant_link_types: section?.dominant_link_types || section?.channel_profile?.dominant_link_types || [],
-                link_type_counts: section?.link_type_counts || section?.channel_profile?.link_type_counts || {},
-            };
-            const displayProfile = buildResourceDisplayProfile(sectionItems, fallbackDisplayProfile);
-            const primaryDisplayType = String(displayProfile?.primary_link_type || 'unknown').trim().toLowerCase() || 'unknown';
             const latestPublishedAt = String(section?.latest_published_at || section?.channel_profile?.latest_published_at || '').trim();
             const subtleText = isSearchSection
                 ? (isPansouSection ? `关键词「${escapeHtml(keyword)}」 · 类型 ${escapeHtml(getResourceProviderFilterLabel())}` : `关键词「${escapeHtml(keyword)}」`)
@@ -2142,7 +2134,6 @@
                                 ${isPansouSection ? '<span class="resource-section-chip resource-section-chip-accent">PanSou</span>' : `<span class="resource-section-chip">@${escapeHtml(section.channel_id || '--')}</span>`}
                                 <span class="resource-section-chip resource-section-chip-accent">${primaryBadge}</span>
                                 <span class="resource-section-chip">${secondaryBadge}</span>
-                                ${!isSearchSection ? `<span class="${escapeHtml(getResourceDisplayLinkTypeBadgeClass(primaryDisplayType))}">${escapeHtml(getResourceDisplayLinkTypeLabel(primaryDisplayType))}</span>` : ''}
                                 ${!isSearchSection && section.last_error ? '<span class="resource-section-chip resource-section-chip-warn">同步异常</span>' : ''}
                             </div>
                             <div class="resource-section-subtle">${subtleText}</div>
