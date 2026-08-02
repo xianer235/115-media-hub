@@ -192,8 +192,7 @@
             } else {
                 scheduleText = `${weekdayText} ${windowText} 每 ${scheduleIntervalMinutes} 分钟查询一次，下次执行 ${String(nextRun || '计算中')}`;
             }
-            const latestMatched = String(task?.matched_resource_title || '').trim();
-            const latestText = latestMatched ? `最近命中：${latestMatched}` : '最近尚未命中资源';
+            const latestText = buildSubscriptionLatestMatchText(task);
             const modeText = isTv ? (multiSeasonMode ? '多季合一追更' : '单季追更') : '命中资源后即执行';
             const fixedShareText = fixedShareLink
                 ? (fixedLinkChannelSearch ? '，固定分享链接兜底' : '，固定分享链接已填写（未启用兜底）')
@@ -583,16 +582,88 @@
             return getSubscriptionProviderLabel(provider);
         }
 
-        function buildSubscriptionProviderBadge(provider) {
+        function normalizeSubscriptionDate(value) {
+            if (!value) return null;
+            const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+            return Number.isNaN(date.getTime()) ? null : date;
+        }
+
+        function formatSubscriptionDateParts(date, includeYear = false) {
+            const normalized = normalizeSubscriptionDate(date);
+            if (!normalized) return '';
+            const year = String(normalized.getFullYear()).padStart(4, '0');
+            const month = String(normalized.getMonth() + 1).padStart(2, '0');
+            const day = String(normalized.getDate()).padStart(2, '0');
+            return includeYear ? `${year}-${month}-${day}` : `${month}-${day}`;
+        }
+
+        function getSubscriptionCalendarDayNumber(date) {
+            const normalized = normalizeSubscriptionDate(date);
+            if (!normalized) return NaN;
+            return Date.UTC(normalized.getFullYear(), normalized.getMonth(), normalized.getDate()) / 86400000;
+        }
+
+        function formatSubscriptionLastHitAge(value, nowValue = new Date()) {
+            const hitDate = normalizeSubscriptionDate(value);
+            const nowDate = normalizeSubscriptionDate(nowValue) || new Date();
+            if (!hitDate) return '';
+            const dayDiff = getSubscriptionCalendarDayNumber(nowDate) - getSubscriptionCalendarDayNumber(hitDate);
+            if (dayDiff === 0) return '今天';
+            if (dayDiff === 1) return '昨天';
+            if (dayDiff >= 2 && dayDiff < 30) return `${dayDiff}天前`;
+            return formatSubscriptionDateParts(hitDate, hitDate.getFullYear() !== nowDate.getFullYear());
+        }
+
+        function formatSubscriptionLastHitDateTime(value) {
+            const date = normalizeSubscriptionDate(value);
+            if (!date) return '';
+            const dateText = formatSubscriptionDateParts(date, true);
+            const hours = String(date.getHours()).padStart(2, '0');
+            const minutes = String(date.getMinutes()).padStart(2, '0');
+            return `${dateText} ${hours}:${minutes}`;
+        }
+
+        function buildSubscriptionLastHitBadge(task) {
+            const payload = task && typeof task === 'object' ? task : {};
+            const matchedTitle = String(payload.matched_resource_title || '').trim();
+            const timestamp = String(payload.last_success_at || '').trim();
+            const dateText = formatSubscriptionLastHitDateTime(timestamp);
+            const hasDate = !!dateText;
+            const label = hasDate
+                ? `最近命中 · ${formatSubscriptionLastHitAge(timestamp)}`
+                : (matchedTitle ? '命中日期未知' : '尚未命中');
+            const className = `subscription-last-hit-badge${hasDate ? '' : ' subscription-last-hit-badge-empty'}`;
+            const title = hasDate ? `最近命中：${dateText}` : label;
+            return `<span class="${className}" title="${escapeHtml(title)}">${escapeHtml(label)}</span>`;
+        }
+
+        function buildSubscriptionLatestMatchText(task) {
+            const payload = task && typeof task === 'object' ? task : {};
+            const matchedTitle = String(payload.matched_resource_title || '').trim();
+            const dateText = formatSubscriptionLastHitDateTime(payload.last_success_at);
+            if (matchedTitle && dateText) return `最近命中：${matchedTitle} · ${dateText}`;
+            if (matchedTitle) return `最近命中：${matchedTitle}（日期未记录）`;
+            if (dateText) return `最近命中时间：${dateText}`;
+            return '最近尚未命中资源';
+        }
+
+        function getSubscriptionProviderBadgeMeta(provider) {
             const normalized = normalizeSubscriptionProvider(provider, '115');
-            const label = getSubscriptionProviderBadgeLabel(normalized);
-            const linkType = ((window.providerMeta || []).find(m => m.name === normalized) || {}).link_type || '';
-            const className = linkType === 'quark'
-                ? 'resource-card-type-badge resource-card-type-badge-quark'
-                : (linkType === '115share'
-                    ? 'resource-card-type-badge resource-card-type-badge-115share'
-                    : 'resource-card-type-badge resource-card-type-badge-default');
-            return `<span class="${className}">${escapeHtml(label)}</span>`;
+            const providerMeta = (window.providerMeta || []).find(m => m.name === normalized) || {};
+            const linkType = String(providerMeta.link_type || '').trim().toLowerCase();
+            const tagMeta = window.ResourceLinkTags?.getTagMeta
+                ? window.ResourceLinkTags.getTagMeta(linkType)
+                : { tone: 'neutral' };
+            const tone = String(tagMeta?.tone || 'neutral').trim() || 'neutral';
+            return {
+                label: getSubscriptionProviderBadgeLabel(normalized),
+                className: `resource-link-tag resource-link-tag--${tone}`,
+            };
+        }
+
+        function buildSubscriptionProviderBadge(provider) {
+            const meta = getSubscriptionProviderBadgeMeta(provider);
+            return `<span class="${meta.className}">${escapeHtml(meta.label)}</span>`;
         }
 
         function getCurrentSubscriptionProvider() {
@@ -2080,6 +2151,7 @@
                 const strictBadgeHtml = task?.strict_title_match
                     ? '<span class="subscription-strict-match-badge">精准</span>'
                     : '';
+                const lastHitBadgeHtml = buildSubscriptionLastHitBadge(task);
                 const running = subscriptionState.running && subscriptionState.current_task === taskName;
                 const queued = (subscriptionState.queued || []).includes(taskName);
                 const status = running ? 'running' : (task.status || 'idle');
@@ -2182,6 +2254,7 @@
                                         <span class="text-lg font-black text-white break-all leading-tight">${escapeHtml(displayTitle)}</span>
                                         ${providerBadgeHtml}
                                         ${strictBadgeHtml}
+                                        ${lastHitBadgeHtml}
                                     </div>
                                 </button>
                                 <button

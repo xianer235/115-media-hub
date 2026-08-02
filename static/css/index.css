@@ -9759,6 +9759,27 @@
             line-height: 1;
             white-space: nowrap;
         }
+        #page-subscription .subscription-last-hit-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            height: 1.25rem;
+            padding: 0 0.5rem;
+            border-radius: 9999px;
+            border: 1px solid rgba(56, 189, 248, 0.44);
+            background: rgba(14, 116, 144, 0.2);
+            color: #bae6fd;
+            font-size: 10px;
+            font-weight: 700;
+            line-height: 1;
+            white-space: nowrap;
+        }
+        #page-subscription .subscription-last-hit-badge-empty {
+            border-style: dashed;
+            border-color: rgba(148, 163, 184, 0.4);
+            background: rgba(51, 65, 85, 0.52);
+            color: #cbd5e1;
+        }
         html.theme-day #page-subscription .subscription-task-search-btn {
             background: #0e7490 !important;
             color: #ffffff !important;
@@ -9774,6 +9795,17 @@
             border-color: rgba(21, 128, 61, 0.5);
             color: #14532d;
             box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.76), 0 1px 2px rgba(15, 23, 42, 0.08);
+        }
+        html.theme-day #page-subscription .subscription-last-hit-badge {
+            background: #e0f2fe;
+            border-color: rgba(14, 116, 144, 0.48);
+            color: #0c4a6e;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.76), 0 1px 2px rgba(15, 23, 42, 0.08);
+        }
+        html.theme-day #page-subscription .subscription-last-hit-badge-empty {
+            background: #f4f4f5;
+            border-color: rgba(148, 163, 184, 0.58);
+            color: #475569;
         }
         html.theme-day #page-subscription .subscription-task-icon-btn,
         html.theme-day #page-subscription .subscription-intro-toggle-btn {
