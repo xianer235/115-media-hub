@@ -1360,15 +1360,23 @@ function renderPlan() {
     }
     const total = Number(plan.total_count || 0);
     const ready = Number(plan.ready_count || 0);
+    const unchanged = Number(plan.unchanged_count || 0);
     const issues = Array.isArray(plan.issues) ? plan.issues : [];
     const warnings = Array.isArray(plan.warnings) ? plan.warnings : [];
-    summary.innerHTML = `
-        <span class="${ready > 0 ? 'scraper-ok-text' : 'scraper-warn-text'}">${ready > 0 ? '可执行' : '需要处理'}</span>
-        <span> / 已勾选 ${escapeHtml(String(selectedReadyCount))} 项，${escapeHtml(String(ready))} / ${escapeHtml(String(total))} 项可执行${issues.length ? ` / ${escapeHtml(String(issues.length))} 个冲突` : ''}${warnings.length ? ` / ${escapeHtml(String(warnings.length))} 个提醒` : ''}</span>
-    `;
+    if (total === 0 && unchanged > 0) {
+        summary.innerHTML = `
+            <span class="scraper-ok-text">无需改名</span>
+            <span> / 已跳过 ${escapeHtml(String(unchanged))} 项无变化文件</span>
+        `;
+    } else {
+        summary.innerHTML = `
+            <span class="${ready > 0 ? 'scraper-ok-text' : 'scraper-warn-text'}">${ready > 0 ? '可执行' : '需要处理'}</span>
+            <span> / 已勾选 ${escapeHtml(String(selectedReadyCount))} 项，${escapeHtml(String(ready))} / ${escapeHtml(String(total))} 项可执行${unchanged > 0 ? ` / 已跳过 ${escapeHtml(String(unchanged))} 项无变化` : ''}${issues.length ? ` / ${escapeHtml(String(issues.length))} 个冲突` : ''}${warnings.length ? ` / ${escapeHtml(String(warnings.length))} 个提醒` : ''}</span>
+        `;
+    }
     const actions = Array.isArray(plan.actions) ? plan.actions : [];
     if (!actions.length) {
-        list.innerHTML = '<div class="scraper-empty-row">没有可改名文件。</div>';
+        list.innerHTML = '<div class="scraper-empty-row">没有需要改名的文件。</div>';
         return;
     }
     list.innerHTML = '';
@@ -1910,12 +1918,17 @@ async function requestPlan(payload, { resetPlan = false } = {}) {
 
 function showPlanReadyToast(data) {
     const warningCount = Array.isArray(data.warnings) ? data.warnings.length : 0;
+    const readyCount = Number(data.ready_count || 0);
+    const totalCount = Number(data.total_count || 0);
+    const unchangedCount = Number(data.unchanged_count || 0);
+    const unchangedNote = unchangedCount > 0 ? `，已跳过 ${unchangedCount} 项无变化` : '';
+    const noChangeOnly = readyCount <= 0 && totalCount === 0 && unchangedCount > 0;
     showToast(
-        Number(data.ready_count || 0) > 0
-            ? (warningCount > 0 ? `预览已生成，含 ${warningCount} 个提醒` : '预览已生成，请勾选确认后执行')
-            : '预览没有可执行项，请处理冲突后再试',
+        readyCount > 0
+            ? (warningCount > 0 ? `预览已生成，含 ${warningCount} 个提醒${unchangedNote}` : `预览已生成，请勾选确认后执行${unchangedNote}`)
+            : (noChangeOnly ? '识别完成，没有需要改名的文件' : `预览没有可执行项，请处理冲突后再试${unchangedNote}`),
         {
-            tone: Number(data.ready_count || 0) > 0 ? (warningCount > 0 ? 'warn' : 'success') : 'warn',
+            tone: readyCount > 0 ? (warningCount > 0 ? 'warn' : 'success') : (noChangeOnly ? 'info' : 'warn'),
             duration: 2800,
             placement: 'top-center',
         },

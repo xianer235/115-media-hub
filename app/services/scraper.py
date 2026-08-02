@@ -1217,6 +1217,7 @@ def build_scraper_rename_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
     preview_entries_cache: Dict[Tuple[str, bool], Dict[str, Any]] = {}
     preview_folder_path_cache: Dict[Tuple[str, str], Tuple[str, bool]] = {}
     action_index = 1
+    unchanged_count = 0
     if folder_mode and bool(plan_options.get("rename_selected_folders", True)):
         _, _, target_folder_name = _build_scraper_media_titles(tmdb, plan_options, "")
         for raw in selected:
@@ -1231,6 +1232,8 @@ def build_scraper_rename_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
             old_path = normalize_relative_path(str(entry.get("path", "") or old_name))
             new_name = target_folder_name
             if not new_name or new_name == old_name:
+                if new_name and new_name == old_name:
+                    unchanged_count += 1
                 continue
             action_issue = ""
             if new_name in target_folder_names:
@@ -1281,6 +1284,9 @@ def build_scraper_rename_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
         old_parent_id = str(entry.get("parent_id", "") or base_cid).strip() or "0"
         old_path = normalize_relative_path(str(entry.get("path", "") or entry.get("name", "")))
         action_issue = issue
+        if target_path and target_path == old_path:
+            unchanged_count += 1
+            continue
         target_parent_path = normalize_relative_path(os.path.dirname(target_path).replace("\\", "/")) if target_path else ""
         new_name = os.path.basename(target_path) if target_path else ""
         existing_parent_id = ""
@@ -1344,6 +1350,7 @@ def build_scraper_rename_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
         "ready": bool(actions) and ready_count == len(actions) and not issues,
         "ready_count": ready_count,
         "total_count": len(actions),
+        "unchanged_count": unchanged_count,
         "tmdb": tmdb,
         "options": plan_options,
     }
@@ -1652,13 +1659,13 @@ def _execute_move_rename(
         target_name = str(action.get("new_name", "") or "")
     if not target_name:
         raise RuntimeError("目标文件名为空")
-    if _target_name_exists(provider, cookie, target_parent, target_name, same_entry_id=entry_id):
-        raise RuntimeError("目标目录中已有同名文件")
     need_move = source_parent != target_parent
     need_rename = source_name != target_name
     responses: List[Dict[str, Any]] = []
     if not need_move and not need_rename:
         return {"skipped": True, "detail": "文件名和目录未变化"}
+    if _target_name_exists(provider, cookie, target_parent, target_name, same_entry_id=entry_id):
+        raise RuntimeError("目标目录中已有同名文件")
     if need_move and need_rename:
         temp_name = _build_temp_name(int(action.get("id", 0) or 0), entry_id, source_name)
         responses.append(_rename_provider_entry(provider, cookie, entry_id, temp_name, source_parent))
