@@ -57,6 +57,7 @@ class ResourceLinkTagsRegistryTest(unittest.TestCase):
                 "mega",
                 "magnet",
                 "ed2k",
+                "telegra_ed2k",
                 "link",
                 "unknown",
             ],
@@ -82,6 +83,20 @@ class ResourceLinkTagsRegistryTest(unittest.TestCase):
         self.assertTrue(all(item["meta"]["label"] == "光鸭网盘" for item in result))
         self.assertTrue(all(item["meta"]["category"] == "cloud" for item in result))
         self.assertTrue(all(item["meta"]["tone"] == "lime" for item in result))
+        self.assertTrue(all(item["meta"]["importMode"] == "none" for item in result))
+
+    def test_telegra_pages_are_the_only_external_ed2k_import_pages(self):
+        cases = [
+            ["ed2k://|file|movie.mkv|1024|0123456789abcdef0123456789abcdef|/", "ed2k", "ed2k", "ed2k-direct"],
+            ["https://telegra.ph/season-08-04", "telegra_ed2k", "ed2k", "ed2k-page"],
+            ["https://example.com/season", "link", "link", "none"],
+            ["https://guangyapan.com/s/abc-123", "guangya", "link", "none"],
+        ]
+        result = run_link_tags(
+            f"{json.dumps(cases)}.map(([link_url]) => {{ const display = api.resolveDisplayType({{ link_url }}); const meta = api.getTagMeta(display); return [display, api.resolveActionType({{ link_url }}), meta.importMode]; }})"
+        )
+
+        self.assertEqual(result, [expected[1:] for expected in cases])
 
     def test_guangya_non_share_urls_remain_direct_links(self):
         urls = [
@@ -161,7 +176,8 @@ class ResourceLinkTagsRegistryTest(unittest.TestCase):
                 "category": "unknown",
                 "tone": "neutral",
                 "actionType": "unknown",
-                "order": 17,
+                "importMode": "none",
+                "order": 18,
             },
         )
 

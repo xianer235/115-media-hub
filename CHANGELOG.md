@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.5] - 2026-08-04
+- Telegraph 电驴页面仅识别 `telegra.ph`，资源卡显示“电驴”并在导入时解析页面中的 ED2K 文件；直接 `ed2k://` 导入保持不变。
+- 普通 HTTP(S) 直链不再进入电驴解析流程；光鸭网盘及其他未接入网盘链接仅展示识别标签，下载按钮明确禁用。
+- 电驴页面解析接口增加 `telegra.ph` 输入与同域跳转限制，避免绕过前端解析任意外部页面；115、夸克、阿里、天翼与 123 云盘分享转存不受影响。
+
 ## [0.5.4] - 2026-08-03
 - 修复刮削标准命名重复识别时仍创建无变化改名动作的问题：完整路径未变化的文件直接从计划中排除，不再重复查询目标目录。
 - 执行层在目录冲突检查前判断移动和重命名需求，避免旧任务或重复提交对无变化文件发起网盘访问；同名跨目录仍只执行移动。

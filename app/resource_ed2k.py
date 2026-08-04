@@ -20,6 +20,7 @@ ED2K_PAGE_ALLOWED_CONTENT_TYPES = (
     "text/plain",
     "application/xhtml+xml",
 )
+ED2K_PAGE_ALLOWED_HOST = "telegra.ph"
 ED2K_FOLDER_CHARACTER_REPLACEMENTS = str.maketrans(
     {
         "*": "＊",
@@ -188,6 +189,21 @@ def validate_public_http_url(
     )
 
 
+def is_allowed_ed2k_page_url(value: Any) -> bool:
+    parsed = urllib.parse.urlsplit(str(value or "").strip())
+    host = str(parsed.hostname or "").strip().rstrip(".").lower()
+    return parsed.scheme.lower() in ("http", "https") and host == ED2K_PAGE_ALLOWED_HOST
+
+
+def validate_ed2k_page_url(
+    value: Any,
+    dns_resolver: Optional[Callable[..., Any]] = None,
+) -> str:
+    if not is_allowed_ed2k_page_url(value):
+        raise ValueError("当前仅支持 telegra.ph 电驴页面")
+    return validate_public_http_url(value, dns_resolver=dns_resolver)
+
+
 def _read_limited_text_response(response: Any) -> str:
     content_type = str(response.headers.get("Content-Type", "") or "").split(";", 1)[0].strip().lower()
     if content_type not in ED2K_PAGE_ALLOWED_CONTENT_TYPES:
@@ -222,7 +238,7 @@ def resolve_ed2k_page(
     session: Optional[requests.Session] = None,
     dns_resolver: Optional[Callable[..., Any]] = None,
 ) -> Dict[str, Any]:
-    source_url = validate_public_http_url(url, dns_resolver=dns_resolver)
+    source_url = validate_ed2k_page_url(url, dns_resolver=dns_resolver)
     active_cfg = cfg if isinstance(cfg, dict) else {}
     proxy_url = build_tg_proxy_url(active_cfg)
     proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else {}
@@ -250,7 +266,7 @@ def resolve_ed2k_page(
                     raise RuntimeError("外链跳转响应缺少目标地址")
                 if redirect_count >= ED2K_PAGE_MAX_REDIRECTS:
                     raise RuntimeError("外链跳转次数过多")
-                current_url = validate_public_http_url(
+                current_url = validate_ed2k_page_url(
                     urllib.parse.urljoin(current_url, location),
                     dns_resolver=dns_resolver,
                 )
@@ -280,5 +296,7 @@ __all__ = [
     "normalize_ed2k_folder_name",
     "parse_ed2k_link",
     "resolve_ed2k_page",
+    "is_allowed_ed2k_page_url",
+    "validate_ed2k_page_url",
     "validate_public_http_url",
 ]

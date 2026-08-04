@@ -27,6 +27,11 @@
         'slate',
         'neutral',
     ]);
+    const IMPORT_MODES = new Set([
+        'none',
+        'ed2k-direct',
+        'ed2k-page',
+    ]);
     const rawDefinitions = [
         {
             type: '115share',
@@ -158,7 +163,17 @@
             category: 'offline',
             tone: 'pink',
             actionType: 'ed2k',
+            importMode: 'ed2k-direct',
             prefixes: ['ed2k://'],
+        },
+        {
+            type: 'telegra_ed2k',
+            label: '电驴',
+            category: 'offline',
+            tone: 'pink',
+            actionType: 'ed2k',
+            importMode: 'ed2k-page',
+            patterns: [/^https?:\/\/telegra\.ph\/.+/i],
         },
         {
             type: 'link',
@@ -190,6 +205,7 @@
             category,
             tone,
             actionType: normalizeType(raw.actionType || raw.type) || 'unknown',
+            importMode: IMPORT_MODES.has(raw.importMode) ? raw.importMode : 'none',
             patterns: Object.freeze([...(raw.patterns || [])]),
             prefixes: Object.freeze((raw.prefixes || []).map(prefix => String(prefix).toLowerCase())),
             order,
@@ -206,6 +222,7 @@
             category: source.category,
             tone: source.tone,
             actionType: source.actionType,
+            importMode: source.importMode,
             order: source.order,
         });
     }

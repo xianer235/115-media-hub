@@ -1,10 +1,10 @@
 {
-  "version": "0.5.4",
-  "buildDate": "2026-08-03T00:00:00+08:00",
+  "version": "0.5.5",
+  "buildDate": "2026-08-04T00:00:00+08:00",
   "notes": [
-    "刮削标准命名重复识别时跳过完整路径无变化的文件",
-    "无变化文件不再创建改名动作或重复查询目标目录，降低网盘访问次数",
-    "刮削预览显示无变化跳过数量，同名跨目录仍仅执行移动"
+    "Telegraph 电驴页面仅识别 telegra.ph，普通 HTTP(S) 链接不再误触发电驴解析",
+    "光鸭网盘及其他未接入网盘链接保持识别展示，下载按钮明确禁用",
+    "直接 ED2K 和已接入网盘分享转存流程保持不变"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

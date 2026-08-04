@@ -15,7 +15,12 @@ from ..background import submit_background
 from ..core import *  # noqa: F401,F403
 from ..memory import release_process_memory
 from ..providers.registry import get_or_none as get_provider_or_none
-from ..resource_ed2k import normalize_ed2k_folder_name, parse_ed2k_link, resolve_ed2k_page
+from ..resource_ed2k import (
+    is_allowed_ed2k_page_url,
+    normalize_ed2k_folder_name,
+    parse_ed2k_link,
+    resolve_ed2k_page,
+)
 from ..services.resource import (
     cancel_resource_job,
     is_resource_offline_link_type,
@@ -997,6 +1002,8 @@ async def resolve_resource_ed2k_endpoint(request: Request) -> Dict[str, Any]:
     url = str(data.get("url", "") or "").strip()
     if not url:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "请填写 ED2K 资源外链"})
+    if not is_allowed_ed2k_page_url(url):
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "当前仅支持 telegra.ph 电驴页面"})
     fallback_title = str(
         data.get("resource_title", "") or data.get("fallback_title", "") or ""
     ).strip()

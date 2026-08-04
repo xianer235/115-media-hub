@@ -136,7 +136,7 @@ class ResourceEd2kParsingTest(unittest.TestCase):
         }
 
         result = resolve_ed2k_page(
-            "https://example.com/share",
+            "https://telegra.ph/share",
             cfg,
             session=session,
             dns_resolver=public_dns,
@@ -154,7 +154,7 @@ class ResourceEd2kParsingTest(unittest.TestCase):
     def test_resolve_page_rejects_private_target_before_request(self):
         session = FakeSession([])
 
-        with self.assertRaisesRegex(ValueError, "公网"):
+        with self.assertRaisesRegex(ValueError, "telegra\\.ph"):
             resolve_ed2k_page(
                 "http://127.0.0.1/resource",
                 {},
@@ -171,9 +171,37 @@ class ResourceEd2kParsingTest(unittest.TestCase):
             ]
         )
 
-        with self.assertRaisesRegex(ValueError, "公网"):
+        with self.assertRaisesRegex(ValueError, "telegra\\.ph"):
+            resolve_ed2k_page(
+                "https://telegra.ph/share",
+                {},
+                session=session,
+                dns_resolver=public_dns,
+            )
+
+        self.assertEqual(len(session.calls), 1)
+
+    def test_resolve_page_rejects_non_telegra_target_before_request(self):
+        session = FakeSession([])
+
+        with self.assertRaisesRegex(ValueError, "telegra\\.ph"):
             resolve_ed2k_page(
                 "https://example.com/share",
+                {},
+                session=session,
+                dns_resolver=public_dns,
+            )
+
+        self.assertEqual(session.calls, [])
+
+    def test_resolve_page_rejects_cross_domain_redirect_before_second_request(self):
+        session = FakeSession(
+            [FakeResponse(status_code=302, headers={"Location": "https://example.com/redirect"})]
+        )
+
+        with self.assertRaisesRegex(ValueError, "telegra\\.ph"):
+            resolve_ed2k_page(
+                "https://telegra.ph/share",
                 {},
                 session=session,
                 dns_resolver=public_dns,
@@ -310,8 +338,8 @@ class ResourceEd2kResolveRouteTest(unittest.IsolatedAsyncioTestCase):
     async def test_resolve_endpoint_uses_current_config_and_resource_title(self):
         endpoint = self.resolve_endpoint()
         resolved = {
-            "source_url": "https://example.com/share",
-            "final_url": "https://example.com/final",
+            "source_url": "https://telegra.ph/share",
+            "final_url": "https://telegra.ph/final",
             "title": "页面标题",
             "items": [{"filename": "第 1 集.mkv", "link_url": SAMPLE_LINK}],
             "item_count": 1,
@@ -327,7 +355,7 @@ class ResourceEd2kResolveRouteTest(unittest.IsolatedAsyncioTestCase):
             response = await endpoint(
                 FakeJsonRequest(
                     {
-                        "url": "https://example.com/share",
+                        "url": "https://telegra.ph/share",
                         "resource_title": "频道资源标题",
                     }
                 )
@@ -335,7 +363,7 @@ class ResourceEd2kResolveRouteTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response, {"ok": True, **resolved})
         resolver.assert_called_once_with(
-            "https://example.com/share",
+            "https://telegra.ph/share",
             config,
             fallback_title="频道资源标题",
         )
@@ -343,8 +371,8 @@ class ResourceEd2kResolveRouteTest(unittest.IsolatedAsyncioTestCase):
     async def test_resolve_endpoint_accepts_fallback_title_alias(self):
         endpoint = self.resolve_endpoint()
         resolved = {
-            "source_url": "https://example.com/share",
-            "final_url": "https://example.com/share",
+            "source_url": "https://telegra.ph/share",
+            "final_url": "https://telegra.ph/share",
             "title": "候选标题",
             "items": [],
             "item_count": 0,
@@ -359,7 +387,7 @@ class ResourceEd2kResolveRouteTest(unittest.IsolatedAsyncioTestCase):
             response = await endpoint(
                 FakeJsonRequest(
                     {
-                        "url": "https://example.com/share",
+                        "url": "https://telegra.ph/share",
                         "fallback_title": "候选标题",
                     }
                 )
@@ -367,7 +395,7 @@ class ResourceEd2kResolveRouteTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(response["ok"])
         resolver.assert_called_once_with(
-            "https://example.com/share",
+            "https://telegra.ph/share",
             {},
             fallback_title="候选标题",
         )
@@ -385,6 +413,19 @@ class ResourceEd2kResolveRouteTest(unittest.IsolatedAsyncioTestCase):
         )
         resolver.assert_not_called()
 
+    async def test_resolve_endpoint_rejects_non_telegra_url_without_fetching(self):
+        endpoint = self.resolve_endpoint()
+
+        with mock.patch.object(resource_routes, "resolve_ed2k_page") as resolver:
+            response = await endpoint(FakeJsonRequest({"url": "https://example.com/share"}))
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            self.response_json(response),
+            {"ok": False, "msg": "当前仅支持 telegra.ph 电驴页面"},
+        )
+        resolver.assert_not_called()
+
     async def test_resolve_endpoint_returns_clear_client_error(self):
         endpoint = self.resolve_endpoint()
 
@@ -393,7 +434,7 @@ class ResourceEd2kResolveRouteTest(unittest.IsolatedAsyncioTestCase):
             "resolve_ed2k_page",
             side_effect=ValueError("外链必须指向公网地址"),
         ):
-            response = await endpoint(FakeJsonRequest({"url": "http://127.0.0.1/private"}))
+            response = await endpoint(FakeJsonRequest({"url": "https://telegra.ph/share"}))
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(
@@ -409,7 +450,7 @@ class ResourceEd2kResolveRouteTest(unittest.IsolatedAsyncioTestCase):
             "resolve_ed2k_page",
             side_effect=requests.ConnectionError("代理连接失败"),
         ):
-            response = await endpoint(FakeJsonRequest({"url": "https://example.com/share"}))
+            response = await endpoint(FakeJsonRequest({"url": "https://telegra.ph/share"}))
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(

@@ -6,6 +6,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SETTINGS_PATH = ROOT / "static/js/modules/tabs/settings.js"
 CSS_PATH = ROOT / "static/css/index.css"
+CORE_PATH = ROOT / "static/js/modules/resource/core.js"
+IMPORT_MODAL_PATH = ROOT / "static/js/modules/resource/import-modal.js"
 
 
 def extract_css_block(source: str, marker: str) -> str:
@@ -25,6 +27,18 @@ def extract_css_block(source: str, marker: str) -> str:
 
 
 class ResourceCardFrontendTest(unittest.TestCase):
+    def test_only_registry_declared_ed2k_items_can_open_offline_import(self):
+        core = CORE_PATH.read_text(encoding="utf-8")
+        modal = IMPORT_MODAL_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("function getResourceImportMode(item)", core)
+        self.assertIn("getResourceImportMode(item) === 'ed2k-direct'", core)
+        self.assertIn("getResourceImportMode(item) === 'ed2k-page'", core)
+        self.assertNotIn("linkType === 'link' && /^https?:\\/\\//i.test(linkUrl)", core)
+        self.assertIn("return '暂不支持下载';", core)
+        self.assertIn("const importMode = getResourceImportMode(item);", modal)
+        self.assertIn("importMode === 'ed2k-direct'", modal)
+
     def test_settings_copy_names_both_supported_offline_link_types(self):
         source = SETTINGS_PATH.read_text(encoding="utf-8")
 

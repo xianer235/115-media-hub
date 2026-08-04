@@ -24,9 +24,8 @@
         }
 
         function isResourceEd2kImportCandidate(item) {
-            const linkType = getEffectiveResourceLinkType(item);
-            const linkUrl = String(item?.link_url || '').trim();
-            return linkType === 'ed2k' || (linkType === 'link' && /^https?:\/\//i.test(linkUrl));
+            const importMode = getResourceImportMode(item);
+            return importMode === 'ed2k-direct' || importMode === 'ed2k-page';
         }
 
         function isResourceEd2kReady() {
@@ -79,8 +78,8 @@
             resourceEd2kState.sourceUrl = linkUrl;
             renderResourceModalLayout(item);
             try {
-                const linkType = getEffectiveResourceLinkType(item);
-                const data = linkType === 'ed2k'
+                const importMode = getResourceImportMode(item);
+                const data = importMode === 'ed2k-direct'
                     ? {
                         title: String(item?.title || '').trim(),
                         source_url: linkUrl,

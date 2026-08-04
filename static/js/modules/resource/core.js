@@ -288,6 +288,10 @@
             return `resource-link-tag resource-link-tag--${tone}`;
         }
 
+        function getResourceImportMode(item) {
+            return window.ResourceLinkTags.getTagMeta(getResourceDisplayLinkType(item)).importMode;
+        }
+
         function buildResourceDisplayProfile(items, fallbackProfile = {}) {
             return window.ResourceLinkTags.summarize(items, fallbackProfile);
         }
@@ -1169,8 +1173,8 @@
             const linkUrl = String(item?.link_url || '').trim();
             return !!linkUrl && (
                 linkType === 'magnet'
-                || linkType === 'ed2k'
-                || (linkType === 'link' && /^https?:\/\//i.test(linkUrl))
+                || getResourceImportMode(item) === 'ed2k-direct'
+                || getResourceImportMode(item) === 'ed2k-page'
                 || isResourceShareLinkType(linkType)
             );
         }
@@ -1184,10 +1188,14 @@
             const linkType = getEffectiveResourceLinkType(item);
             if (!String(item?.link_url || '').trim()) return '暂无可导入链接';
             if (isResourceShareLinkType(linkType)) return '转存';
-            if (linkType === 'magnet' || linkType === 'ed2k' || linkType === 'link') {
+            if (
+                linkType === 'magnet'
+                || getResourceImportMode(item) === 'ed2k-direct'
+                || getResourceImportMode(item) === 'ed2k-page'
+            ) {
                 return '下载';
             }
-            return '当前不可导入';
+            return '暂不支持下载';
         }
 
         function getResourceCopyLabel(item) {
@@ -3574,6 +3582,7 @@
             getResourceDisplayLinkType,
             getResourceDisplayLinkTypeBadgeClass,
             getResourceDisplayLinkTypeLabel,
+            getResourceImportMode,
             isLinkTypeCookieConfigured,
             isProviderCookieConfigured,
             normalizeReceiveCodeInput,
