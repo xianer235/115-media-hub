@@ -2,6 +2,9 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.7] - 2026-08-04
+- 修复任务中心“删除记录”按钮在浅色主题下不可见的问题：重新生成 Tailwind 样式，补上缺失的 `bg-red-600` 工具类。
+
 ## [0.5.6] - 2026-08-04
 - 修复频道同步在活跃频道第一页资源超过“每频道同步资源数”时只取到最旧一批的问题：同步取样按发布时间/消息号倒序收集，确保入库的是最新资源。
 - 资源任务弹窗（任务中心/任务列表共用）头部只保留“任务列表”标题，删除重复的“任务中心”眉题。

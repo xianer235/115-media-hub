@@ -1,9 +1,8 @@
 {
-  "version": "0.5.6",
+  "version": "0.5.7",
   "buildDate": "2026-08-04T00:00:00+08:00",
   "notes": [
-    "修复活跃频道同步时可能只入库最旧一批、漏掉最新资源的问题",
-    "资源任务弹窗头部仅保留任务列表标题，去除重复眉题"
+    "修复任务中心删除记录按钮在浅色主题下不可见的问题"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"
