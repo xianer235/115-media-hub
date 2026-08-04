@@ -366,11 +366,20 @@
 
             const normalizedFilter = normalizeResourceJobFilter(resourceJobFilter);
             const pageStatus = normalizeResourceJobFilter(resourceState?.job_pagination?.status || 'all');
+            const loadError = String(resourceJobLoadError || '').trim();
+            const loadErrorHtml = loadError
+                ? `
+                    <div class="resource-browser-load-more-row" role="alert">
+                        <div class="resource-job-status-note text-red-300">${escapeHtml(loadError)}</div>
+                        <button type="button" data-resource-job-action="retry-load" class="resource-browser-load-more-btn">重新加载</button>
+                    </div>
+                `
+                : '';
             const visibleJobs = pageStatus === normalizedFilter
                 ? jobs
                 : jobs.filter(job => isResourceJobVisible(job, normalizedFilter));
             if (!visibleJobs.length) {
-                container.innerHTML = `<div class="resource-job-card-empty">${escapeHtml(getResourceJobEmptyText(resourceJobFilter))}</div>`;
+                container.innerHTML = loadErrorHtml || `<div class="resource-job-card-empty">${escapeHtml(getResourceJobEmptyText(resourceJobFilter))}</div>`;
                 return;
             }
 
@@ -380,6 +389,7 @@
                 const normalizedStatus = String(job.status || '').toLowerCase();
                 const canCancel = ['pending', 'running', 'submitted'].includes(normalizedStatus);
                 const canRetry = normalizedStatus === 'failed';
+                const canDelete = ['completed', 'failed'].includes(normalizedStatus);
                 const manualRefreshLabel = !hasMonitorTask ? '当前目录不触发' : (canManualRefresh ? '立即触发刷新' : '无需手动刷新');
                 const cancelLabel = canCancel ? '取消任务' : '不可取消';
                 const retryLabel = canRetry ? '重试任务' : '不可重试';
@@ -429,6 +439,7 @@
                                 <button type="button" data-resource-job-action="cancel" data-resource-job-id="${job.id}" class="px-4 py-2 rounded-xl text-sm font-bold ${canCancel ? 'bg-amber-600 hover:bg-amber-500 text-white' : 'bg-slate-700 text-slate-400 btn-disabled'}" ${canCancel ? '' : 'disabled'}>${cancelLabel}</button>
                                 <button type="button" data-resource-job-action="retry" data-resource-job-id="${job.id}" class="px-4 py-2 rounded-xl text-sm font-bold ${canRetry ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-slate-700 text-slate-400 btn-disabled'}" ${canRetry ? '' : 'disabled'}>${retryLabel}</button>
                                 <button type="button" data-resource-job-action="refresh" data-resource-job-id="${job.id}" class="px-4 py-2 rounded-xl text-sm font-bold ${canManualRefresh ? 'bg-sky-600 hover:bg-sky-500 text-white' : 'bg-slate-700 text-slate-400 btn-disabled'}" ${canManualRefresh ? '' : 'disabled'}>${manualRefreshLabel}</button>
+                                ${canDelete ? `<button type="button" data-resource-job-action="delete" data-resource-job-id="${job.id}" class="px-4 py-2 rounded-xl text-sm font-bold bg-red-600 hover:bg-red-500 text-white">删除记录</button>` : ''}
                             </div>
                         </div>
                     </div>
@@ -454,7 +465,7 @@
                     </div>
                 `
                 : '';
-            container.innerHTML = `${rowsHtml}${loadMoreHtml}`;
+            container.innerHTML = `${rowsHtml}${loadErrorHtml}${loadMoreHtml}`;
         }
 
         function syncResourceJobModalTrigger() {
@@ -695,7 +706,7 @@
                 if (taskCenterTab === 'scraper') {
                     void fetchScraperJobsState();
                 } else {
-                    void fetchResourceJobsPage({ status: resourceJobFilter, offset: 0 });
+                    void fetchResourceJobsPage({ status: resourceJobFilter, reset: true });
                     void fetchScraperJobsState({ silent: true });
                 }
             } else {

@@ -137,6 +137,8 @@
         let resourceJobModalOpen = false;
         let resourceJobClearMenuOpen = false;
         let resourceJobLoadingMore = false;
+        let resourceJobLoadError = '';
+        let resourceJobCalibrationPending = false;
         let taskCenterTab = 'resource';
         let scraperJobState = { jobs: [], job_counts: {}, active_jobs: [] };
         let scraperJobFilter = 'all';
@@ -184,7 +186,6 @@
         let resourceHeavyRenderRafId = null;
         let resourceSubmitBusy = false;
         let resourceSubmitBusyToken = 0;
-        let resourceSubmitRefreshToken = 0;
         let resourceJobFilter = 'all';
         let appMountPoints = [];
         let tgProxyTestState = { loading: false, ok: null, message: '', latency_ms: 0, mode: '', proxy_url: '', target_url: '' };
@@ -318,6 +319,7 @@
         const RESOURCE_SHARE_BRANCH_CACHE_TTL_MS = 1000 * 60 * 10;
         const RESOURCE_SHARE_BROWSE_PAGE_LIMIT = 40;
         const RESOURCE_JOB_PAGE_SIZE = 20;
+        const RESOURCE_JOB_PAGE_MAX_SIZE = 25000;
         const SUBSCRIPTION_WEEKDAY_LABELS = {
             1: '周一',
             2: '周二',

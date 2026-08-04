@@ -665,6 +665,7 @@ RESOURCE_JOB_STALE_RECOVER_SECONDS = max(
 )
 RESOURCE_JOB_COMPLETED_KEEP = max(100, min(10000, int(os.environ.get("RESOURCE_JOB_COMPLETED_KEEP", 1000) or 1000)))
 RESOURCE_JOB_FAILED_KEEP = max(100, min(10000, int(os.environ.get("RESOURCE_JOB_FAILED_KEEP", 500) or 500)))
+RESOURCE_JOB_PAGE_MAX_LIMIT = 25000
 RESOURCE_JOBS_STATE_SNAPSHOT_TTL_SECONDS = max(
     0.0,
     min(5.0, float(os.environ.get("RESOURCE_JOBS_STATE_SNAPSHOT_TTL_SECONDS", 1.5) or 1.5)),
@@ -5707,7 +5708,7 @@ def build_resource_jobs_state_payload(
     include_monitor_tasks: bool = True,
     active_job_limit: int = 80,
 ) -> Dict[str, Any]:
-    normalized_limit = max(1, min(int(limit or 20), 200))
+    normalized_limit = max(1, min(int(limit or 20), RESOURCE_JOB_PAGE_MAX_LIMIT))
     normalized_offset = max(0, int(offset or 0))
     normalized_filter = normalize_resource_job_status_filter(status_filter)
     normalized_active_job_limit = max(1, min(int(active_job_limit or 80), 200))
@@ -5990,7 +5991,7 @@ async def build_resource_state_payload(
     normalized_search_source = normalize_resource_search_source(search_source)
     normalized_provider_filter = normalize_resource_provider_filter(provider_filter)
     normalized_search_id = normalize_resource_search_id(search_id)
-    normalized_job_limit = max(1, min(int(job_limit or 20), 200))
+    normalized_job_limit = max(1, min(int(job_limit or 20), RESOURCE_JOB_PAGE_MAX_LIMIT))
     normalized_job_offset = max(0, int(job_offset or 0))
     normalized_job_status_filter = normalize_resource_job_status_filter(job_status_filter)
     compact_snapshot_key = (
@@ -6730,6 +6731,7 @@ from .resource_jobs import (
     count_resource_jobs_by_status,
     create_resource_job,
     create_resource_jobs,
+    delete_resource_job,
     delete_resource_item,
     find_existing_resource_job,
     get_resource_job,

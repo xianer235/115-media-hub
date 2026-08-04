@@ -586,7 +586,10 @@ async def get_resource_state(request: Request) -> Dict[str, Any]:
     search_source = normalize_resource_search_source(request.query_params.get("search_source", "tg"))
     provider_filter = normalize_resource_provider_filter(request.query_params.get("provider_filter", "all"))
     search_id = normalize_resource_search_id(request.query_params.get("search_id", ""))
-    job_limit = max(1, min(parse_int(request.query_params.get("job_limit", 20), default=20), 200))
+    job_limit = max(
+        1,
+        min(parse_int(request.query_params.get("job_limit", 20), default=20), RESOURCE_JOB_PAGE_MAX_LIMIT),
+    )
     job_offset = max(0, parse_int(request.query_params.get("job_offset", 0), default=0))
     job_status_filter = normalize_resource_job_status_filter(request.query_params.get("job_status", "all"))
     compact = request.query_params.get("compact") == "1"
@@ -619,7 +622,10 @@ async def cancel_resource_search_endpoint(request: Request) -> JSONResponse:
 
 @router.get("/resource/jobs/state")
 async def get_resource_jobs_state(request: Request) -> Dict[str, Any]:
-    limit = max(1, min(parse_int(request.query_params.get("limit", 20), default=20), 200))
+    limit = max(
+        1,
+        min(parse_int(request.query_params.get("limit", 20), default=20), RESOURCE_JOB_PAGE_MAX_LIMIT),
+    )
     offset = max(0, parse_int(request.query_params.get("offset", 0), default=0))
     status_filter = normalize_resource_job_status_filter(request.query_params.get("status", "all"))
     return await asyncio.to_thread(_build_resource_jobs_state_snapshot, limit, offset, status_filter)
@@ -1288,6 +1294,22 @@ async def clear_resource_jobs_endpoint(request: Request) -> Dict[str, Any]:
     if scope not in ("completed", "failed", "terminal"):
         return JSONResponse(status_code=400, content={"ok": False, "msg": "清理范围不支持"})
     result = clear_resource_jobs(scope)
+    return {"ok": True, **result}
+
+
+@router.post("/resource/jobs/delete")
+async def delete_resource_job_endpoint(request: Request) -> Dict[str, Any]:
+    incoming = await request.json()
+    payload = incoming if isinstance(incoming, dict) else {}
+    job_id = parse_int(payload.get("job_id", 0), default=0)
+    if job_id <= 0:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "任务 ID 无效"})
+    try:
+        result = delete_resource_job(job_id)
+    except LookupError as exc:
+        return JSONResponse(status_code=404, content={"ok": False, "msg": str(exc)})
+    except RuntimeError as exc:
+        return JSONResponse(status_code=409, content={"ok": False, "msg": str(exc)})
     return {"ok": True, **result}
 
 

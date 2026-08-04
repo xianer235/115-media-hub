@@ -29,7 +29,7 @@ def _build_resource_job_filter_where(status_filter: str) -> Tuple[str, Tuple[Any
 
 
 def list_resource_jobs_page(limit: int = 20, offset: int = 0, status_filter: str = "") -> Dict[str, Any]:
-    page_limit = max(1, min(int(limit or 20), 200))
+    page_limit = max(1, min(int(limit or 20), RESOURCE_JOB_PAGE_MAX_LIMIT))
     page_offset = max(0, int(offset or 0))
     normalized_filter = normalize_resource_job_status_filter(status_filter)
     where_sql, where_params = _build_resource_job_filter_where(normalized_filter)
@@ -172,6 +172,81 @@ def normalize_resource_job_clear_scope(scope: Any) -> str:
         return "terminal"
     return "completed"
 
+
+def _reset_resource_items_without_jobs(cursor: Any, resource_ids: List[int]) -> int:
+    reset_item_count = 0
+    now = now_text()
+    for resource_id in resource_ids:
+        cursor.execute("SELECT COUNT(1) FROM resource_jobs WHERE resource_id = ?", (resource_id,))
+        remain_row = cursor.fetchone()
+        remains = int(remain_row[0] if remain_row else 0)
+        if remains > 0:
+            continue
+        cursor.execute(
+            "UPDATE resource_items SET status = 'new', last_seen_at = ? WHERE id = ?",
+            (now, resource_id),
+        )
+        reset_item_count += int(cursor.rowcount or 0)
+    return reset_item_count
+
+
+def _reset_resource_jobs_sequence_if_empty(cursor: Any) -> None:
+    cursor.execute("SELECT COUNT(1) FROM resource_jobs")
+    remaining_jobs_row = cursor.fetchone()
+    remaining_jobs = int(remaining_jobs_row[0] if remaining_jobs_row else 0)
+    if remaining_jobs == 0:
+        cursor.execute("DELETE FROM sqlite_sequence WHERE name = 'resource_jobs'")
+
+
+def delete_resource_job(job_id: int) -> Dict[str, int]:
+    try:
+        normalized_job_id = int(job_id or 0)
+    except (TypeError, ValueError):
+        normalized_job_id = 0
+    if normalized_job_id <= 0:
+        raise ValueError("任务 ID 无效")
+
+    ensure_db()
+    with db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("BEGIN IMMEDIATE")
+        cursor.execute(
+            "SELECT resource_id, status FROM resource_jobs WHERE id = ?",
+            (normalized_job_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise LookupError("任务不存在")
+
+        resource_id = max(0, int(row[0] or 0))
+        status = str(row[1] or "").strip().lower()
+        if status not in ("completed", "failed"):
+            raise RuntimeError("仅支持删除已完成或失败的导入任务")
+
+        cursor.execute(
+            "DELETE FROM resource_jobs WHERE id = ? AND status IN ('completed', 'failed')",
+            (normalized_job_id,),
+        )
+        deleted_count = int(cursor.rowcount or 0)
+        if deleted_count != 1:
+            raise RuntimeError("任务状态已变化，请刷新后重试")
+
+        reset_item_count = _reset_resource_items_without_jobs(
+            cursor,
+            [resource_id] if resource_id > 0 else [],
+        )
+        _reset_resource_jobs_sequence_if_empty(cursor)
+        conn.commit()
+
+    invalidate_resource_state_snapshot("resource-job-delete")
+    touch_resource_jobs_state_signal("resource-job-delete")
+    return {
+        "job_id": normalized_job_id,
+        "deleted": deleted_count,
+        "reset_items": reset_item_count,
+    }
+
+
 def clear_resource_jobs(scope: str = "completed") -> Dict[str, int]:
     normalized_scope = normalize_resource_job_clear_scope(scope)
     if normalized_scope == "failed":
@@ -197,26 +272,8 @@ def clear_resource_jobs(scope: str = "completed") -> Dict[str, int]:
         )
         deleted_count = int(cursor.rowcount or 0)
 
-        reset_item_count = 0
-        now = now_text()
-        for resource_id in affected_resource_ids:
-            cursor.execute("SELECT COUNT(1) FROM resource_jobs WHERE resource_id = ?", (resource_id,))
-            remain_row = cursor.fetchone()
-            remains = int(remain_row[0] if remain_row else 0)
-            if remains == 0:
-                cursor.execute(
-                    "UPDATE resource_items SET status = 'new', last_seen_at = ? WHERE id = ?",
-                    (now, resource_id),
-                )
-                reset_item_count += int(cursor.rowcount or 0)
-
-        # If the task table has been fully cleared, reset the AUTOINCREMENT counter
-        # so the next created task starts from 1 again.
-        cursor.execute("SELECT COUNT(1) FROM resource_jobs")
-        remaining_jobs_row = cursor.fetchone()
-        remaining_jobs = int(remaining_jobs_row[0] if remaining_jobs_row else 0)
-        if remaining_jobs == 0:
-            cursor.execute("DELETE FROM sqlite_sequence WHERE name = 'resource_jobs'")
+        reset_item_count = _reset_resource_items_without_jobs(cursor, affected_resource_ids)
+        _reset_resource_jobs_sequence_if_empty(cursor)
 
         conn.commit()
     if deleted_count > 0 or reset_item_count > 0:

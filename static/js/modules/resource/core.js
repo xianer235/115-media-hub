@@ -1546,6 +1546,18 @@
             return normalized || 'new';
         }
 
+        function mergeResourceJobRecords(primaryJobs = [], secondaryJobs = []) {
+            const seen = new Set();
+            return [...(Array.isArray(primaryJobs) ? primaryJobs : []), ...(Array.isArray(secondaryJobs) ? secondaryJobs : [])]
+                .filter((job, index) => {
+                    const jobId = Number(job?.id || 0) || 0;
+                    const key = jobId > 0 ? `id:${jobId}` : `fallback:${String(job?.title || '')}:${index}`;
+                    if (seen.has(key)) return false;
+                    seen.add(key);
+                    return true;
+                });
+        }
+
         function findMatchingResourceJob(item) {
             const itemKeys = uniquePreserveOrder([
                 String(item?.source_post_id || item?.extra?.source_post_id || '').trim() ? `post:${String(item?.source_post_id || item?.extra?.source_post_id || '').trim()}` : '',
@@ -1555,7 +1567,7 @@
             if (!itemKeys.length) return null;
             const jobs = Array.isArray(resourceState.jobs) ? resourceState.jobs : [];
             const activeJobs = Array.isArray(resourceState.active_jobs) ? resourceState.active_jobs : [];
-            for (const job of mergeResourceJobPages(jobs, activeJobs)) {
+            for (const job of mergeResourceJobRecords(jobs, activeJobs)) {
                 const jobKeys = new Set(uniquePreserveOrder([
                     String(job?.source_post_id || '').trim() ? `post:${String(job?.source_post_id || '').trim()}` : '',
                     String(job?.message_url || '').trim() ? `msg:${String(job?.message_url || '').trim()}` : '',
@@ -2553,6 +2565,8 @@
 
         function applyResourceState(data, options = {}) {
             if (!data) return;
+            const projectedJobs = projectResourceJobsResponse(data, options);
+            data = projectedJobs.data;
             const deferHeavyRender = !!options.deferHeavyRender;
             const compactUpdate = !!options.compactUpdate;
             const previousBoardStatusSignature = compactUpdate ? buildResourceBoardStatusSignature() : '';
@@ -2889,7 +2903,7 @@
             }
         }
 
-        async function refreshResourceState({ allowSearch = true, keywordOverride = null, searchId = '', signal = null, compact = false } = {}) {
+        async function refreshResourceState({ allowSearch = true, keywordOverride = null, searchId = '', signal = null, compact = false, jobMode = 'poll' } = {}) {
             const resourceModule = await loadResourceTabModule();
             if (resourceModule?.refreshResourceState) {
                 return resourceModule.refreshResourceState({
@@ -2899,14 +2913,16 @@
                     signal,
                     compact,
                     getResourceState: () => resourceState,
-                    getResourceJobsStateRequest,
+                    getResourceJobsStateRequest: () => getResourceJobsStateRequest({ mode: jobMode }),
                     isDirectImportInput,
                     setResourceStateHydrated: (nextValue) => {
                         resourceStateHydrated = !!nextValue;
                     },
                     applyResourceState,
+                    rejectResourceJobsRequest,
                 });
             }
+            let jobRequest = null;
             try {
                 const activeKeyword = typeof keywordOverride === 'string'
                     ? keywordOverride.trim()
@@ -2917,7 +2933,7 @@
                 params.set('search_source', normalizeResourceSearchSource(resourceSearchSource));
                 params.set('provider_filter', 'all');
                 if (searchId) params.set('search_id', String(searchId || '').trim());
-                const jobRequest = getResourceJobsStateRequest();
+                jobRequest = getResourceJobsStateRequest({ mode: jobMode });
                 params.set('job_status', jobRequest.status);
                 params.set('job_offset', String(jobRequest.offset));
                 params.set('job_limit', String(jobRequest.limit));
@@ -2925,9 +2941,10 @@
                 const endpoint = params.toString() ? `/resource/state?${params.toString()}` : '/resource/state';
                 const data = await window.MediaHubApi.getJson(endpoint, signal ? { signal } : undefined);
                 resourceStateHydrated = true;
-                applyResourceState(data, { compactUpdate: !!compact });
+                applyResourceState(data, { compactUpdate: !!compact, jobRequest });
                 return data;
             } catch (e) {
+                rejectResourceJobsRequest(jobRequest, e);
                 return null;
             }
         }
@@ -2949,75 +2966,110 @@
             });
         }
 
+        const resourceJobStateController = window.ResourceJobState.create({
+            pageSize: RESOURCE_JOB_PAGE_SIZE,
+            maxWindowSize: RESOURCE_JOB_PAGE_MAX_SIZE,
+        });
+
+        function scheduleResourceJobWindowCalibration() {
+            if (resourceJobCalibrationPending) return;
+            resourceJobCalibrationPending = true;
+            Promise.resolve()
+                .then(() => refreshResourceJobsOnly({ mode: 'window' }))
+                .finally(() => {
+                    resourceJobCalibrationPending = false;
+                });
+        }
+
+        function projectResourceJobsResponse(data, options = {}) {
+            const source = data && typeof data === 'object' ? data : {};
+            const result = resourceJobStateController.accept(options.jobRequest || null, source);
+            if (!result.accepted) {
+                const currentStats = resourceState?.stats && typeof resourceState.stats === 'object'
+                    ? resourceState.stats
+                    : {};
+                const incomingStats = source.stats && typeof source.stats === 'object' ? source.stats : {};
+                return {
+                    accepted: false,
+                    data: {
+                        ...source,
+                        jobs: resourceState.jobs || [],
+                        active_jobs: resourceState.active_jobs || [],
+                        job_counts: resourceState.job_counts || {},
+                        pagination: resourceState.job_pagination || {},
+                        stats: {
+                            ...incomingStats,
+                            total_job_count: currentStats.total_job_count,
+                            active_job_count: currentStats.active_job_count,
+                            completed_job_count: currentStats.completed_job_count,
+                            failed_job_count: currentStats.failed_job_count,
+                        },
+                    },
+                };
+            }
+            resourceJobLoadError = '';
+            const projected = {
+                ...source,
+                jobs: result.jobs,
+                active_jobs: result.activeJobs,
+                pagination: result.pagination,
+            };
+            if (result.needsCalibration) scheduleResourceJobWindowCalibration();
+            return { accepted: true, data: projected };
+        }
+
+        function rejectResourceJobsRequest(jobRequest, error) {
+            const result = resourceJobStateController.reject(jobRequest, error);
+            if (!result.accepted) return result;
+            resourceJobLoadError = result.error;
+            resourceJobLoadingMore = false;
+            renderResourceJobs();
+            return result;
+        }
+
         function buildResourceJobsStateUrl({ status = resourceJobFilter, offset = 0, limit = RESOURCE_JOB_PAGE_SIZE } = {}) {
             const params = new URLSearchParams();
             const normalizedStatus = normalizeResourceJobFilter(status);
             params.set('status', normalizedStatus);
             params.set('offset', String(Math.max(0, Number(offset || 0) || 0)));
-            params.set('limit', String(Math.max(1, Number(limit || RESOURCE_JOB_PAGE_SIZE) || RESOURCE_JOB_PAGE_SIZE)));
+            params.set('limit', String(Math.max(1, Math.min(RESOURCE_JOB_PAGE_MAX_SIZE, Number(limit || RESOURCE_JOB_PAGE_SIZE) || RESOURCE_JOB_PAGE_SIZE))));
             return `/resource/jobs/state?${params.toString()}`;
         }
 
-        function getResourceJobsStateRequest({ status = resourceJobFilter, offset = 0, limit = null } = {}) {
-            const pagination = resourceState?.job_pagination && typeof resourceState.job_pagination === 'object'
-                ? resourceState.job_pagination
-                : {};
-            const loadedCount = Math.max(
-                RESOURCE_JOB_PAGE_SIZE,
-                Number(pagination.loaded_count || 0) || 0,
-                Number(pagination.next_offset || 0) || 0,
-                Array.isArray(resourceState.jobs) ? resourceState.jobs.length : 0
-            );
-            const requestedLimit = limit == null ? loadedCount : Number(limit || RESOURCE_JOB_PAGE_SIZE) || RESOURCE_JOB_PAGE_SIZE;
-            return {
-                status: normalizeResourceJobFilter(status || pagination.status || resourceJobFilter),
-                offset: Math.max(0, Number(offset || 0) || 0),
-                limit: Math.max(1, Math.min(200, requestedLimit)),
-            };
-        }
-
-        function mergeResourceJobPages(existingJobs = [], incomingJobs = []) {
-            const result = [];
-            const seen = new Set();
-            [...(Array.isArray(existingJobs) ? existingJobs : []), ...(Array.isArray(incomingJobs) ? incomingJobs : [])].forEach((job) => {
-                const jobId = Number(job?.id || 0) || 0;
-                const key = jobId > 0 ? `id:${jobId}` : JSON.stringify(job || {});
-                if (seen.has(key)) return;
-                seen.add(key);
-                result.push(job);
-            });
-            return result;
-        }
-
-        async function fetchResourceJobsPage({ status = resourceJobFilter, offset = 0, append = false } = {}) {
+        function getResourceJobsStateRequest({ status = resourceJobFilter, reset = false, extend = false, mode = 'poll' } = {}) {
             const normalizedStatus = normalizeResourceJobFilter(status);
-            const normalizedOffset = Math.max(0, Number(offset || 0) || 0);
             resourceJobFilter = normalizedStatus;
-            if (append) {
+            resourceJobLoadError = '';
+            return resourceJobStateController.begin({
+                status: normalizedStatus,
+                reset,
+                extend,
+                mode,
+            });
+        }
+
+        async function fetchResourceJobsPage({ status = resourceJobFilter, reset = false, extend = false } = {}) {
+            const normalizedStatus = normalizeResourceJobFilter(status);
+            resourceJobFilter = normalizedStatus;
+            if (extend) {
                 resourceJobLoadingMore = true;
                 renderResourceJobs();
             }
+            const jobRequest = getResourceJobsStateRequest({
+                status: normalizedStatus,
+                reset,
+                extend,
+                mode: 'window',
+            });
             try {
-                const data = await window.MediaHubApi.getJson(buildResourceJobsStateUrl({
-                    status: normalizedStatus,
-                    offset: normalizedOffset,
-                    limit: RESOURCE_JOB_PAGE_SIZE,
-                }));
-                if (append) {
-                    data.jobs = mergeResourceJobPages(resourceState.jobs || [], data.jobs || []);
-                }
-                if (data && typeof data === 'object') {
-                    data.pagination = {
-                        ...(data.pagination && typeof data.pagination === 'object' ? data.pagination : {}),
-                        loaded_count: Array.isArray(data.jobs) ? data.jobs.length : 0,
-                    };
-                }
-                applyResourceJobsState(data);
+                const data = await window.MediaHubApi.getJson(buildResourceJobsStateUrl(jobRequest));
+                applyResourceJobsState(data, { jobRequest });
                 return data;
             } catch (e) {
+                rejectResourceJobsRequest(jobRequest, e);
                 return null;
             } finally {
-                if (append) {
+                if (extend) {
                     resourceJobLoadingMore = false;
                     renderResourceJobs();
                 }
@@ -3032,12 +3084,14 @@
             if (!pagination.has_more) return;
             await fetchResourceJobsPage({
                 status: pagination.status || resourceJobFilter,
-                offset: pagination.next_offset || 0,
-                append: true,
+                extend: true,
             });
         }
 
-        function applyResourceJobsState(data) {
+        function applyResourceJobsState(data, options = {}) {
+            const projectedJobs = projectResourceJobsResponse(data, options);
+            if (!projectedJobs.accepted) return;
+            data = projectedJobs.data;
             const resourceModule = tabRuntimeState.tabModuleCache.resource;
             if (resourceModule?.applyResourceJobsState) {
                 resourceModule.applyResourceJobsState(data, {
@@ -3091,20 +3145,24 @@
             }
         }
 
-        async function refreshResourceJobsOnly() {
+        async function refreshResourceJobsOnly({ mode = 'poll' } = {}) {
             const resourceModule = await loadResourceTabModule();
             if (resourceModule?.refreshResourceJobsOnly) {
                 return resourceModule.refreshResourceJobsOnly({
                     applyResourceJobsState,
                     buildResourceJobsStateUrl,
                     getResourceJobsStateRequest,
+                    rejectResourceJobsRequest,
+                    requestOptions: { mode },
                 });
             }
+            const jobRequest = getResourceJobsStateRequest({ mode });
             try {
-                const data = await window.MediaHubApi.getJson(buildResourceJobsStateUrl(getResourceJobsStateRequest()));
-                applyResourceJobsState(data);
+                const data = await window.MediaHubApi.getJson(buildResourceJobsStateUrl(jobRequest));
+                applyResourceJobsState(data, { jobRequest });
                 return data;
             } catch (e) {
+                rejectResourceJobsRequest(jobRequest, e);
                 return null;
             }
         }
@@ -3455,8 +3513,7 @@
                 showToast(`清空失败：${error?.message || '请稍后重试'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
                 return;
             }
-            await refreshResourceState();
-            await fetchResourceJobsPage({ status: resourceJobFilter, offset: 0 });
+            await refreshResourceState({ jobMode: 'window' });
             const deleted = Number(data.deleted || 0);
             if (deleted > 0) {
                 showToast(`已清空 ${deleted} 条${meta.label}导入记录`, { tone: 'success', duration: 2600, placement: 'top-center' });

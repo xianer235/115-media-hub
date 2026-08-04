@@ -16,7 +16,9 @@ export async function refreshResourceState({
     isDirectImportInput,
     setResourceStateHydrated,
     applyResourceState,
+    rejectResourceJobsRequest,
 } = {}) {
+    let jobRequest = null;
     try {
         const currentResourceState = typeof getResourceState === 'function' ? (getResourceState() || {}) : {};
         const activeKeyword = typeof keywordOverride === 'string'
@@ -31,7 +33,7 @@ export async function refreshResourceState({
         params.set('search_source', String(currentResourceState.search_source || 'tg').trim() || 'tg');
         params.set('provider_filter', 'all');
         if (searchId) params.set('search_id', String(searchId || '').trim());
-        const jobRequest = typeof getResourceJobsStateRequest === 'function'
+        jobRequest = typeof getResourceJobsStateRequest === 'function'
             ? (getResourceJobsStateRequest() || {})
             : {};
         const jobStatus = String(jobRequest.status || 'all').trim() || 'all';
@@ -51,10 +53,13 @@ export async function refreshResourceState({
             })();
         if (!data) return null;
         if (typeof setResourceStateHydrated === 'function') setResourceStateHydrated(true);
-        if (typeof applyResourceState === 'function') applyResourceState(data, { compactUpdate: !!compact });
+        if (typeof applyResourceState === 'function') {
+            applyResourceState(data, { compactUpdate: !!compact, jobRequest });
+        }
         return data;
     } catch (e) {
         if (e?.name === 'AbortError') throw e;
+        if (typeof rejectResourceJobsRequest === 'function') rejectResourceJobsRequest(jobRequest, e);
         return null;
     }
 }
@@ -172,10 +177,17 @@ export function applyResourceJobsState(data, {
     }
 }
 
-export async function refreshResourceJobsOnly({ applyResourceJobsState, buildResourceJobsStateUrl, getResourceJobsStateRequest } = {}) {
+export async function refreshResourceJobsOnly({
+    applyResourceJobsState,
+    buildResourceJobsStateUrl,
+    getResourceJobsStateRequest,
+    rejectResourceJobsRequest,
+    requestOptions = {},
+} = {}) {
+    let jobRequest = null;
     try {
-        const jobRequest = typeof getResourceJobsStateRequest === 'function'
-            ? (getResourceJobsStateRequest() || {})
+        jobRequest = typeof getResourceJobsStateRequest === 'function'
+            ? (getResourceJobsStateRequest(requestOptions) || {})
             : {};
         const endpoint = typeof buildResourceJobsStateUrl === 'function'
             ? buildResourceJobsStateUrl(jobRequest)
@@ -188,9 +200,10 @@ export async function refreshResourceJobsOnly({ applyResourceJobsState, buildRes
                 return res.json();
             })();
         if (!data) return null;
-        if (typeof applyResourceJobsState === 'function') applyResourceJobsState(data);
+        if (typeof applyResourceJobsState === 'function') applyResourceJobsState(data, { jobRequest });
         return data;
     } catch (e) {
+        if (typeof rejectResourceJobsRequest === 'function') rejectResourceJobsRequest(jobRequest, e);
         return null;
     }
 }

@@ -585,30 +585,11 @@
         }
 
         function refreshResourceJobsAfterSubmit() {
-            const refreshToken = ++resourceSubmitRefreshToken;
             Promise.resolve().then(async () => {
-                if (
-                    typeof buildResourceJobsStateUrl === 'function'
-                    && typeof applyResourceJobsState === 'function'
-                    && window.MediaHubApi?.getJson
-                ) {
-                    const jobRequest = typeof getResourceJobsStateRequest === 'function'
-                        ? getResourceJobsStateRequest()
-                        : {
-                            status: resourceJobFilter,
-                            offset: 0,
-                            limit: RESOURCE_JOB_PAGE_SIZE,
-                        };
-                    const data = await window.MediaHubApi.getJson(buildResourceJobsStateUrl(jobRequest));
-                    if (refreshToken === resourceSubmitRefreshToken) {
-                        applyResourceJobsState(data);
-                    }
-                    return;
-                }
                 if (typeof refreshResourceJobsOnly === 'function') {
-                    await refreshResourceJobsOnly();
+                    await refreshResourceJobsOnly({ mode: 'window' });
                 } else {
-                    await refreshResourceState({ allowSearch: false });
+                    await refreshResourceState({ allowSearch: false, jobMode: 'window' });
                 }
             }).catch(() => {});
         }

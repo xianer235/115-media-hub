@@ -10,6 +10,10 @@
             await window.ResourceJobActions?.triggerRetry({ refreshResourceState, showToast }, jobId);
         }
 
+        async function triggerResourceJobDelete(jobId) {
+            await window.ResourceJobActions?.triggerDelete({ refreshResourceState, showToast }, jobId);
+        }
+
         async function showVersionBanner(latest) {
             const aboutModule = await loadAboutTabModule();
             if (!aboutModule?.showVersionBanner) return;
@@ -507,11 +511,16 @@
                 await loadMoreResourceJobs();
                 return;
             }
+            if (action === 'retry-load') {
+                await fetchResourceJobsPage({ status: resourceJobFilter });
+                return;
+            }
             const jobId = parseInt(btn.dataset.resourceJobId || '0', 10);
             if (!jobId) return;
             if (action === 'refresh') await triggerResourceJobRefresh(jobId);
             if (action === 'cancel') await triggerResourceJobCancel(jobId);
             if (action === 'retry') await triggerResourceJobRetry(jobId);
+            if (action === 'delete') await triggerResourceJobDelete(jobId);
         });
         document.getElementById('resource-job-type-tabs')?.addEventListener('click', (e) => {
             const btn = e.target.closest('[data-task-center-tab]');
@@ -523,7 +532,7 @@
             if (taskCenterTab === 'scraper') {
                 void fetchScraperJobsState();
             } else {
-                void fetchResourceJobsPage({ status: resourceJobFilter, offset: 0 });
+                void fetchResourceJobsPage({ status: resourceJobFilter, reset: true });
             }
             renderResourceJobs();
             syncResourceJobModalTrigger();
@@ -542,7 +551,7 @@
             const pageFilter = String(resourceState?.job_pagination?.status || 'all').trim() || 'all';
             if (resourceJobFilter === nextFilter && pageFilter === nextFilter) return;
             resourceJobFilter = nextFilter;
-            void fetchResourceJobsPage({ status: nextFilter, offset: 0 });
+            void fetchResourceJobsPage({ status: nextFilter, reset: true });
         });
         document.getElementById('subscription-task-list')?.addEventListener('click', async (e) => {
             const introBtn = e.target.closest('[data-subscription-toggle-intro]');

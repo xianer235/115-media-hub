@@ -35,9 +35,22 @@
         ctx.showToast(`已创建重试任务 #${Number(data.job_id || 0) || '--'}`, { tone: 'success', duration: 2800, placement: 'top-center' });
     }
 
+    async function triggerDelete(ctx, jobId) {
+        if (!(await window.showAppConfirm('仅删除这条任务记录，不会删除网盘文件。确定继续吗？'))) return;
+        try {
+            await window.MediaHubApi.postJson('/resource/jobs/delete', { job_id: jobId });
+        } catch (error) {
+            ctx.showToast(`删除记录失败：${error?.message || '请稍后重试'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
+            return;
+        }
+        await ctx.refreshResourceState({ allowSearch: false, jobMode: 'window' });
+        ctx.showToast(`任务 #${jobId} 的记录已删除`, { tone: 'success', duration: 2600, placement: 'top-center' });
+    }
+
     global.ResourceJobActions = {
         triggerRefresh,
         triggerCancel,
         triggerRetry,
+        triggerDelete,
     };
 })(window);
