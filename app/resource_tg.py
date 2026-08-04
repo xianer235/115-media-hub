@@ -425,6 +425,8 @@ def fetch_telegram_channel_post_samples(
         )
         pages_scanned += 1
         page_posts = page.get("posts", []) if isinstance(page, dict) else []
+        page_posts = list(page_posts)
+        page_posts.sort(key=get_resource_item_sort_key, reverse=True)
         for post in page_posts:
             identity = build_resource_item_identity(post)
             if identity in seen_keys:

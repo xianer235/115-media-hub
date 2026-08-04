@@ -8,10 +8,10 @@
 
 - **日期**: 2026-08-04
 - **分支**: `main`
-- **当前提交**: `ed43c53`（本地比 `origin/main` 领先 2 个提交）
-- **版本**: 工作区已将 `version.json`、`CHANGELOG.md` 和 README 更新到 `0.5.5`
-- **最近完成**: 电驴外链收敛到 Telegraph 页面解析，光鸭与普通直链下载禁用，既有网盘分享转存保持不变
-- **已有验证**: 完整 138 项 unittest、项目 `compileall`、资源 JS `node --check`、JSON 校验和 `git diff --check` 已通过；Docker daemon 未启动，页面复核待补
+- **当前提交**: `bef005c`（本地比 `origin/main` 领先 1 个提交，另有未提交的频道同步修复）
+- **版本**: 工作区已将 `version.json`、`CHANGELOG.md` 和 README 更新到 `0.5.6`
+- **最近完成**: 修复频道同步漏掉最新资源；资源任务弹窗标题去重已提交
+- **已有验证**: 完整 154 项 unittest、项目 `compileall` 和 `git diff --check` 已通过；真实 TG 频道取样返回最新帖；Docker daemon 未启动，页面复核待补
 
 
 ## 最近重要交接
@@ -26,6 +26,8 @@
 - 2026-08-04 | `main` 未提交 | 电驴外链仅识别 `telegra.ph` 页面并在后端限制同域跳转；直接 ED2K 保持导入，普通 HTTP(S) 与光鸭仅展示且禁用下载，既有五个网盘分享转存不变。新增前后端回归测试，完整 138 项 unittest、Python 编译、3 个资源 JS 语法检查和差异检查通过。下一步：启动 Docker daemon 后执行 `docker compose up -d --build`，复核资源卡与 Telegraph 导入页面。
 - 2026-08-04 | `main` 未提交 | 发布元数据更新至 `0.5.5`，同步版本说明、变更日志、README 与当前交接状态。下一步：启动 Docker daemon 后执行 `docker compose up -d --build`，复核资源卡与 Telegraph 导入页面。
 - 2026-08-04 | `main` 未提交 | 导入任务列表改为 20 条累计窗口与统一请求序号控制，修复加载更多、轮询缩页和过期响应覆盖；新增已完成/失败单条记录删除并在最后关联任务删除后恢复资源状态。新增 14 项前后端回归测试，完整 152 项 unittest、Python 编译、8 个改动 JS 语法检查和差异检查通过；Docker daemon 未启动，容器重建及任务中心日夜模式实测待补。
+- 2026-08-04 | `main` 未提交 | 修复频道同步漏掉最新资源：`fetch_telegram_channel_post_samples` 现按发布时间/消息号倒序收集，避免第一页资源超过目标数时把最旧的一批入库；资源任务弹窗头部仅保留“任务列表”标题。新增 2 项取样回归测试，完整 154 项 unittest、Python 编译和差异检查通过；真实 TG 频道实测返回最新帖。下一步：启动 Docker daemon 后重建容器，在资源页对活跃频道复核“最近资源”时间。
+- 2026-08-04 | `main` 未提交 | 发布元数据更新至 `0.5.6`：收录频道同步最新资源修复与任务弹窗标题去重，同步 version.json、CHANGELOG、README 与交接状态。完整 154 项 unittest、compileall 与差异检查通过。下一步：启动 Docker daemon 后重建容器，复核资源页活跃频道“最近资源”时间与任务弹窗标题。
 
 ## 记录规则
 

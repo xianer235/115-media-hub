@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.6] - 2026-08-04
+- 修复频道同步在活跃频道第一页资源超过“每频道同步资源数”时只取到最旧一批的问题：同步取样按发布时间/消息号倒序收集，确保入库的是最新资源。
+- 资源任务弹窗（任务中心/任务列表共用）头部只保留“任务列表”标题，删除重复的“任务中心”眉题。
+
 ## [0.5.5] - 2026-08-04
 - Telegraph 电驴页面仅识别 `telegra.ph`，资源卡显示“电驴”并在导入时解析页面中的 ED2K 文件；直接 `ed2k://` 导入保持不变。
 - 普通 HTTP(S) 直链不再进入电驴解析流程；光鸭网盘及其他未接入网盘链接仅展示识别标签，下载按钮明确禁用。
