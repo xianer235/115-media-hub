@@ -4446,15 +4446,7 @@
             justify-content: space-between;
             gap: 1rem;
         }
-        .resource-job-modal-eyebrow {
-            font-size: 0.68rem;
-            font-weight: 800;
-            letter-spacing: 0.18em;
-            text-transform: uppercase;
-            color: #7dd3fc;
-        }
         .resource-job-modal-title {
-            margin-top: 0.32rem;
             font-size: 1.18rem;
             font-weight: 900;
             color: #f8fafc;
@@ -8684,7 +8676,6 @@
             background: rgba(248, 250, 252, 0.95);
             border-color: rgba(203, 213, 225, 0.92);
         }
-        html.theme-day .resource-job-modal-eyebrow,
         html.theme-day .resource-job-field-label {
             color: #64748b;
         }
