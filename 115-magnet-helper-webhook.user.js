@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         115-media-hub助手
 // @namespace    http://tampermonkey.net/
-// @version      2.4.3
+// @version      2.4.4
 // @description  检测网页 magnet / torrent / 115 / 夸克分享链接并生成快捷按钮
 // @author       仙儿
 // @license      MIT

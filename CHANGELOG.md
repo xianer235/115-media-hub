@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.8] - 2026-08-05
+- 修复网盘配置栏在日间模式下背景与文字配色错误，恢复深浅主题一致的选中态可读性。
+- 油猴脚本 webhook URL 中文路径在配置框中保持原文显示（不再变成 `%` 编码），仅在请求发送时自动编码为合法 URL。
+- 油猴脚本请求地址输入框提示词改为完整 URL 示例（通用内网 IP），避免用户误填路径片段。
+
 ## [0.5.7] - 2026-08-04
 - 修复任务中心“删除记录”按钮在浅色主题下不可见的问题：重新生成 Tailwind 样式，补上缺失的 `bg-red-600` 工具类。
 

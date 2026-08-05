@@ -1,8 +1,10 @@
 {
-  "version": "0.5.7",
-  "buildDate": "2026-08-04T00:00:00+08:00",
+  "version": "0.5.8",
+  "buildDate": "2026-08-05T00:00:00+08:00",
   "notes": [
-    "修复任务中心删除记录按钮在浅色主题下不可见的问题"
+    "修复网盘配置在日间模式下的配色错误",
+    "油猴脚本 webhook URL 中文路径在配置框中保持原文显示，请求时自动编码",
+    "油猴脚本改进请求地址输入框提示词"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"
