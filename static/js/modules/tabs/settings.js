@@ -657,7 +657,7 @@ export function renderProviderAuthBlocks(cfg, sensitiveMeta) {
                 '</div>' +
                 '<label class="relative inline-flex items-center cursor-pointer" onclick="event.stopPropagation()">' +
                     '<input type="checkbox" id="provider_enabled_' + p.name + '" ' + (enabled ? 'checked' : '') + ' onchange="toggleProviderEnabled(\'' + p.name + '\', this.checked)" class="sr-only peer">' +
-                    '<div class="w-9 h-5 bg-slate-600 rounded-full peer peer-checked:bg-emerald-500/70 peer-focus:ring-2 peer-focus:ring-emerald-400/30 after:content-[\'\'] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>' +
+                    '<div class="provider-toggle w-9 h-5 bg-slate-600 rounded-full peer peer-checked:bg-emerald-500/70 peer-focus:ring-2 peer-focus:ring-emerald-400/30 after:content-[\'\'] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>' +
                 '</label>' +
             '</div>' +
             '<div id="provider-block-body-' + p.name + '" class="p-3 pt-0 border-t border-slate-700/50 hidden">' +

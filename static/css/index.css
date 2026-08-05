@@ -8047,6 +8047,7 @@
         html.theme-day .bg-slate-900\/60,
         html.theme-day .bg-slate-900\/50,
         html.theme-day .bg-slate-800\/80,
+        html.theme-day .bg-slate-800\/50,
         html.theme-day .bg-slate-950\/80,
         html.theme-day .bg-slate-950\/70 { background: var(--surface) !important; background-image: none !important; }
         html.theme-day .bg-slate-950\/45 {
@@ -8059,6 +8060,8 @@
         html.theme-day .border-slate-700\/90,
         html.theme-day .border-slate-700\/80,
         html.theme-day .border-slate-700\/70 { border-color: var(--border) !important; }
+        html.theme-day .border-slate-700\/50,
+        html.theme-day .border-slate-700\/60 { border-color: var(--border) !important; }
         html.theme-day .hover\:border-slate-700\/75:hover { border-color: var(--border) !important; }
         html.theme-day .text-slate-100,
         html.theme-day .text-slate-200,
@@ -9262,6 +9265,17 @@
         html.theme-day .text-sky-400,
         html.theme-day .text-sky-500 { color: #0369a1 !important; }
         html.theme-day .text-sky-700 { color: #075985 !important; }
+        /* provider toggle switch - day mode */
+        html.theme-day .provider-toggle {
+            background: #cbd5e1 !important;
+            box-shadow: inset 0 1px 3px rgba(15, 23, 42, 0.12);
+        }
+        html.theme-day .provider-toggle::after {
+            background: #475569 !important;
+        }
+        html.theme-day .peer:checked + .provider-toggle {
+            background: rgba(16, 185, 129, 0.55) !important;
+        }
         html.theme-day .cookie-health-bar {
             border-color: rgba(148, 163, 184, 0.74);
             background: rgba(248, 250, 252, 0.95);
