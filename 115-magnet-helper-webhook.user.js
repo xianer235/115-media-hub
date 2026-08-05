@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         115-media-hub助手
 // @namespace    http://tampermonkey.net/
-// @version      2.4.2
+// @version      2.4.3
 // @description  检测网页 magnet / torrent / 115 / 夸克分享链接并生成快捷按钮
 // @author       仙儿
 // @license      MIT
@@ -114,8 +114,19 @@
         try {
             const parsed = new URL(text);
             if (!/^https?:$/i.test(parsed.protocol)) return text;
-            return parsed.href;
+            // 返回原始输入以便在配置框中显示中文原文，避免用户看到 % 编码
+            return text;
         } catch (err) {
+            return text;
+        }
+    }
+
+    function encodeUrlForRequest(url) {
+        const text = String(url || '').trim();
+        if (!text) return text;
+        try {
+            return new URL(text).href;
+        } catch (_err) {
             return text.replace(/[^\x00-\x7F]/g, (ch) => encodeURIComponent(ch));
         }
     }
@@ -788,7 +799,7 @@
     }
 
     async function postJson(url, headers, bodyText) {
-        const requestUrl = normalizeWebhookUrl(url);
+        const requestUrl = encodeUrlForRequest(url);
         const gmResult = await postJsonByGM(requestUrl, headers, bodyText);
         if (gmResult.ok || gmResult.status > 0) return gmResult;
         const fetchResult = await postJsonByFetch(requestUrl, headers, bodyText);
@@ -1170,7 +1181,7 @@
                 <div style="font-size:12px;font-weight:700;color:#f8fafc;">${title}</div>
                 <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px;">
                     <input data-editor-field="name" type="text" placeholder="名称：只在脚本内显示，例如：自存电影" value="${escapeHtml(task.name || '')}" style="padding:8px 10px;border:1px solid #475569;border-radius:8px;background:#020617;color:#f8fafc;outline:none;">
-                    <input data-editor-field="webhookUrl" type="text" placeholder="请求地址：后台监控任务的 /webhook/任务名" value="${escapeHtml(task.webhookUrl || '')}" style="padding:8px 10px;border:1px solid #475569;border-radius:8px;background:#020617;color:#f8fafc;outline:none;">
+                    <input data-editor-field="webhookUrl" type="text" placeholder="完整请求地址，如 http://192.168.1.100:18080/webhook/任务名" value="${escapeHtml(task.webhookUrl || '')}" style="padding:8px 10px;border:1px solid #475569;border-radius:8px;background:#020617;color:#f8fafc;outline:none;">
                     <input data-editor-field="savepath" type="text" placeholder="保存路径：115 目标目录，需在监控扫描路径内" value="${escapeHtml(task.savepath || '')}" style="padding:8px 10px;border:1px solid #475569;border-radius:8px;background:#020617;color:#f8fafc;outline:none;">
                     <input data-editor-field="delaySeconds" type="number" min="0" step="1" title="延迟：导入成功后等待几秒再刷新；0 使用监控任务默认延迟" value="${Number(task.delaySeconds || 0)}" style="padding:8px 10px;border:1px solid #475569;border-radius:8px;background:#020617;color:#f8fafc;outline:none;">
                 </div>
