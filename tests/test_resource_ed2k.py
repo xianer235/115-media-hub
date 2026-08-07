@@ -308,6 +308,31 @@ class ResourceEd2kLinkingRegressionTest(unittest.TestCase):
         self.assertEqual(post["title"], "🎬 电影：寒战1994 (2026)")
         self.assertIn(link, post["extra"]["all_links"])
 
+    def test_tg_channel_post_preserves_multiple_direct_ed2k_links_in_post_order(self):
+        first_link = (
+            "ed2k://|file|剧集.S01E01.mkv|1024|"
+            "af33bd45b385b16a4bef434c760e0182|/"
+        )
+        second_link = (
+            "ed2k://|file|剧集.S01E02.mkv|2048|"
+            "a93b3760ed987f48e95dc5e36ea49fee|/"
+        )
+        raw_text = "\n".join(("📺 剧集", first_link, second_link))
+        html = (
+            '<div class="tgme_widget_message" data-post="series/2">'
+            f'<div class="tgme_widget_message_text">{raw_text.replace(chr(10), "<br>")}</div>'
+            "</div>"
+        )
+
+        post = parse_telegram_posts_page(
+            html,
+            {"channel_id": "series", "name": "剧集频道"},
+            limit=10,
+        )["posts"][0]
+
+        self.assertEqual(post["link_url"], first_link)
+        self.assertEqual(post["extra"]["all_links"], [first_link, second_link])
+
 
 class FakeJsonRequest:
     def __init__(self, payload):

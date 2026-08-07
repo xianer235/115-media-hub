@@ -366,6 +366,41 @@ class ResourceEd2kFrontendLogicTest(unittest.TestCase):
         self.assertEqual(result["size_bytes"], 1024)
         self.assertEqual(result["link_type"], "ed2k")
 
+    def test_collect_direct_ed2k_items_preserves_post_order_and_skips_duplicates(self):
+        first_link = "ed2k://|file|Episode-01.mkv|1024|af33bd45b385b16a4bef434c760e0182|/"
+        second_link = "ed2k://|file|Episode-02.mkv|2048|a93b3760ed987f48e95dc5e36ea49fee|/"
+        duplicate_link = first_link.replace("Episode-01", "Duplicate-name")
+        result = run_ed2k_frontend(
+            "typeof api.collectDirectEd2kItems === 'function' ? api.collectDirectEd2kItems({"
+            f"extra: {{ all_links: [{json.dumps(first_link)}, 'https://example.com/file', "
+            f"'ed2k://|file|broken|1|bad|/', {json.dumps(second_link)}, {json.dumps(duplicate_link)}] }}, "
+            f"link_url: {json.dumps(first_link)}"
+            "}).map(item => ({ id: item.id, link_url: item.link_url })) : null"
+        )
+
+        self.assertEqual(
+            result,
+            [
+                {"id": "af33bd45b385b16a4bef434c760e0182:1024", "link_url": first_link},
+                {"id": "a93b3760ed987f48e95dc5e36ea49fee:2048", "link_url": second_link},
+            ],
+        )
+
+    def test_collect_direct_ed2k_items_falls_back_to_legacy_primary_link(self):
+        link = "ed2k://|file|Legacy.mkv|1024|af33bd45b385b16a4bef434c760e0182|/"
+
+        result = run_ed2k_frontend(
+            "typeof api.collectDirectEd2kItems === 'function' ? "
+            f"api.collectDirectEd2kItems({{ link_url: {json.dumps(link)} }}) : null"
+        )
+
+        self.assertEqual([item["link_url"] for item in result or []], [link])
+
+    def test_direct_ed2k_modal_initialization_uses_collected_items(self):
+        source = MODAL_MODULE_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("collectDirectEd2kItems(item)", source)
+
     def test_frequent_ed2k_edits_do_not_redraw_the_whole_modal(self):
         for function_name in (
             "updateResourceEd2kFolderName",

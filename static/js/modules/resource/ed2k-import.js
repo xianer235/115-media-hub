@@ -92,9 +92,28 @@
         };
     }
 
+    function collectDirectEd2kItems(resource) {
+        const allLinks = Array.isArray(resource?.extra?.all_links) ? resource.extra.all_links : [];
+        const values = [...allLinks, resource?.link_url];
+        const seenIds = new Set();
+        const items = [];
+        for (const value of values) {
+            try {
+                const item = parseEd2kLink(value);
+                if (seenIds.has(item.id)) continue;
+                seenIds.add(item.id);
+                items.push(item);
+            } catch (error) {
+                // 同帖中的其他资源链接和格式错误的 ED2K 链接不应阻断可保存文件。
+            }
+        }
+        return items;
+    }
+
     global.ResourceEd2kImport = Object.freeze({
         applySelectionRange,
         buildTargetSavepath,
+        collectDirectEd2kItems,
         composeFolderName,
         normalizeFolderName,
         normalizeRelativePath,

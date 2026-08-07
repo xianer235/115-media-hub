@@ -30,6 +30,7 @@
 - 2026-08-04 | `main` 未提交 | 发布元数据更新至 `0.5.6`：收录频道同步最新资源修复与任务弹窗标题去重，同步 version.json、CHANGELOG、README 与交接状态。完整 154 项 unittest、compileall 与差异检查通过。下一步：启动 Docker daemon 后重建容器，复核资源页活跃频道“最近资源”时间与任务弹窗标题。
 - 2026-08-04 | `main` 未提交 | 修复任务中心“删除记录”按钮在浅色主题下不可见：该按钮的 `bg-red-600` 工具类未包含在旧 Tailwind 生成文件中，重新生成 `tailwind.generated.css` 后已补上；仅静态样式文件改动，git diff 检查通过。下一步：启动 Docker daemon 后重建容器，在任务中心日夜模式复核删除按钮。
 - 2026-08-04 | `main` 未提交 | 发布元数据更新至 `0.5.7`：收录任务中心删除按钮可见性修复，同步 version.json、CHANGELOG、README 与交接状态。下一步：启动 Docker daemon 后重建容器，在任务中心日夜模式复核删除按钮。
+- 2026-08-07 | `main` 未提交 | 修复频道同帖多条直连 ED2K 仅保存第一条：保存弹窗按频道原帖链接顺序收集、校验并去重全部 ED2K 文件，默认全选，Telegraph 解析与批量提交接口不变。新增频道多链接和前端收集回归，完整 158 项 unittest、Python compileall、相关 JS 语法检查与 git diff 检查通过。下一步：重建 Docker 后在真实频道资源中确认多文件勾选与保存。
 
 ## 记录规则
 

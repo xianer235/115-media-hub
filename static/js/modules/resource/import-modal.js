@@ -79,17 +79,22 @@
             renderResourceModalLayout(item);
             try {
                 const importMode = getResourceImportMode(item);
-                const data = importMode === 'ed2k-direct'
-                    ? {
+                let data;
+                if (importMode === 'ed2k-direct') {
+                    const items = window.ResourceEd2kImport.collectDirectEd2kItems(item);
+                    if (!items.length) throw new Error('不是有效的 ED2K 文件链接');
+                    data = {
                         title: String(item?.title || '').trim(),
                         source_url: linkUrl,
                         final_url: linkUrl,
-                        items: [window.ResourceEd2kImport.parseEd2kLink(linkUrl)],
-                    }
-                    : await window.MediaHubApi.postJson('/resource/ed2k/resolve', {
+                        items,
+                    };
+                } else {
+                    data = await window.MediaHubApi.postJson('/resource/ed2k/resolve', {
                         url: linkUrl,
                         resource_title: String(item?.title || '').trim(),
                     });
+                }
                 if (requestToken !== resourceEd2kState.requestToken || selectedResourceItem !== item) return;
                 applyResourceEd2kResolvedData(item, data);
             } catch (error) {
