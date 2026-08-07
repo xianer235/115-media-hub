@@ -1,10 +1,10 @@
 {
-  "version": "0.5.8",
-  "buildDate": "2026-08-05T00:00:00+08:00",
+  "version": "0.5.9",
+  "buildDate": "2026-08-07T00:00:00+08:00",
   "notes": [
-    "修复网盘配置在日间模式下的配色错误",
-    "油猴脚本 webhook URL 中文路径在配置框中保持原文显示，请求时自动编码",
-    "油猴脚本改进请求地址输入框提示词"
+    "频道同帖多种网盘链接结构化保存并支持按链接复制与转存",
+    "兼容旧资源缓存中的 all_links 字段并按任一链接支持网盘筛选",
+    "保持单链接、ED2K 批量导入与既有网盘安全边界"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

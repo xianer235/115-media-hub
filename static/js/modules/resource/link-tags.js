@@ -276,6 +276,46 @@
         return getTagMeta(resolveDisplayType(item)).actionType;
     }
 
+    function getResourceLinkRecords(item) {
+        const payload = normalizeItem(item);
+        const extra = payload.extra && typeof payload.extra === 'object' && !Array.isArray(payload.extra)
+            ? payload.extra
+            : {};
+        const structuredRecords = Array.isArray(extra.resource_links) ? extra.resource_links : [];
+        const legacyRecords = Array.isArray(extra.all_links) ? extra.all_links : [];
+        const primaryRecord = payload.link_url
+            ? {
+                link_url: payload.link_url,
+                link_type: payload.link_type,
+                receive_code: payload.receive_code || extra.receive_code || '',
+            }
+            : null;
+        const values = structuredRecords.length
+            ? [...structuredRecords, primaryRecord].filter(Boolean)
+            : [primaryRecord, ...legacyRecords].filter(Boolean);
+
+        const records = [];
+        const seen = new Set();
+        values.forEach(value => {
+            const raw = value && typeof value === 'object' && !Array.isArray(value)
+                ? value
+                : { link_url: value };
+            const linkUrl = String(raw.link_url || raw.url || '').trim();
+            if (!linkUrl) return;
+            const displayType = resolveDisplayType({ link_url: linkUrl, link_type: raw.link_type });
+            if (displayType === 'unknown') return;
+            const fingerprint = linkUrl.toLowerCase();
+            if (seen.has(fingerprint)) return;
+            seen.add(fingerprint);
+            records.push(Object.freeze({
+                link_url: linkUrl,
+                link_type: displayType,
+                receive_code: String(raw.receive_code || '').trim(),
+            }));
+        });
+        return records;
+    }
+
     function summarize(items, fallbackProfile = {}) {
         const fallback = fallbackProfile && typeof fallbackProfile === 'object' && !Array.isArray(fallbackProfile)
             ? { ...fallbackProfile }
@@ -310,6 +350,7 @@
     global.ResourceLinkTags = Object.freeze({
         detect,
         getTagMeta,
+        getResourceLinkRecords,
         list,
         resolveActionType,
         resolveDisplayType,

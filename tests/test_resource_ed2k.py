@@ -5,6 +5,7 @@ from unittest import mock
 import requests
 
 
+from app.core import resource_item_matches_provider_filter
 from app import resource_ed2k as resource_ed2k_module
 from app.resource_ed2k import (
     extract_ed2k_items,
@@ -13,6 +14,7 @@ from app.resource_ed2k import (
     resolve_ed2k_page,
 )
 from app.resource_linking import (
+    get_resource_link_records,
     detect_resource_link_type,
     extract_resource_candidates,
     extract_resource_links,
@@ -332,6 +334,93 @@ class ResourceEd2kLinkingRegressionTest(unittest.TestCase):
 
         self.assertEqual(post["link_url"], first_link)
         self.assertEqual(post["extra"]["all_links"], [first_link, second_link])
+
+    def test_tg_channel_post_keeps_mixed_resource_links_as_structured_records(self):
+        links = [
+            "https://115.com/s/primary115",
+            "https://pan.quark.cn/s/quark123",
+            "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef",
+            "ed2k://|file|episode.mkv|1024|0123456789abcdef0123456789abcdef|/",
+            "https://example.com/movie-page",
+        ]
+        raw_text = "\n".join(("🎬 混合资源", *links))
+        html = (
+            '<div class="tgme_widget_message" data-post="mixed/3">'
+            f'<div class="tgme_widget_message_text">{raw_text.replace(chr(10), "<br>")}</div>'
+            "</div>"
+        )
+
+        post = parse_telegram_posts_page(
+            html,
+            {"channel_id": "mixed", "name": "混合频道"},
+            limit=10,
+        )["posts"][0]
+
+        self.assertEqual(post["link_url"], links[2])
+        self.assertEqual(
+            [(item["link_url"], item["link_type"]) for item in post["extra"]["resource_links"]],
+            [
+                (links[0], "115share"),
+                (links[1], "quark"),
+                (links[2], "magnet"),
+                (links[3], "ed2k"),
+                (links[4], "link"),
+            ],
+        )
+
+    def test_tg_channel_post_keeps_bare_and_anchor_links_in_message_order(self):
+        bare_link = "https://pan.quark.cn/s/quark123"
+        anchor_link = "https://115.com/s/primary115"
+        html = (
+            '<div class="tgme_widget_message" data-post="mixed/4">'
+            '<div class="tgme_widget_message_text">'
+            f'🎬 混合资源<br>{bare_link}<br>'
+            f'<a href="{anchor_link}">115 下载</a>'
+            "</div>"
+            "</div>"
+        )
+
+        post = parse_telegram_posts_page(
+            html,
+            {"channel_id": "mixed", "name": "混合频道"},
+            limit=10,
+        )["posts"][0]
+
+        self.assertEqual(
+            [item["link_url"] for item in post["extra"]["resource_links"]],
+            [bare_link, anchor_link],
+        )
+
+    def test_legacy_all_links_are_normalized_without_losing_primary_link(self):
+        primary = "https://115.com/s/primary115"
+        secondary = "https://pan.quark.cn/s/quark123"
+        records = get_resource_link_records(
+            {
+                "link_url": primary,
+                "link_type": "115share",
+                "raw_text": f"电影\n{primary}\n{secondary}",
+                "extra": {"all_links": [primary, secondary]},
+            }
+        )
+
+        self.assertEqual(
+            [(item["link_url"], item["link_type"]) for item in records],
+            [(primary, "115share"), (secondary, "quark")],
+        )
+
+    def test_provider_filter_matches_a_secondary_resource_link(self):
+        item = {
+            "link_url": "https://115.com/s/primary115",
+            "link_type": "115share",
+            "extra": {
+                "resource_links": [
+                    {"link_url": "https://115.com/s/primary115", "link_type": "115share"},
+                    {"link_url": "https://pan.quark.cn/s/quark123", "link_type": "quark"},
+                ]
+            },
+        }
+
+        self.assertTrue(resource_item_matches_provider_filter(item, "quark"))
 
 
 class FakeJsonRequest:

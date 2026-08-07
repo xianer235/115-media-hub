@@ -13,6 +13,7 @@ from .resource_identity import normalize_resource_identity_mode, normalize_teleg
 from .resource_linking import (
     apply_share_receive_code_to_url,
     detect_resource_link_type,
+    get_resource_link_records,
     normalize_receive_code,
     parse_115_share_payload,
     parse_quark_share_payload,
@@ -107,6 +108,7 @@ def serialize_resource_item_row(row: sqlite3.Row) -> Dict[str, Any]:
             if not str(extra.get(key, "") or "").strip() and str(legacy_extra.get(key, "") or "").strip():
                 extra[key] = legacy_extra[key]
     data["extra"] = extra
+    data["extra"]["resource_links"] = get_resource_link_records(data)
     data["cover_url"] = str(extra.get("cover_url", "") or "").strip()
     data["source_post_id"] = str(extra.get("source_post_id", "") or "").strip()
     return data

@@ -18,6 +18,7 @@ from .resource_identity import (
 )
 from .resource_linking import (
     RESOURCE_YEAR_REGEX,
+    build_resource_link_records,
     choose_resource_link,
     detect_resource_link_type,
     extract_resource_links,
@@ -58,6 +59,7 @@ TG_FETCH_RETRY_DELAY_SECONDS = max(0.2, float(os.environ.get("TG_FETCH_RETRY_DEL
 
 TG_WIDGET_POST_REGEX = re.compile(r'<div[^>]+class="tgme_widget_message[^"]*"[^>]+data-post="([^"]+)"[^>]*>', re.IGNORECASE)
 TG_LINK_HREF_REGEX = re.compile(r'href="([^"]+)"', re.IGNORECASE)
+TG_MESSAGE_ANCHOR_REGEX = re.compile(r'<a\b[^>]*\bhref="([^"]+)"[^>]*>(.*?)</a>', re.IGNORECASE | re.DOTALL)
 TG_IMAGE_STYLE_REGEX = re.compile(r"background-image:url\('([^']+)'\)", re.IGNORECASE)
 TG_PREV_BEFORE_REGEX = re.compile(r'rel="prev"[^>]+href="[^"]*before=([^"&]+)', re.IGNORECASE)
 TG_CHANNEL_TITLE_REGEXES = [
@@ -294,13 +296,20 @@ def parse_telegram_posts_page(html: str, source: Dict[str, Any], limit: int = 10
             text_match = re.search(r'class="tgme_widget_message_caption[^"]*"[^>]*>(.*?)</div>', chunk, re.IGNORECASE | re.DOTALL)
         text_html = text_match.group(1) if text_match else ""
         raw_text = strip_html_to_text(text_html)
-        hrefs = [unescape(link) for link in TG_LINK_HREF_REGEX.findall(chunk)]
-        all_links = [
-            link for link in extract_resource_links("\n".join([*hrefs, raw_text]))
+        def replace_message_anchor(match: re.Match) -> str:
+            label = strip_html_to_text(match.group(2))
+            href = unescape(match.group(1)).strip()
+            return f"{label}\n{href}" if href else label
+
+        link_text = strip_html_to_text(TG_MESSAGE_ANCHOR_REGEX.sub(replace_message_anchor, text_html))
+        extracted_links = [
+            link for link in extract_resource_links(link_text)
             if "t.me/" not in link
             and "telegram.me/" not in link
             and "telegram.org/" not in link
         ]
+        resource_links = build_resource_link_records(raw_text, extracted_links)
+        all_links = [str(item.get("link_url", "") or "") for item in resource_links]
         link_url = choose_resource_link(all_links)
         if not raw_text and not link_url:
             continue
@@ -325,6 +334,7 @@ def parse_telegram_posts_page(html: str, source: Dict[str, Any], limit: int = 10
                 "cover_url": unescape(image_match.group(1)) if image_match else "",
                 "source_post_id": match.group(1),
                 "source_url": build_telegram_channel_url(channel_id),
+                "resource_links": resource_links,
                 "all_links": all_links[:40],
             },
         }

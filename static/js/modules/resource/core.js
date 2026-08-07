@@ -288,6 +288,101 @@
             return `resource-link-tag resource-link-tag--${tone}`;
         }
 
+        function getResourceLinkRecords(item) {
+            return window.ResourceLinkTags.getResourceLinkRecords(item);
+        }
+
+        function createResourceLinkActionItem(item, record) {
+            const resource = item && typeof item === 'object' ? item : {};
+            const link = record && typeof record === 'object' ? record : {};
+            const linkUrl = String(link.link_url || '').trim();
+            const linkType = String(link.link_type || '').trim();
+            const allRecords = getResourceLinkRecords(resource);
+            const relatedRecords = linkType === 'ed2k'
+                ? allRecords.filter(candidate => String(candidate?.link_type || '').trim() === 'ed2k')
+                : [link];
+            const extra = resource.extra && typeof resource.extra === 'object' ? resource.extra : {};
+            return {
+                ...resource,
+                link_url: linkUrl,
+                link_type: linkType,
+                receive_code: String(link.receive_code || '').trim(),
+                extra: {
+                    ...extra,
+                    resource_links: relatedRecords,
+                    all_links: relatedRecords.map(candidate => String(candidate?.link_url || '').trim()).filter(Boolean),
+                    receive_code: String(link.receive_code || '').trim(),
+                },
+            };
+        }
+
+        function getResourceImportCandidates(item) {
+            const candidates = [];
+            let hasEd2kCandidate = false;
+            getResourceLinkRecords(item).forEach(record => {
+                const candidate = createResourceLinkActionItem(item, record);
+                const linkType = getEffectiveResourceLinkType(candidate);
+                if (!canOpenResourceImportLink(candidate) || !isLinkTypeCookieConfigured(linkType)) return;
+                if (linkType === 'ed2k') {
+                    if (hasEd2kCandidate) return;
+                    hasEd2kCandidate = true;
+                }
+                candidates.push(candidate);
+            });
+            return candidates;
+        }
+
+        function openResourceLinkChoiceModal(records, { title = '选择资源链接', actionLabel = '继续' } = {}) {
+            const candidates = Array.isArray(records) ? records.filter(Boolean) : [];
+            if (!candidates.length) return Promise.resolve(null);
+            if (candidates.length === 1) return Promise.resolve(candidates[0]);
+            return new Promise((resolve) => {
+                const modal = document.createElement('div');
+                modal.className = 'fixed inset-0 bg-black/60 z-[60] p-4 flex items-start justify-center';
+                modal.innerHTML = `
+                    <div class="w-full max-w-xl mt-[12vh] group-card modal-card" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
+                        <div class="flex items-center justify-between gap-3 mb-3">
+                            <div class="text-lg font-black text-white">${escapeHtml(title)}</div>
+                            <button type="button" class="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm" data-resource-link-choice-cancel>关闭</button>
+                        </div>
+                        <div class="space-y-2">
+                            ${candidates.map((record, index) => {
+                                const displayType = getResourceDisplayLinkType(record);
+                                const label = getResourceDisplayLinkTypeLabel(displayType);
+                                return `
+                                    <button type="button" class="w-full text-left p-3 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700" data-resource-link-choice-index="${index}">
+                                        <span class="${escapeHtml(getResourceDisplayLinkTypeBadgeClass(displayType))}">${escapeHtml(label)}</span>
+                                        <span class="block text-xs text-slate-400 break-all mt-2">${escapeHtml(record.link_url)}</span>
+                                        <span class="block text-xs text-sky-300 mt-2">${escapeHtml(actionLabel)}</span>
+                                    </button>
+                                `;
+                            }).join('')}
+                        </div>
+                    </div>
+                `;
+                const cleanup = (value) => {
+                    document.removeEventListener('keydown', onKeydown);
+                    modal.remove();
+                    resolve(value || null);
+                };
+                const onKeydown = (event) => {
+                    if (event.key === 'Escape') cleanup(null);
+                };
+                modal.addEventListener('click', (event) => {
+                    if (event.target === modal || event.target.closest('[data-resource-link-choice-cancel]')) {
+                        cleanup(null);
+                        return;
+                    }
+                    const button = event.target.closest('[data-resource-link-choice-index]');
+                    if (!button) return;
+                    cleanup(candidates[Number(button.dataset.resourceLinkChoiceIndex)] || null);
+                });
+                document.addEventListener('keydown', onKeydown);
+                document.body.appendChild(modal);
+                window.setTimeout(() => modal.querySelector('[data-resource-link-choice-index]')?.focus(), 0);
+            });
+        }
+
         function getResourceImportMode(item) {
             return window.ResourceLinkTags.getTagMeta(getResourceDisplayLinkType(item)).importMode;
         }
@@ -436,10 +531,10 @@
         function resourceItemMatchesProviderFilter(item, providerFilter = resourceProviderFilter) {
             const normalized = normalizeResourceProviderFilter(providerFilter);
             if (normalized === 'all') return true;
-            const linkType = getEffectiveResourceLinkType(item);
-            if (normalized === 'magnet') return linkType === 'magnet' || linkType === 'ed2k';
+            const linkTypes = getResourceLinkRecords(item).map(record => getEffectiveResourceLinkType(record));
+            if (normalized === 'magnet') return linkTypes.some(linkType => linkType === 'magnet' || linkType === 'ed2k');
             const p = getProviderByName(normalized);
-            if (p) return linkType === p.link_type;
+            if (p) return linkTypes.includes(p.link_type);
             return false;
         }
 
@@ -1168,7 +1263,7 @@
             return formatTimeText(raw);
         }
 
-        function canOpenResourceImport(item) {
+        function canOpenResourceImportLink(item) {
             const linkType = getEffectiveResourceLinkType(item);
             const linkUrl = String(item?.link_url || '').trim();
             return !!linkUrl && (
@@ -1179,14 +1274,21 @@
             );
         }
 
+        function canOpenResourceImport(item) {
+            return getResourceLinkRecords(item).some(record => canOpenResourceImportLink(createResourceLinkActionItem(item, record)));
+        }
+
         function canImportResource(item) {
-            const linkType = getEffectiveResourceLinkType(item);
-            return canOpenResourceImport(item) && isLinkTypeCookieConfigured(linkType);
+            return getResourceImportCandidates(item).length > 0;
         }
 
         function getResourceImportLabel(item) {
-            const linkType = getEffectiveResourceLinkType(item);
-            if (!String(item?.link_url || '').trim()) return '暂无可导入链接';
+            const records = getResourceLinkRecords(item);
+            const importCandidates = getResourceImportCandidates(item);
+            if (!records.length) return '暂无可导入链接';
+            if (!importCandidates.length) return '暂不支持下载';
+            if (importCandidates.length > 1) return '下载/转存';
+            const linkType = getEffectiveResourceLinkType(importCandidates[0]);
             if (isResourceShareLinkType(linkType)) return '转存';
             if (
                 linkType === 'magnet'
@@ -1199,7 +1301,7 @@
         }
 
         function getResourceCopyLabel(item) {
-            return String(item?.link_url || '').trim() ? '复制链接' : '复制文案';
+            return getResourceLinkRecords(item).length ? '复制链接' : '复制文案';
         }
 
         function findResourceItem(resourceId) {
@@ -1714,10 +1816,11 @@
         }
 
         function buildResourceCard(item) {
-            const displayType = getResourceDisplayLinkType(item);
-            const importOpenable = canOpenResourceImport(item);
+            const linkRecords = getResourceLinkRecords(item);
+            const displayTypes = [...new Set(linkRecords.map(record => getResourceDisplayLinkType(record)))];
+            const importOpenable = getResourceImportCandidates(item).length > 0;
             const importClass = importOpenable ? 'resource-card-action-primary' : 'resource-card-action-secondary resource-card-action-disabled';
-            const copyDisabled = String(item?.link_url || item?.raw_text || item?.title || '').trim() ? '' : 'resource-card-action-disabled';
+            const copyDisabled = linkRecords.length || String(item?.raw_text || item?.title || '').trim() ? '' : 'resource-card-action-disabled';
             return `
                 <article class="resource-card">
                     <button type="button" data-resource-action="preview" data-resource-id="${item.id}" class="resource-card-preview-trigger shrink-0">
@@ -1728,7 +1831,7 @@
                             <button type="button" data-resource-action="preview" data-resource-id="${item.id}" class="resource-card-title break-words text-left bg-transparent border-none p-0 hover:text-sky-700 transition-colors">${escapeHtml(item?.title || '未命名资源')}</button>
                             <div class="resource-card-badges">
                                 ${buildResourceStatusBadge(getResourceDisplayStatus(item))}
-                                <span class="${escapeHtml(getResourceDisplayLinkTypeBadgeClass(displayType))}">${escapeHtml(getResourceDisplayLinkTypeLabel(displayType))}</span>
+                                ${displayTypes.map(displayType => `<span class="${escapeHtml(getResourceDisplayLinkTypeBadgeClass(displayType))}">${escapeHtml(getResourceDisplayLinkTypeLabel(displayType))}</span>`).join('')}
                                 ${item?.quality ? `<span class="text-[10px] px-3 py-1 rounded-full bg-sky-500/15 text-sky-300 border border-sky-500/20">${escapeHtml(item.quality)}</span>` : ''}
                                 ${item?.year ? `<span class="text-[10px] px-3 py-1 rounded-full bg-violet-500/15 text-violet-300 border border-violet-500/20">${escapeHtml(item.year)}</span>` : ''}
                             </div>
@@ -3620,7 +3723,12 @@
             setResourceBatchImportItems,
             getResourceBatchMagnetItems,
             isResourceBatchImportMode,
+            getResourceLinkRecords,
+            createResourceLinkActionItem,
+            getResourceImportCandidates,
+            openResourceLinkChoiceModal,
             canOpenResourceImport,
+            canOpenResourceImportLink,
             canImportResource,
             getResourceImportLabel,
             getResourceCopyText,

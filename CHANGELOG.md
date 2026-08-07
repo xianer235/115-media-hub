@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.9] - 2026-08-07
+- 频道同一帖子中的多种网盘、磁力、ED2K 和展示型直链统一保存为结构化链接列表，按原帖顺序去重并保留主链接兼容字段。
+- 资源卡片展示同帖的多个链接类型；复制链接可逐条选择，下载/转存仅展示当前已启用且支持导入的候选。
+- 兼容旧缓存中的 `extra.all_links`，网盘筛选支持按任一结构化链接命中；单链接、ED2K 批量导入与既有安全边界保持不变。
+
 ## [0.5.8] - 2026-08-05
 - 修复网盘配置栏在日间模式下背景与文字配色错误，恢复深浅主题一致的选中态可读性。
 - 油猴脚本 webhook URL 中文路径在配置框中保持原文显示（不再变成 `%` 编码），仅在请求发送时自动编码为合法 URL。

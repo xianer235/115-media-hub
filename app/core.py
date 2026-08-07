@@ -86,6 +86,7 @@ from .resource_linking import (
     extract_magnet_hash,
     extract_resource_candidates,
     extract_resource_links,
+    get_resource_link_records,
     guess_resource_quality,
     is_resource_title_link_like,
     normalize_115_share_url_candidate,
@@ -3027,12 +3028,17 @@ def resource_item_matches_provider_filter(item: Dict[str, Any], provider_filter:
     if normalized_filter == "all":
         return True
     payload = item if isinstance(item, dict) else {}
-    link_type = resolve_resource_link_type(payload.get("link_type", ""), payload.get("link_url", ""))
+    link_types = {
+        resolve_resource_link_type(record.get("link_type", ""), record.get("link_url", ""))
+        for record in get_resource_link_records(payload)
+    }
+    if not link_types:
+        link_types = {resolve_resource_link_type(payload.get("link_type", ""), payload.get("link_url", ""))}
     if normalized_filter == "magnet":
-        return link_type in ("magnet", "ed2k")
+        return bool(link_types.intersection({"magnet", "ed2k"}))
     p = _get_provider_or_none(normalized_filter)
     if p:
-        return link_type == p.link_type
+        return p.link_type in link_types
     return False
 
 

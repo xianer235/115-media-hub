@@ -93,14 +93,19 @@ def extract_resource_links(raw_text: str) -> List[str]:
     raw = str(raw_text or "")
     if not raw.strip():
         return []
-    links: List[str] = []
-    links.extend(RESOURCE_MAGNET_REGEX.findall(raw))
-    links.extend(RESOURCE_ED2K_REGEX.findall(raw))
-    links.extend(RESOURCE_URL_REGEX.findall(raw))
-    links.extend(RESOURCE_115_SHARE_BARE_URL_REGEX.findall(raw))
+    matches = []
+    for pattern, priority in (
+        (RESOURCE_MAGNET_REGEX, 0),
+        (RESOURCE_ED2K_REGEX, 1),
+        (RESOURCE_URL_REGEX, 2),
+        (RESOURCE_115_SHARE_BARE_URL_REGEX, 3),
+    ):
+        for match in pattern.finditer(raw):
+            matches.append((match.start(), priority, match.group(0)))
+    matches.sort(key=lambda item: (item[0], item[1]))
 
     normalized_links: List[str] = []
-    for link in links:
+    for _, _, link in matches:
         token = normalize_115_share_url_candidate(link)
         token = trim_resource_link_token(token)
         lowered = token.lower()
@@ -374,6 +379,74 @@ def parse_quark_share_payload(url: str, raw_text: str = "", receive_code: str = 
     }
 
 
+def normalize_resource_link_record(value: Any, raw_text: str = "") -> Dict[str, str]:
+    raw_record = value if isinstance(value, dict) else {}
+    raw_link = raw_record.get("link_url", "") if raw_record else value
+    link_url = normalize_115_share_url_candidate(str(raw_link or ""))
+    link_url = trim_resource_link_token(link_url)
+    if not link_url:
+        return {}
+
+    link_type = resolve_resource_link_type(str(raw_record.get("link_type", "") or ""), link_url)
+    receive_code = normalize_receive_code(raw_record.get("receive_code", ""))
+    if link_type == "115share":
+        parsed_payload = parse_115_share_payload(link_url, raw_text, receive_code)
+        link_url = str(parsed_payload.get("url", "") or link_url).strip() or link_url
+        link_type = detect_resource_link_type(link_url)
+        receive_code = normalize_receive_code(parsed_payload.get("receive_code", ""))
+    elif link_type == "quark":
+        parsed_payload = parse_quark_share_payload(link_url, raw_text, receive_code)
+        link_url = str(parsed_payload.get("url", "") or link_url).strip() or link_url
+        link_type = detect_resource_link_type(link_url)
+        receive_code = normalize_receive_code(parsed_payload.get("receive_code", ""))
+
+    return {
+        "link_url": link_url,
+        "link_type": link_type or "unknown",
+        "receive_code": receive_code,
+    }
+
+
+def build_resource_link_records(raw_text: str, links: List[Any] = None) -> List[Dict[str, str]]:
+    raw = str(raw_text or "")
+    source_links = extract_resource_links(raw) if links is None else list(links or [])
+    records: List[Dict[str, str]] = []
+    seen = set()
+    for value in source_links:
+        record = normalize_resource_link_record(value, raw)
+        link_url = str(record.get("link_url", "") or "").strip()
+        if not link_url:
+            continue
+        fingerprint = link_url.lower()
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        records.append(record)
+    return records
+
+
+def get_resource_link_records(item: Dict[str, Any]) -> List[Dict[str, str]]:
+    payload = item if isinstance(item, dict) else {}
+    extra = payload.get("extra") if isinstance(payload.get("extra"), dict) else {}
+    raw_text = str(payload.get("raw_text", "") or "")
+    structured = extra.get("resource_links") if isinstance(extra, dict) else None
+    if isinstance(structured, list) and structured:
+        return build_resource_link_records(raw_text, structured)
+
+    legacy_links: List[Any] = []
+    primary_link = str(payload.get("link_url", "") or "").strip()
+    if primary_link:
+        legacy_links.append(
+            {
+                "link_url": primary_link,
+                "link_type": payload.get("link_type", ""),
+                "receive_code": payload.get("receive_code", "") or extra.get("receive_code", ""),
+            }
+        )
+    legacy_links.extend(extra.get("all_links", []) if isinstance(extra.get("all_links"), list) else [])
+    return build_resource_link_records(raw_text, legacy_links)
+
+
 def extract_resource_candidates(
     raw_text: str,
     source_name: str = "",
@@ -386,7 +459,7 @@ def extract_resource_candidates(
     if not raw:
         return []
 
-    links = extract_resource_links(raw)
+    link_records = build_resource_link_records(raw)
     base_title = pick_resource_title(raw)
     base_title_link_like = is_resource_title_link_like(base_title)
     guessed_year = ""
@@ -399,7 +472,7 @@ def extract_resource_candidates(
         tg_candidates = [url for url in RESOURCE_URL_REGEX.findall(raw) if "t.me/" in url or "telegram.me/" in url]
         tg_link = tg_candidates[0] if tg_candidates else ""
 
-    if not links:
+    if not link_records:
         return [
             {
                 "source_type": source_type,
@@ -419,28 +492,18 @@ def extract_resource_candidates(
         ]
 
     candidates: List[Dict[str, Any]] = []
-    multi = len(links) > 1
-    for idx, link in enumerate(links, start=1):
-        normalized_link = str(link or "").strip()
-        link_type = detect_resource_link_type(normalized_link)
-        receive_code = ""
-        if link_type == "115share":
-            parsed_payload = parse_115_share_payload(normalized_link, raw)
-            normalized_link = str(parsed_payload.get("url", "") or normalized_link).strip() or normalized_link
-            link_type = detect_resource_link_type(normalized_link)
-            receive_code = normalize_receive_code(parsed_payload.get("receive_code", ""))
-        elif link_type == "quark":
-            parsed_payload = parse_quark_share_payload(normalized_link, raw)
-            normalized_link = str(parsed_payload.get("url", "") or normalized_link).strip() or normalized_link
-            link_type = detect_resource_link_type(normalized_link)
-            receive_code = normalize_receive_code(parsed_payload.get("receive_code", ""))
+    multi = len(link_records) > 1
+    for idx, link_record in enumerate(link_records, start=1):
+        normalized_link = str(link_record.get("link_url", "") or "").strip()
+        link_type = str(link_record.get("link_type", "unknown") or "unknown").strip()
+        receive_code = normalize_receive_code(link_record.get("receive_code", ""))
         if base_title_link_like:
             title = pick_link_fallback_title(link_type, normalized_link, idx if multi else 0)
         elif multi:
             title = f"{base_title} #{idx}"
         else:
             title = base_title
-        extra: Dict[str, Any] = {}
+        extra: Dict[str, Any] = {"resource_links": [link_record]}
         if receive_code:
             extra["receive_code"] = receive_code
         candidates.append(
@@ -500,6 +563,9 @@ __all__ = [
     "pick_link_fallback_title",
     "parse_115_share_payload",
     "parse_quark_share_payload",
+    "normalize_resource_link_record",
+    "build_resource_link_records",
+    "get_resource_link_records",
     "extract_resource_candidates",
     "build_content_fingerprint",
 ]

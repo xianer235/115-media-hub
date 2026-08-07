@@ -37,6 +37,26 @@ process.stdout.write(JSON.stringify(result));
 
 
 class ResourceLinkTagsRegistryTest(unittest.TestCase):
+    def test_link_records_prefer_structured_data_and_fall_back_to_legacy_all_links(self):
+        primary = "https://115.com/s/primary115"
+        quark = "https://pan.quark.cn/s/quark123"
+        magnet = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef"
+        result = run_link_tags(
+            "api.getResourceLinkRecords({"
+            f"link_url: {json.dumps(primary)}, link_type: '115share', "
+            f"extra: {{ all_links: [{json.dumps(primary)}, {json.dumps(quark)}, {json.dumps(magnet)}] }}"
+            "}).map(item => ({ link_url: item.link_url, link_type: item.link_type }))"
+        )
+
+        self.assertEqual(
+            result,
+            [
+                {"link_url": primary, "link_type": "115share"},
+                {"link_url": quark, "link_type": "quark"},
+                {"link_url": magnet, "link_type": "magnet"},
+            ],
+        )
+
     def test_registry_contains_all_builtin_types_in_display_order(self):
         self.assertEqual(
             run_link_tags("api.list().map(item => item.type)"),
@@ -249,11 +269,19 @@ class ResourceLinkTagsIntegrationTest(unittest.TestCase):
 
         self.assertIn("window.ResourceLinkTags.resolveActionType({ link_url: url })", source)
         self.assertIn("window.ResourceLinkTags.resolveActionType(item)", source)
-        self.assertIn("const displayType = getResourceDisplayLinkType(item);", card_body)
+        self.assertIn("const linkRecords = getResourceLinkRecords(item);", card_body)
+        self.assertIn("const displayTypes = [...new Set(linkRecords.map(record => getResourceDisplayLinkType(record)))];", card_body)
         self.assertIn("getResourceDisplayLinkTypeBadgeClass(displayType)", card_body)
         self.assertIn("getResourceDisplayLinkTypeLabel(displayType)", card_body)
         self.assertNotIn("buildResourceDisplayProfile(sectionItems", section_body)
         self.assertNotIn("getResourceDisplayLinkTypeBadgeClass(primaryDisplayType)", section_body)
+
+    def test_resource_core_uses_link_records_for_multi_link_actions(self):
+        source = CORE_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("window.ResourceLinkTags.getResourceLinkRecords(item)", source)
+        self.assertIn("function getResourceImportCandidates(item)", source)
+        self.assertIn("openResourceLinkChoiceModal", source)
 
     def test_resource_core_exports_display_helpers_for_channel_manager(self):
         source = CORE_PATH.read_text(encoding="utf-8")
