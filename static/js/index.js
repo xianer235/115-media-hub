@@ -1728,10 +1728,13 @@
             } else {
                 applyResourceTgHealthFromSyncResult({ ...result, queued: false }, durationMs, resourceTgLastLatencyMs);
             }
+            const searchInputKeyword = String(document.getElementById('resource-search-input')?.value || '').trim();
+            const searchKeyword = searchInputKeyword || String(resourceState.search || '').trim();
             if (
                 refreshOnComplete
                 && currentTab === 'resource'
                 && !document.hidden
+                && !searchKeyword
                 && typeof refreshResourceState === 'function'
             ) {
                 void refreshResourceState({ allowSearch: false });

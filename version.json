@@ -1,10 +1,10 @@
 {
-  "version": "0.5.9",
-  "buildDate": "2026-08-07T00:00:00+08:00",
+  "version": "0.5.10",
+  "buildDate": "2026-08-09T00:00:00+08:00",
   "notes": [
-    "频道同帖多种网盘链接结构化保存并支持按链接复制与转存",
-    "兼容旧资源缓存中的 all_links 字段并按任一链接支持网盘筛选",
-    "保持单链接、ED2K 批量导入与既有网盘安全边界"
+    "修复资源中心频道同步完成后空搜索首页不自动刷新的问题",
+    "有搜索词时保留当前搜索结果，不被同步完成刷新覆盖",
+    "新增同步完成状态与资源刷新竞态回归测试"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

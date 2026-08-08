@@ -2802,7 +2802,7 @@
                 renderResourceCookieHint();
             }
             if (typeof handleResourceChannelSyncStateChange === 'function') {
-                handleResourceChannelSyncStateChange(previousChannelSync, resourceState.channel_sync, { refreshOnComplete: false });
+                handleResourceChannelSyncStateChange(previousChannelSync, resourceState.channel_sync, { refreshOnComplete: compactUpdate });
             }
             if (!compactUpdate) {
                 if (feedPagingKeysToReset.length) {
