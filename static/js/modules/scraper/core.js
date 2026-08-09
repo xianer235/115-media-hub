@@ -297,6 +297,7 @@ function withMonitorSyncResult(message, response = {}) {
     if (sync.status === 'reconcile_queued') return `${message}，STRM 局部校正已排队`;
     if (sync.status === 'processing') return `${message}，STRM 正在同步`;
     if (sync.status === 'completed') return `${message}，STRM 同步已完成`;
+    if (sync.status === 'manual_required') return `${message}，STRM 将同步已知内容，完成后需手动监控补齐`;
     if (sync.status === 'failed') return `${message}，STRM 同步失败，已保留重试`;
     if (sync.status === 'not_matched') return `${message}，未命中文件夹监控任务`;
     if (sync.status === 'unavailable') return `${message}，STRM 同步信息不可用`;

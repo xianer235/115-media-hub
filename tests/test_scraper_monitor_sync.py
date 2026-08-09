@@ -258,6 +258,106 @@ class ScraperMonitorSyncTest(unittest.TestCase):
             ).fetchall()
         self.assertEqual(rows, [(new_local, "New.mkv")])
 
+    def test_incomplete_rename_path_preserves_old_strm_and_index(self):
+        cfg = self._cfg(self._task(scan_path="/115/一级", target_path="媒体库"))
+        old_local = "媒体库/一级/二级/Old.mkv"
+        self._insert_monitor_file("影视监控", old_local, "二级/Old.mkv")
+        old_strm = self._write_strm(old_local, "old")
+        prepared = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="rename",
+            entries=[
+                {
+                    "id": "incomplete-path",
+                    "old_path": "一级/二级/Old.mkv",
+                    "new_path": "New.mkv",
+                    "old_parent_id": "second-level-cid",
+                    "new_parent_id": "second-level-cid",
+                    "is_dir": False,
+                    "size": 4096,
+                }
+            ],
+            source_action="scraper-job:legacy:forward",
+            dedupe_key="incomplete-rename",
+            cfg=cfg,
+        )
+        monitor_changes.confirm_monitor_change_events(prepared, succeeded=True, enqueue=False)
+
+        with (
+            patch.object(monitor_changes, "STRM_ROOT", self.strm_root),
+            patch.object(
+                monitor_changes,
+                "list_remote_dir",
+                AsyncMock(side_effect=AssertionError("confirmed invalid paths must not read 115")),
+            ),
+        ):
+            result = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
+
+        self.assertEqual(result["failed"], 1)
+        self.assertEqual(result["deleted"], 0)
+        self.assertTrue(os.path.isfile(old_strm))
+        with sqlite3.connect(self.db_path) as conn:
+            index_rows = conn.execute(
+                "SELECT local_rel_path, remote_rel_path FROM monitor_files"
+            ).fetchall()
+            event_row = conn.execute(
+                "SELECT status, last_error FROM monitor_change_events WHERE id = ?",
+                (prepared["event_ids"][0],),
+            ).fetchone()
+        self.assertEqual(index_rows, [(old_local, "二级/Old.mkv")])
+        self.assertEqual(event_row[0], "failed")
+        self.assertIn("不完整", event_row[1])
+
+    def test_move_with_same_parent_id_and_different_parent_path_preserves_old_strm(self):
+        cfg = self._cfg(self._task(scan_path="/115/一级", target_path="媒体库"))
+        old_local = "媒体库/一级/二级/Old.mkv"
+        self._insert_monitor_file("影视监控", old_local, "二级/Old.mkv")
+        old_strm = self._write_strm(old_local, "old")
+        prepared = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="move",
+            entries=[
+                {
+                    "id": "contradictory-parent",
+                    "old_path": "一级/二级/Old.mkv",
+                    "new_path": "一级/New.mkv",
+                    "old_parent_id": "second-level-cid",
+                    "new_parent_id": "second-level-cid",
+                    "is_dir": False,
+                    "size": 4096,
+                }
+            ],
+            source_action="scraper-job:legacy:forward",
+            dedupe_key="contradictory-parent",
+            cfg=cfg,
+        )
+        monitor_changes.confirm_monitor_change_events(prepared, succeeded=True, enqueue=False)
+
+        with (
+            patch.object(monitor_changes, "STRM_ROOT", self.strm_root),
+            patch.object(
+                monitor_changes,
+                "list_remote_dir",
+                AsyncMock(side_effect=AssertionError("confirmed invalid paths must not read 115")),
+            ),
+        ):
+            result = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
+
+        self.assertEqual(result["failed"], 1)
+        self.assertEqual(result["deleted"], 0)
+        self.assertTrue(os.path.isfile(old_strm))
+        with sqlite3.connect(self.db_path) as conn:
+            index_rows = conn.execute(
+                "SELECT local_rel_path, remote_rel_path FROM monitor_files"
+            ).fetchall()
+            event_row = conn.execute(
+                "SELECT status, last_error FROM monitor_change_events WHERE id = ?",
+                (prepared["event_ids"][0],),
+            ).fetchone()
+        self.assertEqual(index_rows, [(old_local, "二级/Old.mkv")])
+        self.assertEqual(event_row[0], "failed")
+        self.assertIn("父目录", event_row[1])
+
     def test_delete_is_explicit_even_when_sync_clean_is_false(self):
         cfg = self._cfg(self._task(sync_clean=False, incremental=True))
         local_rel = "媒体库/Media/Delete.mkv"
@@ -284,6 +384,24 @@ class ScraperMonitorSyncTest(unittest.TestCase):
         with sqlite3.connect(self.db_path) as conn:
             count = conn.execute("SELECT COUNT(1) FROM monitor_files").fetchone()[0]
         self.assertEqual(count, 0)
+
+    def test_file_delete_keeps_empty_parent_directory(self):
+        cfg = self._cfg()
+        local_rel = "媒体库/Media/Folder/Delete.mkv"
+        self._insert_monitor_file("影视监控", local_rel, "Folder/Delete.mkv")
+        target = self._write_strm(local_rel)
+        parent_dir = os.path.dirname(target)
+
+        _, _, result = self._run_confirmed(
+            cfg,
+            "delete",
+            [{"id": "keep-parent", "path": "Media/Folder/Delete.mkv", "is_dir": False}],
+            dedupe_key="delete-keep-parent",
+        )
+
+        self.assertEqual(result["completed"], 1)
+        self.assertFalse(os.path.exists(target))
+        self.assertTrue(os.path.isdir(parent_dir))
 
     def test_delete_keeps_shared_strm_referenced_by_another_monitor_task(self):
         task_a = self._task(name="任务 A", target_path="共享库")
@@ -357,7 +475,7 @@ class ScraperMonitorSyncTest(unittest.TestCase):
             ]
         self.assertEqual(task_names, ["Media", "Shows"])
 
-    def test_folder_manifest_is_captured_per_monitor_task(self):
+    def test_folder_manifest_is_shared_across_covering_monitor_tasks(self):
         broad = self._task(name="Broad", scan_path="/115/Media", target_path="Broad")
         nested = self._task(name="Nested", scan_path="/115/Media/Shows", target_path="Nested")
         cfg = self._cfg(broad, nested)
@@ -367,6 +485,12 @@ class ScraperMonitorSyncTest(unittest.TestCase):
             "Shows/Source/Episode.mkv",
             size=4096,
         )
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO monitor_dirs(task_name, dir_rel_path, remote_modified, entry_modified, needs_rescan, missing_confirmations) VALUES (?, ?, ?, ?, 0, 0)",
+                ("Broad", "Shows/Source", "source-modified", "source-entry-modified"),
+            )
+            conn.commit()
         prepared = monitor_changes.prepare_monitor_change_events(
             provider="115",
             operation="copy",
@@ -390,17 +514,35 @@ class ScraperMonitorSyncTest(unittest.TestCase):
         self.assertEqual([row[0] for row in rows], ["Broad", "Nested"])
         snapshots = {task_name: json.loads(raw) for task_name, raw in rows}
         self.assertTrue(snapshots["Broad"]["manifest_known"])
-        self.assertFalse(snapshots["Nested"]["manifest_known"])
+        self.assertTrue(snapshots["Nested"]["manifest_known"])
         self.assertEqual(
             snapshots["Broad"]["indexed_files"],
             [{"modified_at": "2026-08-09 10:00:00", "path": "Media/Shows/Source/Episode.mkv", "size": 4096}],
         )
+        self.assertEqual(snapshots["Nested"]["indexed_files"], snapshots["Broad"]["indexed_files"])
+        self.assertEqual(
+            snapshots["Broad"]["indexed_dirs"],
+            [
+                {
+                    "entry_modified": "source-entry-modified",
+                    "path": "Media/Shows/Source",
+                    "remote_modified": "source-modified",
+                }
+            ],
+        )
+        self.assertEqual(snapshots["Nested"]["indexed_dirs"], snapshots["Broad"]["indexed_dirs"])
 
     def test_indexed_folder_copy_clones_manifest_and_preserves_metadata(self):
         cfg = self._cfg()
         old_local = "媒体库/Media/Source/Episode.mkv"
         self._insert_monitor_file("影视监控", old_local, "Source/Episode.mkv", size=4096)
         self._write_strm(old_local, "source")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO monitor_dirs(task_name, dir_rel_path, remote_modified, entry_modified, needs_rescan, missing_confirmations) VALUES (?, ?, ?, ?, 0, 0)",
+                ("影视监控", "Source", "source-modified", "source-entry-modified"),
+            )
+            conn.commit()
         metadata = os.path.join(self.strm_root, "媒体库/Media/Source/poster.jpg")
         os.makedirs(os.path.dirname(metadata), exist_ok=True)
         with open(metadata, "w", encoding="utf-8") as handle:
@@ -432,8 +574,19 @@ class ScraperMonitorSyncTest(unittest.TestCase):
         self.assertTrue(os.path.isfile(metadata))
         with open(copied, "r", encoding="utf-8") as handle:
             self.assertIn("%2F115%2FMedia%2FCopied%2FEpisode.mkv", handle.read())
+        with sqlite3.connect(self.db_path) as conn:
+            dir_rows = conn.execute(
+                "SELECT dir_rel_path, remote_modified, entry_modified, needs_rescan FROM monitor_dirs ORDER BY dir_rel_path"
+            ).fetchall()
+        self.assertEqual(
+            dir_rows,
+            [
+                ("Copied", "source-modified", "source-entry-modified", 0),
+                ("Source", "source-modified", "source-entry-modified", 0),
+            ],
+        )
 
-    def test_dirty_indexed_folder_copy_reconciles_target_subtree(self):
+    def test_dirty_indexed_folder_copy_syncs_known_index_and_requires_manual_monitor(self):
         cfg = self._cfg()
         old_local = "媒体库/Media/Source/Episode.mkv"
         self._insert_monitor_file("影视监控", old_local, "Source/Episode.mkv", size=4096)
@@ -445,16 +598,12 @@ class ScraperMonitorSyncTest(unittest.TestCase):
             )
             conn.commit()
 
-        calls = []
-
-        async def fake_list_remote_dir(_cfg, remote_path, _refresh, _task, *, folder_cid=""):
-            calls.append((remote_path, folder_cid))
-            self.assertEqual(remote_path, "/115/Media/Copied")
-            self.assertEqual(folder_cid, "copied-folder-cid")
-            return "", [{"name": "Episode.mkv", "is_dir": False, "size": 4096, "modified": ""}]
-
-        with patch.object(monitor_changes, "list_remote_dir", side_effect=fake_list_remote_dir):
-            _, _, result = self._run_confirmed(
+        with patch.object(
+            monitor_changes,
+            "list_remote_dir",
+            AsyncMock(side_effect=AssertionError("unknown folders must wait for a manual monitor scan")),
+        ):
+            _, confirmed, result = self._run_confirmed(
                 cfg,
                 "copy",
                 [
@@ -471,34 +620,21 @@ class ScraperMonitorSyncTest(unittest.TestCase):
             )
 
         self.assertEqual(result["completed"], 1)
-        self.assertEqual(calls, [("/115/Media/Copied", "copied-folder-cid")])
+        self.assertEqual(result["manual_required"], 1)
+        self.assertEqual(confirmed["status"], "manual_required")
         self.assertTrue(os.path.isfile(self._strm_path("媒体库/Media/Copied/Episode.mkv")))
+        with sqlite3.connect(self.db_path) as conn:
+            status = conn.execute("SELECT status FROM monitor_change_events").fetchone()[0]
+        self.assertEqual(status, "manual_required")
 
-    def test_unknown_folder_copy_scans_only_new_subtree(self):
+    def test_unknown_folder_copy_requires_manual_monitor_without_remote_listing(self):
         cfg = self._cfg()
-        calls = []
-
-        async def fake_list_remote_dir(_cfg, remote_path, _refresh, _task, *, folder_cid=""):
-            calls.append((remote_path, folder_cid))
-            if remote_path == "/115/Media/Copied":
-                return "", [
-                    {"id": "season-cid", "cid": "season-cid", "name": "Season 1", "is_dir": True, "modified": "", "size": 0},
-                    {"id": "readme-id", "name": "readme.txt", "is_dir": False, "modified": "", "size": 20},
-                ]
-            if remote_path == "/115/Media/Copied/Season 1":
-                return "", [
-                    {
-                        "id": "episode-id",
-                        "name": "Episode.mkv",
-                        "is_dir": False,
-                        "modified": "2026-08-09 10:00:00",
-                        "size": 4096,
-                    }
-                ]
-            raise AssertionError(f"unexpected remote path: {remote_path}")
-
-        with patch.object(monitor_changes, "list_remote_dir", side_effect=fake_list_remote_dir):
-            _, _, result = self._run_confirmed(
+        with patch.object(
+            monitor_changes,
+            "list_remote_dir",
+            AsyncMock(side_effect=AssertionError("unknown folders must not list the target subtree")),
+        ):
+            _, confirmed, result = self._run_confirmed(
                 cfg,
                 "copy",
                 [
@@ -515,15 +651,59 @@ class ScraperMonitorSyncTest(unittest.TestCase):
             )
 
         self.assertEqual(result["completed"], 1)
+        self.assertEqual(result["manual_required"], 1)
+        self.assertEqual(confirmed["status"], "manual_required")
+        self.assertFalse(os.path.exists(self._strm_path("媒体库/Media/Copied/Season 1/Episode.mkv")))
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute("SELECT status, retry_count FROM monitor_change_events").fetchone()
+        self.assertEqual(row, ("manual_required", 0))
+
+    def test_successful_manual_scan_clears_manual_required_event_for_covered_scope(self):
+        cfg = self._cfg()
+        prepared = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="copy",
+            entries=[
+                {
+                    "id": "manual-clear",
+                    "path": "Outside/Source",
+                    "new_path": "Media/ManualFolder",
+                    "is_dir": True,
+                }
+            ],
+            dedupe_key="manual-clear",
+            cfg=cfg,
+        )
+        monitor_changes.confirm_monitor_change_events(prepared, succeeded=True, enqueue=False)
+        with patch.object(monitor_changes, "STRM_ROOT", self.strm_root):
+            result = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
+        self.assertEqual(result["manual_required"], 1)
+        self.assertEqual(monitor_changes.get_monitor_change_counts(), {"影视监控": {"pending": 0, "failed": 0, "manual_required": 1}})
+
+        scopes = monitor_changes.get_manual_required_monitor_scopes("影视监控", cfg=cfg)
         self.assertEqual(
-            calls,
+            scopes,
             [
-                ("/115/Media/Copied", "copied-cid"),
-                ("/115/Media/Copied/Season 1", "season-cid"),
+                {
+                    "event_id": prepared["event_ids"][0],
+                    "provider_path": "Media/ManualFolder",
+                    "remote_path": "/115/Media/ManualFolder",
+                    "first_level_dir_rel": "ManualFolder",
+                }
             ],
         )
-        self.assertNotIn(("/115/Media", ""), calls)
-        self.assertTrue(os.path.isfile(self._strm_path("媒体库/Media/Copied/Season 1/Episode.mkv")))
+
+        self.assertEqual(
+            monitor_changes.complete_manual_required_monitor_events(
+                "影视监控",
+                [prepared["event_ids"][0]],
+            ),
+            1,
+        )
+        with sqlite3.connect(self.db_path) as conn:
+            status = conn.execute("SELECT status FROM monitor_change_events").fetchone()[0]
+        self.assertEqual(status, "completed")
+        self.assertEqual(monitor_changes.get_monitor_change_counts(), {})
 
     def test_cid_scoped_listing_does_not_resolve_through_monitor_root(self):
         cfg = self._cfg()
@@ -771,7 +951,7 @@ class ScraperMonitorSyncTest(unittest.TestCase):
                 "copy-with-cid",
             )
 
-        self.assertEqual(response["monitor_sync"]["status"], "queued")
+        self.assertEqual(response["monitor_sync"]["status"], "manual_required")
         with sqlite3.connect(self.db_path) as conn:
             snapshot = json.loads(
                 conn.execute("SELECT entry_snapshot_json FROM monitor_change_events").fetchone()[0]
@@ -851,7 +1031,7 @@ class ScraperMonitorSyncTest(unittest.TestCase):
             )
         self.assertEqual(snapshot["new_cid"], "")
 
-    def test_copy_without_destination_cid_is_retained_without_directory_listing(self):
+    def test_copy_without_destination_cid_requires_manual_monitor_without_listing(self):
         cfg = self._cfg()
         with (
             patch.object(scraper, "get_config", return_value=cfg),
@@ -889,16 +1069,17 @@ class ScraperMonitorSyncTest(unittest.TestCase):
         ):
             processed = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
 
-        self.assertEqual(processed["failed"], 1)
+        self.assertEqual(processed["completed"], 1)
+        self.assertEqual(processed["manual_required"], 1)
         with sqlite3.connect(self.db_path) as conn:
             row = conn.execute(
                 "SELECT status, entry_snapshot_json, last_error FROM monitor_change_events"
             ).fetchone()
-        self.assertEqual(row[0], "failed")
+        self.assertEqual(row[0], "manual_required")
         self.assertEqual(json.loads(row[1])["new_cid"], "")
-        self.assertIn("目标 CID", row[2])
+        self.assertEqual(row[2], "需手动监控")
 
-    def test_zero_destination_cid_is_rejected_without_listing_root(self):
+    def test_zero_destination_cid_requires_manual_monitor_without_listing_root(self):
         cfg = self._cfg()
         prepared = monitor_changes.prepare_monitor_change_events(
             provider="115",
@@ -928,7 +1109,8 @@ class ScraperMonitorSyncTest(unittest.TestCase):
         ):
             result = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
 
-        self.assertEqual(result["failed"], 1)
+        self.assertEqual(result["completed"], 1)
+        self.assertEqual(result["manual_required"], 1)
         self.assertEqual(calls, [])
 
     def test_direct_rename_persists_event_before_provider_call(self):
@@ -1261,18 +1443,37 @@ class ScraperMonitorSyncTest(unittest.TestCase):
             dedupe_key="count-failed",
             cfg=cfg,
         )
+        third = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="copy",
+            entries=[
+                {
+                    "id": "manual",
+                    "path": "Outside/Unknown",
+                    "new_path": "Media/Unknown",
+                    "is_dir": True,
+                }
+            ],
+            dedupe_key="count-manual",
+            cfg=cfg,
+        )
         monitor_changes.confirm_monitor_change_events(first, succeeded=True, enqueue=False)
         monitor_changes.confirm_monitor_change_events(second, succeeded=True, enqueue=False)
+        monitor_changes.confirm_monitor_change_events(third, succeeded=True, enqueue=False)
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 "UPDATE monitor_change_events SET status = 'failed' WHERE id = ?",
                 (second["event_ids"][0],),
             )
+            conn.execute(
+                "UPDATE monitor_change_events SET status = 'manual_required' WHERE id = ?",
+                (third["event_ids"][0],),
+            )
             conn.commit()
 
         self.assertEqual(
             monitor_changes.get_monitor_change_counts(),
-            {"影视监控": {"pending": 1, "failed": 1}},
+            {"影视监控": {"pending": 1, "failed": 1, "manual_required": 1}},
         )
 
     def test_cleanup_removes_only_expired_completed_events(self):
@@ -1362,30 +1563,200 @@ class ScraperMonitorSyncTest(unittest.TestCase):
         self.assertIn("monitorState.change_counts", source)
         self.assertIn("待同步", source)
         self.assertIn("同步失败", source)
+        self.assertIn("需手动监控", source)
+
+    def test_scraper_frontend_explains_manual_required_sync_status(self):
+        source = SCRAPER_CORE_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("sync.status === 'manual_required'", source)
+        self.assertIn("需手动监控", source)
+
+    def test_monitor_change_task_summary_reports_manual_required_count(self):
+        cfg = self._cfg()
+        logs = AsyncMock()
+        with (
+            patch.object(monitor, "_claim_monitor_job", return_value=True),
+            patch.object(monitor, "get_config", return_value=cfg),
+            patch.object(monitor, "write_monitor_task_header", AsyncMock()),
+            patch.object(monitor, "write_monitor_section", AsyncMock()),
+            patch.object(monitor, "write_monitor_log", logs),
+            patch.object(monitor, "write_monitor_task_footer", AsyncMock()),
+            patch.object(monitor, "update_monitor_summary"),
+            patch.object(monitor, "schedule_ui_state_push"),
+            patch.object(monitor, "_finish_monitor_job", AsyncMock()),
+            patch.object(
+                monitor_changes,
+                "process_monitor_change_events",
+                AsyncMock(
+                    return_value={
+                        "completed": 2,
+                        "failed": 0,
+                        "generated": 1,
+                        "deleted": 0,
+                        "directory_count": 0,
+                        "file_count": 1,
+                        "manual_required": 2,
+                        "errors": [],
+                    }
+                ),
+            ),
+        ):
+            asyncio.run(monitor.run_monitor_change_task("影视监控", payload={"event_ids": [1, 2]}))
+
+        messages = "\n".join(str(call.args[0]) for call in logs.await_args_list)
+        self.assertIn("需手动监控 2", messages)
+
+    def test_real_batch_plan_canonicalizes_relative_paths_and_renames_three_nested_files_without_remote_listing(self):
+        task = self._task(scan_path="/115/一级", target_path="媒体库")
+        cfg = self._cfg(task)
+        entries = [
+            {
+                "id": f"batch-{episode}",
+                "name": f"Example.S01E{episode:02d}.mkv",
+                "is_dir": False,
+                "parent_id": "second-level-cid",
+                "parent_path": "一级/二级",
+                "path": f"Example.S01E{episode:02d}.mkv",
+                "size": 8192,
+                "modified_at": "2026-08-09 10:00:00",
+            }
+            for episode in range(1, 4)
+        ]
+        payload = {
+            "provider": "115",
+            "base_cid": "second-level-cid",
+            "base_path": "一级/二级",
+            "entries": entries,
+            "tmdb": {
+                "id": 42,
+                "media_type": "tv",
+                "title": "示例剧",
+                "year": "2024",
+                "total_episodes": 3,
+                "total_seasons": 1,
+            },
+            "options": {
+                "selection_mode": "contents",
+                "season": 1,
+                "title_language": "zh",
+            },
+        }
+        with (
+            patch.object(scraper, "_require_scraper_operation"),
+            patch.object(scraper, "_require_provider_cookie", return_value="cookie"),
+            patch.object(scraper, "_walk_existing_folder", return_value=("second-level-cid", True)),
+            patch.object(scraper, "_target_name_exists", return_value=False),
+        ):
+            plan = scraper.build_scraper_rename_plan(payload)
+
+        self.assertTrue(plan["ready"])
+        self.assertEqual(len(plan["actions"]), 3)
+        for action in plan["actions"]:
+            old_local = f"媒体库/一级/二级/{action['old_name']}"
+            self._insert_monitor_file(
+                "影视监控",
+                old_local,
+                f"二级/{action['old_name']}",
+                size=action["file_size"],
+            )
+            self._write_strm(old_local, "old")
+
+        job_id = scraper._insert_scraper_job("115", plan, plan["options"], plan["tmdb"])
+        with (
+            patch.object(scraper, "get_config", return_value=cfg),
+            patch.object(scraper, "_require_scraper_operation"),
+            patch.object(scraper, "_require_provider_cookie", return_value="cookie"),
+            patch.object(scraper, "_target_name_exists", return_value=False),
+            patch.object(scraper, "_rename_provider_entry", return_value={"state": True}),
+            patch.object(scraper, "_invalidate_provider_parent"),
+            patch.object(monitor_changes, "_enqueue_task_names"),
+        ):
+            scraper.run_scraper_job(job_id)
+
+        with (
+            patch.object(monitor_changes, "STRM_ROOT", self.strm_root),
+            patch.object(
+                monitor_changes,
+                "list_remote_dir",
+                AsyncMock(side_effect=AssertionError("known batch file renames must not list 115 directories")),
+            ),
+        ):
+            result = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
+
+        self.assertEqual(result["completed"], 3)
+        self.assertEqual(result["deleted"], 3)
+        self.assertEqual(result["generated"], 3)
+        self.assertTrue(os.path.isdir(os.path.join(self.strm_root, "媒体库/一级/二级")))
+        with sqlite3.connect(self.db_path) as conn:
+            event_paths = conn.execute(
+                "SELECT old_path, new_path FROM monitor_change_events ORDER BY id"
+            ).fetchall()
+            indexed = conn.execute(
+                "SELECT local_rel_path, remote_rel_path FROM monitor_files ORDER BY local_rel_path"
+            ).fetchall()
+
+        expected_index = []
+        for action in plan["actions"]:
+            self.assertEqual(action["old_path"], f"一级/二级/{action['old_name']}")
+            self.assertEqual(action["new_path"], f"一级/二级/{action['new_name']}")
+            old_local = f"媒体库/一级/二级/{action['old_name']}"
+            new_local = f"媒体库/一级/二级/{action['new_name']}"
+            self.assertFalse(os.path.exists(self._strm_path(old_local)))
+            with open(self._strm_path(new_local), "r", encoding="utf-8") as handle:
+                self.assertEqual(
+                    handle.read(),
+                    core.build_strm_play_url(cfg, f"/115/{action['new_path']}"),
+                )
+            expected_index.append((new_local, f"二级/{action['new_name']}"))
+
+        self.assertEqual(
+            event_paths,
+            [(action["old_path"], action["new_path"]) for action in plan["actions"]],
+        )
+        self.assertEqual(indexed, sorted(expected_index))
 
     def test_batch_scraper_forward_and_rollback_use_stable_event_keys(self):
         cfg = self._cfg()
-        plan = {
+        payload = {
+            "provider": "115",
             "base_cid": "parent",
-            "actions": [
+            "base_path": "Media",
+            "entries": [
                 {
-                    "action_index": 1,
-                    "entry_id": "batch-file",
+                    "id": "batch-file",
+                    "name": "Example.S01E01.mkv",
                     "is_dir": False,
-                    "old_parent_id": "parent",
-                    "old_name": "Old.mkv",
-                    "old_path": "Media/Old.mkv",
-                    "new_parent_id": "parent",
-                    "new_name": "New.mkv",
-                    "new_path": "Media/New.mkv",
-                    "target_parent_path": "Media",
-                    "file_size": 8192,
-                    "remote_modified": "2026-08-09 10:00:00",
-                    "ready": True,
+                    "parent_id": "parent",
+                    "parent_path": "Media",
+                    "path": "Media/Example.S01E01.mkv",
+                    "size": 8192,
+                    "modified_at": "2026-08-09 10:00:00",
                 }
             ],
+            "tmdb": {
+                "id": 42,
+                "media_type": "tv",
+                "title": "示例剧",
+                "year": "2024",
+                "total_episodes": 1,
+                "total_seasons": 1,
+            },
+            "options": {
+                "selection_mode": "contents",
+                "season": 1,
+                "title_language": "zh",
+            },
         }
-        job_id = scraper._insert_scraper_job("115", plan, {}, {})
+        with (
+            patch.object(scraper, "_require_scraper_operation"),
+            patch.object(scraper, "_require_provider_cookie", return_value="cookie"),
+            patch.object(scraper, "_walk_existing_folder", return_value=("parent", True)),
+            patch.object(scraper, "_target_name_exists", return_value=False),
+        ):
+            plan = scraper.build_scraper_rename_plan(payload)
+        self.assertTrue(plan["ready"])
+        action = plan["actions"][0]
+        job_id = scraper._insert_scraper_job("115", plan, plan["options"], plan["tmdb"])
 
         with (
             patch.object(scraper, "get_config", return_value=cfg),
@@ -1410,9 +1781,56 @@ class ScraperMonitorSyncTest(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.assertIn(f"scraper-job:{job_id}:action:", rows[0][0])
         self.assertTrue(rows[0][0].endswith(":forward:batch-file"))
-        self.assertEqual(rows[0][1:3], ("Media/Old.mkv", "Media/New.mkv"))
+        self.assertEqual(rows[0][1:3], (action["old_path"], action["new_path"]))
         self.assertTrue(rows[1][0].endswith(":rollback:batch-file"))
-        self.assertEqual(rows[1][1:3], ("Media/New.mkv", "Media/Old.mkv"))
+        self.assertEqual(rows[1][1:3], (action["new_path"], action["old_path"]))
+
+    def test_legacy_pending_batch_action_uses_saved_base_path_for_monitor_event(self):
+        cfg = self._cfg(self._task(scan_path="/115/一级", target_path="媒体库"))
+        plan = {
+            "base_cid": "second-level-cid",
+            "actions": [
+                {
+                    "action_index": 1,
+                    "entry_id": "legacy-file",
+                    "is_dir": False,
+                    "old_parent_id": "second-level-cid",
+                    "old_name": "Old.mkv",
+                    "old_path": "一级/二级/Old.mkv",
+                    "new_parent_id": "second-level-cid",
+                    "new_name": "New.mkv",
+                    "new_path": "New.mkv",
+                    "target_parent_path": "",
+                    "file_size": 8192,
+                    "remote_modified": "2026-08-09 10:00:00",
+                    "ready": True,
+                }
+            ],
+        }
+        job_id = scraper._insert_scraper_job(
+            "115",
+            plan,
+            {"base_path": "一级/二级"},
+            {},
+        )
+
+        with (
+            patch.object(scraper, "get_config", return_value=cfg),
+            patch.object(scraper, "_require_scraper_operation"),
+            patch.object(scraper, "_require_provider_cookie", return_value="cookie"),
+            patch.object(scraper, "_target_name_exists", return_value=False),
+            patch.object(scraper, "_rename_provider_entry", return_value={"state": True}),
+            patch.object(scraper, "_invalidate_provider_parent"),
+            patch.object(monitor_changes, "_enqueue_task_names"),
+        ):
+            scraper.run_scraper_job(job_id)
+
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT old_path, new_path FROM monitor_change_events WHERE source_action = ?",
+                (f"scraper-job:{job_id}:forward",),
+            ).fetchone()
+        self.assertEqual(row, ("一级/二级/Old.mkv", "一级/二级/New.mkv"))
 
     def test_batch_noop_action_does_not_create_monitor_event(self):
         cfg = self._cfg()
@@ -1530,6 +1948,355 @@ class ScraperMonitorSyncTest(unittest.TestCase):
         self.assertIn("merged_into", rows[0][3])
         self.assertEqual(confirmed["event_count"], 1)
 
+    def test_pending_forward_and_rollback_chain_collapses_without_local_change(self):
+        cfg = self._cfg()
+        old_local = "媒体库/Media/A.mkv"
+        self._insert_monitor_file("影视监控", old_local, "A.mkv", size=4096)
+        target = self._write_strm(old_local, "original")
+        forward = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="move",
+            entries=[
+                {
+                    "id": "forward-rollback",
+                    "old_path": "Media/A.mkv",
+                    "new_path": "Media/B.mkv",
+                    "old_parent_id": "media-parent",
+                    "new_parent_id": "media-parent",
+                    "is_dir": False,
+                    "size": 4096,
+                }
+            ],
+            source_action="scraper-job:1:forward",
+            dedupe_key="forward-chain",
+            cfg=cfg,
+        )
+        monitor_changes.confirm_monitor_change_events(forward, succeeded=True, enqueue=False)
+        rollback = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="move",
+            entries=[
+                {
+                    "id": "forward-rollback",
+                    "old_path": "Media/B.mkv",
+                    "new_path": "Media/A.mkv",
+                    "old_parent_id": "media-parent",
+                    "new_parent_id": "media-parent",
+                    "is_dir": False,
+                    "size": 4096,
+                }
+            ],
+            source_action="scraper-job:1:rollback",
+            dedupe_key="rollback-chain",
+            cfg=cfg,
+        )
+        confirmed = monitor_changes.confirm_monitor_change_events(
+            rollback,
+            succeeded=True,
+            enqueue=False,
+        )
+
+        self.assertEqual(confirmed["status"], "completed")
+        with sqlite3.connect(self.db_path) as conn:
+            statuses = conn.execute(
+                "SELECT status FROM monitor_change_events ORDER BY id"
+            ).fetchall()
+            rows = conn.execute(
+                "SELECT local_rel_path, remote_rel_path FROM monitor_files"
+            ).fetchall()
+        self.assertEqual(statuses, [("completed",), ("completed",)])
+        self.assertEqual(rows, [(old_local, "A.mkv")])
+        with open(target, "r", encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "original")
+
+    def test_recovered_processing_event_is_not_collapsed_with_rollback_chain(self):
+        cfg = self._cfg()
+        old_local = "媒体库/Media/A.mkv"
+        new_local = "媒体库/Media/B.mkv"
+        self._insert_monitor_file("影视监控", old_local, "A.mkv", size=4096)
+        self._write_strm(old_local, "original")
+        forward = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="move",
+            entries=[
+                {
+                    "id": "crashed-forward",
+                    "old_path": "Media/A.mkv",
+                    "new_path": "Media/B.mkv",
+                    "old_parent_id": "media-parent",
+                    "new_parent_id": "media-parent",
+                    "is_dir": False,
+                    "size": 4096,
+                }
+            ],
+            source_action="scraper-job:crashed:forward",
+            dedupe_key="crashed-forward",
+            cfg=cfg,
+        )
+        monitor_changes.confirm_monitor_change_events(forward, succeeded=True, enqueue=False)
+        self._write_strm(new_local, "partially-written")
+        os.remove(self._strm_path(old_local))
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE monitor_change_events SET status = 'processing' WHERE id = ?",
+                (forward["event_ids"][0],),
+            )
+            conn.commit()
+
+        monitor_changes.recover_monitor_change_events(cfg=cfg, enqueue=False)
+        rollback = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="move",
+            entries=[
+                {
+                    "id": "crashed-forward",
+                    "old_path": "Media/B.mkv",
+                    "new_path": "Media/A.mkv",
+                    "old_parent_id": "media-parent",
+                    "new_parent_id": "media-parent",
+                    "is_dir": False,
+                    "size": 4096,
+                }
+            ],
+            source_action="scraper-job:crashed:rollback",
+            dedupe_key="crashed-rollback",
+            cfg=cfg,
+        )
+        monitor_changes.confirm_monitor_change_events(rollback, succeeded=True, enqueue=False)
+
+        with sqlite3.connect(self.db_path) as conn:
+            statuses = conn.execute(
+                "SELECT status FROM monitor_change_events ORDER BY id"
+            ).fetchall()
+        self.assertEqual(statuses, [("pending",), ("pending",)])
+        with patch.object(monitor_changes, "STRM_ROOT", self.strm_root):
+            result = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
+        self.assertEqual(result["completed"], 2)
+        self.assertTrue(os.path.exists(self._strm_path(old_local)))
+        self.assertFalse(os.path.exists(self._strm_path(new_local)))
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT local_rel_path, remote_rel_path FROM monitor_files"
+            ).fetchall()
+        self.assertEqual(rows, [(old_local, "A.mkv")])
+
+    def test_pending_cross_directory_move_then_rename_keeps_original_parent_id(self):
+        cfg = self._cfg()
+        old_local = "媒体库/Media/A/Episode.mkv"
+        new_local = "媒体库/Media/B/Renamed.mkv"
+        self._insert_monitor_file("影视监控", old_local, "A/Episode.mkv", size=4096)
+        self._write_strm(old_local, "old")
+        first = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="move",
+            entries=[
+                {
+                    "id": "move-rename-chain",
+                    "old_path": "Media/A/Episode.mkv",
+                    "new_path": "Media/B/Episode.mkv",
+                    "old_parent_id": "parent-a",
+                    "new_parent_id": "parent-b",
+                    "is_dir": False,
+                    "size": 4096,
+                }
+            ],
+            source_action="scraper:entry:move",
+            dedupe_key="move-rename-chain-one",
+            cfg=cfg,
+        )
+        monitor_changes.confirm_monitor_change_events(first, succeeded=True, enqueue=False)
+        second = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="rename",
+            entries=[
+                {
+                    "id": "move-rename-chain",
+                    "old_path": "Media/B/Episode.mkv",
+                    "new_path": "Media/B/Renamed.mkv",
+                    "old_parent_id": "parent-b",
+                    "new_parent_id": "parent-b",
+                    "is_dir": False,
+                    "size": 4096,
+                }
+            ],
+            source_action="scraper:entry:rename",
+            dedupe_key="move-rename-chain-two",
+            cfg=cfg,
+        )
+        monitor_changes.confirm_monitor_change_events(second, succeeded=True, enqueue=False)
+
+        with sqlite3.connect(self.db_path) as conn:
+            raw_snapshot = conn.execute(
+                "SELECT entry_snapshot_json FROM monitor_change_events WHERE id = ?",
+                (second["event_ids"][0],),
+            ).fetchone()[0]
+        snapshot = json.loads(raw_snapshot)
+        self.assertEqual(snapshot["old_path"], "Media/A/Episode.mkv")
+        self.assertEqual(snapshot["old_parent_id"], "parent-a")
+        self.assertEqual(snapshot["new_parent_id"], "parent-b")
+        with patch.object(monitor_changes, "STRM_ROOT", self.strm_root):
+            result = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
+        self.assertEqual(result["completed"], 1)
+        self.assertFalse(os.path.exists(self._strm_path(old_local)))
+        self.assertTrue(os.path.exists(self._strm_path(new_local)))
+
+    def test_continuous_folder_moves_merge_indexed_dirs_without_manual_required(self):
+        cfg = self._cfg()
+        old_local = "媒体库/Media/Source/Episode.mkv"
+        self._insert_monitor_file(
+            "影视监控",
+            old_local,
+            "Source/Episode.mkv",
+            modified="source-modified",
+            size=4096,
+        )
+        self._write_strm(old_local, "source")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO monitor_dirs(
+                    task_name, dir_rel_path, remote_modified, entry_modified, needs_rescan, missing_confirmations
+                ) VALUES (?, ?, ?, ?, 0, 0)
+                """,
+                ("影视监控", "Source", "source-modified", "source-entry"),
+            )
+            conn.commit()
+
+        first = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="rename",
+            entries=[
+                {
+                    "id": "folder-chain",
+                    "path": "Media/Source",
+                    "new_path": "Media/Mid",
+                    "is_dir": True,
+                    "old_parent_id": "media-parent",
+                    "new_parent_id": "media-parent",
+                }
+            ],
+            source_action="direct:folder-chain",
+            dedupe_key="folder-chain-one",
+            cfg=cfg,
+        )
+        monitor_changes.confirm_monitor_change_events(first, succeeded=True, enqueue=False)
+
+        second = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="rename",
+            entries=[
+                {
+                    "id": "folder-chain",
+                    "path": "Media/Mid",
+                    "new_path": "Media/Dest",
+                    "is_dir": True,
+                    "old_parent_id": "media-parent",
+                    "new_parent_id": "media-parent",
+                }
+            ],
+            source_action="direct:folder-chain",
+            dedupe_key="folder-chain-two",
+            cfg=cfg,
+        )
+        monitor_changes.confirm_monitor_change_events(second, succeeded=True, enqueue=False)
+
+        with sqlite3.connect(self.db_path) as conn:
+            raw_snapshot, status = conn.execute(
+                "SELECT entry_snapshot_json, status FROM monitor_change_events WHERE id = ?",
+                (second["event_ids"][0],),
+            ).fetchone()
+        snapshot = json.loads(raw_snapshot)
+        self.assertEqual(status, "pending")
+        self.assertEqual(snapshot["old_path"], "Media/Source")
+        self.assertTrue(snapshot["manifest_known"])
+        self.assertFalse(snapshot["manual_required"])
+        self.assertEqual(snapshot["indexed_files"], [{"modified_at": "source-modified", "path": "Media/Source/Episode.mkv", "size": 4096}])
+        self.assertEqual(
+            snapshot["indexed_dirs"],
+            [{"entry_modified": "source-entry", "path": "Media/Source", "remote_modified": "source-modified"}],
+        )
+
+    def test_processed_manual_required_folder_move_transfers_prompt_to_final_path(self):
+        cfg = self._cfg()
+        source_local = "媒体库/Media/Source/Episode.mkv"
+        self._insert_monitor_file("影视监控", source_local, "Source/Episode.mkv", size=4096)
+        self._write_strm(source_local, "source")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO monitor_dirs(
+                    task_name, dir_rel_path, remote_modified, entry_modified, needs_rescan, missing_confirmations
+                ) VALUES (?, ?, '', '', 1, 0)
+                """,
+                ("影视监控", "Source"),
+            )
+            conn.commit()
+
+        first = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="move",
+            entries=[
+                {
+                    "id": "manual-folder-chain",
+                    "path": "Media/Source",
+                    "new_path": "Media/Mid",
+                    "is_dir": True,
+                    "old_parent_id": "media-parent",
+                    "new_parent_id": "media-parent",
+                }
+            ],
+            source_action="scraper:entry:move",
+            dedupe_key="manual-folder-chain-one",
+            cfg=cfg,
+        )
+        monitor_changes.confirm_monitor_change_events(first, succeeded=True, enqueue=False)
+        with patch.object(monitor_changes, "STRM_ROOT", self.strm_root):
+            first_result = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
+        self.assertEqual(first_result["manual_required"], 1)
+        self.assertTrue(os.path.exists(self._strm_path("媒体库/Media/Mid/Episode.mkv")))
+
+        second = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="rename",
+            entries=[
+                {
+                    "id": "manual-folder-chain",
+                    "path": "Media/Mid",
+                    "new_path": "Media/Dest",
+                    "is_dir": True,
+                    "old_parent_id": "media-parent",
+                    "new_parent_id": "media-parent",
+                }
+            ],
+            source_action="scraper:entry:rename",
+            dedupe_key="manual-folder-chain-two",
+            cfg=cfg,
+        )
+        monitor_changes.confirm_monitor_change_events(second, succeeded=True, enqueue=False)
+
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT old_path, new_path, status, entry_snapshot_json FROM monitor_change_events ORDER BY id"
+            ).fetchall()
+        final_snapshot = json.loads(rows[1][3])
+        self.assertEqual(rows[0][2], "completed")
+        self.assertEqual(rows[1][0:3], ("Media/Mid", "Media/Dest", "pending"))
+        self.assertTrue(final_snapshot["manual_required"])
+        self.assertFalse(final_snapshot["manifest_known"])
+        self.assertEqual(final_snapshot["indexed_files"][0]["path"], "Media/Mid/Episode.mkv")
+
+        with patch.object(monitor_changes, "STRM_ROOT", self.strm_root):
+            second_result = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
+        self.assertEqual(second_result["manual_required"], 1)
+        self.assertFalse(os.path.exists(self._strm_path("媒体库/Media/Mid/Episode.mkv")))
+        self.assertTrue(os.path.exists(self._strm_path("媒体库/Media/Dest/Episode.mkv")))
+        with sqlite3.connect(self.db_path) as conn:
+            current_status = conn.execute(
+                "SELECT status FROM monitor_change_events WHERE id = ?",
+                (second["event_ids"][0],),
+            ).fetchone()[0]
+        self.assertEqual(current_status, "manual_required")
+
     def test_continuous_renames_with_different_entry_ids_do_not_merge(self):
         cfg = self._cfg()
         first = monitor_changes.prepare_monitor_change_events(
@@ -1640,6 +2407,8 @@ class ScraperMonitorSyncTest(unittest.TestCase):
                         "name": "Movie.mkv",
                         "path": "Media/Movie.mkv",
                         "new_path": "Other/Movie.mkv",
+                        "old_parent_id": "source-parent",
+                        "new_parent_id": "target-parent",
                         "is_dir": False,
                         "size": 4096,
                     }
@@ -1655,6 +2424,67 @@ class ScraperMonitorSyncTest(unittest.TestCase):
                 "SELECT task_name, local_rel_path FROM monitor_files ORDER BY task_name"
             ).fetchall()
         self.assertEqual(rows, [("目标", "目标库/Other/Movie.mkv")])
+
+    def test_cross_monitor_folder_move_reuses_source_manifest_and_baseline_without_listing(self):
+        source_task = self._task(name="Source", scan_path="/115/Media/SourceRoot", target_path="源库")
+        destination_task = self._task(
+            name="Destination",
+            scan_path="/115/Media/DestinationRoot",
+            target_path="目标库",
+        )
+        cfg = self._cfg(source_task, destination_task)
+        old_local = "源库/SourceRoot/Folder/Episode.mkv"
+        new_local = "目标库/DestinationRoot/Folder/Episode.mkv"
+        self._insert_monitor_file("Source", old_local, "Folder/Episode.mkv", size=4096)
+        self._write_strm(old_local, "source")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO monitor_dirs(task_name, dir_rel_path, remote_modified, entry_modified, needs_rescan, missing_confirmations) VALUES (?, ?, ?, ?, 0, 0)",
+                ("Source", "Folder", "folder-modified", "folder-entry-modified"),
+            )
+            conn.commit()
+
+        with patch.object(
+            monitor_changes,
+            "list_remote_dir",
+            AsyncMock(side_effect=AssertionError("indexed cross-monitor folders must not list 115")),
+        ):
+            _, _, result = self._run_confirmed(
+                cfg,
+                "move",
+                [
+                    {
+                        "id": "cross-folder",
+                        "name": "Folder",
+                        "old_path": "Media/SourceRoot/Folder",
+                        "new_path": "Media/DestinationRoot/Folder",
+                        "old_parent_id": "source-parent",
+                        "new_parent_id": "destination-parent",
+                        "old_cid": "cross-folder",
+                        "new_cid": "cross-folder",
+                        "is_dir": True,
+                    }
+                ],
+                dedupe_key="cross-monitor-folder-move",
+            )
+
+        self.assertEqual(result["completed"], 2)
+        self.assertEqual(result["deleted"], 1)
+        self.assertEqual(result["generated"], 1)
+        self.assertFalse(os.path.exists(self._strm_path(old_local)))
+        self.assertTrue(os.path.isfile(self._strm_path(new_local)))
+        with sqlite3.connect(self.db_path) as conn:
+            file_rows = conn.execute(
+                "SELECT task_name, local_rel_path, remote_rel_path FROM monitor_files ORDER BY task_name"
+            ).fetchall()
+            dir_rows = conn.execute(
+                "SELECT task_name, dir_rel_path, remote_modified, entry_modified, needs_rescan FROM monitor_dirs ORDER BY task_name, dir_rel_path"
+            ).fetchall()
+        self.assertEqual(file_rows, [("Destination", new_local, "Folder/Episode.mkv")])
+        self.assertEqual(
+            dir_rows,
+            [("Destination", "Folder", "folder-modified", "folder-entry-modified", 0)],
+        )
 
     def test_folder_rename_removes_only_indexed_strm_and_keeps_metadata(self):
         cfg = self._cfg()
@@ -1690,7 +2520,7 @@ class ScraperMonitorSyncTest(unittest.TestCase):
             rows = conn.execute("SELECT local_rel_path FROM monitor_files").fetchall()
         self.assertEqual(rows, [(new_local,)])
 
-    def test_folder_rename_removes_old_dir_state_and_marks_parent_branch(self):
+    def test_folder_rename_migrates_clean_directory_baseline(self):
         cfg = self._cfg()
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
@@ -1721,10 +2551,16 @@ class ScraperMonitorSyncTest(unittest.TestCase):
         self.assertEqual(result["completed"], 1)
         with sqlite3.connect(self.db_path) as conn:
             rows = conn.execute(
-                "SELECT dir_rel_path, needs_rescan FROM monitor_dirs WHERE task_name = ? ORDER BY dir_rel_path",
+                "SELECT dir_rel_path, remote_modified, entry_modified, needs_rescan FROM monitor_dirs WHERE task_name = ? ORDER BY dir_rel_path",
                 ("影视监控",),
             ).fetchall()
-        self.assertEqual(rows, [("Shows", 1)])
+        self.assertEqual(
+            rows,
+            [
+                ("Shows", "old", "old", 0),
+                ("Shows/New", "old", "old", 0),
+            ],
+        )
 
     def test_top_level_folder_change_does_not_mark_empty_root_branch(self):
         cfg = self._cfg()
@@ -1755,9 +2591,9 @@ class ScraperMonitorSyncTest(unittest.TestCase):
                 "SELECT dir_rel_path, needs_rescan FROM monitor_dirs WHERE task_name = ?",
                 ("影视监控",),
             ).fetchall()
-        self.assertEqual(rows, [("New", 1)])
+        self.assertEqual(rows, [("New", 0)])
 
-    def test_root_level_file_change_marks_monitor_root_for_validation(self):
+    def test_root_level_file_change_does_not_force_monitor_rescan(self):
         cfg = self._cfg()
         _, _, result = self._run_confirmed(
             cfg,
@@ -1780,7 +2616,7 @@ class ScraperMonitorSyncTest(unittest.TestCase):
                 "SELECT dir_rel_path, needs_rescan FROM monitor_dirs WHERE task_name = ?",
                 ("影视监控",),
             ).fetchall()
-        self.assertEqual(rows, [("", 1)])
+        self.assertEqual(rows, [])
 
     def test_new_file_and_filter_rules_are_applied_without_full_write_mode(self):
         cfg = self._cfg(self._task(min_file_size_mb=1, strm_write_mode="full", sync_clean=False))
@@ -1835,7 +2671,7 @@ class ScraperMonitorSyncTest(unittest.TestCase):
         with sqlite3.connect(self.db_path) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(1) FROM monitor_files").fetchone()[0], 0)
 
-    def test_create_folder_updates_dirty_baseline_without_listing(self):
+    def test_create_folder_records_clean_baseline_without_listing(self):
         cfg = self._cfg()
         with patch.object(
             monitor_changes,
@@ -1855,15 +2691,17 @@ class ScraperMonitorSyncTest(unittest.TestCase):
                 "SELECT dir_rel_path, needs_rescan FROM monitor_dirs WHERE task_name = ?",
                 ("影视监控",),
             ).fetchone()
-        self.assertEqual(row, ("NewFolder", 1))
+        self.assertEqual(row, ("NewFolder", 0))
 
     def test_reconcile_reads_minimal_parent_and_rebuilds_actual_new_name(self):
         cfg = self._cfg()
         old_local = "媒体库/Media/Folder/Old.mkv"
         self._insert_monitor_file("影视监控", old_local, "Folder/Old.mkv")
         self._write_strm(old_local, "old")
+        calls = []
 
         async def fake_list(_cfg, remote_path, _refresh, _task, *, folder_cid=""):
+            calls.append((remote_path, folder_cid))
             self.assertEqual(remote_path, "/115/Media/Folder")
             self.assertEqual(folder_cid, "folder-parent-cid")
             return "", [
@@ -1900,6 +2738,7 @@ class ScraperMonitorSyncTest(unittest.TestCase):
             result = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
 
         self.assertEqual(result["completed"], 1)
+        self.assertEqual(calls, [("/115/Media/Folder", "folder-parent-cid")])
         self.assertFalse(os.path.exists(self._strm_path(old_local)))
         self.assertTrue(os.path.exists(self._strm_path("媒体库/Media/Folder/New.mkv")))
 
@@ -2003,27 +2842,38 @@ class ScraperMonitorSyncTest(unittest.TestCase):
         self.assertEqual(row[0], "failed")
         self.assertIn("未找到", row[1])
 
-    def test_unknown_subtree_failure_is_retained_and_retried_with_backoff(self):
+    def test_local_write_failure_is_retained_and_retried_with_backoff(self):
         cfg = self._cfg()
+        old_local = "媒体库/Media/Retry/Old.mkv"
+        new_local = "媒体库/Media/Retry/New.mkv"
+        self._insert_monitor_file("影视监控", old_local, "Retry/Old.mkv", size=4096)
+        self._write_strm(old_local, "old")
         prepared = monitor_changes.prepare_monitor_change_events(
             provider="115",
-            operation="copy",
+            operation="rename",
             entries=[
                 {
-                    "id": "retry-folder",
-                    "path": "Outside/Source",
-                    "new_path": "Media/Retry",
-                    "new_cid": "retry-folder-cid",
-                    "is_dir": True,
+                    "id": "retry-file",
+                    "path": "Media/Retry/Old.mkv",
+                    "new_path": "Media/Retry/New.mkv",
+                    "old_parent_id": "retry-parent",
+                    "new_parent_id": "retry-parent",
+                    "is_dir": False,
+                    "size": 4096,
                 }
             ],
-            dedupe_key="unknown-retry",
+            dedupe_key="local-write-retry",
             cfg=cfg,
         )
         monitor_changes.confirm_monitor_change_events(prepared, succeeded=True, enqueue=False)
         with (
             patch.object(monitor_changes, "STRM_ROOT", self.strm_root),
-            patch.object(monitor_changes, "list_remote_dir", AsyncMock(side_effect=RuntimeError("temporary 115 error"))),
+            patch.object(monitor_changes, "_write_strm_file", side_effect=RuntimeError("temporary local write error")),
+            patch.object(
+                monitor_changes,
+                "list_remote_dir",
+                AsyncMock(side_effect=AssertionError("confirmed file changes must not list 115")),
+            ),
         ):
             first = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
         self.assertEqual(first["failed"], 1)
@@ -2036,63 +2886,644 @@ class ScraperMonitorSyncTest(unittest.TestCase):
         self.assertEqual(row[0], "failed")
         self.assertEqual(row[1], 1)
         self.assertGreater(row[2], 0)
-        self.assertIn("temporary 115 error", row[3])
-
-        async def retry_list(_cfg, remote_path, _refresh, _task, *, folder_cid=""):
-            self.assertEqual(remote_path, "/115/Media/Retry")
-            self.assertEqual(folder_cid, "retry-folder-cid")
-            return "", [{"name": "Episode.mkv", "is_dir": False, "size": 4096, "modified": ""}]
+        self.assertIn("temporary local write error", row[3])
+        self.assertTrue(os.path.exists(self._strm_path(old_local)))
+        self.assertFalse(os.path.exists(self._strm_path(new_local)))
+        with sqlite3.connect(self.db_path) as conn:
+            index_rows = conn.execute(
+                "SELECT local_rel_path, remote_rel_path FROM monitor_files"
+            ).fetchall()
+        self.assertEqual(index_rows, [(old_local, "Retry/Old.mkv")])
 
         with (
             patch.object(monitor_changes, "STRM_ROOT", self.strm_root),
-            patch.object(monitor_changes, "list_remote_dir", side_effect=retry_list),
+            patch.object(
+                monitor_changes,
+                "list_remote_dir",
+                AsyncMock(side_effect=AssertionError("local retries must not list 115")),
+            ),
         ):
             second = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
         self.assertEqual(second["completed"], 1)
-        self.assertTrue(os.path.exists(self._strm_path("媒体库/Media/Retry/Episode.mkv")))
+        self.assertTrue(os.path.exists(self._strm_path(new_local)))
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT local_rel_path, remote_rel_path FROM monitor_files"
+            ).fetchall()
+        self.assertEqual(rows, [(new_local, "Retry/New.mkv")])
 
-    def test_unknown_subtree_file_limit_fails_without_root_fallback(self):
+    def test_indexed_folder_write_failure_restores_old_strms_and_removes_partial_new_files(self):
+        cfg = self._cfg()
+        old_locals = [
+            "媒体库/Media/Source/Episode01.mkv",
+            "媒体库/Media/Source/Episode02.mkv",
+        ]
+        new_locals = [
+            "媒体库/Media/Renamed/Episode01.mkv",
+            "媒体库/Media/Renamed/Episode02.mkv",
+        ]
+        for index, old_local in enumerate(old_locals, start=1):
+            self._insert_monitor_file(
+                "影视监控",
+                old_local,
+                f"Source/Episode{index:02d}.mkv",
+                size=4096,
+            )
+            self._write_strm(old_local, f"old-{index}")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO monitor_dirs(task_name, dir_rel_path, remote_modified, entry_modified, needs_rescan, missing_confirmations) VALUES (?, ?, '', '', 0, 0)",
+                ("影视监控", "Source"),
+            )
+            conn.commit()
+
+        prepared = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="move",
+            entries=[
+                {
+                    "id": "folder-write-retry",
+                    "old_path": "Media/Source",
+                    "new_path": "Media/Renamed",
+                    "old_parent_id": "media-parent",
+                    "new_parent_id": "media-parent",
+                    "is_dir": True,
+                }
+            ],
+            dedupe_key="folder-write-retry",
+            cfg=cfg,
+        )
+        monitor_changes.confirm_monitor_change_events(prepared, succeeded=True, enqueue=False)
+        original_write = monitor_changes._write_strm_file
+        write_count = 0
+
+        def flaky_write(*args, **kwargs):
+            nonlocal write_count
+            write_count += 1
+            if write_count == 2:
+                raise RuntimeError("second folder STRM write failed")
+            return original_write(*args, **kwargs)
+
+        with (
+            patch.object(monitor_changes, "STRM_ROOT", self.strm_root),
+            patch.object(monitor_changes, "_write_strm_file", side_effect=flaky_write),
+            patch.object(
+                monitor_changes,
+                "list_remote_dir",
+                AsyncMock(side_effect=AssertionError("confirmed indexed folders must not read 115")),
+            ),
+        ):
+            result = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
+
+        self.assertEqual(result["failed"], 1)
+        self.assertEqual(write_count, 2)
+        for old_local in old_locals:
+            self.assertTrue(os.path.exists(self._strm_path(old_local)))
+        for new_local in new_locals:
+            self.assertFalse(os.path.exists(self._strm_path(new_local)))
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT local_rel_path, remote_rel_path FROM monitor_files ORDER BY local_rel_path"
+            ).fetchall()
+        self.assertEqual(
+            rows,
+            [
+                (old_locals[0], "Source/Episode01.mkv"),
+                (old_locals[1], "Source/Episode02.mkv"),
+            ],
+        )
+
+    def test_manual_required_event_is_not_cleared_without_explicit_coverage(self):
         cfg = self._cfg()
         prepared = monitor_changes.prepare_monitor_change_events(
             provider="115",
             operation="copy",
             entries=[
                 {
-                    "id": "bounded-folder",
+                    "id": "scoped-manual-folder",
                     "path": "Outside/Source",
-                    "new_path": "Media/Bounded",
-                    "new_cid": "bounded-folder-cid",
+                    "new_path": "Media/ScopedManual",
                     "is_dir": True,
                 }
             ],
-            dedupe_key="unknown-bounded",
+            dedupe_key="scoped-manual",
             cfg=cfg,
         )
         monitor_changes.confirm_monitor_change_events(prepared, succeeded=True, enqueue=False)
-        calls = []
+        with patch.object(monitor_changes, "STRM_ROOT", self.strm_root):
+            result = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
+        self.assertEqual(result["manual_required"], 1)
+        self.assertEqual(
+            monitor_changes.complete_manual_required_monitor_events(
+                "影视监控",
+                [],
+            ),
+            0,
+        )
+        with sqlite3.connect(self.db_path) as conn:
+            self.assertEqual(
+                conn.execute("SELECT status FROM monitor_change_events").fetchone()[0],
+                "manual_required",
+            )
 
-        async def bounded_list(_cfg, remote_path, _refresh, _task, *, folder_cid=""):
-            calls.append(remote_path)
-            self.assertEqual(folder_cid, "bounded-folder-cid")
-            if remote_path == "/115/Media/Bounded":
-                return "", [
-                    {"name": "A.mkv", "is_dir": False, "size": 4096, "modified": ""},
-                    {"name": "B.mkv", "is_dir": False, "size": 4096, "modified": ""},
-                ]
-            raise AssertionError(f"unexpected path: {remote_path}")
+    def test_cross_directory_move_without_parent_ids_preserves_old_strm(self):
+        cfg = self._cfg()
+        old_local = "媒体库/Media/A/Episode.mkv"
+        new_local = "媒体库/Media/B/Episode.mkv"
+        self._insert_monitor_file("影视监控", old_local, "A/Episode.mkv", size=4096)
+        self._write_strm(old_local, "old")
 
+        prepared = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="move",
+            entries=[
+                {
+                    "id": "missing-parent-ids",
+                    "old_path": "Media/A/Episode.mkv",
+                    "new_path": "Media/B/Episode.mkv",
+                    "is_dir": False,
+                    "size": 4096,
+                }
+            ],
+            dedupe_key="missing-parent-ids",
+            cfg=cfg,
+        )
+        monitor_changes.confirm_monitor_change_events(prepared, succeeded=True, enqueue=False)
         with (
             patch.object(monitor_changes, "STRM_ROOT", self.strm_root),
-            patch.object(monitor_changes, "MONITOR_CHANGE_MAX_FILES", 1),
-            patch.object(monitor_changes, "list_remote_dir", side_effect=bounded_list),
+            patch.object(
+                monitor_changes,
+                "list_remote_dir",
+                AsyncMock(side_effect=AssertionError("confirmed move must fail before any 115 listing")),
+            ),
         ):
             result = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
+
         self.assertEqual(result["failed"], 1)
-        self.assertEqual(calls, ["/115/Media/Bounded"])
-        self.assertNotIn("/115/Media", calls)
-        self.assertFalse(os.path.exists(self._strm_path("媒体库/Media/Bounded/A.mkv")))
+        self.assertTrue(os.path.exists(self._strm_path(old_local)))
+        self.assertFalse(os.path.exists(self._strm_path(new_local)))
         with sqlite3.connect(self.db_path) as conn:
-            self.assertEqual(conn.execute("SELECT COUNT(1) FROM monitor_files").fetchone()[0], 0)
+            rows = conn.execute(
+                "SELECT local_rel_path, remote_rel_path FROM monitor_files"
+            ).fetchall()
+            event_status, error = conn.execute(
+                "SELECT status, last_error FROM monitor_change_events WHERE id = ?",
+                (prepared["event_ids"][0],),
+            ).fetchone()
+        self.assertEqual(rows, [(old_local, "A/Episode.mkv")])
+        self.assertEqual(event_status, "failed")
+        self.assertIn("父目录", error)
+
+    def test_invalid_folder_manifest_path_fails_before_deleting_old_strm(self):
+        cfg = self._cfg()
+        old_local = "媒体库/Media/Source/Episode.mkv"
+        escaped_local = "媒体库/Media/Escape.mkv"
+        self._insert_monitor_file(
+            "影视监控",
+            old_local,
+            "Source/../Escape.mkv",
+            size=4096,
+        )
+        self._write_strm(old_local, "old")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO monitor_dirs(task_name, dir_rel_path, remote_modified, entry_modified, needs_rescan, missing_confirmations) VALUES (?, ?, '', '', 0, 0)",
+                ("影视监控", "Source"),
+            )
+            conn.commit()
+
+        prepared = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="move",
+            entries=[
+                {
+                    "id": "invalid-manifest-folder",
+                    "old_path": "Media/Source",
+                    "new_path": "Media/Dest",
+                    "old_parent_id": "media-parent",
+                    "new_parent_id": "media-parent",
+                    "is_dir": True,
+                }
+            ],
+            dedupe_key="invalid-folder-manifest",
+            cfg=cfg,
+        )
+        monitor_changes.confirm_monitor_change_events(prepared, succeeded=True, enqueue=False)
+        with patch.object(monitor_changes, "STRM_ROOT", self.strm_root):
+            result = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
+
+        self.assertEqual(result["failed"], 1)
+        self.assertTrue(os.path.exists(self._strm_path(old_local)))
+        self.assertFalse(os.path.exists(self._strm_path(escaped_local)))
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT local_rel_path, remote_rel_path FROM monitor_files"
+            ).fetchall()
+            event_status, error = conn.execute(
+                "SELECT status, last_error FROM monitor_change_events WHERE id = ?",
+                (prepared["event_ids"][0],),
+            ).fetchone()
+        self.assertEqual(rows, [(old_local, "Source/../Escape.mkv")])
+        self.assertEqual(event_status, "failed")
+        self.assertIn("索引清单", error)
+
+    def test_cross_task_manifest_respects_destination_size_filter_completeness(self):
+        source_task = self._task(
+            name="来源",
+            scan_path="/115/Media/Source",
+            target_path="来源库",
+            min_file_size_mb=1024,
+        )
+        target_task = self._task(
+            name="目标",
+            scan_path="/115/Media/Dest",
+            target_path="目标库",
+            min_file_size_mb=0,
+        )
+        cfg = self._cfg(source_task, target_task)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO monitor_dirs(task_name, dir_rel_path, remote_modified, entry_modified, needs_rescan, missing_confirmations) VALUES (?, ?, '', '', 0, 0)",
+                ("来源", "Folder"),
+            )
+            conn.commit()
+
+        prepared = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="move",
+            entries=[
+                {
+                    "id": "filtered-folder",
+                    "old_path": "Media/Source/Folder",
+                    "new_path": "Media/Dest/Folder",
+                    "old_parent_id": "source-parent",
+                    "new_parent_id": "dest-parent",
+                    "is_dir": True,
+                }
+            ],
+            dedupe_key="cross-task-filter-completeness",
+            cfg=cfg,
+        )
+
+        with sqlite3.connect(self.db_path) as conn:
+            raw_snapshot = conn.execute(
+                "SELECT entry_snapshot_json FROM monitor_change_events WHERE task_name = ?",
+                ("目标",),
+            ).fetchone()[0]
+        snapshot = json.loads(raw_snapshot)
+        self.assertFalse(snapshot["manifest_known"])
+        self.assertTrue(snapshot["manual_required"])
+        monitor_changes.confirm_monitor_change_events(prepared, succeeded=True, enqueue=False)
+        with patch.object(monitor_changes, "STRM_ROOT", self.strm_root):
+            result = asyncio.run(
+                monitor_changes.process_monitor_change_events(
+                    "目标",
+                    cfg=cfg,
+                )
+            )
+        self.assertEqual(result["manual_required"], 1)
+
+    def test_conflicting_shared_output_is_not_overwritten(self):
+        task_a = self._task(name="任务 A", scan_path="/115/A/Media", target_path="共享库")
+        task_b = self._task(name="任务 B", scan_path="/115/B/Media", target_path="共享库")
+        cfg = self._cfg(task_a, task_b)
+        local_rel = "共享库/Media/Episode.mkv"
+        self._insert_monitor_file("任务 B", local_rel, "Episode.mkv", size=4096)
+        target = self._write_strm(local_rel, "task-b-original")
+
+        prepared = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="copy",
+            entries=[
+                {
+                    "id": "shared-output-source",
+                    "old_path": "Outside/Source.mkv",
+                    "new_path": "A/Media/Episode.mkv",
+                    "new_parent_id": "task-a-parent",
+                    "is_dir": False,
+                    "size": 4096,
+                }
+            ],
+            dedupe_key="shared-output-conflict",
+            cfg=cfg,
+        )
+        monitor_changes.confirm_monitor_change_events(prepared, succeeded=True, enqueue=False)
+        with patch.object(monitor_changes, "STRM_ROOT", self.strm_root):
+            result = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
+
+        self.assertEqual(result["failed"], 1)
+        with open(target, "r", encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "task-b-original")
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT task_name, remote_rel_path FROM monitor_files WHERE local_rel_path = ?",
+                (local_rel,),
+            ).fetchall()
+        self.assertEqual(rows, [("任务 B", "Episode.mkv")])
+
+    def test_startup_recovery_uses_persisted_create_folder_cid_without_listing(self):
+        cfg = self._cfg()
+        prepared = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="create",
+            entries=[
+                {
+                    "id": "",
+                    "new_path": "Media/NewFolder",
+                    "new_parent_id": "media-parent",
+                    "is_dir": True,
+                }
+            ],
+            dedupe_key="recover-create-folder-cid",
+            cfg=cfg,
+        )
+        monitor_changes.update_monitor_change_event_snapshots(
+            prepared,
+            [{"new_path": "Media/NewFolder", "new_cid": "new-folder-cid"}],
+        )
+
+        recovery = monitor_changes.recover_monitor_change_events(cfg=cfg, enqueue=False)
+
+        self.assertEqual(recovery["recovered"], 1)
+        with sqlite3.connect(self.db_path) as conn:
+            status_row = conn.execute(
+                "SELECT status, needs_reconcile FROM monitor_change_events WHERE id = ?",
+                (prepared["event_ids"][0],),
+            ).fetchone()
+        self.assertEqual(status_row, ("pending", 0))
+        with (
+            patch.object(monitor_changes, "STRM_ROOT", self.strm_root),
+            patch.object(
+                monitor_changes,
+                "list_remote_dir",
+                AsyncMock(side_effect=AssertionError("persisted destination CID confirms the create")),
+            ),
+        ):
+            result = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
+        self.assertEqual(result["completed"], 1)
+
+    def test_startup_recovery_uses_persisted_copy_folder_cid_without_listing(self):
+        cfg = self._cfg()
+        old_local = "媒体库/Media/Source/Episode.mkv"
+        new_local = "媒体库/Media/Copied/Episode.mkv"
+        self._insert_monitor_file("影视监控", old_local, "Source/Episode.mkv", size=4096)
+        self._write_strm(old_local, "source")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO monitor_dirs(task_name, dir_rel_path, remote_modified, entry_modified, needs_rescan, missing_confirmations) VALUES (?, ?, '', '', 0, 0)",
+                ("影视监控", "Source"),
+            )
+            conn.commit()
+        prepared = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="copy",
+            entries=[
+                {
+                    "id": "source-folder-cid",
+                    "old_path": "Media/Source",
+                    "new_path": "Media/Copied",
+                    "new_parent_id": "media-parent",
+                    "old_cid": "source-folder-cid",
+                    "is_dir": True,
+                }
+            ],
+            dedupe_key="recover-copy-folder-cid",
+            cfg=cfg,
+        )
+        monitor_changes.update_monitor_change_event_snapshots(
+            prepared,
+            [
+                {
+                    "id": "source-folder-cid",
+                    "new_path": "Media/Copied",
+                    "new_cid": "copied-folder-cid",
+                }
+            ],
+        )
+
+        monitor_changes.recover_monitor_change_events(cfg=cfg, enqueue=False)
+        with sqlite3.connect(self.db_path) as conn:
+            needs_reconcile = conn.execute(
+                "SELECT needs_reconcile FROM monitor_change_events WHERE id = ?",
+                (prepared["event_ids"][0],),
+            ).fetchone()[0]
+        self.assertEqual(needs_reconcile, 0)
+        with (
+            patch.object(monitor_changes, "STRM_ROOT", self.strm_root),
+            patch.object(
+                monitor_changes,
+                "list_remote_dir",
+                AsyncMock(side_effect=AssertionError("persisted destination CID confirms the copy")),
+            ),
+        ):
+            result = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
+        self.assertEqual(result["completed"], 1)
+        self.assertTrue(os.path.exists(self._strm_path(old_local)))
+        self.assertTrue(os.path.exists(self._strm_path(new_local)))
+
+    def test_startup_recovery_does_not_trust_source_cid_as_copy_destination(self):
+        cfg = self._cfg()
+        prepared = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="copy",
+            entries=[
+                {
+                    "id": "source-folder-cid",
+                    "old_path": "Outside/Source",
+                    "new_path": "Media/Copied",
+                    "old_parent_id": "source-parent",
+                    "new_parent_id": "media-parent",
+                    "old_cid": "source-folder-cid",
+                    "new_cid": "source-folder-cid",
+                    "is_dir": True,
+                }
+            ],
+            dedupe_key="recover-reject-source-cid",
+            cfg=cfg,
+        )
+
+        monitor_changes.recover_monitor_change_events(cfg=cfg, enqueue=False)
+
+        with sqlite3.connect(self.db_path) as conn:
+            needs_reconcile = conn.execute(
+                "SELECT needs_reconcile FROM monitor_change_events WHERE id = ?",
+                (prepared["event_ids"][0],),
+            ).fetchone()[0]
+        self.assertEqual(needs_reconcile, 1)
+
+    def test_startup_recovery_preserves_confirmed_processing_mode(self):
+        cfg = self._cfg()
+        old_local = "媒体库/Media/Folder/Old.mkv"
+        new_local = "媒体库/Media/Folder/New.mkv"
+        self._insert_monitor_file("影视监控", old_local, "Folder/Old.mkv", size=4096)
+        self._write_strm(old_local, "old")
+        prepared = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="rename",
+            entries=[
+                {
+                    "id": "processing-recovery",
+                    "old_path": "Media/Folder/Old.mkv",
+                    "new_path": "Media/Folder/New.mkv",
+                    "old_parent_id": "folder-parent",
+                    "new_parent_id": "folder-parent",
+                    "is_dir": False,
+                    "size": 4096,
+                }
+            ],
+            dedupe_key="recover-confirmed-processing",
+            cfg=cfg,
+        )
+        monitor_changes.confirm_monitor_change_events(prepared, succeeded=True, enqueue=False)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE monitor_change_events SET status = 'processing' WHERE id = ?",
+                (prepared["event_ids"][0],),
+            )
+            conn.commit()
+
+        monitor_changes.recover_monitor_change_events(cfg=cfg, enqueue=False)
+        with sqlite3.connect(self.db_path) as conn:
+            needs_reconcile = conn.execute(
+                "SELECT needs_reconcile FROM monitor_change_events WHERE id = ?",
+                (prepared["event_ids"][0],),
+            ).fetchone()[0]
+        self.assertEqual(needs_reconcile, 0)
+        with (
+            patch.object(monitor_changes, "STRM_ROOT", self.strm_root),
+            patch.object(
+                monitor_changes,
+                "list_remote_dir",
+                AsyncMock(side_effect=AssertionError("confirmed processing recovery stays precise")),
+            ),
+        ):
+            result = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
+        self.assertEqual(result["completed"], 1)
+        self.assertFalse(os.path.exists(self._strm_path(old_local)))
+        self.assertTrue(os.path.exists(self._strm_path(new_local)))
+
+    def test_reconcile_delete_with_same_id_renamed_replaces_old_index(self):
+        cfg = self._cfg()
+        old_local = "媒体库/Media/Folder/Old.mkv"
+        new_local = "媒体库/Media/Folder/Renamed.mkv"
+        self._insert_monitor_file("影视监控", old_local, "Folder/Old.mkv", size=4096)
+        self._write_strm(old_local, "old")
+
+        async def fake_list(_cfg, remote_path, _refresh, _task, *, folder_cid=""):
+            self.assertEqual(remote_path, "/115/Media/Folder")
+            self.assertEqual(folder_cid, "folder-parent")
+            return "", [
+                {
+                    "id": "delete-then-renamed",
+                    "name": "Renamed.mkv",
+                    "is_dir": False,
+                    "size": 4096,
+                    "modified": "2026-08-10 10:00:00",
+                }
+            ]
+
+        prepared = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="delete",
+            entries=[
+                {
+                    "id": "delete-then-renamed",
+                    "old_path": "Media/Folder/Old.mkv",
+                    "old_parent_id": "folder-parent",
+                    "is_dir": False,
+                    "size": 4096,
+                }
+            ],
+            dedupe_key="reconcile-delete-renamed",
+            cfg=cfg,
+        )
+        monitor_changes.confirm_monitor_change_events(
+            prepared,
+            succeeded=False,
+            enqueue=False,
+            error="remote result unknown",
+        )
+        with (
+            patch.object(monitor_changes, "STRM_ROOT", self.strm_root),
+            patch.object(monitor_changes, "list_remote_dir", side_effect=fake_list),
+        ):
+            result = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
+
+        self.assertEqual(result["completed"], 1)
+        self.assertFalse(os.path.exists(self._strm_path(old_local)))
+        self.assertTrue(os.path.exists(self._strm_path(new_local)))
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT local_rel_path, remote_rel_path FROM monitor_files"
+            ).fetchall()
+        self.assertEqual(rows, [(new_local, "Folder/Renamed.mkv")])
+
+    def test_reconcile_dirty_folder_delete_with_same_id_renamed_keeps_manual_required(self):
+        cfg = self._cfg()
+        old_local = "媒体库/Media/Parent/Source/Known.mkv"
+        new_local = "媒体库/Media/Parent/Renamed/Known.mkv"
+        self._insert_monitor_file("影视监控", old_local, "Parent/Source/Known.mkv", size=4096)
+        self._write_strm(old_local, "old")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO monitor_dirs(
+                    task_name, dir_rel_path, remote_modified, entry_modified,
+                    needs_rescan, missing_confirmations
+                ) VALUES (?, ?, '', '', 1, 0)
+                """,
+                ("影视监控", "Parent/Source"),
+            )
+            conn.commit()
+
+        async def fake_list(_cfg, remote_path, _refresh, _task, *, folder_cid=""):
+            self.assertEqual(remote_path, "/115/Media/Parent")
+            self.assertEqual(folder_cid, "parent-cid")
+            return "", [
+                {
+                    "id": "dirty-folder-delete",
+                    "name": "Renamed",
+                    "is_dir": True,
+                    "size": 0,
+                }
+            ]
+
+        prepared = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="delete",
+            entries=[
+                {
+                    "id": "dirty-folder-delete",
+                    "old_path": "Media/Parent/Source",
+                    "old_parent_id": "parent-cid",
+                    "is_dir": True,
+                }
+            ],
+            dedupe_key="dirty-folder-delete-rename",
+            cfg=cfg,
+        )
+        monitor_changes.confirm_monitor_change_events(
+            prepared,
+            succeeded=False,
+            enqueue=False,
+            error="remote result unknown",
+        )
+        with (
+            patch.object(monitor_changes, "STRM_ROOT", self.strm_root),
+            patch.object(monitor_changes, "list_remote_dir", side_effect=fake_list),
+        ):
+            result = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
+
+        self.assertEqual(result["completed"], 1)
+        self.assertEqual(result["manual_required"], 1)
+        self.assertFalse(os.path.exists(self._strm_path(old_local)))
+        self.assertTrue(os.path.exists(self._strm_path(new_local)))
+        with sqlite3.connect(self.db_path) as conn:
+            status = conn.execute(
+                "SELECT status FROM monitor_change_events WHERE id = ?",
+                (prepared["event_ids"][0],),
+            ).fetchone()[0]
+        self.assertEqual(status, "manual_required")
 
 
 if __name__ == "__main__":

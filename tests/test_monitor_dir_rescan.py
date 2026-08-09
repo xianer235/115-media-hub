@@ -8,7 +8,7 @@ from typing import Optional
 from unittest.mock import AsyncMock, Mock, patch
 
 from app import db
-from app.services import monitor, strm_files
+from app.services import monitor, monitor_changes, strm_files
 
 
 TASK_NAME = "Monitor"
@@ -231,6 +231,28 @@ class MonitorDirRescanTest(unittest.TestCase):
 
         return call_log
 
+    def _create_manual_required_folder_event(self, task: dict, *, suffix: str) -> int:
+        cfg = self._cfg(task)
+        prepared = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="copy",
+            entries=[
+                {
+                    "id": f"manual-{suffix}",
+                    "path": f"Outside/{suffix}",
+                    "new_path": f"Library/{suffix}/Imported",
+                    "is_dir": True,
+                }
+            ],
+            dedupe_key=f"manual-{suffix}",
+            cfg=cfg,
+        )
+        monitor_changes.confirm_monitor_change_events(prepared, succeeded=True, enqueue=False)
+        with patch.object(monitor_changes, "STRM_ROOT", self.strm_root):
+            result = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
+        self.assertEqual(result["manual_required"], 1)
+        return prepared["event_ids"][0]
+
     def test_monitor_dir_migration_adds_rescan_columns(self):
         legacy_db_path = os.path.join(self.tmpdir.name, "legacy.db")
         conn = sqlite3.connect(legacy_db_path)
@@ -444,6 +466,105 @@ class MonitorDirRescanTest(unittest.TestCase):
         )
 
         self.assertEqual(call_log, ["/115/Library", "/115/Library/SeasonB"])
+
+    def test_manual_required_branch_bypasses_unchanged_entry_time_and_clears_after_scan(self):
+        task = self._task(sync_clean=True, skip_by_dir_mtime=True)
+        self._insert_monitor_dir(
+            "SeriesA",
+            remote_modified="2026-08-09 10:00:00",
+            entry_modified="2026-08-09 10:00:00",
+        )
+        event_id = self._create_manual_required_folder_event(task, suffix="SeriesA")
+
+        call_log = self._run_monitor(
+            {
+                "/115/Library": (
+                    "2026-08-09 10:00:00",
+                    [_dir_item("SeriesA", "2026-08-09 10:00:00")],
+                ),
+                "/115/Library/SeriesA": (
+                    "2026-08-09 10:00:00",
+                    [_dir_item("Imported", "2026-08-09 10:00:00")],
+                ),
+                "/115/Library/SeriesA/Imported": (
+                    "2026-08-09 10:00:00",
+                    [_file_item("Episode.mkv", "2026-08-09 10:00:00")],
+                ),
+            },
+            task=task,
+        )
+
+        self.assertEqual(
+            call_log,
+            [
+                "/115/Library",
+                "/115/Library/SeriesA",
+                "/115/Library/SeriesA/Imported",
+            ],
+        )
+        self.assertTrue(
+            os.path.exists(
+                strm_files.managed_strm_file_path(
+                    "Library/SeriesA/Imported/Episode.mkv",
+                    root=self.strm_root,
+                )
+            )
+        )
+        with sqlite3.connect(self.db_path) as conn:
+            status = conn.execute(
+                "SELECT status FROM monitor_change_events WHERE id = ?",
+                (event_id,),
+            ).fetchone()[0]
+        self.assertEqual(status, "completed")
+
+    def test_manual_scan_only_clears_successfully_covered_manual_required_branch(self):
+        task = self._task(sync_clean=True, skip_by_dir_mtime=True)
+        for branch in ("SeriesA", "SeriesB"):
+            self._insert_monitor_dir(
+                branch,
+                remote_modified="2026-08-09 10:00:00",
+                entry_modified="2026-08-09 10:00:00",
+            )
+        series_a_event = self._create_manual_required_folder_event(task, suffix="SeriesA")
+        series_b_event = self._create_manual_required_folder_event(task, suffix="SeriesB")
+
+        call_log = self._run_monitor(
+            {
+                "/115/Library": (
+                    "2026-08-09 10:00:00",
+                    [
+                        _dir_item("SeriesA", "2026-08-09 10:00:00"),
+                        _dir_item("SeriesB", "2026-08-09 10:00:00"),
+                    ],
+                ),
+                "/115/Library/SeriesA": (
+                    "2026-08-09 10:00:00",
+                    [_dir_item("Imported", "2026-08-09 10:00:00")],
+                ),
+                "/115/Library/SeriesA/Imported": ("2026-08-09 10:00:00", []),
+                "/115/Library/SeriesB": RuntimeError("temporary 115 error"),
+            },
+            task=task,
+        )
+
+        self.assertEqual(
+            call_log,
+            [
+                "/115/Library",
+                "/115/Library/SeriesA",
+                "/115/Library/SeriesB",
+                "/115/Library/SeriesA/Imported",
+            ],
+        )
+        with sqlite3.connect(self.db_path) as conn:
+            statuses = dict(
+                conn.execute(
+                    "SELECT id, status FROM monitor_change_events WHERE id IN (?, ?)",
+                    (series_a_event, series_b_event),
+                ).fetchall()
+            )
+        self.assertEqual(statuses[series_a_event], "completed")
+        self.assertEqual(statuses[series_b_event], "manual_required")
 
     def test_changed_first_level_branch_does_not_prune_deeper_directories(self):
         task = self._task(sync_clean=True, skip_by_dir_mtime=True)

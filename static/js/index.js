@@ -4096,8 +4096,14 @@
                 const changeCount = monitorState.change_counts?.[taskName] || {};
                 const pendingChanges = Math.max(0, Number(changeCount.pending || 0) || 0);
                 const failedChanges = Math.max(0, Number(changeCount.failed || 0) || 0);
-                const changeCountHtml = pendingChanges || failedChanges
-                    ? `<div class="mt-1 text-xs font-semibold ${failedChanges ? 'text-red-400' : 'text-amber-300'}">${pendingChanges ? `待同步 ${pendingChanges}` : ''}${pendingChanges && failedChanges ? ' / ' : ''}${failedChanges ? `同步失败 ${failedChanges}` : ''}</div>`
+                const manualRequiredChanges = Math.max(0, Number(changeCount.manual_required || 0) || 0);
+                const changeLabels = [
+                    pendingChanges ? `待同步 ${pendingChanges}` : '',
+                    manualRequiredChanges ? `需手动监控 ${manualRequiredChanges}` : '',
+                    failedChanges ? `同步失败 ${failedChanges}` : '',
+                ].filter(Boolean);
+                const changeCountHtml = changeLabels.length
+                    ? `<div class="mt-1 text-xs font-semibold ${failedChanges ? 'text-red-400' : 'text-amber-300'}">${changeLabels.join(' / ')}</div>`
                     : '';
                 const running = monitorState.running && monitorState.current_task === taskName;
                 const queued = (monitorState.queued || []).includes(taskName);

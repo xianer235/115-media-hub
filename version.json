@@ -1,10 +1,10 @@
 {
-  "version": "0.5.11",
-  "buildDate": "2026-08-09T00:00:00+08:00",
+  "version": "0.5.12",
+  "buildDate": "2026-08-10T00:00:00+08:00",
   "notes": [
-    "新增 115 刮削操作驱动的精准 STRM 同步",
-    "重命名、复制、移动、删除和新建文件夹通过持久化事件更新监控索引",
-    "未知文件夹限制为目标子树读取，失败事件保留并退避重试"
+    "修复 115 刮削批量动作把相对路径误传为不完整路径的问题",
+    "精准 STRM 同步先校验变更计划，再按删旧生成新路径更新索引",
+    "未知或不完整文件夹索引保留需手动监控提示，避免漏同步"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

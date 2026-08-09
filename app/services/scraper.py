@@ -1299,6 +1299,16 @@ def _relative_parent_path_from_base(parent_path: str, base_path: str) -> str:
     return source
 
 
+def _canonical_scraper_mount_path(path: str, base_path: str) -> str:
+    normalized_path = normalize_relative_path(str(path or "").strip())
+    normalized_base = normalize_relative_path(str(base_path or "").strip())
+    if not normalized_path or not normalized_base:
+        return normalized_path
+    if normalized_path == normalized_base or normalized_path.startswith(f"{normalized_base}/"):
+        return normalized_path
+    return normalize_relative_path(join_relative_path(normalized_base, normalized_path))
+
+
 def _resolve_scraper_tv_episode_info(task: Dict[str, Any], episodes: Set[int], default_season: int) -> Tuple[Dict[str, Any], str]:
     normalized_values = sorted({max(0, int(value or 0)) for value in episodes if max(0, int(value or 0)) > 0})
     if not normalized_values:
@@ -1750,7 +1760,10 @@ def build_scraper_rename_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
                 continue
             old_parent_id = str(entry.get("parent_id", "") or base_cid).strip() or "0"
             old_name = str(entry.get("name", "") or "")
-            old_path = normalize_relative_path(str(entry.get("path", "") or old_name))
+            old_path = _canonical_scraper_mount_path(
+                str(entry.get("path", "") or old_name),
+                base_path,
+            )
             new_name = target_folder_name
             if not new_name or new_name == old_name:
                 if new_name and new_name == old_name:
@@ -1778,7 +1791,10 @@ def build_scraper_rename_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "old_path": old_path,
                 "new_parent_id": old_parent_id,
                 "new_name": new_name,
-                "new_path": normalize_relative_path(join_relative_path(normalize_relative_path(str(item.get("parent_path", "") or "")), new_name)),
+                "new_path": _canonical_scraper_mount_path(
+                    join_relative_path(normalize_relative_path(str(item.get("parent_path", "") or "")), new_name),
+                    base_path,
+                ),
                 "target_parent_path": "",
                 "file_size": max(0, parse_int(entry.get("size", 0), 0)),
                 "remote_modified": str(entry.get("modified_at", "") or ""),
@@ -1797,21 +1813,29 @@ def build_scraper_rename_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
             action_index += 1
     for file_index, entry in enumerate(expanded_files):
         episode_info = file_episode_infos[file_index] if file_index < len(file_episode_infos) else None
-        target_path, issue = _build_scraper_target_path(
+        execution_target_path, issue = _build_scraper_target_path(
             entry,
             tmdb,
             plan_options,
             episode_info=episode_info,
             episode_widths_by_season=episode_widths_by_season,
         )
+        target_path = _canonical_scraper_mount_path(execution_target_path, base_path)
         old_parent_id = str(entry.get("parent_id", "") or base_cid).strip() or "0"
-        old_path = normalize_relative_path(str(entry.get("path", "") or entry.get("name", "")))
+        old_path = _canonical_scraper_mount_path(
+            str(entry.get("path", "") or entry.get("name", "")),
+            base_path,
+        )
         action_issue = issue
         if target_path and target_path == old_path:
             unchanged_count += 1
             continue
-        target_parent_path = normalize_relative_path(os.path.dirname(target_path).replace("\\", "/")) if target_path else ""
-        new_name = os.path.basename(target_path) if target_path else ""
+        target_parent_path = (
+            normalize_relative_path(os.path.dirname(execution_target_path).replace("\\", "/"))
+            if execution_target_path
+            else ""
+        )
+        new_name = os.path.basename(execution_target_path) if execution_target_path else ""
         existing_parent_id = ""
         if target_path:
             if target_path in target_paths:
@@ -1869,6 +1893,7 @@ def build_scraper_rename_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
         "ok": True,
         "provider": provider,
         "base_cid": base_cid,
+        "base_path": base_path,
         "actions": actions,
         "issues": issues,
         "warnings": unique_preserve_order(warnings),
@@ -1901,7 +1926,13 @@ def _insert_scraper_job(provider: str, plan: Dict[str, Any], options: Dict[str, 
                 now,
                 safe_json_dumps(options),
                 safe_json_dumps(tmdb),
-                safe_json_dumps({"base_cid": plan.get("base_cid", "0"), "actions": actions}),
+                safe_json_dumps(
+                    {
+                        "base_cid": plan.get("base_cid", "0"),
+                        "base_path": plan.get("base_path", "") or options.get("base_path", ""),
+                        "actions": actions,
+                    }
+                ),
             ),
         )
         job_id = int(cursor.lastrowid or 0)
@@ -2114,6 +2145,28 @@ def _load_scraper_job(job_id: int) -> Tuple[Dict[str, Any], List[Dict[str, Any]]
     return job, actions
 
 
+def _scraper_job_base_path(job: Dict[str, Any], plan: Dict[str, Any]) -> str:
+    options = safe_json_loads(job.get("options_json", "{}"), {})
+    if not isinstance(options, dict):
+        options = {}
+    return normalize_relative_path(
+        str(plan.get("base_path", "") or options.get("base_path", "") or "")
+    )
+
+
+def _normalize_scraper_job_action_paths(action: Dict[str, Any], base_path: str) -> Dict[str, Any]:
+    normalized = dict(action or {})
+    normalized["old_path"] = _canonical_scraper_mount_path(
+        str(normalized.get("old_path", "") or ""),
+        base_path,
+    )
+    normalized["new_path"] = _canonical_scraper_mount_path(
+        str(normalized.get("new_path", "") or ""),
+        base_path,
+    )
+    return normalized
+
+
 def _update_scraper_job(job_id: int, _conn: Optional[Any] = None, **fields: Any) -> None:
     if not fields:
         return
@@ -2216,7 +2269,9 @@ def _prepare_scraper_job_action_monitor_sync(
     action: Dict[str, Any],
     *,
     reverse: bool = False,
+    base_path: str = "",
 ) -> Dict[str, Any]:
+    action = _normalize_scraper_job_action_paths(action, base_path)
     old_path = normalize_relative_path(str(action.get("new_path" if reverse else "old_path", "") or ""))
     new_path = normalize_relative_path(str(action.get("old_path" if reverse else "new_path", "") or ""))
     old_parent_id = str(action.get("new_parent_id" if reverse else "old_parent_id", "") or "").strip()
@@ -2258,6 +2313,8 @@ def run_scraper_job(job_id: int) -> None:
         cookie = _require_provider_cookie(provider)
         plan = safe_json_loads(job.get("plan_json", "{}"), {})
         base_cid = str(plan.get("base_cid", "0") or "0").strip() or "0"
+        base_path = _scraper_job_base_path(job, plan)
+        actions = [_normalize_scraper_job_action_paths(action, base_path) for action in actions]
     except Exception as exc:
         _update_scraper_job(job_id, status="failed", status_detail=str(exc), failed_actions=1, finished_at=now_text())
         return
@@ -2273,7 +2330,12 @@ def run_scraper_job(job_id: int) -> None:
             conn.commit()
             prepared_sync: Optional[Dict[str, Any]] = None
             try:
-                prepared_sync = _prepare_scraper_job_action_monitor_sync(provider, job_id, action)
+                prepared_sync = _prepare_scraper_job_action_monitor_sync(
+                    provider,
+                    job_id,
+                    action,
+                    base_path=base_path,
+                )
                 target_parent_path = str(action.get("target_parent_path", "") or "")
                 target_parent_id = str(action.get("new_parent_id", "") or "").strip()
                 if not target_parent_id:
@@ -2345,6 +2407,9 @@ def rollback_scraper_job(job_id: int) -> None:
         provider = normalize_scraper_provider(job.get("provider", "115")) or "115"
         _require_scraper_operation(provider, "rollback", "回退")
         cookie = _require_provider_cookie(provider)
+        plan = safe_json_loads(job.get("plan_json", "{}"), {})
+        base_path = _scraper_job_base_path(job, plan)
+        actions = [_normalize_scraper_job_action_paths(action, base_path) for action in actions]
     except Exception as exc:
         _update_scraper_job(job_id, status="rollback_failed", status_detail=str(exc), rollback_failed_actions=1, finished_at=now_text())
         return
@@ -2376,6 +2441,7 @@ def rollback_scraper_job(job_id: int) -> None:
                     job_id,
                     action,
                     reverse=True,
+                    base_path=base_path,
                 )
                 result = _execute_move_rename(
                     provider,
