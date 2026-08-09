@@ -924,6 +924,63 @@ async def run_monitor_task(
         await _finish_monitor_job(task_name, "monitor")
 
 
+def _single_line_monitor_change_path(value: Any) -> str:
+    normalized = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+    return " ".join(part.strip() for part in normalized.split("\n") if part.strip())
+
+
+def _monitor_change_count(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+async def _write_monitor_change_details(details: Any) -> None:
+    raw_details = details if isinstance(details, list) else []
+    for detail in raw_details:
+        if not isinstance(detail, dict):
+            continue
+        if detail.get("kind") == "file":
+            changes = detail.get("changes", [])
+            for change in changes if isinstance(changes, list) else []:
+                if not isinstance(change, dict):
+                    continue
+                action = str(change.get("action", "") or "")
+                label = {"delete": "删除 STRM", "generate": "生成 STRM"}.get(action, "")
+                path = _single_line_monitor_change_path(change.get("path"))
+                if not label or not path:
+                    continue
+                await write_monitor_log(
+                    f"{label}: {path}",
+                    "info" if action == "delete" else "success",
+                )
+            continue
+        if detail.get("kind") != "folder":
+            continue
+
+        operation = str(detail.get("operation", "") or "").strip().lower()
+        old_path = _single_line_monitor_change_path(detail.get("old_path"))
+        new_path = _single_line_monitor_change_path(detail.get("new_path"))
+        deleted = _monitor_change_count(detail.get("deleted", 0))
+        generated = _monitor_change_count(detail.get("generated", 0))
+        if old_path and new_path:
+            label = "文件夹复制" if operation == "copy" else "文件夹变更"
+            subject = f"{old_path} -> {new_path}"
+            counts = f"生成 {generated}" if operation == "copy" else f"删除 {deleted}，生成 {generated}"
+        elif old_path:
+            label = "文件夹删除"
+            subject = old_path
+            counts = f"删除 {deleted}"
+        elif new_path:
+            label = "文件夹新增"
+            subject = new_path
+            counts = f"生成 {generated}"
+        else:
+            continue
+        await write_monitor_log(f"{label}: {subject}（{counts}）", "info")
+
+
 async def run_monitor_change_task(
     task_name: str,
     trigger: str = "change",
@@ -955,6 +1012,7 @@ async def run_monitor_change_task(
         raw_event_ids = payload.get("event_ids", []) if isinstance(payload, dict) else []
         event_ids = raw_event_ids if isinstance(raw_event_ids, list) else None
         result = await process_monitor_change_events(task_name, cfg=cfg, event_ids=event_ids)
+        await _write_monitor_change_details(result.get("change_details"))
         summary_values = {
             key: int(result.get(key, 0) or 0)
             for key in (

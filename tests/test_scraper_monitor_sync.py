@@ -435,6 +435,7 @@ class ScraperMonitorSyncTest(unittest.TestCase):
 
         self.assertEqual(result["completed"], 1)
         self.assertTrue(os.path.isfile(target))
+        self.assertEqual(result.get("change_details"), [])
         with sqlite3.connect(self.db_path) as conn:
             rows = conn.execute(
                 "SELECT task_name FROM monitor_files WHERE local_rel_path = ? ORDER BY task_name",
@@ -1597,14 +1598,48 @@ class ScraperMonitorSyncTest(unittest.TestCase):
                         "file_count": 1,
                         "manual_required": 2,
                         "errors": [],
+                        "change_details": [
+                            {
+                                "kind": "file",
+                                "changes": [
+                                    {
+                                        "action": "delete",
+                                        "path": "媒体库/旧\r\n名称.mkv.strm",
+                                    },
+                                    {
+                                        "action": "generate",
+                                        "path": "媒体库/新名称.mkv.strm",
+                                    },
+                                ],
+                            },
+                            {
+                                "kind": "folder",
+                                "operation": "move",
+                                "old_path": "媒体库/旧目录",
+                                "new_path": "媒体库/新目录",
+                                "deleted": 2,
+                                "generated": 2,
+                            },
+                        ],
                     }
                 ),
             ),
         ):
             asyncio.run(monitor.run_monitor_change_task("影视监控", payload={"event_ids": [1, 2]}))
 
-        messages = "\n".join(str(call.args[0]) for call in logs.await_args_list)
-        self.assertIn("需手动监控 2", messages)
+        self.assertEqual(
+            [(str(call.args[0]), str(call.args[1])) for call in logs.await_args_list],
+            [
+                ("删除 STRM: 媒体库/旧 名称.mkv.strm", "info"),
+                ("生成 STRM: 媒体库/新名称.mkv.strm", "success"),
+                ("文件夹变更: 媒体库/旧目录 -> 媒体库/新目录（删除 2，生成 2）", "info"),
+                (
+                    "变更同步汇总: 完成 2，失败 0，生成 1，删除 0，"
+                    "局部读取目录 0，文件 1，需手动监控 2",
+                    "warn",
+                ),
+            ],
+        )
 
     def test_real_batch_plan_canonicalizes_relative_paths_and_renames_three_nested_files_without_remote_listing(self):
         task = self._task(scan_path="/115/一级", target_path="媒体库")
@@ -1714,6 +1749,25 @@ class ScraperMonitorSyncTest(unittest.TestCase):
             [(action["old_path"], action["new_path"]) for action in plan["actions"]],
         )
         self.assertEqual(indexed, sorted(expected_index))
+        self.assertEqual(
+            result.get("change_details"),
+            [
+                {
+                    "kind": "file",
+                    "changes": [
+                        {
+                            "action": "delete",
+                            "path": f"媒体库/一级/二级/{action['old_name']}.strm",
+                        },
+                        {
+                            "action": "generate",
+                            "path": f"媒体库/一级/二级/{action['new_name']}.strm",
+                        },
+                    ],
+                }
+                for action in plan["actions"]
+            ],
+        )
 
     def test_batch_scraper_forward_and_rollback_use_stable_event_keys(self):
         cfg = self._cfg()
@@ -2519,6 +2573,19 @@ class ScraperMonitorSyncTest(unittest.TestCase):
         with sqlite3.connect(self.db_path) as conn:
             rows = conn.execute("SELECT local_rel_path FROM monitor_files").fetchall()
         self.assertEqual(rows, [(new_local,)])
+        self.assertEqual(
+            result.get("change_details"),
+            [
+                {
+                    "kind": "folder",
+                    "operation": "rename",
+                    "old_path": "媒体库/Media/OldFolder",
+                    "new_path": "媒体库/Media/NewFolder",
+                    "deleted": 1,
+                    "generated": 1,
+                }
+            ],
+        )
 
     def test_folder_rename_migrates_clean_directory_baseline(self):
         cfg = self._cfg()
@@ -2977,6 +3044,7 @@ class ScraperMonitorSyncTest(unittest.TestCase):
 
         self.assertEqual(result["failed"], 1)
         self.assertEqual(write_count, 2)
+        self.assertEqual(result.get("change_details"), [])
         for old_local in old_locals:
             self.assertTrue(os.path.exists(self._strm_path(old_local)))
         for new_local in new_locals:

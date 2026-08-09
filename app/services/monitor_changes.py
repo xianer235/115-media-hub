@@ -1301,6 +1301,40 @@ def _validate_event_outputs(
     )
 
 
+def _build_committed_change_detail(
+    plan: Dict[str, Any],
+    stats: Dict[str, Any],
+    *,
+    effective_new_context: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    old_context = plan.get("old_context") if isinstance(plan.get("old_context"), dict) else {}
+    if effective_new_context is None:
+        new_context = plan.get("new_context") if isinstance(plan.get("new_context"), dict) else {}
+    else:
+        new_context = effective_new_context
+    deleted = _nonnegative_int(stats.get("deleted", 0))
+    generated = _nonnegative_int(stats.get("generated", 0))
+
+    if plan.get("is_dir"):
+        return {
+            "kind": "folder",
+            "operation": str(plan.get("operation", "") or ""),
+            "old_path": str(old_context.get("local_rel_path", "") or ""),
+            "new_path": str(new_context.get("local_rel_path", "") or ""),
+            "deleted": deleted,
+            "generated": generated,
+        }
+
+    changes: List[Dict[str, str]] = []
+    old_local_path = str(old_context.get("local_rel_path", "") or "")
+    new_local_path = str(new_context.get("local_rel_path", "") or "")
+    if deleted > 0 and old_local_path:
+        changes.append({"action": "delete", "path": f"{old_local_path}.strm"})
+    if generated > 0 and new_local_path:
+        changes.append({"action": "generate", "path": f"{new_local_path}.strm"})
+    return {"kind": "file", "changes": changes} if changes else {}
+
+
 async def _apply_precise_event(
     conn: Any,
     cfg: Dict[str, Any],
@@ -1308,7 +1342,7 @@ async def _apply_precise_event(
     event: Dict[str, Any],
     *,
     journal: Optional[Dict[str, Optional[bytes]]] = None,
-) -> Dict[str, int]:
+) -> Dict[str, Any]:
     snapshot = safe_json_loads(event.get("entry_snapshot_json", "{}"), {})
     if not isinstance(snapshot, dict):
         snapshot = {}
@@ -1354,6 +1388,7 @@ async def _apply_precise_event(
             stats["file_count"] += 1
 
     _sync_event_baselines(conn, cfg, task, plan)
+    stats["change_detail"] = _build_committed_change_detail(plan, stats)
     return stats
 
 
@@ -1397,7 +1432,7 @@ async def _reconcile_event(
     event: Dict[str, Any],
     *,
     journal: Optional[Dict[str, Optional[bytes]]] = None,
-) -> Dict[str, int]:
+) -> Dict[str, Any]:
     snapshot = safe_json_loads(event.get("entry_snapshot_json", "{}"), {})
     if not isinstance(snapshot, dict):
         snapshot = {}
@@ -1531,6 +1566,11 @@ async def _reconcile_event(
             stats["generated"] += int(added.get("generated", 0) or 0)
             stats["skipped"] += int(added.get("skipped", 0) or 0)
             stats["file_count"] += 1
+    stats["change_detail"] = _build_committed_change_detail(
+        plan,
+        stats,
+        effective_new_context=add_context,
+    )
     return stats
 
 
@@ -1576,6 +1616,7 @@ async def process_monitor_change_events(
         "file_count": 0,
         "manual_required": 0,
         "errors": [],
+        "change_details": [],
     }
     with db_connection() as conn:
         events = _load_ready_events(conn, task_name=task_name, event_ids=event_ids)
@@ -1629,6 +1670,9 @@ async def process_monitor_change_events(
                 )
                 conn.commit()
                 result["completed"] += 1
+                change_detail = stats.get("change_detail")
+                if isinstance(change_detail, dict) and change_detail:
+                    result["change_details"].append(change_detail)
                 for key in ("generated", "skipped", "deleted", "directory_count", "file_count", "manual_required"):
                     result[key] += int(stats.get(key, 0) or 0)
             except Exception as exc:

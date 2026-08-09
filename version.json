@@ -1,10 +1,10 @@
 {
-  "version": "0.5.12",
+  "version": "0.5.13",
   "buildDate": "2026-08-10T00:00:00+08:00",
   "notes": [
-    "修复 115 刮削批量动作把相对路径误传为不完整路径的问题",
-    "精准 STRM 同步先校验变更计划，再按删旧生成新路径更新索引",
-    "未知或不完整文件夹索引保留需手动监控提示，避免漏同步"
+    "刮削精准同步日志列出实际删除和生成的本地 STRM 路径",
+    "文件重命名和移动按事件相邻显示删旧与生成新明细",
+    "文件夹变更使用单行计数摘要，失败或未实际写入时不误报"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

@@ -93,4 +93,4 @@
 - 本地写入失败或数据库提交失败并回滚时不输出成功明细，重试成功后只输出一次。
 - 路径换行符被替换，不产生伪造日志行。
 
-完成前运行精准同步定向测试、完整 `unittest discover -s tests`、项目 `compileall`、改动 JS 的 `node --check`（若有 JS 改动）和 `git diff --check`。Docker 可用时重建当前源码；真实 115 验证仍限定在用户明确允许的小目录中。
+本次实现按变更风险运行 5 项精准同步定向测试（批量三文件改名、共享 STRM、写入失败回滚、文件夹改名和日志顺序），并通过项目 `compileall`、`version.json` JSON 解析及 `git diff --check`。本次没有 JavaScript 改动，因此不运行 `node --check`；按用户要求也未重复完整测试套件。Docker 可用时仍应重建当前源码，真实 115 验证限定在用户明确允许的小目录中。
