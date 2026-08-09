@@ -1,5 +1,5 @@
         let isRunning = false;
-        let monitorState = { running: false, current_task: '', tasks: [], logs: [], log_segments: [], log_segment_total: 0, log_segment_has_more: false, summary: { step: '空闲', detail: '等待监控任务' }, queued: [], next_runs: {} };
+        let monitorState = { running: false, current_task: '', tasks: [], logs: [], log_segments: [], log_segment_total: 0, log_segment_has_more: false, summary: { step: '空闲', detail: '等待监控任务' }, queued: [], next_runs: {}, change_counts: {} };
         let subscriptionState = { running: false, current_task: '', tasks: [], logs: [], summary: { step: '空闲', detail: '等待订阅任务' }, queued: [], next_runs: {} };
         let sign115State = {
             enabled: false,
@@ -1328,6 +1328,7 @@
                 queued: Array.isArray(state?.queued) ? state.queued : [],
                 next_runs: state?.next_runs || {},
                 tasks: Array.isArray(state?.tasks) ? state.tasks : [],
+                change_counts: state?.change_counts || {},
                 locks: Array.from(monitorActionLocks).sort()
             });
         }
@@ -4092,6 +4093,12 @@
             container.innerHTML = tasks.map(task => {
                 const taskName = String(task?.name || '').trim();
                 const taskKey = encodeURIComponent(taskName);
+                const changeCount = monitorState.change_counts?.[taskName] || {};
+                const pendingChanges = Math.max(0, Number(changeCount.pending || 0) || 0);
+                const failedChanges = Math.max(0, Number(changeCount.failed || 0) || 0);
+                const changeCountHtml = pendingChanges || failedChanges
+                    ? `<div class="mt-1 text-xs font-semibold ${failedChanges ? 'text-red-400' : 'text-amber-300'}">${pendingChanges ? `待同步 ${pendingChanges}` : ''}${pendingChanges && failedChanges ? ' / ' : ''}${failedChanges ? `同步失败 ${failedChanges}` : ''}</div>`
+                    : '';
                 const running = monitorState.running && monitorState.current_task === taskName;
                 const queued = (monitorState.queued || []).includes(taskName);
                 const starting = isMonitorActionLocked('start', taskName);
@@ -4144,6 +4151,7 @@
                                     class="min-w-0 flex-1 text-left rounded-lg border border-transparent hover:border-slate-700/75 focus:outline-none focus:ring-2 focus:ring-sky-500/45 px-1 py-0.5"
                                 >
                                     <div class="text-lg font-black text-white break-all leading-tight">${escapeHtml(taskName)}</div>
+                                    ${changeCountHtml}
                                 </button>
                                 <button
                                     type="button"

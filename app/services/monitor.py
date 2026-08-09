@@ -7,6 +7,41 @@ from .strm_files import delete_managed_strm_file, managed_strm_file_path, remove
 
 
 MONITOR_DIR_MISSING_RELEASE_CONFIRMATIONS = 2
+_monitor_dispatch_pending = False
+
+
+def _claim_monitor_job(task_name: str) -> bool:
+    global _monitor_dispatch_pending
+    with monitor_queue_lock:
+        if monitor_status["running"]:
+            return False
+        _monitor_dispatch_pending = False
+        monitor_status["running"] = True
+        monitor_status["current_task"] = str(task_name or "")
+        monitor_status["queued"] = [item["task_name"] for item in monitor_queue]
+    monitor_control["cancel"] = False
+    return True
+
+
+def _release_monitor_job() -> bool:
+    global _monitor_dispatch_pending
+    with monitor_queue_lock:
+        monitor_status["running"] = False
+        monitor_status["current_task"] = ""
+        should_dispatch = bool(monitor_queue) and not _monitor_dispatch_pending
+        if should_dispatch:
+            _monitor_dispatch_pending = True
+        monitor_status["queued"] = [item["task_name"] for item in monitor_queue]
+    monitor_control["cancel"] = False
+    return should_dispatch
+
+
+async def _finish_monitor_job(task_name: str, memory_label: str) -> None:
+    should_dispatch = _release_monitor_job()
+    schedule_ui_state_push(0)
+    release_process_memory(f"{memory_label}:{task_name}", force=True)
+    if should_dispatch:
+        await start_next_monitor_job()
 
 
 def _sql_like_descendant_pattern(path: str) -> str:
@@ -329,24 +364,22 @@ async def run_monitor_task(
     payload: Optional[Dict[str, Any]] = None,
     merged_count: int = 0,
 ) -> None:
+    if not _claim_monitor_job(task_name):
+        return
     cfg = get_config()
     task = next((t for t in cfg["monitor_tasks"] if t["name"] == task_name), None)
     if not task:
         await write_monitor_log(f"任务不存在: {task_name}", "error")
+        await _finish_monitor_job(task_name, "monitor")
         return
     config_error = validate_monitor_runtime_config(cfg, task)
     if config_error:
         await write_monitor_log(f"任务配置错误: {config_error}", "error")
         update_monitor_summary("任务失败", config_error)
-        return
-
-    if monitor_status["running"]:
+        await _finish_monitor_job(task_name, "monitor")
         return
 
     ensure_db()
-    monitor_status["running"] = True
-    monitor_status["current_task"] = task_name
-    monitor_control["cancel"] = False
     monitor_last_run[task_name] = time.time()
     update_monitor_summary("准备执行", f"{task_name} ({trigger})")
     schedule_ui_state_push(0)
@@ -813,36 +846,113 @@ async def run_monitor_task(
                 conn.close()
         except Exception:
             pass
-        monitor_status["running"] = False
-        monitor_status["current_task"] = ""
-        monitor_control["cancel"] = False
-        schedule_ui_state_push(0)
-        release_process_memory(f"monitor:{task_name}", force=True)
-        await start_next_monitor_job()
+        await _finish_monitor_job(task_name, "monitor")
+
+
+async def run_monitor_change_task(
+    task_name: str,
+    trigger: str = "change",
+    payload: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Consume persisted scraper mutations without entering the scan walker."""
+    if not _claim_monitor_job(task_name):
+        return
+    cfg = get_config()
+    task = next(
+        (
+            normalize_task(item)
+            for item in cfg.get("monitor_tasks", []) or []
+            if isinstance(item, dict) and str(item.get("name", "") or "") == str(task_name or "")
+        ),
+        None,
+    )
+    if not task:
+        await write_monitor_log(f"变更同步任务不存在: {task_name}", "error")
+        await _finish_monitor_job(task_name, "monitor-change")
+        return
+    update_monitor_summary("准备同步变更", task_name)
+    schedule_ui_state_push(0)
+    try:
+        await write_monitor_task_header(task, "change", payload)
+        await write_monitor_section("处理刮削变更")
+        from .monitor_changes import process_monitor_change_events
+
+        raw_event_ids = payload.get("event_ids", []) if isinstance(payload, dict) else []
+        event_ids = raw_event_ids if isinstance(raw_event_ids, list) else None
+        result = await process_monitor_change_events(task_name, cfg=cfg, event_ids=event_ids)
+        summary_values = {
+            key: int(result.get(key, 0) or 0)
+            for key in ("completed", "failed", "generated", "deleted", "directory_count", "file_count")
+        }
+        await write_monitor_log(
+            (
+                "变更同步汇总: 完成 {completed}，失败 {failed}，生成 {generated}，"
+                "删除 {deleted}，局部读取目录 {directory_count}，文件 {file_count}"
+            ).format(**summary_values),
+            "success" if int(result.get("failed", 0) or 0) == 0 else "warn",
+        )
+        for error_item in (result.get("errors", []) if isinstance(result.get("errors"), list) else [])[:10]:
+            if not isinstance(error_item, dict):
+                continue
+            await write_monitor_log(
+                "变更事件 #{event_id} 失败，已保留重试: {error}".format(
+                    event_id=max(0, int(error_item.get("event_id", 0) or 0)),
+                    error=str(error_item.get("error", "") or "未知错误"),
+                ),
+                "error",
+            )
+        status_text = "变更同步完成" if int(result.get("failed", 0) or 0) == 0 else "变更同步部分失败"
+        await write_monitor_task_footer(task_name, status_text)
+        update_monitor_summary(status_text, task_name)
+    except asyncio.CancelledError:
+        await write_monitor_task_footer(task_name, "变更同步已中断")
+        update_monitor_summary("变更同步中断", task_name)
+    except Exception as exc:
+        await write_monitor_log(f"变更同步失败: {exc}", "error")
+        await write_monitor_task_footer(task_name, "变更同步失败")
+        update_monitor_summary("变更同步失败", str(exc))
+    finally:
+        await _finish_monitor_job(task_name, "monitor-change")
 
 
 async def start_next_monitor_job() -> None:
+    global _monitor_dispatch_pending
     with monitor_queue_lock:
         if monitor_status["running"] or not monitor_queue:
+            _monitor_dispatch_pending = False
             monitor_status["queued"] = [item["task_name"] for item in monitor_queue]
             schedule_ui_state_push(0)
             return
+        _monitor_dispatch_pending = True
         next_job = monitor_queue.pop(0)
         monitor_status["queued"] = [item["task_name"] for item in monitor_queue]
     schedule_ui_state_push(0)
-    submit_background(
-        run_monitor_task,
-        next_job["task_name"],
-        trigger=next_job.get("trigger", "queued"),
-        payload=next_job.get("payload"),
-        merged_count=max(0, int(next_job.get("merge_count", 0) or 0)),
-        label="monitor-job",
-    )
+    if str(next_job.get("mode", "scan") or "scan") == "change":
+        submit_background(
+            run_monitor_change_task,
+            next_job["task_name"],
+            trigger=next_job.get("trigger", "change"),
+            payload=next_job.get("payload"),
+            label="monitor-change-job",
+        )
+    else:
+        submit_background(
+            run_monitor_task,
+            next_job["task_name"],
+            trigger=next_job.get("trigger", "queued"),
+            payload=next_job.get("payload"),
+            merged_count=max(0, int(next_job.get("merge_count", 0) or 0)),
+            label="monitor-job",
+        )
 
 
 def _normalize_monitor_queue_payload(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     raw_payload = payload if isinstance(payload, dict) else {}
     normalized: Dict[str, Any] = {}
+
+    mode = str(raw_payload.get("mode", "scan") or "scan").strip().lower()
+    if mode == "change":
+        normalized["mode"] = "change"
 
     savepath = normalize_relative_path(raw_payload.get("savepath", ""))
     if savepath:
@@ -930,19 +1040,23 @@ def _merge_monitor_queue_payload(existing: Optional[Dict[str, Any]], incoming: O
         int(incoming_payload.get("delayTime", 0) or 0),
     )
 
-    merged_payload: Dict[str, Any]
+    merged_mode = "change" if (
+        str(existing_payload.get("mode", "") or "").strip().lower() == "change"
+        or str(incoming_payload.get("mode", "") or "").strip().lower() == "change"
+    ) else "scan"
+    merged_payload: Dict[str, Any] = {"mode": "change"} if merged_mode == "change" else {}
     if not existing_scope or not incoming_scope:
-        merged_payload = {}
+        merged_payload = {"mode": "change"} if merged_mode == "change" else {}
     elif existing_scope == incoming_scope:
         # 同目录短时间多次触发时，统一提升为父目录刷新，避免因 sharetitle 不同造成风暴排队。
-        merged_payload = {"savepath": normalize_relative_path(existing_scope.lstrip("/"))}
+        merged_payload["savepath"] = normalize_relative_path(existing_scope.lstrip("/"))
     elif is_subpath(existing_scope, incoming_scope):
-        merged_payload = {"savepath": normalize_relative_path(incoming_scope.lstrip("/"))}
+        merged_payload["savepath"] = normalize_relative_path(incoming_scope.lstrip("/"))
     elif is_subpath(incoming_scope, existing_scope):
-        merged_payload = {"savepath": normalize_relative_path(existing_scope.lstrip("/"))}
+        merged_payload["savepath"] = normalize_relative_path(existing_scope.lstrip("/"))
     else:
         # 不同分支目录并发触发时，回退全任务刷新，保证不漏刷。
-        merged_payload = {}
+        merged_payload = {"mode": "change"} if merged_mode == "change" else {}
 
     if merged_delay > 0:
         merged_payload["delayTime"] = merged_delay
@@ -957,6 +1071,7 @@ def _pick_monitor_trigger(existing_trigger: str, new_trigger: str) -> str:
         "manual": 2,
         "resource": 3,
         "webhook": 4,
+        "change": 5,
     }
     existing = str(existing_trigger or "").strip().lower() or "queued"
     incoming = str(new_trigger or "").strip().lower() or "queued"
@@ -966,6 +1081,7 @@ def _pick_monitor_trigger(existing_trigger: str, new_trigger: str) -> str:
 
 
 def queue_monitor_job(task_name: str, trigger: str, payload: Optional[Dict[str, Any]] = None) -> str:
+    global _monitor_dispatch_pending
     normalized_task_name = str(task_name or "").strip()
     if not normalized_task_name:
         schedule_ui_state_push(0)
@@ -973,28 +1089,39 @@ def queue_monitor_job(task_name: str, trigger: str, payload: Optional[Dict[str, 
 
     normalized_trigger = str(trigger or "").strip().lower() or "manual"
     normalized_payload = _normalize_monitor_queue_payload(payload)
+    mode = str(normalized_payload.get("mode", "scan") or "scan")
 
-    for queued_item in monitor_queue:
-        if str(queued_item.get("task_name", "")).strip() != normalized_task_name:
-            continue
-        queued_item["payload"] = _merge_monitor_queue_payload(queued_item.get("payload"), normalized_payload)
-        queued_item["trigger"] = _pick_monitor_trigger(queued_item.get("trigger", "queued"), normalized_trigger)
-        queued_item["merge_count"] = max(0, int(queued_item.get("merge_count", 0) or 0)) + 1
+    should_dispatch = False
+    with monitor_queue_lock:
+        matched_item: Optional[Dict[str, Any]] = None
+        for queued_item in monitor_queue:
+            if str(queued_item.get("task_name", "")).strip() != normalized_task_name:
+                continue
+            if str(queued_item.get("mode", "scan") or "scan") != mode:
+                continue
+            matched_item = queued_item
+            break
+        if matched_item is not None:
+            matched_item["payload"] = _merge_monitor_queue_payload(matched_item.get("payload"), normalized_payload)
+            matched_item["mode"] = mode
+            matched_item["trigger"] = _pick_monitor_trigger(matched_item.get("trigger", "queued"), normalized_trigger)
+            matched_item["merge_count"] = max(0, int(matched_item.get("merge_count", 0) or 0)) + 1
+        else:
+            monitor_queue.append(
+                {
+                    "task_name": normalized_task_name,
+                    "trigger": normalized_trigger,
+                    "payload": normalized_payload,
+                    "mode": mode,
+                    "merge_count": 0,
+                }
+            )
+        if not monitor_status["running"] and not _monitor_dispatch_pending:
+            _monitor_dispatch_pending = True
+            should_dispatch = True
         monitor_status["queued"] = [item["task_name"] for item in monitor_queue]
-        schedule_ui_state_push(0)
-        return "queued"
-
-    monitor_queue.append(
-        {
-            "task_name": normalized_task_name,
-            "trigger": normalized_trigger,
-            "payload": normalized_payload,
-            "merge_count": 0,
-        }
-    )
-    monitor_status["queued"] = [item["task_name"] for item in monitor_queue]
     schedule_ui_state_push(0)
-    if monitor_status["running"]:
-        return "queued"
-    submit_background(start_next_monitor_job, label="monitor-next")
-    return "started"
+    if should_dispatch:
+        submit_background(start_next_monitor_job, label="monitor-next")
+        return "started"
+    return "queued"

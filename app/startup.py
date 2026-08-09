@@ -7,6 +7,11 @@ from .core import *  # noqa: F401,F403
 from .background import start_background_runtime, stop_background_runtime, submit_background
 from .memory import release_process_memory
 from .services.monitor import queue_monitor_job
+from .services.monitor_changes import (
+    cleanup_completed_monitor_change_events,
+    recover_monitor_change_events,
+    queue_ready_monitor_change_tasks,
+)
 from .services.resource import schedule_resource_job_refresh
 from .services.sign115 import refresh_sign115_status, run_sign115_job
 from .services.subscription import queue_subscription_job
@@ -56,6 +61,9 @@ async def startup() -> None:
     bind_ui_event_loop()
     start_background_runtime()
     ensure_db()
+    # Reconcile mutations left between the remote operation and local STRM
+    # processing before normal schedulers start issuing scans.
+    recover_monitor_change_events(cfg=get_config())
     os.makedirs(LOG_DIR, exist_ok=True)
     restore_runtime_logs_from_files()
 
@@ -120,6 +128,7 @@ async def startup() -> None:
                 monitor_next_run[name] = datetime.fromtimestamp(next_ts).strftime("%H:%M:%S")
                 if now >= next_ts:
                     queue_monitor_job(name, "cron")
+            queue_ready_monitor_change_tasks(cfg=cfg)
             if monitor_next_run != prev_next_runs:
                 schedule_ui_state_push(0)
             await asyncio.sleep(5)
@@ -220,6 +229,7 @@ async def startup() -> None:
         await asyncio.sleep(MEMORY_HOUSEKEEPING_INTERVAL_SECONDS)
         while True:
             await asyncio.to_thread(prune_runtime_memory_caches)
+            await asyncio.to_thread(cleanup_completed_monitor_change_events)
             await asyncio.to_thread(release_process_memory, "runtime-housekeeping")
             await asyncio.sleep(MEMORY_HOUSEKEEPING_INTERVAL_SECONDS)
 

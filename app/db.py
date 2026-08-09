@@ -146,6 +146,33 @@ def ensure_db() -> None:
             )
             cursor.execute(
                 """
+                CREATE TABLE IF NOT EXISTS monitor_change_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    dedupe_key TEXT NOT NULL,
+                    provider TEXT NOT NULL DEFAULT '115',
+                    operation TEXT NOT NULL DEFAULT '',
+                    old_path TEXT NOT NULL DEFAULT '',
+                    new_path TEXT NOT NULL DEFAULT '',
+                    entry_snapshot_json TEXT NOT NULL DEFAULT '{}',
+                    task_name TEXT NOT NULL DEFAULT '',
+                    source_action TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'prepared',
+                    needs_reconcile INTEGER NOT NULL DEFAULT 0,
+                    retry_count INTEGER NOT NULL DEFAULT 0,
+                    next_retry_at REAL NOT NULL DEFAULT 0,
+                    directory_count INTEGER NOT NULL DEFAULT 0,
+                    file_count INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL DEFAULT '',
+                    confirmed_at TEXT NOT NULL DEFAULT '',
+                    completed_at TEXT NOT NULL DEFAULT '',
+                    UNIQUE(dedupe_key, task_name, old_path, new_path)
+                )
+                """
+            )
+            cursor.execute(
+                """
                 CREATE TABLE IF NOT EXISTS resource_items (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     source_type TEXT NOT NULL DEFAULT 'manual',
@@ -352,6 +379,8 @@ def ensure_db() -> None:
                     new_name TEXT NOT NULL DEFAULT '',
                     new_path TEXT NOT NULL DEFAULT '',
                     target_parent_path TEXT NOT NULL DEFAULT '',
+                    file_size INTEGER NOT NULL DEFAULT 0,
+                    remote_modified TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL DEFAULT 'pending',
                     status_detail TEXT NOT NULL DEFAULT '',
                     rollback_status TEXT NOT NULL DEFAULT '',
@@ -394,6 +423,12 @@ def ensure_db() -> None:
                 cursor.execute("ALTER TABLE monitor_dirs ADD COLUMN missing_confirmations INTEGER NOT NULL DEFAULT 0")
             if "entry_modified" not in monitor_dir_columns:
                 cursor.execute("ALTER TABLE monitor_dirs ADD COLUMN entry_modified TEXT NOT NULL DEFAULT ''")
+            cursor.execute("PRAGMA table_info(scraper_job_actions)")
+            scraper_action_columns = {str(row[1]) for row in cursor.fetchall()}
+            if "file_size" not in scraper_action_columns:
+                cursor.execute("ALTER TABLE scraper_job_actions ADD COLUMN file_size INTEGER NOT NULL DEFAULT 0")
+            if "remote_modified" not in scraper_action_columns:
+                cursor.execute("ALTER TABLE scraper_job_actions ADD COLUMN remote_modified TEXT NOT NULL DEFAULT ''")
             cursor.execute("PRAGMA table_info(resource_jobs)")
             job_columns = {str(row[1]) for row in cursor.fetchall()}
             if "extra_json" not in job_columns:
@@ -403,6 +438,18 @@ def ensure_db() -> None:
                 """
                 CREATE INDEX IF NOT EXISTS idx_monitor_dirs_task_rescan
                 ON monitor_dirs(task_name, needs_rescan, dir_rel_path)
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_monitor_change_events_task_status
+                ON monitor_change_events(task_name, status, next_retry_at, id)
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_monitor_change_events_cleanup
+                ON monitor_change_events(status, completed_at)
                 """
             )
             cursor.execute(

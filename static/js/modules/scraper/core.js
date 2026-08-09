@@ -266,6 +266,43 @@ function getSelectionParentPath(entry = {}) {
     return normalizePath(item.parent_path || currentParentPath());
 }
 
+function buildMutationRequestId() {
+    if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+    return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function buildMonitorEntrySnapshot(entry = {}) {
+    const item = entry && typeof entry === 'object' ? entry : {};
+    return {
+        id: String(item.id || '').trim(),
+        name: String(item.name || '').trim(),
+        path: getSelectionPath(item),
+        parent_path: getSelectionParentPath(item),
+        parent_id: normalizeCid(item.parent_id || state.cid),
+        is_dir: !!item.is_dir,
+        cid: item.is_dir ? String(item.cid || item.id || '').trim() : '',
+        fid: item.is_dir ? '' : String(item.fid || item.id || '').trim(),
+        size: Math.max(0, Number(item.size || 0) || 0),
+        modified_at: String(item.modified_at || '').trim(),
+    };
+}
+
+function withMonitorSyncResult(message, response = {}) {
+    const sync = response?.monitor_sync;
+    if (!sync || sync.status === 'not_applicable') return message;
+    const taskCount = Array.isArray(sync.matched_tasks) ? sync.matched_tasks.length : 0;
+    if (sync.status === 'queued') {
+        return `${message}，STRM 同步已排队${taskCount ? `（${taskCount} 个监控任务）` : ''}`;
+    }
+    if (sync.status === 'reconcile_queued') return `${message}，STRM 局部校正已排队`;
+    if (sync.status === 'processing') return `${message}，STRM 正在同步`;
+    if (sync.status === 'completed') return `${message}，STRM 同步已完成`;
+    if (sync.status === 'failed') return `${message}，STRM 同步失败，已保留重试`;
+    if (sync.status === 'not_matched') return `${message}，未命中文件夹监控任务`;
+    if (sync.status === 'unavailable') return `${message}，STRM 同步信息不可用`;
+    return message;
+}
+
 function isSelectionPathCovered(path, ancestorPath) {
     const normalizedPath = normalizePath(path);
     const normalizedAncestor = normalizePath(ancestorPath);
@@ -1566,13 +1603,15 @@ async function createFolder() {
         return;
     }
     try {
-        await window.MediaHubApi.postJson(`/scraper/${encodeURIComponent(state.provider)}/folders`, {
+        const data = await window.MediaHubApi.postJson(`/scraper/${encodeURIComponent(state.provider)}/folders`, {
             cid: state.cid,
             name,
+            parent_path: currentParentPath(),
+            request_id: buildMutationRequestId(),
         });
         if (input) input.value = '';
         closeToolPopovers();
-        showToast('文件夹已创建', { tone: 'success', duration: 2200, placement: 'top-center' });
+        showToast(withMonitorSyncResult('文件夹已创建', data), { tone: 'success', duration: 2600, placement: 'top-center' });
         await loadEntries({ force: true });
     } catch (error) {
         showToast(`新建失败：${error.message || '未知错误'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
@@ -1617,12 +1656,14 @@ async function renameSelected() {
                 if (!ok) return;
             }
         }
-        await window.MediaHubApi.postJson(`/scraper/${encodeURIComponent(state.provider)}/rename`, {
+        const data = await window.MediaHubApi.postJson(`/scraper/${encodeURIComponent(state.provider)}/rename`, {
             entry_id: target.id,
             parent_id: target.parent_id || state.cid,
             name,
+            entry: buildMonitorEntrySnapshot(target),
+            request_id: buildMutationRequestId(),
         });
-        showToast(`${targetLabel}已重命名`, { tone: 'success', duration: 2200, placement: 'top-center' });
+        showToast(withMonitorSyncResult(`${targetLabel}已重命名`, data), { tone: 'success', duration: 2800, placement: 'top-center' });
         await loadEntries({ force: true });
     } catch (error) {
         showToast(`重命名失败：${error.message || '未知错误'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
@@ -1682,13 +1723,16 @@ async function moveHere() {
     });
     if (!ok) return;
     try {
-        await window.MediaHubApi.postJson(`/scraper/${encodeURIComponent(state.provider)}/move`, {
+        const data = await window.MediaHubApi.postJson(`/scraper/${encodeURIComponent(state.provider)}/move`, {
             entry_ids: buffer.entries.map(item => item.id),
             source_cid: buffer.source_cid,
             target_cid: state.cid,
+            entries: buffer.entries.map(buildMonitorEntrySnapshot),
+            target_parent_path: currentParentPath(),
+            request_id: buildMutationRequestId(),
         });
         state.moveBuffer = null;
-        showToast('移动已完成', { tone: 'success', duration: 2400, placement: 'top-center' });
+        showToast(withMonitorSyncResult('移动已完成', data), { tone: 'success', duration: 2800, placement: 'top-center' });
         await loadEntries({ force: true });
     } catch (error) {
         showToast(`移动失败：${error.message || '未知错误'}`, { tone: 'error', duration: 3400, placement: 'top-center' });
@@ -1712,13 +1756,16 @@ async function copyHere() {
     });
     if (!ok) return;
     try {
-        await window.MediaHubApi.postJson(`/scraper/${encodeURIComponent(state.provider)}/copy`, {
+        const data = await window.MediaHubApi.postJson(`/scraper/${encodeURIComponent(state.provider)}/copy`, {
             entry_ids: buffer.entries.map(item => item.id),
             source_cid: buffer.source_cid,
             target_cid: state.cid,
+            entries: buffer.entries.map(buildMonitorEntrySnapshot),
+            target_parent_path: currentParentPath(),
+            request_id: buildMutationRequestId(),
         });
         state.copyBuffer = null;
-        showToast('复制已完成', { tone: 'success', duration: 2400, placement: 'top-center' });
+        showToast(withMonitorSyncResult('复制已完成', data), { tone: 'success', duration: 2800, placement: 'top-center' });
         await loadEntries({ force: true });
     } catch (error) {
         showToast(`复制失败：${error.message || '未知错误'}`, { tone: 'error', duration: 3400, placement: 'top-center' });
@@ -1738,11 +1785,13 @@ async function deleteSelected() {
     });
     if (!ok) return;
     try {
-        await window.MediaHubApi.postJson(`/scraper/${encodeURIComponent(state.provider)}/delete`, {
+        const data = await window.MediaHubApi.postJson(`/scraper/${encodeURIComponent(state.provider)}/delete`, {
             entry_ids: selected.map(item => item.id),
             parent_id: state.cid,
+            entries: selected.map(buildMonitorEntrySnapshot),
+            request_id: buildMutationRequestId(),
         });
-        showToast('已删除选中条目', { tone: 'success', duration: 2400, placement: 'top-center' });
+        showToast(withMonitorSyncResult('已删除选中条目', data), { tone: 'success', duration: 2800, placement: 'top-center' });
         await loadEntries({ force: true });
     } catch (error) {
         showToast(`删除失败：${error.message || '未知错误'}`, { tone: 'error', duration: 3400, placement: 'top-center' });

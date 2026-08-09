@@ -1,10 +1,10 @@
 {
-  "version": "0.5.10",
+  "version": "0.5.11",
   "buildDate": "2026-08-09T00:00:00+08:00",
   "notes": [
-    "修复资源中心频道同步完成后空搜索首页不自动刷新的问题",
-    "有搜索词时保留当前搜索结果，不被同步完成刷新覆盖",
-    "新增同步完成状态与资源刷新竞态回归测试"
+    "新增 115 刮削操作驱动的精准 STRM 同步",
+    "重命名、复制、移动、删除和新建文件夹通过持久化事件更新监控索引",
+    "未知文件夹限制为目标子树读取，失败事件保留并退避重试"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

@@ -5494,6 +5494,12 @@ def build_monitor_status_payload(
     compact: bool = False,
 ) -> Dict[str, Any]:
     cfg = cfg or get_config()
+    try:
+        from .services.monitor_changes import get_monitor_change_counts
+
+        change_counts = get_monitor_change_counts()
+    except Exception:
+        change_counts = {}
     logs = monitor_status.get("logs", [])
     tail_limit = min(log_limit, UI_STATUS_STREAM_LOG_TAIL_LIMIT) if compact else log_limit
     segment_page = build_monitor_log_segment_page(limit=MONITOR_UI_RECENT_TASK_LOG_LIMIT)
@@ -5509,6 +5515,7 @@ def build_monitor_status_payload(
         "log_segment_limit": segment_page["limit"],
         "log_segment_has_more": segment_page["has_more"],
         "summary": clone_jsonable(monitor_status.get("summary", {})),
+        "change_counts": clone_jsonable(change_counts),
         "webhook_base": "/webhook/",
     }
     if not compact:
@@ -6566,6 +6573,7 @@ def format_monitor_trigger(trigger: str) -> str:
         "resource": "资源中心触发",
         "cron": "定时触发",
         "queued": "队列触发",
+        "change": "刮削变更同步",
     }
     return labels.get(trigger, trigger or "未知触发")
 
@@ -6963,17 +6971,22 @@ async def list_remote_dir(
     remote_path: str,
     refresh: bool,
     task: Dict[str, Any],
+    *,
+    folder_cid: str = "",
 ) -> Tuple[str, List[Dict[str, Any]]]:
     cookie = str(cfg.get("cookie_115", "")).strip()
     if not cookie:
         raise RuntimeError("请先在参数配置中填写 115 Cookie")
     _, normalized_rel = resolve_provider_relative_path(cfg, remote_path, expected_provider="115")
+    normalized_folder_cid = str(folder_cid or "").strip()
     retries = task["retries"]
     last_error = None
     for attempt in range(1, retries + 1):
         try:
             def load_entries() -> List[Dict[str, Any]]:
-                cid = resolve_115_folder_id_by_path(cookie, normalized_rel) if normalized_rel else "0"
+                cid = normalized_folder_cid or (
+                    resolve_115_folder_id_by_path(cookie, normalized_rel) if normalized_rel else "0"
+                )
                 return list_115_entries(cookie, cid, bool(refresh))
 
             entries = await asyncio.to_thread(load_entries)
@@ -6986,10 +6999,15 @@ async def list_remote_dir(
                 modified_at = str(entry.get("modified_at", "")).strip()
                 if modified_at and (not modified or modified_at > modified):
                     modified = modified_at
+                is_dir = bool(entry.get("is_dir"))
+                entry_id = str(entry.get("id", "") or entry.get("cid", "") or entry.get("fid", "")).strip()
                 items.append(
                     {
+                        "id": entry_id,
+                        "cid": str(entry.get("cid", "") or (entry_id if is_dir else "")).strip(),
+                        "fid": str(entry.get("fid", "") or (entry_id if not is_dir else "")).strip(),
                         "name": name,
-                        "is_dir": bool(entry.get("is_dir")),
+                        "is_dir": is_dir,
                         "modified": modified_at,
                         "size": int(entry.get("size", 0) or 0),
                         "pick_code": str(entry.get("pick_code", "")).strip(),

@@ -8,10 +8,10 @@
 
 - **日期**: 2026-08-09
 - **分支**: `main`
-- **当前提交**: `0.5.10` 发布提交已创建（本地比 `origin/main` 领先 2 个提交）
-- **版本**: 工作区已将 `version.json`、`CHANGELOG.md` 和 README 更新到 `0.5.10`
-- **最近完成**: 修复资源中心频道同步完成后的空搜索首页刷新，并保留有搜索词时的当前搜索结果
-- **已有验证**: 完整 167 项 unittest、项目 `compileall`、资源 JS 语法和 `git diff --check` 已通过；Docker daemon 未启动，真实页面复核待补
+- **当前提交**: `08db23a`，与 `origin/main` 一致；精准 STRM 同步改动尚未提交
+- **版本**: `0.5.11`，已同步版本说明；本次版本更新尚未提交
+- **最近完成**: 115 刮削操作持久化为精准监控变更事件，串行更新 STRM、监控索引和待校验基线
+- **已有验证**: 精准同步 59 项、普通监控脏分支 22 项及完整 226 项 unittest 通过；项目 `compileall`、2 个改动 JS 语法和 `git diff --check` 通过；Docker daemon 未启动，容器与真实 115 小目录流程待补
 
 
 ## 最近重要交接
@@ -42,3 +42,5 @@
 
 - 2026-08-09 | `main` 未提交 | 修复资源中心频道同步完成后的首页刷新：compact 轮询发现完成状态时，在搜索框为空的情况下触发一次完整资源状态刷新；有搜索词时保留当前搜索结果。新增 3 项前端回归测试，完整 167 项 unittest、Python compileall、资源 JS 语法检查和 git diff 检查通过。Docker daemon 未启动，容器重建与真实页面复核待补。下一步：启动 Docker daemon 后按 `docker compose up -d --build` 复核空搜索同步刷新和带搜索词保留结果。
 - 2026-08-09 | `main` | 发布版本更新至 `0.5.10`，同步 version.json、CHANGELOG、README 与交接记录，收录资源中心同步完成刷新修复和 3 项回归测试。完整 167 项 unittest、compileall、资源 JS 语法检查和差异检查已通过；Docker daemon 未启动。下一步：启动 Docker daemon 后重建容器复核两条同步刷新路径。
+- 2026-08-09 | `main` 未提交 | 新增刮削操作驱动的精准 STRM 同步：115 重命名、复制、移动、删除、新建文件夹及批量刮削执行/回退先持久化变更事件，再通过独立串行队列精确更新 STRM 和监控索引；显式请求 ID 约束快照，连续入队只保留一个 dispatcher，共享输出仍被其他任务引用时不误删，未知文件夹只读取目标子树，失败退避保留，非 STRM 元数据不动。精准同步 59 项、普通监控 22 项和完整 226 项 unittest、Python compileall、2 个改动 JS 语法及差异检查通过；未升级版本、未提交。Docker daemon socket 不存在，容器和真实 115 小目录流程未验证。下一步：启动 Docker daemon 后按代理配置执行 `docker compose up -d --build`，复核文件/文件夹改名、删除、复制、跨任务移动及监控日志。
+- 2026-08-09 | `main` 未提交 | 版本号从 `0.5.10` 更新至 `0.5.11`，同步 `version.json`、`CHANGELOG.md`、README 和 handoff，收录精准 STRM 同步功能；未提交、未推送。下一步：用户确认后再决定是否提交。

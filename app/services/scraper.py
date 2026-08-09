@@ -1,6 +1,7 @@
 import os
 import re
 import unicodedata
+import uuid
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..core import *  # noqa: F401,F403
@@ -9,6 +10,340 @@ from ..providers.pan115 import invalidate_115_entries_cache
 from ..providers.registry import get_or_none as get_provider_or_none, list_enabled as list_enabled_providers
 from ..media_tags import media_tag_labels, remove_media_tags
 from ..services.subscription_episode import _extract_subscription_season_from_name, _extract_task_episodes_from_file_entry
+
+
+def _prepare_scraper_monitor_sync(
+    provider: str,
+    operation: str,
+    entries: List[Dict[str, Any]],
+    *,
+    source_action: str,
+    dedupe_key: str,
+) -> Dict[str, Any]:
+    """Create a durable monitor event before a 115 mutation.
+
+    Importing lazily keeps the provider/browser module usable without making the
+    monitor service part of its import graph during application bootstrap.
+    """
+    from .monitor_changes import prepare_monitor_change_events
+
+    return prepare_monitor_change_events(
+        provider=provider,
+        operation=operation,
+        entries=entries,
+        source_action=source_action,
+        dedupe_key=dedupe_key,
+        cfg=get_config(),
+    )
+
+
+def _finish_scraper_monitor_sync(
+    prepared: Dict[str, Any],
+    *,
+    succeeded: bool,
+    error: str = "",
+) -> Dict[str, Any]:
+    from .monitor_changes import confirm_monitor_change_events
+
+    return confirm_monitor_change_events(prepared, succeeded=succeeded, error=error)
+
+
+def _update_scraper_monitor_sync(
+    prepared: Dict[str, Any],
+    entries: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    from .monitor_changes import update_monitor_change_event_snapshots
+
+    return update_monitor_change_event_snapshots(prepared, entries)
+
+
+def _direct_monitor_change_key(action: str, request_id: str = "") -> str:
+    token = str(request_id or "").strip() or uuid.uuid4().hex
+    return f"scraper:direct:{str(action or '').strip()}:{token}"
+
+
+def _scraper_snapshot_is_dir(entry: Dict[str, Any]) -> bool:
+    value = entry.get("is_dir", False)
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _select_requested_monitor_snapshots(
+    entries: Optional[List[Dict[str, Any]]],
+    entry_ids: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """Bind client snapshots to explicit mutation IDs without positional guesses."""
+    requested_ids: List[str] = []
+    requested_id_set: Set[str] = set()
+    for value in entry_ids or []:
+        entry_id = str(value or "").strip()
+        if not entry_id or entry_id in requested_id_set:
+            continue
+        requested_ids.append(entry_id)
+        requested_id_set.add(entry_id)
+
+    snapshots_by_id: Dict[str, Dict[str, Any]] = {}
+    for raw_entry in entries or []:
+        if not isinstance(raw_entry, dict):
+            continue
+        is_dir = _scraper_snapshot_is_dir(raw_entry)
+        entry_id = str(
+            raw_entry.get("id", "")
+            or (raw_entry.get("cid", "") if is_dir else raw_entry.get("fid", ""))
+            or ""
+        ).strip()
+        if not entry_id or entry_id in snapshots_by_id:
+            continue
+        if requested_id_set and entry_id not in requested_id_set:
+            continue
+        snapshots_by_id[entry_id] = {
+            **raw_entry,
+            "id": entry_id,
+            "is_dir": is_dir,
+        }
+
+    if requested_ids:
+        return [snapshots_by_id[entry_id] for entry_id in requested_ids if entry_id in snapshots_by_id]
+    return list(snapshots_by_id.values())
+
+
+def _build_transfer_monitor_snapshots(
+    provider: str,
+    entries: Optional[List[Dict[str, Any]]],
+    target_parent_path: Optional[str],
+    target_parent_id: str = "",
+    *,
+    operation: str = "move",
+    entry_ids: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    if str(provider or "").strip().lower() != "115" or not isinstance(entries, list) or target_parent_path is None:
+        return []
+    target_path = normalize_relative_path(target_parent_path)
+    snapshots: List[Dict[str, Any]] = []
+    selected_entries = _select_requested_monitor_snapshots(entries, entry_ids)
+    for source in selected_entries:
+        old_path = normalize_relative_path(str(source.get("path", "") or ""))
+        name = str(source.get("name", "") or basename(old_path)).strip()
+        if not old_path or not name:
+            continue
+        is_dir = bool(source.get("is_dir"))
+        entry_id = str(source.get("id", "") or "").strip()
+        source_id = str(source.get("cid", "") or (source.get("id", "") if is_dir else "") or "").strip()
+        if is_dir and not source_id:
+            source_id = entry_id
+        normalized_operation = str(operation or "").strip().lower()
+        snapshots.append(
+            {
+                **source,
+                "id": entry_id,
+                "old_path": old_path,
+                "new_path": join_relative_path(target_path, name),
+                "old_parent_id": str(source.get("parent_id", "") or "").strip(),
+                "new_parent_id": str(target_parent_id or "").strip(),
+                "old_cid": source_id,
+                "new_cid": source_id if is_dir and provider == "115" and normalized_operation == "move" else "",
+            }
+        )
+    return snapshots
+
+
+def _extract_copy_destination_cids(
+    result: Dict[str, Any],
+    snapshots: List[Dict[str, Any]],
+    *,
+    target_parent_id: str = "",
+    request_id: str = "",
+) -> List[Dict[str, Any]]:
+    """Read only explicit destination IDs returned by the copy operation.
+
+    115 response shapes vary between endpoints.  This accepts explicit copied
+    entry records and single-folder destination IDs, while rejecting source
+    IDs and parent CIDs.  If the response does not identify the new folder, the
+    event remains without ``new_cid`` and the bounded worker retains it as a
+    failed event instead of traversing by path.
+    """
+    directory_snapshots = [item for item in snapshots if isinstance(item, dict) and bool(item.get("is_dir"))]
+    if not directory_snapshots or not isinstance(result, dict):
+        return []
+    globally_rejected_ids = {
+        str(target_parent_id or "").strip(),
+        str(request_id or "").strip(),
+        "",
+        "0",
+    }
+
+    explicit_list_keys = {
+        "new_cids",
+        "copied_cids",
+        "destination_cids",
+        "new_folder_cids",
+        "new_folder_ids",
+    }
+
+    def build_explicit_list_updates(value: Any) -> List[Dict[str, Any]]:
+        if not isinstance(value, list) or len(value) != len(directory_snapshots):
+            return []
+        normalized_cids = [str(item or "").strip() for item in value]
+        if not normalized_cids or any(not cid or cid == "0" for cid in normalized_cids):
+            return []
+        if len(set(normalized_cids)) != len(normalized_cids):
+            return []
+        updates: List[Dict[str, Any]] = []
+        for snapshot, destination_cid in zip(directory_snapshots, normalized_cids):
+            rejected_ids = {
+                str(snapshot.get("id", "") or "").strip(),
+                str(snapshot.get("old_cid", "") or "").strip(),
+                str(snapshot.get("old_parent_id", "") or "").strip(),
+                str(snapshot.get("new_parent_id", "") or "").strip(),
+                *globally_rejected_ids,
+            }
+            if destination_cid in rejected_ids:
+                return []
+            updates.append(
+                {
+                    "id": str(snapshot.get("id", "") or "").strip(),
+                    "old_path": str(snapshot.get("old_path", "") or ""),
+                    "new_path": str(snapshot.get("new_path", "") or ""),
+                    "new_cid": destination_cid,
+                }
+            )
+        return updates
+
+    def find_explicit_destination_list(value: Any) -> List[Dict[str, Any]]:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if str(key or "").strip().lower() in explicit_list_keys:
+                    updates = build_explicit_list_updates(child)
+                    if updates:
+                        return updates
+                nested = find_explicit_destination_list(child)
+                if nested:
+                    return nested
+        elif isinstance(value, list):
+            for child in value:
+                nested = find_explicit_destination_list(child)
+                if nested:
+                    return nested
+        return []
+
+    explicit_updates = find_explicit_destination_list(result)
+    if explicit_updates:
+        return explicit_updates
+
+    roots: List[Any] = []
+    root_keys = (
+        "copied_entries",
+        "new_entries",
+        "copied_entry_ids",
+        "new_entry_ids",
+        "data",
+    )
+    for key in root_keys:
+        if key in result:
+            roots.append(result.get(key))
+    response = result.get("response")
+    if isinstance(response, dict):
+        for key in root_keys:
+            if key in response:
+                roots.append(response.get(key))
+
+    source_keys = ("source_id", "source_cid", "old_id", "old_cid", "origin_id", "from_id")
+    destination_keys = (
+        "new_cid",
+        "destination_cid",
+        "dest_cid",
+        "copied_cid",
+        "new_folder_id",
+        "folder_id",
+        "new_id",
+        "destination_id",
+        "dest_id",
+        "cid",
+        "file_id",
+        "id",
+    )
+    candidates: List[Dict[str, str]] = []
+
+    def collect(value: Any, source_hint: str = "") -> None:
+        if isinstance(value, list):
+            for child in value:
+                collect(child, source_hint)
+            return
+        if not isinstance(value, dict):
+            scalar = str(value or "").strip()
+            if source_hint and scalar:
+                candidates.append({"source_id": source_hint, "name": "", "cid": scalar})
+            return
+
+        source_id = next(
+            (str(value.get(key, "") or "").strip() for key in source_keys if str(value.get(key, "") or "").strip()),
+            source_hint,
+        )
+        name = str(value.get("name", "") or value.get("file_name", "") or "").strip()
+        destination_id = next(
+            (
+                str(value.get(key, "") or "").strip()
+                for key in destination_keys
+                if str(value.get(key, "") or "").strip() and str(value.get(key, "") or "").strip() != "0"
+            ),
+            "",
+        )
+        if destination_id:
+            candidates.append({"source_id": source_id, "name": name, "cid": destination_id})
+        for key, child in value.items():
+            key_text = str(key or "").strip()
+            next_source_hint = key_text if key_text and any(
+                key_text == str(item.get("id", "") or "").strip() for item in directory_snapshots
+            ) else source_id
+            if isinstance(child, (dict, list)) or next_source_hint:
+                collect(child, next_source_hint)
+
+    for root in roots:
+        collect(root)
+
+    updates: List[Dict[str, Any]] = []
+    used_cids: Set[str] = set()
+    for snapshot in directory_snapshots:
+        source_id = str(snapshot.get("id", "") or snapshot.get("old_cid", "") or "").strip()
+        source_name = str(snapshot.get("name", "") or "").strip()
+        rejected_ids = {
+            source_id,
+            str(snapshot.get("old_cid", "") or "").strip(),
+            str(snapshot.get("old_parent_id", "") or "").strip(),
+            str(snapshot.get("new_parent_id", "") or "").strip(),
+            *globally_rejected_ids,
+        }
+        matching = [
+            candidate
+            for candidate in candidates
+            if (
+                (source_id and candidate.get("source_id") == source_id)
+                or (source_name and candidate.get("name") == source_name)
+            )
+            and candidate.get("cid") not in rejected_ids
+            and candidate.get("cid") not in used_cids
+        ]
+        if not matching and len(directory_snapshots) == 1:
+            matching = [
+                candidate
+                for candidate in candidates
+                if candidate.get("cid") not in rejected_ids and candidate.get("cid") not in used_cids
+            ]
+        unique_cids = sorted({str(candidate.get("cid", "") or "").strip() for candidate in matching if str(candidate.get("cid", "") or "").strip()})
+        if len(unique_cids) != 1:
+            continue
+        destination_cid = unique_cids[0]
+        used_cids.add(destination_cid)
+        updates.append(
+            {
+                "id": source_id,
+                "old_path": str(snapshot.get("old_path", "") or ""),
+                "new_path": str(snapshot.get("new_path", "") or ""),
+                "new_cid": destination_cid,
+            }
+        )
+    return updates
 
 
 SCRAPER_JOB_LIMIT_DEFAULT = 20
@@ -371,21 +706,111 @@ def list_scraper_entries(provider: str, cid: str = "0", force_refresh: bool = Fa
     }
 
 
-def create_scraper_folder(provider: str, cid: str, name: str) -> Dict[str, Any]:
+def create_scraper_folder(
+    provider: str,
+    cid: str,
+    name: str,
+    parent_path: Optional[str] = None,
+    request_id: str = "",
+) -> Dict[str, Any]:
     normalized = normalize_scraper_provider(provider)
     cookie = _require_provider_cookie(normalized)
     parent_id = str(cid or "0").strip() or "0"
-    folder = _create_provider_folder(normalized, cookie, parent_id, str(name or "").strip())
+    folder_name = str(name or "").strip()
+    normalized_parent_path = normalize_relative_path(str(parent_path or "").strip())
+    prepared = _prepare_scraper_monitor_sync(
+        normalized,
+        "create",
+        [
+            {
+                "id": "",
+                "name": folder_name,
+                "path": join_relative_path(normalized_parent_path, folder_name),
+                "new_path": join_relative_path(normalized_parent_path, folder_name),
+                "new_parent_id": parent_id,
+                "is_dir": True,
+            }
+        ]
+        if normalized == "115" and parent_path is not None
+        else [],
+        source_action="scraper:folder:create",
+        dedupe_key=_direct_monitor_change_key("folder-create", request_id),
+    )
+    try:
+        folder = _create_provider_folder(normalized, cookie, parent_id, folder_name)
+    except Exception as exc:
+        _finish_scraper_monitor_sync(prepared, succeeded=False, error=str(exc))
+        raise
     _invalidate_provider_parent(normalized, parent_id)
-    return {"ok": True, "provider": normalized, "cid": parent_id, "folder": folder}
+    if normalized == "115" and isinstance(folder, dict):
+        folder_id = str(
+            folder.get("id", "")
+            or folder.get("cid", "")
+            or folder.get("folder_id", "")
+            or ""
+        ).strip()
+        if folder_id and folder_id != parent_id:
+            _update_scraper_monitor_sync(
+                prepared,
+                [
+                    {
+                        "new_path": join_relative_path(normalized_parent_path, folder_name),
+                        "new_parent_id": parent_id,
+                        "new_cid": folder_id,
+                    }
+                ],
+            )
+    monitor_sync = _finish_scraper_monitor_sync(prepared, succeeded=True)
+    return {"ok": True, "provider": normalized, "cid": parent_id, "folder": folder, "monitor_sync": monitor_sync}
 
 
-def rename_scraper_entry(provider: str, entry_id: str, parent_id: str, name: str) -> Dict[str, Any]:
+def rename_scraper_entry(
+    provider: str,
+    entry_id: str,
+    parent_id: str,
+    name: str,
+    entry: Optional[Dict[str, Any]] = None,
+    request_id: str = "",
+) -> Dict[str, Any]:
     normalized = normalize_scraper_provider(provider)
     cookie = _require_provider_cookie(normalized)
-    result = _rename_provider_entry(normalized, cookie, entry_id, name, parent_id)
+    matched_entries = _select_requested_monitor_snapshots(
+        [entry] if isinstance(entry, dict) else [],
+        [entry_id],
+    )
+    source_entry = matched_entries[0] if matched_entries else {}
+    old_path = normalize_relative_path(str(source_entry.get("path", "") or ""))
+    new_path = normalize_relative_path(join_relative_path(os.path.dirname(old_path), str(name or "").strip())) if old_path else ""
+    prepared = _prepare_scraper_monitor_sync(
+        normalized,
+        "rename",
+        [
+            {
+                **source_entry,
+                "id": str(source_entry.get("id", "") or entry_id),
+                "path": old_path,
+                "old_path": old_path,
+                "new_path": new_path,
+                "old_parent_id": str(source_entry.get("parent_id", "") or parent_id).strip(),
+                "new_parent_id": str(source_entry.get("parent_id", "") or parent_id).strip(),
+                "old_cid": str(source_entry.get("cid", "") or (entry_id if bool(source_entry.get("is_dir")) else "")).strip(),
+                "new_cid": str(source_entry.get("cid", "") or (entry_id if bool(source_entry.get("is_dir")) else "")).strip(),
+                "name": str(source_entry.get("name", "") or ""),
+            }
+        ]
+        if normalized == "115" and old_path and new_path
+        else [],
+        source_action="scraper:entry:rename",
+        dedupe_key=_direct_monitor_change_key("rename", request_id),
+    )
+    try:
+        result = _rename_provider_entry(normalized, cookie, entry_id, name, parent_id)
+    except Exception as exc:
+        _finish_scraper_monitor_sync(prepared, succeeded=False, error=str(exc))
+        raise
     _invalidate_provider_parent(normalized, parent_id)
-    return {"ok": True, "provider": normalized, "entry": result}
+    monitor_sync = _finish_scraper_monitor_sync(prepared, succeeded=True)
+    return {"ok": True, "provider": normalized, "entry": result, "monitor_sync": monitor_sync}
 
 
 def check_scraper_folder_rename_warning(provider: str, old_path: str, new_path: str) -> Dict[str, Any]:
@@ -404,29 +829,125 @@ def check_scraper_folder_rename_warning(provider: str, old_path: str, new_path: 
     }
 
 
-def move_scraper_entries(provider: str, entry_ids: List[str], target_cid: str, source_cid: str = "") -> Dict[str, Any]:
+def move_scraper_entries(
+    provider: str,
+    entry_ids: List[str],
+    target_cid: str,
+    source_cid: str = "",
+    entries: Optional[List[Dict[str, Any]]] = None,
+    target_parent_path: Optional[str] = None,
+    request_id: str = "",
+) -> Dict[str, Any]:
     normalized = normalize_scraper_provider(provider)
     cookie = _require_provider_cookie(normalized)
-    result = _move_provider_entries(normalized, cookie, entry_ids, target_cid, source_cid)
+    snapshots = _build_transfer_monitor_snapshots(
+        normalized,
+        entries,
+        target_parent_path,
+        target_parent_id=target_cid,
+        operation="move",
+        entry_ids=entry_ids,
+    )
+    prepared = _prepare_scraper_monitor_sync(
+        normalized,
+        "move",
+        snapshots,
+        source_action="scraper:entry:move",
+        dedupe_key=_direct_monitor_change_key("move", request_id),
+    )
+    try:
+        result = _move_provider_entries(normalized, cookie, entry_ids, target_cid, source_cid)
+    except Exception as exc:
+        _finish_scraper_monitor_sync(prepared, succeeded=False, error=str(exc))
+        raise
     _invalidate_provider_parent(normalized, source_cid)
     _invalidate_provider_parent(normalized, target_cid)
-    return {"ok": True, "provider": normalized, "result": result}
+    monitor_sync = _finish_scraper_monitor_sync(prepared, succeeded=True)
+    return {"ok": True, "provider": normalized, "result": result, "monitor_sync": monitor_sync}
 
 
-def copy_scraper_entries(provider: str, entry_ids: List[str], target_cid: str, source_cid: str = "") -> Dict[str, Any]:
+def copy_scraper_entries(
+    provider: str,
+    entry_ids: List[str],
+    target_cid: str,
+    source_cid: str = "",
+    entries: Optional[List[Dict[str, Any]]] = None,
+    target_parent_path: Optional[str] = None,
+    request_id: str = "",
+) -> Dict[str, Any]:
     normalized = normalize_scraper_provider(provider)
     cookie = _require_provider_cookie(normalized)
-    result = _copy_provider_entries(normalized, cookie, entry_ids, target_cid, source_cid)
+    snapshots = _build_transfer_monitor_snapshots(
+        normalized,
+        entries,
+        target_parent_path,
+        target_parent_id=target_cid,
+        operation="copy",
+        entry_ids=entry_ids,
+    )
+    prepared = _prepare_scraper_monitor_sync(
+        normalized,
+        "copy",
+        snapshots,
+        source_action="scraper:entry:copy",
+        dedupe_key=_direct_monitor_change_key("copy", request_id),
+    )
+    try:
+        result = _copy_provider_entries(normalized, cookie, entry_ids, target_cid, source_cid)
+    except Exception as exc:
+        _finish_scraper_monitor_sync(prepared, succeeded=False, error=str(exc))
+        raise
     _invalidate_provider_parent(normalized, target_cid)
-    return {"ok": True, "provider": normalized, "result": result}
+    if normalized == "115":
+        copy_updates = _extract_copy_destination_cids(
+            result,
+            snapshots,
+            target_parent_id=target_cid,
+            request_id=request_id,
+        )
+        if copy_updates:
+            _update_scraper_monitor_sync(prepared, copy_updates)
+    monitor_sync = _finish_scraper_monitor_sync(prepared, succeeded=True)
+    return {"ok": True, "provider": normalized, "result": result, "monitor_sync": monitor_sync}
 
 
-def delete_scraper_entries(provider: str, entry_ids: List[str], parent_id: str = "") -> Dict[str, Any]:
+def delete_scraper_entries(
+    provider: str,
+    entry_ids: List[str],
+    parent_id: str = "",
+    entries: Optional[List[Dict[str, Any]]] = None,
+    request_id: str = "",
+) -> Dict[str, Any]:
     normalized = normalize_scraper_provider(provider)
     cookie = _require_provider_cookie(normalized)
-    result = _delete_provider_entries(normalized, cookie, entry_ids, parent_id)
+    selected_entries = _select_requested_monitor_snapshots(entries, entry_ids)
+    snapshots = (
+        [
+            {
+                **item,
+                "old_parent_id": str(item.get("parent_id", "") or parent_id).strip(),
+            }
+            for item in selected_entries
+            if isinstance(item, dict) and str(item.get("path", "") or "").strip()
+        ]
+        if normalized == "115"
+        else []
+    )
+    prepared = _prepare_scraper_monitor_sync(
+        normalized,
+        "delete",
+        snapshots,
+        source_action="scraper:entry:delete",
+        dedupe_key=_direct_monitor_change_key("delete", request_id),
+    )
+    try:
+        result = _delete_provider_entries(normalized, cookie, entry_ids, parent_id)
+    except Exception as exc:
+        _finish_scraper_monitor_sync(prepared, succeeded=False, error=str(exc))
+        raise
     _invalidate_provider_parent(normalized, parent_id)
-    return {"ok": True, "provider": normalized, "result": result}
+    monitor_sync = _finish_scraper_monitor_sync(prepared, succeeded=True)
+    return {"ok": True, "provider": normalized, "result": result, "monitor_sync": monitor_sync}
 
 
 def _strip_extension(name: str) -> str:
@@ -1259,6 +1780,8 @@ def build_scraper_rename_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "new_name": new_name,
                 "new_path": normalize_relative_path(join_relative_path(normalize_relative_path(str(item.get("parent_path", "") or "")), new_name)),
                 "target_parent_path": "",
+                "file_size": max(0, parse_int(entry.get("size", 0), 0)),
+                "remote_modified": str(entry.get("modified_at", "") or ""),
                 "issue": action_issue,
                 "warning": "",
                 "ready": bool(new_name and not action_issue),
@@ -1322,6 +1845,8 @@ def build_scraper_rename_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
             "new_name": new_name,
             "new_path": target_path,
             "target_parent_path": target_parent_path,
+            "file_size": max(0, parse_int(entry.get("size", 0), 0)),
+            "remote_modified": str(entry.get("modified_at", "") or ""),
             "issue": action_issue,
             "warning": "",
             "ready": bool(target_path and not action_issue),
@@ -1385,9 +1910,10 @@ def _insert_scraper_job(provider: str, plan: Dict[str, Any], options: Dict[str, 
                 """
                 INSERT INTO scraper_job_actions(
                     job_id, action_index, provider, entry_id, is_dir, old_parent_id, old_name, old_path,
-                    new_parent_id, new_name, new_path, target_parent_path, status, status_detail,
+                    new_parent_id, new_name, new_path, target_parent_path, file_size, remote_modified,
+                    status, status_detail,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '', ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '', ?, ?)
                 """,
                 (
                     job_id,
@@ -1402,6 +1928,8 @@ def _insert_scraper_job(provider: str, plan: Dict[str, Any], options: Dict[str, 
                     str(action.get("new_name", "") or ""),
                     str(action.get("new_path", "") or ""),
                     str(action.get("target_parent_path", "") or ""),
+                    max(0, parse_int(action.get("file_size", 0), 0)),
+                    str(action.get("remote_modified", "") or ""),
                     now,
                     now,
                 ),
@@ -1444,6 +1972,8 @@ def _serialize_scraper_action_row(row: Any) -> Dict[str, Any]:
         "new_name": str(item.get("new_name", "") or ""),
         "new_path": str(item.get("new_path", "") or ""),
         "target_parent_path": str(item.get("target_parent_path", "") or ""),
+        "file_size": max(0, int(item.get("file_size", 0) or 0)),
+        "remote_modified": str(item.get("remote_modified", "") or ""),
         "status": str(item.get("status", "") or ""),
         "status_detail": str(item.get("status_detail", "") or ""),
         "rollback_status": str(item.get("rollback_status", "") or ""),
@@ -1680,6 +2210,46 @@ def _execute_move_rename(
     return {"skipped": False, "responses": responses, "target_parent_id": target_parent}
 
 
+def _prepare_scraper_job_action_monitor_sync(
+    provider: str,
+    job_id: int,
+    action: Dict[str, Any],
+    *,
+    reverse: bool = False,
+) -> Dict[str, Any]:
+    old_path = normalize_relative_path(str(action.get("new_path" if reverse else "old_path", "") or ""))
+    new_path = normalize_relative_path(str(action.get("old_path" if reverse else "new_path", "") or ""))
+    old_parent_id = str(action.get("new_parent_id" if reverse else "old_parent_id", "") or "").strip()
+    new_parent_id = str(action.get("old_parent_id" if reverse else "new_parent_id", "") or "").strip()
+    is_dir = bool(action.get("is_dir"))
+    entry_id = str(action.get("entry_id", "") or "").strip()
+    direction = "rollback" if reverse else "forward"
+    event_entries = [] if not old_path or not new_path or old_path == new_path else [
+        {
+            "id": entry_id,
+            "name": str(action.get("new_name" if reverse else "old_name", "") or ""),
+            "old_path": old_path,
+            "new_path": new_path,
+            "old_parent_id": old_parent_id,
+            "new_parent_id": new_parent_id,
+            "old_cid": entry_id if is_dir else "",
+            "new_cid": entry_id if is_dir else "",
+            "is_dir": is_dir,
+            "size": max(0, parse_int(action.get("file_size", 0), 0)),
+            "modified_at": str(action.get("remote_modified", "") or ""),
+        }
+    ]
+    return _prepare_scraper_monitor_sync(
+        provider,
+        "move",
+        event_entries,
+        source_action=f"scraper-job:{int(job_id)}:{direction}",
+        dedupe_key=(
+            f"scraper-job:{int(job_id)}:action:{int(action.get('id', 0) or 0)}:{direction}"
+        ),
+    )
+
+
 def run_scraper_job(job_id: int) -> None:
     try:
         job, actions = _load_scraper_job(job_id)
@@ -1700,14 +2270,30 @@ def run_scraper_job(job_id: int) -> None:
         for action in actions:
             action_id = int(action.get("id", 0) or 0)
             _update_scraper_action(action_id, _conn=conn, status="running", status_detail="正在处理")
+            conn.commit()
+            prepared_sync: Optional[Dict[str, Any]] = None
             try:
+                prepared_sync = _prepare_scraper_job_action_monitor_sync(provider, job_id, action)
                 target_parent_path = str(action.get("target_parent_path", "") or "")
                 target_parent_id = str(action.get("new_parent_id", "") or "").strip()
                 if not target_parent_id:
                     target_parent_id = _ensure_folder_from_base(provider, cookie, base_cid, target_parent_path)
                     _update_scraper_action(action_id, _conn=conn, new_parent_id=target_parent_id)
                     action["new_parent_id"] = target_parent_id
+                    conn.commit()
+                    _update_scraper_monitor_sync(
+                        prepared_sync,
+                        [
+                            {
+                                "id": str(action.get("entry_id", "") or ""),
+                                "old_path": str(action.get("old_path", "") or ""),
+                                "new_path": str(action.get("new_path", "") or ""),
+                                "new_parent_id": target_parent_id,
+                            }
+                        ],
+                    )
                 result = _execute_move_rename(provider, cookie, action, target_parent_id)
+                result["monitor_sync"] = _finish_scraper_monitor_sync(prepared_sync, succeeded=True)
                 action_status = "skipped" if result.get("skipped") else "completed"
                 detail = str(result.get("detail") or "已完成")
                 _update_scraper_action(action_id, _conn=conn, status=action_status, status_detail=detail, response_json=safe_json_dumps(result))
@@ -1720,6 +2306,8 @@ def run_scraper_job(job_id: int) -> None:
                     failed_actions=failed,
                 )
             except Exception as exc:
+                if prepared_sync:
+                    _finish_scraper_monitor_sync(prepared_sync, succeeded=False, error=str(exc))
                 failed += 1
                 _update_scraper_action(action_id, _conn=conn, status="failed", status_detail=str(exc))
                 _update_scraper_job(
@@ -1769,6 +2357,7 @@ def rollback_scraper_job(job_id: int) -> None:
         failed = 0
         for action in reversed(successful_actions):
             action_id = int(action.get("id", 0) or 0)
+            prepared_sync: Optional[Dict[str, Any]] = None
             try:
                 if str(action.get("status", "") or "") == "skipped":
                     _update_scraper_action(action_id, _conn=conn, rollback_status="skipped", rollback_detail="原动作未产生变化")
@@ -1782,6 +2371,12 @@ def rollback_scraper_job(job_id: int) -> None:
                     )
                     conn.commit()
                     continue
+                prepared_sync = _prepare_scraper_job_action_monitor_sync(
+                    provider,
+                    job_id,
+                    action,
+                    reverse=True,
+                )
                 result = _execute_move_rename(
                     provider,
                     cookie,
@@ -1789,6 +2384,7 @@ def rollback_scraper_job(job_id: int) -> None:
                     str(action.get("old_parent_id", "") or "0"),
                     reverse=True,
                 )
+                result["monitor_sync"] = _finish_scraper_monitor_sync(prepared_sync, succeeded=True)
                 _update_scraper_action(action_id, _conn=conn, rollback_status="completed", rollback_detail="已回退", response_json=safe_json_dumps(result))
                 succeeded += 1
                 _update_scraper_job(
@@ -1799,6 +2395,8 @@ def rollback_scraper_job(job_id: int) -> None:
                     rollback_failed_actions=failed,
                 )
             except Exception as exc:
+                if prepared_sync:
+                    _finish_scraper_monitor_sync(prepared_sync, succeeded=False, error=str(exc))
                 failed += 1
                 _update_scraper_action(action_id, _conn=conn, rollback_status="failed", rollback_detail=str(exc))
                 _update_scraper_job(
