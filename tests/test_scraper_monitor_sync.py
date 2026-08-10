@@ -142,6 +142,39 @@ class ScraperMonitorSyncTest(unittest.TestCase):
             ("rename", "Media/Old.mkv", "Media/New.mkv", "影视监控", "prepared", "direct:rename"),
         )
 
+    def test_schema_migration_adds_processor_revision_without_losing_events(self):
+        cfg = self._cfg()
+        prepared = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="delete",
+            entries=[{"id": "legacy-event", "path": "Media/Legacy.mkv", "is_dir": False}],
+            dedupe_key="legacy-event",
+            cfg=cfg,
+        )
+        event_id = prepared["event_ids"][0]
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("ALTER TABLE monitor_change_events DROP COLUMN processor_revision")
+            columns = {
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(monitor_change_events)").fetchall()
+            }
+        self.assertNotIn("processor_revision", columns)
+
+        db._DB_ENSURED = False
+        db.ensure_db()
+
+        with sqlite3.connect(self.db_path) as conn:
+            columns = {
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(monitor_change_events)").fetchall()
+            }
+            row = conn.execute(
+                "SELECT id, status, processor_revision FROM monitor_change_events WHERE id = ?",
+                (event_id,),
+            ).fetchone()
+        self.assertIn("processor_revision", columns)
+        self.assertEqual(row, (event_id, "prepared", 0))
+
     def test_snapshot_normalizes_size_and_fills_parent_path(self):
         cfg = self._cfg()
         prepared = monitor_changes.prepare_monitor_change_events(
@@ -1557,6 +1590,141 @@ class ScraperMonitorSyncTest(unittest.TestCase):
         self.assertEqual(result["completed"], 0)
         self.assertEqual(result["failed"], 0)
 
+    def test_failed_event_at_retry_limit_is_requeued_after_handler_upgrade(self):
+        cfg = self._cfg()
+        prepared = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="delete",
+            entries=[{"id": "retry-upgrade", "path": "Media/RetryUpgrade.mkv", "is_dir": False}],
+            dedupe_key="retry-upgrade",
+            cfg=cfg,
+        )
+        monitor_changes.confirm_monitor_change_events(prepared, succeeded=True, enqueue=False)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE monitor_change_events SET status = 'failed', retry_count = ?, next_retry_at = 0 WHERE id = ?",
+                (monitor_changes.MONITOR_CHANGE_MAX_RETRIES, prepared["event_ids"][0]),
+            )
+            conn.commit()
+
+        recovery = monitor_changes.recover_monitor_change_events(cfg=cfg, enqueue=False)
+
+        self.assertEqual(recovery["recovered"], 1)
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT status, retry_count, processor_revision FROM monitor_change_events WHERE id = ?",
+                (prepared["event_ids"][0],),
+            ).fetchone()
+        self.assertEqual(
+            row,
+            ("pending", 0, monitor_changes.MONITOR_CHANGE_HANDLER_REVISION),
+        )
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE monitor_change_events SET status = 'failed', retry_count = ? WHERE id = ?",
+                (monitor_changes.MONITOR_CHANGE_MAX_RETRIES, prepared["event_ids"][0]),
+            )
+            conn.commit()
+
+        second_recovery = monitor_changes.recover_monitor_change_events(cfg=cfg, enqueue=False)
+
+        self.assertEqual(second_recovery["recovered"], 0)
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT status, retry_count, processor_revision FROM monitor_change_events WHERE id = ?",
+                (prepared["event_ids"][0],),
+            ).fetchone()
+        self.assertEqual(
+            row,
+            (
+                "failed",
+                monitor_changes.MONITOR_CHANGE_MAX_RETRIES,
+                monitor_changes.MONITOR_CHANGE_HANDLER_REVISION,
+            ),
+        )
+
+    def test_handler_upgrade_replays_legacy_child_event_after_parent_rename(self):
+        cfg = self._cfg(self._task(scan_path="/115/Media", target_path="媒体库"))
+        old_local = "媒体库/Media/OldFolder/Old.mkv"
+        intermediate_local = "媒体库/Media/NewFolder/Old.mkv"
+        new_local = "媒体库/Media/NewFolder/New.mkv"
+        self._insert_monitor_file("影视监控", old_local, "OldFolder/Old.mkv", size=4096)
+        self._write_strm(old_local, "old")
+        source_action = "scraper-job:legacy-parent-child:forward"
+        parent = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="move",
+            entries=[
+                {
+                    "id": "legacy-folder",
+                    "old_path": "Media/OldFolder",
+                    "new_path": "Media/NewFolder",
+                    "old_parent_id": "media-root",
+                    "new_parent_id": "media-root",
+                    "is_dir": True,
+                }
+            ],
+            source_action=source_action,
+            dedupe_key="legacy-parent",
+            cfg=cfg,
+        )
+        child = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="move",
+            entries=[
+                {
+                    "id": "legacy-file",
+                    "old_path": "Media/OldFolder/Old.mkv",
+                    "new_path": "Media/NewFolder/New.mkv",
+                    "old_parent_id": "legacy-folder",
+                    "new_parent_id": "legacy-folder",
+                    "is_dir": False,
+                    "size": 4096,
+                }
+            ],
+            source_action=source_action,
+            dedupe_key="legacy-child",
+            cfg=cfg,
+        )
+        monitor_changes.confirm_monitor_change_events(parent, succeeded=True, enqueue=False)
+        monitor_changes.confirm_monitor_change_events(child, succeeded=True, enqueue=False)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE monitor_files
+                SET local_rel_path = ?, remote_rel_path = ?
+                WHERE task_name = ? AND local_rel_path = ?
+                """,
+                (intermediate_local, "NewFolder/Old.mkv", "影视监控", old_local),
+            )
+            conn.execute(
+                "UPDATE monitor_change_events SET status = 'completed' WHERE id = ?",
+                (parent["event_ids"][0],),
+            )
+            conn.execute(
+                """
+                UPDATE monitor_change_events
+                SET status = 'failed', retry_count = ?, next_retry_at = 0, processor_revision = 0
+                WHERE id = ?
+                """,
+                (monitor_changes.MONITOR_CHANGE_MAX_RETRIES, child["event_ids"][0]),
+            )
+            conn.commit()
+        os.makedirs(os.path.dirname(self._strm_path(intermediate_local)), exist_ok=True)
+        os.replace(self._strm_path(old_local), self._strm_path(intermediate_local))
+        self.assertTrue(os.path.exists(self._strm_path(intermediate_local)))
+
+        recovery = monitor_changes.recover_monitor_change_events(cfg=cfg, enqueue=False)
+        self.assertEqual(recovery["recovered"], 1)
+        with patch.object(monitor_changes, "STRM_ROOT", self.strm_root):
+            second = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
+
+        self.assertEqual(second["completed"], 1)
+        self.assertEqual(second["failed"], 0)
+        self.assertFalse(os.path.exists(self._strm_path(intermediate_local)))
+        self.assertTrue(os.path.exists(self._strm_path(new_local)))
+
     def test_monitor_task_cards_render_pending_and_failed_change_counts(self):
         source = INDEX_JS_PATH.read_text(encoding="utf-8")
 
@@ -1768,6 +1936,170 @@ class ScraperMonitorSyncTest(unittest.TestCase):
                 for action in plan["actions"]
             ],
         )
+
+    def test_batch_folder_rename_rebases_child_event_and_keeps_rename_semantics(self):
+        cfg = self._cfg(self._task(scan_path="/115/Media", target_path="媒体库"))
+        old_local = "媒体库/Media/OldFolder/Old.mkv"
+        new_local = "媒体库/Media/NewFolder/New.mkv"
+        self._insert_monitor_file("影视监控", old_local, "OldFolder/Old.mkv", size=4096)
+        self._write_strm(old_local, "old")
+        plan = {
+            "base_cid": "media-root",
+            "base_path": "Media",
+            "actions": [
+                {
+                    "action_index": 1,
+                    "entry_id": "folder-entry",
+                    "is_dir": True,
+                    "old_parent_id": "media-root",
+                    "old_name": "OldFolder",
+                    "old_path": "Media/OldFolder",
+                    "new_parent_id": "media-root",
+                    "new_name": "NewFolder",
+                    "new_path": "Media/NewFolder",
+                    "target_parent_path": "Media",
+                    "file_size": 0,
+                    "remote_modified": "2026-08-10 10:00:00",
+                    "ready": True,
+                },
+                {
+                    "action_index": 2,
+                    "entry_id": "file-entry",
+                    "is_dir": False,
+                    "old_parent_id": "folder-entry",
+                    "old_name": "Old.mkv",
+                    "old_path": "Media/OldFolder/Old.mkv",
+                    "new_parent_id": "",
+                    "new_name": "New.mkv",
+                    "new_path": "Media/NewFolder/New.mkv",
+                    "target_parent_path": "NewFolder",
+                    "file_size": 4096,
+                    "remote_modified": "2026-08-10 10:00:00",
+                    "ready": True,
+                },
+            ],
+        }
+        job_id = scraper._insert_scraper_job("115", plan, {"base_path": "Media"}, {})
+
+        with (
+            patch.object(scraper, "get_config", return_value=cfg),
+            patch.object(scraper, "_require_scraper_operation"),
+            patch.object(scraper, "_require_provider_cookie", return_value="cookie"),
+            patch.object(scraper, "_target_name_exists", return_value=False),
+            patch.object(scraper, "_ensure_folder_from_base", return_value="folder-entry"),
+            patch.object(scraper, "_rename_provider_entry", return_value={"state": True}),
+            patch.object(scraper, "_invalidate_provider_parent"),
+            patch.object(monitor_changes, "_enqueue_task_names"),
+        ):
+            scraper.run_scraper_job(job_id)
+
+        with sqlite3.connect(self.db_path) as conn:
+            events = conn.execute(
+                "SELECT operation, old_path, new_path FROM monitor_change_events ORDER BY id"
+            ).fetchall()
+
+        self.assertEqual(
+            events,
+            [
+                ("rename", "Media/OldFolder", "Media/NewFolder"),
+                ("rename", "Media/NewFolder/Old.mkv", "Media/NewFolder/New.mkv"),
+            ],
+        )
+        with patch.object(monitor_changes, "STRM_ROOT", self.strm_root):
+            result = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
+        self.assertEqual(result["completed"], 2)
+        self.assertFalse(os.path.exists(self._strm_path(old_local)))
+        self.assertTrue(os.path.exists(self._strm_path(new_local)))
+
+    def test_batch_folder_rename_rollback_rebases_child_event_before_folder(self):
+        cfg = self._cfg(self._task(scan_path="/115/Media", target_path="媒体库"))
+        old_local = "媒体库/Media/OldFolder/Old.mkv"
+        new_local = "媒体库/Media/NewFolder/New.mkv"
+        self._insert_monitor_file("影视监控", old_local, "OldFolder/Old.mkv", size=4096)
+        self._write_strm(old_local, "old")
+        plan = {
+            "base_cid": "media-root",
+            "base_path": "Media",
+            "actions": [
+                {
+                    "action_index": 1,
+                    "entry_id": "folder-entry",
+                    "is_dir": True,
+                    "old_parent_id": "media-root",
+                    "old_name": "OldFolder",
+                    "old_path": "Media/OldFolder",
+                    "new_parent_id": "media-root",
+                    "new_name": "NewFolder",
+                    "new_path": "Media/NewFolder",
+                    "target_parent_path": "Media",
+                    "file_size": 0,
+                    "remote_modified": "2026-08-10 10:00:00",
+                    "ready": True,
+                },
+                {
+                    "action_index": 2,
+                    "entry_id": "file-entry",
+                    "is_dir": False,
+                    "old_parent_id": "folder-entry",
+                    "old_name": "Old.mkv",
+                    "old_path": "Media/OldFolder/Old.mkv",
+                    "new_parent_id": "",
+                    "new_name": "New.mkv",
+                    "new_path": "Media/NewFolder/New.mkv",
+                    "target_parent_path": "NewFolder",
+                    "file_size": 4096,
+                    "remote_modified": "2026-08-10 10:00:00",
+                    "ready": True,
+                },
+            ],
+        }
+        job_id = scraper._insert_scraper_job("115", plan, {"base_path": "Media"}, {})
+
+        common_patches = (
+            patch.object(scraper, "get_config", return_value=cfg),
+            patch.object(scraper, "_require_scraper_operation"),
+            patch.object(scraper, "_require_provider_cookie", return_value="cookie"),
+            patch.object(scraper, "_target_name_exists", return_value=False),
+            patch.object(scraper, "_ensure_folder_from_base", return_value="folder-entry"),
+            patch.object(scraper, "_rename_provider_entry", return_value={"state": True}),
+            patch.object(scraper, "_invalidate_provider_parent"),
+            patch.object(monitor_changes, "_enqueue_task_names"),
+        )
+        with ExitStack() as stack:
+            for context in common_patches:
+                stack.enter_context(context)
+            scraper.run_scraper_job(job_id)
+        with patch.object(monitor_changes, "STRM_ROOT", self.strm_root):
+            forward_result = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
+        self.assertEqual(forward_result["completed"], 2)
+
+        with ExitStack() as stack:
+            for context in common_patches:
+                stack.enter_context(context)
+            scraper.rollback_scraper_job(job_id)
+
+        with sqlite3.connect(self.db_path) as conn:
+            rollback_events = conn.execute(
+                """
+                SELECT operation, old_path, new_path
+                FROM monitor_change_events
+                WHERE source_action = ?
+                ORDER BY id
+                """,
+                (f"scraper-job:{job_id}:rollback",),
+            ).fetchall()
+        self.assertEqual(
+            rollback_events,
+            [
+                ("rename", "Media/NewFolder/New.mkv", "Media/NewFolder/Old.mkv"),
+                ("rename", "Media/NewFolder", "Media/OldFolder"),
+            ],
+        )
+        with patch.object(monitor_changes, "STRM_ROOT", self.strm_root):
+            rollback_result = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
+        self.assertEqual(rollback_result["completed"], 2)
+        self.assertTrue(os.path.exists(self._strm_path(old_local)))
+        self.assertFalse(os.path.exists(self._strm_path(new_local)))
 
     def test_batch_scraper_forward_and_rollback_use_stable_event_keys(self):
         cfg = self._cfg()

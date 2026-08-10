@@ -29,6 +29,9 @@ from .strm_files import delete_managed_strm_file, managed_strm_file_path, remove
 MONITOR_CHANGE_MAX_RETRIES = 5
 MONITOR_CHANGE_RETRY_BASE_SECONDS = 5
 MONITOR_CHANGE_COMPLETED_RETENTION_DAYS = 30
+# Increment when a deployed handler changes how an event is interpreted.  A
+# maxed-out event from an older handler gets one fresh attempt after startup.
+MONITOR_CHANGE_HANDLER_REVISION = 1
 
 _CHANGE_OPERATIONS = {"create", "copy", "move", "rename", "delete"}
 _CHANGE_OPERATION_ALIASES = {
@@ -306,6 +309,78 @@ def _manifest_is_complete_for_task(
     )
 
 
+def _load_scraper_job_path_rewrites(
+    conn: Any,
+    task_name: str,
+    source_action: str,
+    *,
+    statuses: Sequence[str],
+    before_event_id: int = 0,
+    directories_only: bool = False,
+) -> List[Tuple[str, str]]:
+    normalized_source = str(source_action or "").strip()
+    normalized_statuses = [str(status or "").strip() for status in statuses if str(status or "").strip()]
+    if not normalized_source.startswith("scraper-job:") or not normalized_statuses:
+        return []
+    placeholders = ",".join("?" for _ in normalized_statuses)
+    clauses = [
+        "task_name = ?",
+        "source_action = ?",
+        f"status IN ({placeholders})",
+        "needs_reconcile = 0",
+        "operation IN ('rename', 'move')",
+    ]
+    values: List[Any] = [str(task_name or ""), normalized_source, *normalized_statuses]
+    if before_event_id > 0:
+        clauses.append("id < ?")
+        values.append(int(before_event_id))
+    rows = conn.execute(
+        f"""
+        SELECT old_path, new_path, entry_snapshot_json
+        FROM monitor_change_events
+        WHERE {' AND '.join(clauses)}
+        ORDER BY id
+        """,
+        tuple(values),
+    ).fetchall()
+    rewrites: List[Tuple[str, str]] = []
+    for row in rows:
+        if directories_only:
+            snapshot = safe_json_loads(row[2], {})
+            if not isinstance(snapshot, dict) or not _snapshot_bool(snapshot.get("is_dir")):
+                continue
+        old_root = normalize_relative_path(str(row[0] or ""))
+        new_root = normalize_relative_path(str(row[1] or ""))
+        if not old_root or not new_root or old_root == new_root:
+            continue
+        rewrites.append((old_root, new_root))
+    return rewrites
+
+
+def _project_scraper_job_manifest(
+    conn: Any,
+    task_name: str,
+    source_action: str,
+    items: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    projected = [dict(item) for item in items if isinstance(item, dict)]
+    if not projected:
+        return projected
+    rewrites = _load_scraper_job_path_rewrites(
+        conn,
+        task_name,
+        source_action,
+        statuses=("pending", "processing", "completed", "manual_required"),
+    )
+    for old_root, new_root in rewrites:
+        for item in projected:
+            source_path = normalize_relative_path(str(item.get("path", "") or ""))
+            target_path = _manifest_target_path(old_root, new_root, source_path)
+            if target_path:
+                item["path"] = target_path
+    return projected
+
+
 def _event_entry_key(base_key: str, entry: Dict[str, Any], index: int) -> str:
     identity = str(entry.get("id", "") or entry.get("old_path", "") or entry.get("new_path", "") or index)
     return f"{str(base_key or 'monitor-change').strip()}:{identity}"[:500]
@@ -378,8 +453,18 @@ def prepare_monitor_change_events(
                 if snapshot.get("is_dir") and snapshot.get("old_path"):
                     manifest_known = _manifest_is_complete_for_task(task, source_evidence)
                     enriched["manifest_known"] = manifest_known
-                    enriched["indexed_files"] = manifest
-                    enriched["indexed_dirs"] = indexed_dirs
+                    enriched["indexed_files"] = _project_scraper_job_manifest(
+                        conn,
+                        task_name,
+                        source_action,
+                        manifest,
+                    )
+                    enriched["indexed_dirs"] = _project_scraper_job_manifest(
+                        conn,
+                        task_name,
+                        source_action,
+                        indexed_dirs,
+                    )
                 enriched["manual_required"] = bool(
                     enriched.get("is_dir")
                     and normalized_operation in {"copy", "rename", "move"}
@@ -1133,6 +1218,45 @@ def _manifest_target_path(old_root: str, new_root: str, source_path: str) -> str
     return join_relative_path(new_normalized, suffix)
 
 
+def _normalize_scraper_job_event_for_processing(
+    conn: Any,
+    event: Dict[str, Any],
+    snapshot: Dict[str, Any],
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    source_action = str(event.get("source_action", "") or "").strip()
+    operation = str(event.get("operation", "") or "").strip()
+    if not source_action.startswith("scraper-job:") or operation not in {"rename", "move"}:
+        return event, snapshot
+
+    effective_event = dict(event)
+    effective_snapshot = dict(snapshot)
+    rewrites = _load_scraper_job_path_rewrites(
+        conn,
+        str(event.get("task_name", "") or ""),
+        source_action,
+        statuses=("completed", "manual_required"),
+        before_event_id=max(0, int(event.get("id", 0) or 0)),
+        directories_only=True,
+    )
+    for key in ("old_path", "new_path"):
+        effective_path = normalize_relative_path(str(effective_event.get(key, "") or ""))
+        for old_root, new_root in rewrites:
+            projected_path = _manifest_target_path(old_root, new_root, effective_path)
+            if projected_path:
+                effective_path = projected_path
+        effective_event[key] = effective_path
+        effective_snapshot[key] = effective_path
+
+    old_parent_id = str(effective_snapshot.get("old_parent_id", "") or "").strip()
+    new_parent_id = str(effective_snapshot.get("new_parent_id", "") or "").strip()
+    if old_parent_id and new_parent_id:
+        effective_event["operation"] = "rename" if old_parent_id == new_parent_id else "move"
+    effective_snapshot["parent_path"] = normalize_relative_path(
+        os.path.dirname(str(effective_event.get("old_path", "") or ""))
+    )
+    return effective_event, effective_snapshot
+
+
 def _build_folder_manifest_plan(
     cfg: Dict[str, Any],
     task: Dict[str, Any],
@@ -1346,6 +1470,7 @@ async def _apply_precise_event(
     snapshot = safe_json_loads(event.get("entry_snapshot_json", "{}"), {})
     if not isinstance(snapshot, dict):
         snapshot = {}
+    event, snapshot = _normalize_scraper_job_event_for_processing(conn, event, snapshot)
     plan = _build_event_change_plan(cfg, task, event, snapshot)
     _validate_event_outputs(conn, cfg, task, plan)
     operation = str(plan["operation"])
@@ -1436,6 +1561,7 @@ async def _reconcile_event(
     snapshot = safe_json_loads(event.get("entry_snapshot_json", "{}"), {})
     if not isinstance(snapshot, dict):
         snapshot = {}
+    event, snapshot = _normalize_scraper_job_event_for_processing(conn, event, snapshot)
     plan = _build_event_change_plan(cfg, task, event, snapshot)
     operation = str(plan["operation"])
     is_dir = bool(plan["is_dir"])
@@ -1625,8 +1751,12 @@ async def process_monitor_change_events(
             task = _task_by_name(active_cfg, str(event.get("task_name", "") or ""))
             file_journal: Dict[str, Optional[bytes]] = {}
             conn.execute(
-                "UPDATE monitor_change_events SET status = 'processing', updated_at = ? WHERE id = ?",
-                (now_text(), event_id),
+                """
+                UPDATE monitor_change_events
+                SET status = 'processing', processor_revision = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (MONITOR_CHANGE_HANDLER_REVISION, now_text(), event_id),
             )
             conn.commit()
             try:
@@ -1687,10 +1817,17 @@ async def process_monitor_change_events(
                     """
                     UPDATE monitor_change_events
                     SET status = 'failed', retry_count = ?, next_retry_at = ?,
-                        last_error = ?, updated_at = ?
+                        last_error = ?, processor_revision = ?, updated_at = ?
                     WHERE id = ?
                     """,
-                    (retry_count, time.time() + backoff, error_text[:1000], now_text(), event_id),
+                    (
+                        retry_count,
+                        time.time() + backoff,
+                        error_text[:1000],
+                        MONITOR_CHANGE_HANDLER_REVISION,
+                        now_text(),
+                        event_id,
+                    ),
                 )
                 conn.commit()
                 result["failed"] += 1
@@ -1877,6 +2014,24 @@ def recover_monitor_change_events(*, cfg: Optional[Dict[str, Any]] = None, enque
                 ),
             )
             recovered += max(0, int(cursor.rowcount or 0))
+        cursor.execute(
+            """
+            UPDATE monitor_change_events
+            SET status = 'pending', retry_count = 0, next_retry_at = 0,
+                processor_revision = ?, last_error = ?, completed_at = '', updated_at = ?
+            WHERE status = 'failed'
+              AND retry_count >= ?
+              AND COALESCE(processor_revision, 0) < ?
+            """,
+            (
+                MONITOR_CHANGE_HANDLER_REVISION,
+                "处理器升级后重新排队",
+                now,
+                MONITOR_CHANGE_MAX_RETRIES,
+                MONITOR_CHANGE_HANDLER_REVISION,
+            ),
+        )
+        recovered += max(0, int(cursor.rowcount or 0))
         cursor.execute(
             """
             SELECT DISTINCT task_name

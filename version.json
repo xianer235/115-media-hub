@@ -1,10 +1,10 @@
 {
-  "version": "0.5.13",
-  "buildDate": "2026-08-10T00:00:00+08:00",
+  "version": "0.5.14",
+  "buildDate": "2026-08-11T00:00:00+08:00",
   "notes": [
-    "刮削精准同步日志列出实际删除和生成的本地 STRM 路径",
-    "文件重命名和移动按事件相邻显示删旧与生成新明细",
-    "文件夹变更使用单行计数摘要，失败或未实际写入时不误报"
+    "修复批量刮削同时重命名父目录和子文件时仍使用旧父路径的问题",
+    "精准同步按父目录 ID 区分重命名和移动，并维护正向及回退路径变换",
+    "旧处理器达到重试上限的事件在升级后自动重新排队一次"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

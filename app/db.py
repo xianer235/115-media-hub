@@ -163,6 +163,7 @@ def ensure_db() -> None:
                     directory_count INTEGER NOT NULL DEFAULT 0,
                     file_count INTEGER NOT NULL DEFAULT 0,
                     last_error TEXT NOT NULL DEFAULT '',
+                    processor_revision INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL DEFAULT '',
                     updated_at TEXT NOT NULL DEFAULT '',
                     confirmed_at TEXT NOT NULL DEFAULT '',
@@ -423,6 +424,12 @@ def ensure_db() -> None:
                 cursor.execute("ALTER TABLE monitor_dirs ADD COLUMN missing_confirmations INTEGER NOT NULL DEFAULT 0")
             if "entry_modified" not in monitor_dir_columns:
                 cursor.execute("ALTER TABLE monitor_dirs ADD COLUMN entry_modified TEXT NOT NULL DEFAULT ''")
+            cursor.execute("PRAGMA table_info(monitor_change_events)")
+            monitor_change_columns = {str(row[1]) for row in cursor.fetchall()}
+            if "processor_revision" not in monitor_change_columns:
+                cursor.execute(
+                    "ALTER TABLE monitor_change_events ADD COLUMN processor_revision INTEGER NOT NULL DEFAULT 0"
+                )
             cursor.execute("PRAGMA table_info(scraper_job_actions)")
             scraper_action_columns = {str(row[1]) for row in cursor.fetchall()}
             if "file_size" not in scraper_action_columns:
