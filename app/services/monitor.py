@@ -1039,8 +1039,13 @@ async def run_monitor_change_task(
         for error_item in (result.get("errors", []) if isinstance(result.get("errors"), list) else [])[:10]:
             if not isinstance(error_item, dict):
                 continue
+            retryable = bool(error_item.get("retryable", True))
             await write_monitor_log(
-                "变更事件 #{event_id} 失败，已保留重试: {error}".format(
+                (
+                    "变更事件 #{event_id} 失败，已保留重试: {error}"
+                    if retryable
+                    else "变更事件 #{event_id} 失败: {error}"
+                ).format(
                     event_id=max(0, int(error_item.get("event_id", 0) or 0)),
                     error=str(error_item.get("error", "") or "未知错误"),
                 ),

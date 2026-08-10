@@ -386,6 +386,13 @@ def _event_entry_key(base_key: str, entry: Dict[str, Any], index: int) -> str:
     return f"{str(base_key or 'monitor-change').strip()}:{identity}"[:500]
 
 
+def _scraper_job_source_key(value: Any) -> str:
+    parts = str(value or "").strip().split(":")
+    if len(parts) < 3 or parts[0] != "scraper-job" or not parts[1]:
+        return ""
+    return ":".join(parts[:2])
+
+
 def prepare_monitor_change_events(
     *,
     provider: str,
@@ -425,6 +432,7 @@ def prepare_monitor_change_events(
     now = now_text()
     event_ids: List[int] = []
     matched_names: Set[str] = set()
+    scraper_path_only = str(source_action or "").strip().startswith("scraper-job:")
     with db_connection() as conn:
         cursor = conn.cursor()
         for index, snapshot in enumerate(snapshots):
@@ -444,12 +452,18 @@ def prepare_monitor_change_events(
                     task_matches,
                     str(snapshot.get("old_path", "")),
                 )
-            entry_key = _event_entry_key(dedupe_key, snapshot, index)
+            key_snapshot = dict(snapshot)
+            if scraper_path_only:
+                key_snapshot.pop("id", None)
+            entry_key = _event_entry_key(dedupe_key, key_snapshot, index)
             for task in task_matches:
                 task_name = str(task.get("name", "") or "").strip()
                 if not task_name:
                     continue
                 enriched = dict(snapshot)
+                if scraper_path_only:
+                    for key in ("id", "old_parent_id", "new_parent_id", "old_cid", "new_cid"):
+                        enriched.pop(key, None)
                 if snapshot.get("is_dir") and snapshot.get("old_path"):
                     manifest_known = _manifest_is_complete_for_task(task, source_evidence)
                     enriched["manifest_known"] = manifest_known
@@ -636,7 +650,7 @@ def _merge_continuous_path_events(conn: Any, event_ids: Sequence[int]) -> None:
             continue
         cursor.execute(
             """
-            SELECT id, old_path, entry_snapshot_json, needs_reconcile, status
+            SELECT id, old_path, entry_snapshot_json, needs_reconcile, status, source_action
             FROM monitor_change_events
             WHERE task_name = ? AND status IN ('pending', 'manual_required') AND id < ?
             AND operation IN ('rename', 'move') AND new_path = ?
@@ -661,7 +675,18 @@ def _merge_continuous_path_events(conn: Any, event_ids: Sequence[int]) -> None:
             if isinstance(previous_snapshot, dict)
             else ""
         )
-        if not current_entry_id or not previous_entry_id or current_entry_id != previous_entry_id:
+        same_explicit_entry = bool(
+            current_entry_id
+            and previous_entry_id
+            and current_entry_id == previous_entry_id
+        )
+        same_scraper_path_chain = bool(
+            not current_entry_id
+            and not previous_entry_id
+            and _scraper_job_source_key(previous[5])
+            and _scraper_job_source_key(previous[5]) == _scraper_job_source_key(current[6])
+        )
+        if not same_explicit_entry and not same_scraper_path_chain:
             continue
         previous_status = str(previous[4] or "").strip()
         # A worker may have changed STRM files before its transaction was
@@ -895,6 +920,10 @@ def _build_event_change_plan(
     operation = _normalize_operation(event.get("operation", ""))
     old_path = normalize_relative_path(event.get("old_path", ""))
     new_path = normalize_relative_path(event.get("new_path", ""))
+    if operation in {"rename", "move"} and old_path and new_path:
+        old_parent_path = normalize_relative_path(os.path.dirname(old_path))
+        new_parent_path = normalize_relative_path(os.path.dirname(new_path))
+        operation = "rename" if old_parent_path == new_parent_path else "move"
     required_old = operation in {"copy", "move", "rename", "delete"}
     required_new = operation in {"create", "copy", "move", "rename"}
     if required_old and not _provider_path_is_safe(old_path):
@@ -904,24 +933,8 @@ def _build_event_change_plan(
 
     old_context = _task_path_context(cfg, task, old_path) if old_path else {}
     new_context = _task_path_context(cfg, task, new_path) if new_path else {}
-    if operation == "rename":
-        if not old_context or not new_context:
-            raise RuntimeError("精准同步重命名路径不完整，已保留旧 STRM")
-        if normalize_relative_path(os.path.dirname(old_path)) != normalize_relative_path(os.path.dirname(new_path)):
-            raise RuntimeError("精准同步重命名父目录不一致，已保留旧 STRM")
-    if operation == "move":
-        old_parent_id = str(snapshot.get("old_parent_id", "") or "").strip()
-        new_parent_id = str(snapshot.get("new_parent_id", "") or "").strip()
-        old_parent_path = normalize_relative_path(os.path.dirname(old_path))
-        new_parent_path = normalize_relative_path(os.path.dirname(new_path))
-        same_parent_path = old_parent_path == new_parent_path
-        if not same_parent_path:
-            if not old_parent_id or not new_parent_id:
-                raise RuntimeError("精准同步跨目录移动缺少父目录 ID，已保留旧 STRM")
-            if old_parent_id == new_parent_id:
-                raise RuntimeError("精准同步移动父目录路径与目录 ID 不一致，已保留旧 STRM")
-        elif old_parent_id and new_parent_id and old_parent_id != new_parent_id:
-            raise RuntimeError("精准同步移动父目录路径与目录 ID 不一致，已保留旧 STRM")
+    if operation == "rename" and (not old_context or not new_context):
+        raise RuntimeError("精准同步路径不完整，已保留旧 STRM")
 
     remove_old = operation in {"delete", "rename", "move"} and bool(old_context)
     add_new = operation in {"create", "copy", "rename", "move"} and bool(new_context)
@@ -1247,10 +1260,6 @@ def _normalize_scraper_job_event_for_processing(
         effective_event[key] = effective_path
         effective_snapshot[key] = effective_path
 
-    old_parent_id = str(effective_snapshot.get("old_parent_id", "") or "").strip()
-    new_parent_id = str(effective_snapshot.get("new_parent_id", "") or "").strip()
-    if old_parent_id and new_parent_id:
-        effective_event["operation"] = "rename" if old_parent_id == new_parent_id else "move"
     effective_snapshot["parent_path"] = normalize_relative_path(
         os.path.dirname(str(effective_event.get("old_path", "") or ""))
     )
@@ -1724,6 +1733,13 @@ def _load_ready_events(
     return [sqlite_row_to_dict(row) for row in cursor.fetchall()]
 
 
+def _is_one_shot_scraper_sync(event: Dict[str, Any]) -> bool:
+    return (
+        str(event.get("source_action", "") or "").strip().startswith("scraper-job:")
+        and not bool(int(event.get("needs_reconcile", 0) or 0))
+    )
+
+
 async def process_monitor_change_events(
     task_name: str = "",
     *,
@@ -1811,27 +1827,33 @@ async def process_monitor_change_events(
                 error_text = str(exc)
                 if restore_errors:
                     error_text = f"{error_text}; STRM 回滚失败: {'; '.join(restore_errors)}"
-                retry_count = max(0, int(event.get("retry_count", 0) or 0)) + 1
-                backoff = min(3600, MONITOR_CHANGE_RETRY_BASE_SECONDS * (2 ** max(0, retry_count - 1)))
-                conn.execute(
-                    """
-                    UPDATE monitor_change_events
-                    SET status = 'failed', retry_count = ?, next_retry_at = ?,
-                        last_error = ?, processor_revision = ?, updated_at = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        retry_count,
-                        time.time() + backoff,
-                        error_text[:1000],
-                        MONITOR_CHANGE_HANDLER_REVISION,
-                        now_text(),
-                        event_id,
-                    ),
-                )
+                retryable = not _is_one_shot_scraper_sync(event)
+                if retryable:
+                    retry_count = max(0, int(event.get("retry_count", 0) or 0)) + 1
+                    backoff = min(3600, MONITOR_CHANGE_RETRY_BASE_SECONDS * (2 ** max(0, retry_count - 1)))
+                    conn.execute(
+                        """
+                        UPDATE monitor_change_events
+                        SET status = 'failed', retry_count = ?, next_retry_at = ?,
+                            last_error = ?, processor_revision = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            retry_count,
+                            time.time() + backoff,
+                            error_text[:1000],
+                            MONITOR_CHANGE_HANDLER_REVISION,
+                            now_text(),
+                            event_id,
+                        ),
+                    )
+                else:
+                    conn.execute("DELETE FROM monitor_change_events WHERE id = ?", (event_id,))
                 conn.commit()
                 result["failed"] += 1
-                result["errors"].append({"event_id": event_id, "error": error_text})
+                result["errors"].append(
+                    {"event_id": event_id, "error": error_text, "retryable": retryable}
+                )
     return result
 
 
@@ -1964,6 +1986,14 @@ def recover_monitor_change_events(*, cfg: Optional[Dict[str, Any]] = None, enque
     now = now_text()
     with db_connection() as conn:
         cursor = conn.cursor()
+        cursor.execute(
+            """
+            DELETE FROM monitor_change_events
+            WHERE status = 'failed'
+              AND needs_reconcile = 0
+              AND source_action LIKE 'scraper-job:%'
+            """
+        )
         cursor.execute(
             """
             SELECT id, status, operation, needs_reconcile, entry_snapshot_json
