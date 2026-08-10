@@ -468,7 +468,6 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
     schedule_ui_state_push(0)
     cfg = get_config()
     os.makedirs(TREE_DIR, exist_ok=True)
-    ensure_db()
     run_started_at = time.perf_counter()
     prefetch_elapsed_seconds = 0.0
     generate_elapsed_seconds = 0.0
@@ -521,6 +520,92 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
         if not mount_prefix_115:
             raise RuntimeError("请先在参数配置中填写 115 网盘路径前缀")
 
+        source_contexts: List[Dict[str, Any]] = []
+        for idx, tree in enumerate(trees):
+            raw_source = tree.get("path", "")
+            source_rel = _normalize_tree_source_relative_path(raw_source, cfg)
+            prefix = normalize_relative_path(tree.get("prefix", ""))
+            exclude = max(0, int(tree.get("exclude", 1) or 1))
+            source_label = "/" + source_rel if source_rel else "/"
+            tree_key = build_tree_cache_key(
+                {
+                    "source_type": "tree_file",
+                    "path": str(raw_source or "").strip(),
+                    "prefix": prefix,
+                    "exclude": exclude,
+                }
+            )
+            current_tree_keys.append(tree_key)
+            tree_cache_path = os.path.join(TREE_DIR, f"cache_{tree_key}.txt")
+            tree_raw_cache_path = os.path.join(TREE_DIR, f"raw_{tree_key}.txt")
+
+            await update_progress(
+                "读取目录树文件",
+                (idx / max(len(trees), 1) * 35),
+                f"源 {idx + 1}/{len(trees)}：{source_label}",
+            )
+            await write_log(f"读取目录树文件源: {source_label}")
+
+            cookie = str(cfg.get("cookie_115", "")).strip()
+            source_fetch_started_at = time.perf_counter()
+            try:
+                raw_bytes = await asyncio.to_thread(_fetch_115_tree_file_bytes, cookie, source_rel)
+                fetched_tree_count += 1
+                await asyncio.to_thread(_save_tree_raw_cache, tree_raw_cache_path, raw_bytes)
+            except Exception as exc:
+                cached_raw_bytes = await asyncio.to_thread(_load_tree_raw_cache, tree_raw_cache_path)
+                if cached_raw_bytes is None:
+                    raise
+                raw_bytes = cached_raw_bytes
+                local_raw_cache_count += 1
+                await write_log(
+                    f"⚠ 源 {idx + 1} 联网读取失败，已使用上次成功保存的本地目录树副本：{exc}",
+                    "warn",
+                )
+            prefetch_elapsed_seconds += max(0.0, time.perf_counter() - source_fetch_started_at)
+            file_hash = hashlib.md5(raw_bytes).hexdigest()
+            parse_signature = build_tree_parse_signature(file_hash, user_exts)
+            current_tree_hashes[tree_key] = {"parse_signature": parse_signature}
+            old_state = last_tree_hashes.get(tree_key, {})
+            old_signature = old_state.get("parse_signature", "") if isinstance(old_state, dict) else ""
+            unchanged = bool(
+                can_skip_by_hash
+                and old_signature
+                and old_signature == parse_signature
+                and os.path.exists(tree_cache_path)
+            )
+            source_contexts.append(
+                {
+                    "idx": idx,
+                    "source_rel": source_rel,
+                    "source_label": source_label,
+                    "prefix": prefix,
+                    "exclude": exclude,
+                    "tree_cache_path": tree_cache_path,
+                    "tree_raw_cache_path": tree_raw_cache_path,
+                    "unchanged": unchanged,
+                }
+            )
+            del raw_bytes
+
+        tree_layout_changed = sorted(last_tree_keys) != sorted(current_tree_keys)
+        all_trees_unchanged = bool(source_contexts) and all(context["unchanged"] for context in source_contexts)
+        if can_skip_by_hash and all_trees_unchanged and tree_layout_changed:
+            await write_log("ℹ 目录树源配置有变更，继续执行同步以校正结果")
+        if can_skip_by_hash and all_trees_unchanged and not tree_layout_changed:
+            prefetch_elapsed_seconds = max(0.0, time.perf_counter() - run_started_at)
+            await write_log(
+                f"本轮概况：联网读取 {fetched_tree_count} 个，本地副本 {local_raw_cache_count} 个，缓存复用 0 个，解析 0 个"
+            )
+            await write_log("✅ MD5 校验命中：全部目录树无变动，跳过解析与同步")
+            await write_log(
+                f"任务耗时：前置处理 {_format_tree_elapsed_seconds(prefetch_elapsed_seconds)} | 总 {_format_tree_elapsed_seconds(prefetch_elapsed_seconds)}"
+            )
+            await write_log("━━━━━━━━━━【任务结束 | 目录树文件 | MD5 校验命中】━━━━━━━━━━", "task-divider")
+            await update_progress("任务完成", 100, "MD5 校验命中：无变动")
+            return
+
+        ensure_db()
         conn = open_db()
         conn.isolation_level = None
         cursor = conn.cursor()
@@ -578,70 +663,26 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
 
         scanned_tree_line_total = 0
         scanned_tree_node_total = 0
-        for idx, tree in enumerate(trees):
-            raw_source = tree.get("path", "")
-            source_rel = _normalize_tree_source_relative_path(raw_source, cfg)
-            prefix = normalize_relative_path(tree.get("prefix", ""))
-            exclude = max(0, int(tree.get("exclude", 1) or 1))
-            source_label = "/" + source_rel if source_rel else "/"
-            tree_key = build_tree_cache_key(
-                {
-                    "source_type": "tree_file",
-                    "path": str(raw_source or "").strip(),
-                    "prefix": prefix,
-                    "exclude": exclude,
-                }
-            )
-            current_tree_keys.append(tree_key)
-            tree_cache_path = os.path.join(TREE_DIR, f"cache_{tree_key}.txt")
-            tree_raw_cache_path = os.path.join(TREE_DIR, f"raw_{tree_key}.txt")
-            current_source_state["label"] = f"源 {idx + 1}/{len(trees)}：{source_label}"
-
-            await update_progress(
-                "读取目录树文件",
-                (idx / max(len(trees), 1) * 35),
-                f"源 {idx + 1}/{len(trees)}：{source_label}",
-            )
-            await write_log(f"读取目录树文件源: {source_label}")
-
-            cookie = str(cfg.get("cookie_115", "")).strip()
-            source_fetch_started_at = time.perf_counter()
-            try:
-                raw_bytes = await asyncio.to_thread(_fetch_115_tree_file_bytes, cookie, source_rel)
-                fetched_tree_count += 1
-                await asyncio.to_thread(_save_tree_raw_cache, tree_raw_cache_path, raw_bytes)
-            except Exception as exc:
-                cached_raw_bytes = await asyncio.to_thread(_load_tree_raw_cache, tree_raw_cache_path)
-                if cached_raw_bytes is None:
-                    raise
-                raw_bytes = cached_raw_bytes
-                local_raw_cache_count += 1
-                await write_log(
-                    f"⚠ 源 {idx + 1} 联网读取失败，已使用上次成功保存的本地目录树副本：{exc}",
-                    "warn",
-                )
-            prefetch_elapsed_seconds += max(0.0, time.perf_counter() - source_fetch_started_at)
-            file_hash = hashlib.md5(raw_bytes).hexdigest()
-            parse_signature = build_tree_parse_signature(file_hash, user_exts)
-
-            if can_skip_by_hash:
-                old_state = last_tree_hashes.get(tree_key, {})
-                old_signature = old_state.get("parse_signature", "") if isinstance(old_state, dict) else ""
-                if old_signature and old_signature == parse_signature and os.path.exists(tree_cache_path):
-                    reused_count = _replay_tree_cache(tree_cache_path, process_rel_path)
-                    skipped_tree_count += 1
-                    current_tree_hashes[tree_key] = {"parse_signature": parse_signature}
-                    await write_log(f"源 {idx + 1} MD5 无变化，复用缓存 {reused_count} 条")
-                    del raw_bytes
-                    continue
+        for source_context in source_contexts:
+            idx = int(source_context["idx"])
+            source_rel = str(source_context["source_rel"])
+            current_source_state["label"] = f"源 {idx + 1}/{len(trees)}：{source_context['source_label']}"
+            if source_context["unchanged"]:
+                reused_count = _replay_tree_cache(source_context["tree_cache_path"], process_rel_path)
+                skipped_tree_count += 1
+                await write_log(f"源 {idx + 1} MD5 无变化，复用缓存 {reused_count} 条")
+                continue
 
             try:
+                raw_bytes = _load_tree_raw_cache(source_context["tree_raw_cache_path"])
+                if raw_bytes is None:
+                    raise RuntimeError(f"目录树本地副本不存在：{source_rel}")
                 matched_count, scanned_lines, scanned_nodes = _stream_tree_matches_to_cache(
-                    tree_cache_path,
+                    source_context["tree_cache_path"],
                     raw_bytes,
                     user_exts,
-                    prefix,
-                    exclude,
+                    source_context["prefix"],
+                    source_context["exclude"],
                     process_rel_path,
                 )
             except RuntimeError as exc:
@@ -652,10 +693,7 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
             parsed_tree_count += 1
             scanned_tree_line_total += scanned_lines
             scanned_tree_node_total += scanned_nodes
-            current_tree_hashes[tree_key] = {"parse_signature": parse_signature}
-            await write_log(
-                f"源 {idx + 1} 解析完成: 行 {scanned_lines} | 节点 {scanned_nodes} | 命中 {matched_count}"
-            )
+            await write_log(f"源 {idx + 1} 解析完成: 行 {scanned_lines} | 节点 {scanned_nodes} | 命中 {matched_count}")
             del raw_bytes
             flush_path_batch()
 
@@ -668,22 +706,6 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
                 sort_keys=True,
             )
             save_config(cfg)
-
-        tree_layout_changed = sorted(last_tree_keys) != sorted(current_tree_keys)
-        if can_skip_by_hash and trees and skipped_tree_count == len(trees) and tree_layout_changed:
-            await write_log("ℹ 目录树源配置有变更，继续执行同步以校正结果")
-        if can_skip_by_hash and trees and skipped_tree_count == len(trees) and not tree_layout_changed:
-            prefetch_elapsed_seconds = max(0.0, time.perf_counter() - run_started_at)
-            await write_log(
-                f"本轮概况：联网读取 {fetched_tree_count} 个，本地副本 {local_raw_cache_count} 个，缓存复用 {skipped_tree_count} 个，解析 {parsed_tree_count} 个"
-            )
-            await write_log("✅ MD5 校验命中：全部目录树无变动，跳过解析与同步")
-            await write_log(
-                f"任务耗时：前置处理 {_format_tree_elapsed_seconds(prefetch_elapsed_seconds)} | 总 {_format_tree_elapsed_seconds(prefetch_elapsed_seconds)}"
-            )
-            await write_log("━━━━━━━━━━【任务结束 | 目录树文件 | MD5 校验命中】━━━━━━━━━━", "task-divider")
-            await update_progress("任务完成", 100, "MD5 校验命中：无变动")
-            return
 
         if duplicate_scan_count > 0:
             await write_log(f"检测到重复路径 {duplicate_scan_count} 条，已去重后继续同步")
