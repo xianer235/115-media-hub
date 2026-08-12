@@ -358,6 +358,138 @@ def _bump_missing_monitor_dir(cursor: sqlite3.Cursor, task_name: str, dir_rel_pa
     return next_missing
 
 
+def _auto_scrape_new_media_items(
+    cfg: Dict[str, Any],
+    task: Dict[str, Any],
+    new_media_items: List[Dict[str, Any]],
+) -> str:
+    """新增媒体文件自动刮削整理：只对高置信度自动匹配条目执行一次，失败仅记录。"""
+    from .scraper import (
+        _walk_existing_folder,
+        build_scraper_batch_plan,
+        create_scraper_job_from_plan,
+        identify_scraper_batch_items,
+        run_scraper_job,
+        scan_scraper_batch_items,
+    )
+
+    if not new_media_items:
+        return "没有新增媒体文件"
+    cookie = str(cfg.get("cookie_115", "") or "").strip()
+    parent_cid_cache: Dict[str, str] = {}
+    parent_items: Dict[str, List[Dict[str, Any]]] = {}
+    for item in new_media_items:
+        fid = str(item.get("fid") or item.get("id") or "").strip()
+        rel_path = normalize_relative_path(str(item.get("remote_rel", "") or ""))
+        if not fid or not rel_path:
+            continue
+        try:
+            full_remote_path = join_remote_path(
+                normalize_remote_path(task.get("scan_path", "")),
+                rel_path,
+            )
+            _provider, mount_rel = resolve_provider_relative_path(cfg, full_remote_path, expected_provider="115")
+        except Exception:
+            continue
+        if not mount_rel:
+            continue
+        parent_rel = normalize_relative_path(os.path.dirname(mount_rel))
+        if not parent_rel:
+            continue
+        parent_cid = parent_cid_cache.get(parent_rel, "")
+        if not parent_cid:
+            try:
+                parent_cid, _exists = _walk_existing_folder("115", cookie, "0", parent_rel)
+            except Exception:
+                parent_cid = ""
+            parent_cid_cache[parent_rel] = parent_cid
+        if not parent_cid:
+            continue
+        parent_items.setdefault(parent_rel, []).append(item)
+    if not parent_items:
+        return f"新增文件无法解析网盘路径，跳过 {len(new_media_items)} 项"
+    entries: List[Dict[str, Any]] = []
+    for parent_rel in sorted(parent_items):
+        folder_name = os.path.basename(parent_rel)
+        grandparent_rel = normalize_relative_path(os.path.dirname(parent_rel))
+        grandparent_cid = parent_cid_cache.get(grandparent_rel, "")
+        if grandparent_rel and not grandparent_cid:
+            try:
+                grandparent_cid, _exists = _walk_existing_folder("115", cookie, "0", grandparent_rel)
+            except Exception:
+                grandparent_cid = ""
+            parent_cid_cache[grandparent_rel] = grandparent_cid
+        if grandparent_rel and not grandparent_cid:
+            continue
+        entries.append(
+            {
+                "id": parent_cid_cache[parent_rel],
+                "cid": parent_cid_cache[parent_rel],
+                "name": folder_name,
+                "is_dir": True,
+                "parent_id": grandparent_cid or "0",
+                "parent_path": grandparent_rel,
+                "path": parent_rel,
+            }
+        )
+    scan = scan_scraper_batch_items("115", "0", "", entries)
+    scan_items = scan.get("items", []) if isinstance(scan, dict) else []
+    if not scan_items:
+        return "新增文件未形成可识别条目"
+    identify_payload = {
+        "provider": "115",
+        "items": [
+            {
+                "item_index": max(0, int(item.get("item_index", 0) or 0)),
+                "name": item.get("name", ""),
+                "entry": item.get("entry", {}),
+                "files": (item.get("files") or [])[:40],
+            }
+            for item in scan_items
+        ],
+    }
+    identify = identify_scraper_batch_items(identify_payload)
+    results = identify.get("results", []) if isinstance(identify, dict) else []
+    auto_results = [
+        result
+        for result in results
+        if isinstance(result, dict) and result.get("status") == "auto" and result.get("auto_pick")
+    ]
+    if not auto_results:
+        return "新增条目无高置信度自动匹配，已跳过（可在刮削页手动整理）"
+    auto_indexes = {max(0, int(result.get("item_index", 0) or 0)) for result in auto_results}
+    auto_by_index = {
+        max(0, int(result.get("item_index", 0) or 0)): result.get("auto_pick")
+        for result in auto_results
+    }
+    plan_items = [
+        {
+            "item_index": max(0, int(item.get("item_index", 0) or 0)),
+            "name": item.get("name", ""),
+            "entry": item.get("entry", {}),
+            "tmdb": auto_by_index.get(max(0, int(item.get("item_index", 0) or 0)), {}),
+        }
+        for item in scan_items
+        if max(0, int(item.get("item_index", 0) or 0)) in auto_indexes
+    ]
+    plan = build_scraper_batch_plan(
+        {
+            "provider": "115",
+            "base_cid": "0",
+            "base_path": "",
+            "options": {"title_language": "zh", "delete_ad_files": False},
+            "items": plan_items,
+        }
+    )
+    ready_count = max(0, int(plan.get("ready_count", 0) or 0))
+    if ready_count <= 0:
+        return "高置信度条目无可执行动作"
+    job = create_scraper_job_from_plan({"plan": plan})
+    job_id = max(0, int(job.get("job_id", 0) or 0))
+    run_scraper_job(job_id)
+    return f"已自动整理 {ready_count} 项（任务 #{job_id}）"
+
+
 async def run_monitor_task(
     task_name: str,
     trigger: str = "manual",
@@ -404,6 +536,7 @@ async def run_monitor_task(
         "rescan_branches": 0,
     }
     generated_strm_paths: List[str] = []
+    new_media_items: List[Dict[str, Any]] = []
     force_strm_rewrite = str(task.get("strm_write_mode", "incremental") or "incremental").strip().lower() == "full"
 
     try:
@@ -426,6 +559,12 @@ async def run_monitor_task(
         cursor.execute(
             "CREATE TEMP TABLE current_scan (local_rel_path TEXT PRIMARY KEY, remote_rel_path TEXT, remote_modified TEXT, file_size INTEGER)"
         )
+        previous_file_keys: Set[str] = set()
+        try:
+            cursor.execute("SELECT local_rel_path FROM monitor_files WHERE task_name = ?", (task_name,))
+            previous_file_keys = {str(row[0] or "") for row in cursor.fetchall()}
+        except Exception:
+            previous_file_keys = set()
 
         task_root = resolve_task_root(task)
         task_scan_path = normalize_remote_path(task["scan_path"])
@@ -656,6 +795,17 @@ async def run_monitor_task(
                     stats["skipped"] += 1
 
                 remote_rel = normalize_relative_path(os.path.relpath(item_remote_path, task_scan_path))
+                if item_local_rel not in previous_file_keys:
+                    new_media_items.append(
+                        {
+                            "id": str(item.get("id", "") or "").strip(),
+                            "fid": str(item.get("fid", "") or "").strip(),
+                            "name": name,
+                            "size": size,
+                            "remote_rel": remote_rel,
+                            "local_rel": item_local_rel,
+                        }
+                    )
                 cursor.execute(
                     """
                     INSERT OR REPLACE INTO current_scan(local_rel_path, remote_rel_path, remote_modified, file_size)
@@ -847,6 +997,18 @@ async def run_monitor_task(
                     f"已清除需手动监控提示: {completed_manual_events} 条",
                     "success",
                 )
+
+        if bool(task.get("auto_scrape_on_new")) and new_media_items:
+            try:
+                auto_message = await asyncio.to_thread(
+                    _auto_scrape_new_media_items,
+                    cfg,
+                    task,
+                    list(new_media_items),
+                )
+                await write_monitor_log(f"自动整理: {auto_message}", "success")
+            except Exception as exc:
+                await write_monitor_log(f"自动整理失败: {exc}", "error")
 
         await write_monitor_section("执行结果")
         await write_monitor_task_summary(stats, cleanup_enabled=cleanup_enabled)

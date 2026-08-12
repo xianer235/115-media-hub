@@ -41,6 +41,17 @@ const state = {
     manualBusy: false,
     manualResults: [],
     manualMediaTypeTouched: false,
+    batchBusy: false,
+    batchScan: null,
+    batchIdentify: null,
+    batchBindings: {},
+    batchIncluded: new Set(),
+    batchSearchState: {},
+    batchSplitMode: 'auto',
+    batchPathGesture: null,
+    batchPlanContext: null,
+    batchError: '',
+    batchSelection: [],
     planBusy: false,
     plan: null,
     planSelections: new Set(),
@@ -168,6 +179,75 @@ function joinPath(...parts) {
 
 function currentParentPath() {
     return normalizePath(state.trail.slice(1).map(item => item.name || '').join('/'));
+}
+
+function getScraperUrlParams() {
+    const raw = String(window.location.hash || '').replace(/^#/, '');
+    const params = new URLSearchParams(raw);
+    return {
+        provider: String(params.get('provider') || '').trim(),
+        path: String(params.get('path') || '').trim(),
+    };
+}
+
+function syncScraperLocationHash() {
+    try {
+        const raw = String(window.location.hash || '').replace(/^#/, '');
+        const params = new URLSearchParams(raw);
+        params.set('tab', 'scraper');
+        params.set('provider', String(state.provider || '115'));
+        const path = currentParentPath();
+        if (path) params.set('path', path);
+        else params.delete('path');
+        const url = `${window.location.pathname}${window.location.search}#${params.toString()}`;
+        history.replaceState(null, '', url);
+    } catch (error) {
+        // URL 写入失败不影响刮削浏览。
+    }
+}
+
+async function restoreScraperLocation() {
+    const params = getScraperUrlParams();
+    const provider = normalizeProvider(params.provider);
+    const knownProvider = provider && state.providers.some(
+        item => normalizeProvider(item.provider) === provider,
+    );
+    if (!knownProvider) return false;
+    if (provider !== state.provider) {
+        state.provider = provider;
+        state.cid = '0';
+        state.trail = [{ id: '0', name: '根目录' }];
+        state.search = '';
+        $('scraper-search-input').value = '';
+        clearSelection();
+        clearPlan();
+        resetIdentifyContext({ resetInputs: true });
+        closeIdentifyPanel();
+        renderProviderTabs();
+    }
+    const segments = String(params.path || '').split('/').filter(Boolean);
+    if (!segments.length) return true;
+    let currentCid = '0';
+    const trail = [{ id: '0', name: '根目录' }];
+    try {
+        for (const segment of segments) {
+            const data = await window.MediaHubApi.getJson(
+                `/scraper/${encodeURIComponent(state.provider)}/entries?cid=${encodeURIComponent(currentCid)}`
+            );
+            const entries = Array.isArray(data.entries) ? data.entries : [];
+            const matched = entries.find(item => item.is_dir && String(item.name || '') === segment);
+            if (!matched) break;
+            currentCid = normalizeCid(matched.cid || matched.id);
+            trail.push({ id: currentCid, name: segment });
+        }
+    } catch (error) {
+        // 目录已失效时停留在最近可访问的位置。
+    }
+    if (trail.length > 1) {
+        state.cid = currentCid;
+        state.trail = trail;
+    }
+    return true;
 }
 
 function formatFileSize(size) {
@@ -411,6 +491,7 @@ function clearPlan() {
     state.planBusy = false;
     state.plan = null;
     state.planSelections.clear();
+    state.batchPlanContext = null;
     renderPlan();
     renderEntries();
 }
@@ -689,7 +770,7 @@ function renderSelection() {
     const renameButton = document.querySelector('[data-scraper-action="rename-selected"]');
     if (renameButton) {
         const canRename = supportsProviderOperation('rename') && selectedEntries.length === 1 && !hasPlan;
-        renameButton.classList.remove('hidden');
+        renameButton.classList.toggle('hidden', hasPlan);
         renameButton.disabled = state.loading || !canRename;
         renameButton.classList.toggle('btn-disabled', state.loading || !canRename);
         renameButton.textContent = '重命名';
@@ -697,31 +778,37 @@ function renderSelection() {
             ? (canRename ? '重命名选中的文件或文件夹' : '请选择一个文件或文件夹进行重命名')
             : `${getProviderLabel()} 暂不支持重命名`;
     }
-    const clearIdentifyButton = document.querySelector('[data-scraper-action="clear-identify"]');
-    if (clearIdentifyButton) {
-        const hasIdentifyContext = !!(state.identifyBusy || state.identifyResult || state.tmdb || hasPlan);
-        clearIdentifyButton.classList.toggle('hidden', !hasIdentifyContext);
-        clearIdentifyButton.disabled = state.loading || state.executeBusy || !hasIdentifyContext;
-        clearIdentifyButton.classList.toggle('btn-disabled', state.loading || state.executeBusy || !hasIdentifyContext);
-        clearIdentifyButton.textContent = state.identifyBusy || state.planBusy ? '退出中...' : '退出识别';
-        clearIdentifyButton.title = hasIdentifyContext
-            ? '清除识别结果、TMDB 绑定和预览，返回普通文件浏览'
-            : '当前没有识别状态';
-    }
     const actionRules = {
         'select-range': !hasPlan && selectedInCurrent >= 2,
         'prepare-copy': supportsProviderOperation('copy') && hasSelection,
         'prepare-move': supportsProviderOperation('move') && hasSelection,
         'delete-selected': supportsProviderOperation('delete') && hasSelection,
-        identify: supportsProviderOperation('scrape') && hasSelection,
     };
     Object.entries(actionRules).forEach(([action, enabled]) => {
         const button = document.querySelector(`[data-scraper-action="${action}"]`);
         if (!button) return;
+        button.classList.toggle('hidden', hasPlan);
         button.disabled = state.loading || !enabled;
         button.classList.toggle('btn-disabled', state.loading || !enabled);
-        if (action === 'identify') button.textContent = hasBinding ? '修改识别' : '识别';
     });
+    const batchButton = document.querySelector('[data-scraper-action="open-batch"]');
+    if (batchButton) {
+        const canBatch = supportsProviderOperation('scrape') && isProviderConfigured() && !hasPlan && selectedEntries.length > 0;
+        batchButton.classList.toggle('hidden', hasPlan);
+        batchButton.disabled = state.loading || !canBatch;
+        batchButton.classList.toggle('btn-disabled', state.loading || !canBatch);
+        batchButton.title = canBatch
+            ? `识别整理勾选的 ${selectedEntries.length} 个条目`
+            : (hasPlan ? '退出预览后再识别整理' : '请先勾选要识别的文件夹或文件');
+    }
+    const reopenBatchButton = $('scraper-reopen-batch-btn');
+    if (reopenBatchButton) {
+        const batchItems = Array.isArray(state.batchScan?.items) ? state.batchScan.items : [];
+        const canReopen = hasPlan && batchItems.length > 0;
+        reopenBatchButton.classList.toggle('hidden', !canReopen);
+        reopenBatchButton.disabled = state.loading || state.executeBusy || !canReopen;
+        reopenBatchButton.classList.toggle('btn-disabled', state.loading || state.executeBusy || !canReopen);
+    }
     const clearPlanBtn = $('scraper-clear-plan-btn');
     if (clearPlanBtn) {
         clearPlanBtn.classList.toggle('hidden', !hasPlan);
@@ -822,6 +909,14 @@ function renderEntries() {
     }
     table?.classList.toggle('is-preview-mode', planActions.length > 0);
     if (planActions.length) {
+        const planWarnings = Array.isArray(state.plan?.warnings) ? state.plan.warnings : [];
+        const warningBar = planWarnings.length
+            ? `
+                <div class="scraper-plan-warning-bar">
+                    ${planWarnings.map(text => `<div>${escapeHtml(String(text || ''))}</div>`).join('')}
+                </div>
+            `
+            : '';
         if (header) {
             header.innerHTML = `
                 <div>原文件</div>
@@ -829,22 +924,25 @@ function renderEntries() {
                 <span>执行</span>
             `;
         }
-        list.innerHTML = planActions.map((action) => {
+        const actionRows = planActions.map((action) => {
             const actionIndex = Number(action.action_index || 0) || 0;
             const checked = action.ready && state.planSelections.has(actionIndex);
-            const readyClass = action.ready ? 'is-ready' : 'is-blocked';
-            const statusText = action.ready ? '可执行' : '需处理';
+            const isDelete = !!action.delete;
+            const readyClass = isDelete
+                ? 'is-delete'
+                : (action.ready ? (action.is_dir ? 'is-ready is-ready-dir' : 'is-ready') : 'is-blocked');
+            const statusText = isDelete ? '删除' : (action.ready ? '可执行' : '需处理');
             const oldPath = String(action.old_path || action.old_name || '--');
-            const newPath = String(action.new_path || action.new_name || '--');
+            const newPath = isDelete ? '（删除广告文件）' : String(action.new_path || action.new_name || '--');
             return `
                 <div class="scraper-preview-row ${readyClass}">
                     <div class="scraper-preview-original">
-                        <span class="scraper-plan-badge">${action.is_dir ? '文件夹' : '文件'}</span>
+                        <span class="scraper-plan-badge">${action.is_dir ? '文件夹' : (isDelete ? '广告' : '文件')}</span>
                         <strong title="${escapeHtml(oldPath)}">${escapeHtml(action.old_name || '--')}</strong>
                     </div>
                     <div class="scraper-preview-target">
                         <div class="scraper-preview-target-head">
-                            <span class="scraper-preview-status ${action.ready ? 'is-ok' : 'is-warn'}">${statusText}</span>
+                            <span class="scraper-preview-status ${isDelete ? 'is-danger' : (action.ready ? 'is-ok' : 'is-warn')}">${statusText}</span>
                             <strong title="${escapeHtml(newPath)}">${escapeHtml(action.new_name || '--')}</strong>
                         </div>
                         ${action.issue ? `<em>${escapeHtml(action.issue)}</em>` : ''}
@@ -858,6 +956,29 @@ function renderEntries() {
                 </div>
             `;
         }).join('');
+        const unchangedRows = Array.isArray(state.plan?.unchanged_rows) ? state.plan.unchanged_rows : [];
+        const unchangedHtml = unchangedRows.map((row) => {
+            const title = row.item_name ? `${row.item_name} / ${row.old_name || '--'}` : (row.old_name || '--');
+            return `
+                <div class="scraper-preview-row is-unchanged">
+                    <div class="scraper-preview-original">
+                        <span class="scraper-plan-badge">${row.is_dir ? '文件夹' : '文件'}</span>
+                        <strong title="${escapeHtml(row.old_path || row.old_name || '--')}">${escapeHtml(title)}</strong>
+                    </div>
+                    <div class="scraper-preview-target">
+                        <div class="scraper-preview-target-head">
+                            <span class="scraper-preview-status is-muted">无变化</span>
+                            <strong>保持原名，已跳过</strong>
+                        </div>
+                    </div>
+                    <label class="scraper-preview-check">
+                        <input type="checkbox" class="ui-checkbox ui-checkbox-sm" disabled>
+                        <span>跳过</span>
+                    </label>
+                </div>
+            `;
+        }).join('');
+        list.innerHTML = warningBar + actionRows + unchangedHtml;
         return;
     }
     if (header) {
@@ -971,6 +1092,7 @@ function syncSeasonControl() {
     const field = $('scraper-season-field');
     const input = $('scraper-season');
     if (!field || !input) return;
+    if (!$('scraper-batch-panel')?.classList.contains('hidden')) return;
     const isTv = (state.tmdb?.tmdb_media_type || state.tmdb?.media_type || $('scraper-manual-media-type')?.value) === 'tv';
     field.classList.toggle('hidden', !isTv);
     if (!isTv) return;
@@ -988,6 +1110,7 @@ function syncEpisodeModeControl() {
     const field = $('scraper-episode-mode-field');
     const input = $('scraper-episode-mode');
     if (!field || !input) return;
+    if (!$('scraper-batch-panel')?.classList.contains('hidden')) return;
     const isTv = (state.tmdb?.tmdb_media_type || state.tmdb?.media_type || $('scraper-manual-media-type')?.value) === 'tv';
     field.classList.toggle('hidden', !isTv);
     if (!isTv) return;
@@ -1008,6 +1131,7 @@ function syncIncludeTmdbIdControl() {
     const input = $('scraper-include-tmdb-id');
     const label = input?.closest('label');
     if (!input) return;
+    if (!$('scraper-batch-panel')?.classList.contains('hidden')) return;
     const wholeFolderMode = isWholeFolderSelection();
     input.disabled = !wholeFolderMode;
     if (!wholeFolderMode) {
@@ -1029,6 +1153,7 @@ function syncSeasonSubfolderControl() {
     const input = $('scraper-use-season-subfolder');
     const label = $('scraper-use-season-subfolder-wrap');
     if (!input) return;
+    if (!$('scraper-batch-panel')?.classList.contains('hidden')) return;
     const wholeFolderMode = isWholeFolderSelection();
     input.disabled = !wholeFolderMode;
     if (!wholeFolderMode) {
@@ -1048,6 +1173,7 @@ function syncFolderRenameControl() {
     const input = $('scraper-rename-selected-folders');
     const label = $('scraper-rename-selected-folders-wrap');
     if (!input) return;
+    if (!$('scraper-batch-panel')?.classList.contains('hidden')) return;
     const wholeFolderMode = isWholeFolderSelection();
     input.disabled = !wholeFolderMode;
     if (!wholeFolderMode) {
@@ -1069,6 +1195,43 @@ function syncFolderScopedControls() {
     syncIncludeTmdbIdControl();
     syncSeasonSubfolderControl();
     syncFolderRenameControl();
+}
+
+function syncBatchOptionControls() {
+    const items = Array.isArray(state.batchScan?.items) ? state.batchScan.items : [];
+    const identifyResults = Array.isArray(state.batchIdentify) ? state.batchIdentify : [];
+    const hasFolder = items.some(item => !!item.is_dir);
+    const hasTv = items.some(item => {
+        const index = Number(item.item_index || 0);
+        const identify = identifyResults.find(result => Number(result.item_index || 0) === index) || {};
+        const binding = getBatchBinding(index);
+        return identify.media_type === 'tv'
+            || binding?.tmdb_media_type === 'tv'
+            || binding?.media_type === 'tv';
+    });
+    $('scraper-season-field')?.classList.toggle('hidden', !hasTv);
+    $('scraper-episode-mode-field')?.classList.toggle('hidden', !hasTv);
+    const folderScoped = [
+        ['scraper-include-tmdb-id', null],
+        ['scraper-use-season-subfolder', 'scraper-use-season-subfolder-wrap'],
+        ['scraper-rename-selected-folders', 'scraper-rename-selected-folders-wrap'],
+    ];
+    folderScoped.forEach(([inputId, labelId]) => {
+        const input = $(inputId);
+        if (!input) return;
+        const label = $(labelId) || input.closest('label');
+        input.disabled = !hasFolder;
+        if (!hasFolder) {
+            if (input.checked) input.dataset.autoDisabled = '1';
+            input.checked = false;
+        } else if (input.dataset.autoDisabled === '1') {
+            input.checked = true;
+            delete input.dataset.autoDisabled;
+        }
+        label?.classList.toggle('is-disabled', !hasFolder);
+        if (label) label.title = hasFolder ? '' : '仅在整理文件夹条目时可用';
+    });
+    syncFileInfoControls();
 }
 
 function getDisplayEntries() {
@@ -1551,6 +1714,7 @@ async function switchProvider(provider) {
     renderProviderTabs();
     renderIdentify();
     await loadEntries();
+    syncScraperLocationHash();
 }
 
 async function enterFolder(entryId) {
@@ -1573,6 +1737,7 @@ async function enterFolder(entryId) {
         state.navigationBusy = false;
         renderEntries();
     }
+    syncScraperLocationHash();
 }
 
 async function goTrail(index) {
@@ -1594,6 +1759,7 @@ async function goTrail(index) {
         state.navigationBusy = false;
         renderEntries();
     }
+    syncScraperLocationHash();
 }
 
 async function createFolder() {
@@ -1888,9 +2054,7 @@ async function manualSearchTmdb() {
     state.manualResults = [];
     renderIdentify();
     try {
-        const params = new URLSearchParams({ q: query, media_type: mediaType });
-        const data = await window.MediaHubApi.getJson(`/tmdb/search?${params.toString()}`);
-        state.manualResults = Array.isArray(data.items) ? data.items : [];
+        state.manualResults = await fetchTmdbSearch(query, mediaType);
         if (!state.manualResults.length) {
             showToast('未找到 TMDB 条目', { tone: 'warn', duration: 2400, placement: 'top-center' });
         }
@@ -1899,6 +2063,656 @@ async function manualSearchTmdb() {
     } finally {
         state.manualBusy = false;
         renderIdentify();
+    }
+}
+
+function collectBatchOptions() {
+    const preserveTags = {};
+    document.querySelectorAll('[data-scraper-tag]').forEach((input) => {
+        preserveTags[String(input.dataset.scraperTag || '').trim()] = !!input.checked;
+    });
+    return {
+        selection_mode: 'batch',
+        title_language: String($('scraper-title-language')?.value || 'zh'),
+        season: Math.max(1, Number($('scraper-season')?.value || 1) || 1),
+        episode_mode: String($('scraper-episode-mode')?.value || 'auto'),
+        include_tmdb_id: !!$('scraper-include-tmdb-id')?.checked,
+        use_season_subfolder: $('scraper-use-season-subfolder')?.checked !== false,
+        rename_selected_folders: $('scraper-rename-selected-folders')?.checked !== false,
+        delete_ad_files: !!$('scraper-delete-ad-files')?.checked,
+        preserve_file_info: !!$('scraper-preserve-file-info')?.checked,
+        preserve_tags: preserveTags,
+    };
+}
+
+function resetBatchContext() {
+    state.batchBusy = false;
+    state.batchScan = null;
+    state.batchIdentify = null;
+    state.batchBindings = {};
+    state.batchIncluded = new Set();
+    state.batchSearchState = {};
+    state.batchSplitMode = 'auto';
+    state.batchError = '';
+    state.batchSelection = [];
+}
+
+function openBatchPanel() {
+    if (!supportsProviderOperation('scrape')) {
+        showToast(`${getProviderLabel()} 暂不支持批量整理`, { tone: 'warn', duration: 2400, placement: 'top-center' });
+        return;
+    }
+    const entries = getEffectiveSelectedEntries();
+    if (!entries.length) {
+        showToast('请先勾选要整理的文件夹或文件（可全选当前目录）', { tone: 'warn', duration: 2800, placement: 'top-center' });
+        return;
+    }
+    const panel = $('scraper-batch-panel');
+    if (!panel) return;
+    panel.classList.remove('hidden');
+    panel.classList.add('is-open');
+    resetBatchContext();
+    state.batchSelection = entries;
+    void scanBatch(entries);
+}
+
+function closeBatchPanel() {
+    const panel = $('scraper-batch-panel');
+    if (!panel) return;
+    panel.classList.add('hidden');
+    panel.classList.remove('is-open');
+}
+
+function reopenBatchPanel() {
+    const panel = $('scraper-batch-panel');
+    if (!panel) return;
+    const items = Array.isArray(state.batchScan?.items) ? state.batchScan.items : [];
+    if (!items.length) {
+        openBatchPanel();
+        return;
+    }
+    // 保留已识别的条目与绑定，直接回到批量识别界面继续改绑。
+    panel.classList.remove('hidden');
+    panel.classList.add('is-open');
+    renderBatch();
+}
+
+function setBatchSplitMode(mode) {
+    const normalized = mode === 'single' || mode === 'split' ? mode : 'auto';
+    if (state.batchSplitMode === normalized) return;
+    state.batchSplitMode = normalized;
+    renderBatchSplitMode();
+    if (state.batchSelection.length && !state.batchBusy) {
+        void scanBatch();
+    }
+}
+
+function renderBatchSplitMode() {
+    const mode = state.batchSplitMode || 'auto';
+    const text = $('scraper-split-mode-text');
+    if (text) {
+        text.textContent = mode === 'single' ? '整个文件夹' : (mode === 'split' ? '按子目录拆分' : '自动判断');
+    }
+    document.querySelectorAll('[data-split-mode]').forEach((button) => {
+        const active = String(button.dataset.splitMode || '').trim() === mode;
+        button.classList.toggle('is-active', active);
+        button.classList.toggle('is-auto', mode === 'auto');
+    });
+}
+
+function getBatchItem(itemIndex) {
+    const items = Array.isArray(state.batchScan?.items) ? state.batchScan.items : [];
+    return items.find(item => Number(item.item_index || 0) === Number(itemIndex || 0)) || null;
+}
+
+function getBatchIdentify(itemIndex) {
+    const results = Array.isArray(state.batchIdentify) ? state.batchIdentify : [];
+    return results.find(item => Number(item.item_index || 0) === Number(itemIndex || 0)) || null;
+}
+
+function getBatchBinding(itemIndex) {
+    return state.batchBindings[String(Number(itemIndex || 0))] || null;
+}
+
+function getBatchCandidateTitle(candidate = {}) {
+    const title = candidate.tmdb_title || candidate.title || candidate.original_title || '';
+    const year = candidate.tmdb_year || candidate.year || '';
+    return `${title || '--'}${year ? ` (${year})` : ''}`;
+}
+
+function setBatchBinding(itemIndex, candidate) {
+    const index = Number(itemIndex || 0);
+    if (!candidate || index <= 0) return;
+    state.batchBindings[String(index)] = candidate;
+    state.batchIncluded.add(index);
+}
+
+async function scanBatch(entries) {
+    if (state.batchBusy) return;
+    const selectedEntries = (Array.isArray(entries) && entries.length ? entries : state.batchSelection) || [];
+    if (!selectedEntries.length) {
+        showToast('请先勾选要整理的文件夹或文件', { tone: 'warn', duration: 2600, placement: 'top-center' });
+        return;
+    }
+    state.batchBusy = true;
+    const summary = $('scraper-batch-summary');
+    if (summary) summary.textContent = `正在整理勾选的 ${selectedEntries.length} 个条目并识别...`;
+    renderBatch();
+    try {
+        const data = await window.MediaHubApi.postJson('/scraper/batch/scan', {
+            provider: state.provider,
+            cid: state.cid,
+            base_path: currentParentPath(),
+            selected: selectedEntries,
+            split_mode: state.batchSplitMode || 'auto',
+        });
+        state.batchScan = data || {};
+        state.batchIdentify = null;
+        state.batchBindings = {};
+        state.batchIncluded = new Set();
+        state.batchSearchState = {};
+        await identifyBatch();
+    } catch (error) {
+        state.batchError = error.message || '未知错误';
+        if (summary) summary.textContent = `扫描失败：${error.message || '未知错误'}`;
+        showToast(`批量扫描失败：${error.message || '未知错误'}`, { tone: 'error', duration: 3600, placement: 'top-center' });
+    } finally {
+        state.batchBusy = false;
+        renderBatch();
+    }
+}
+
+async function identifyBatch() {
+    const items = Array.isArray(state.batchScan?.items) ? state.batchScan.items : [];
+    if (!items.length) return;
+    state.batchBusy = true;
+    renderBatch();
+    try {
+        const data = await window.MediaHubApi.postJson('/scraper/batch/identify', {
+            provider: state.provider,
+            items: items.map(item => ({
+                item_index: Number(item.item_index || 0),
+                name: item.name,
+                entry: item.entry,
+                files: Array.isArray(item.files) ? item.files.slice(0, 40) : [],
+            })),
+        });
+        state.batchIdentify = Array.isArray(data.results) ? data.results : [];
+        state.batchBindings = {};
+        state.batchIncluded = new Set();
+        state.batchSearchState = {};
+        for (const result of state.batchIdentify) {
+            if (result?.ok && result.auto_pick) {
+                const index = Number(result.item_index || 0);
+                if (index > 0) {
+                    state.batchBindings[String(index)] = result.auto_pick;
+                    state.batchIncluded.add(index);
+                }
+            }
+        }
+    } catch (error) {
+        showToast(`自动识别失败：${error.message || '未知错误'}`, { tone: 'error', duration: 3600, placement: 'top-center' });
+    } finally {
+        state.batchBusy = false;
+        renderBatch();
+    }
+}
+
+function renderBatchItemSearch(itemIndex) {
+    const index = Number(itemIndex || 0);
+    const searchState = state.batchSearchState[String(index)] || {};
+    if (!searchState.open) return '';
+    const query = String(searchState.query ?? '');
+    const mediaType = searchState.mediaType === 'tv' ? 'tv' : 'movie';
+    const results = Array.isArray(searchState.results) ? searchState.results : [];
+    const busy = !!searchState.busy;
+    const pathHtml = renderBatchPathSelection(index);
+    const resultHtml = busy
+        ? '<div class="scraper-empty-small">搜索中...</div>'
+        : (results.length
+            ? results.map((candidate, candidateIndex) => `
+                <div class="scraper-batch-result">
+                    <div class="scraper-batch-result-main">
+                        <strong title="${escapeHtml(getBatchCandidateTitle(candidate))}">${escapeHtml(getBatchCandidateTitle(candidate))}</strong>
+                        <span>${candidate.media_type === 'tv' ? '剧集' : '电影'} #${escapeHtml(String(candidate.id || ''))}</span>
+                    </div>
+                    <button type="button" class="scraper-compact-btn scraper-primary-soft" data-batch-bind="${escapeHtml(String(index))}" data-batch-bind-candidate="${escapeHtml(String(candidateIndex))}">绑定</button>
+                </div>
+            `).join('')
+            : '<div class="scraper-empty-small">输入名称后点击搜索。</div>');
+    return `
+        <div class="scraper-batch-search">
+            ${pathHtml}
+            <div class="scraper-batch-search-row">
+                <input class="scraper-input" data-batch-query="${escapeHtml(String(index))}" placeholder="影视名称" value="${escapeHtml(query)}">
+                <select class="scraper-select" data-batch-query-type="${escapeHtml(String(index))}" aria-label="TMDB 类型">
+                    <option value="movie" ${mediaType === 'movie' ? 'selected' : ''}>电影</option>
+                    <option value="tv" ${mediaType === 'tv' ? 'selected' : ''}>电视剧</option>
+                </select>
+                <button type="button" class="scraper-compact-btn scraper-primary-soft" data-batch-search-run="${escapeHtml(String(index))}" ${busy ? 'disabled' : ''}>搜索</button>
+            </div>
+            ${resultHtml}
+        </div>
+    `;
+}
+
+function renderBatchPathSelection(index) {
+    const searchState = state.batchSearchState[String(index)] || {};
+    const selection = searchState.selection;
+    if (!selection) return '';
+    const source = String(selection.source || '').trim();
+    const tokens = Array.isArray(selection.tokens) ? selection.tokens : [];
+    if (!source || !tokens.length) return '';
+    const selectedIndexes = Array.isArray(selection.selectedIndexes) ? selection.selectedIndexes : [];
+    const selected = new Set(selectedIndexes.map(Number));
+    const query = window.ScraperPathSelection?.composeQuery(selection) || '';
+    if (selection.expanded === false) {
+        return `
+            <div class="scraper-batch-path is-collapsed">
+                <div class="scraper-path-collapsed">
+                    <div class="scraper-path-result">
+                        <span>已填入搜索框</span>
+                        <strong>${escapeHtml(query || '尚未选择标题')}</strong>
+                    </div>
+                    <button type="button" class="scraper-compact-btn" data-batch-path-reopen="${escapeHtml(String(index))}">重新选词</button>
+                </div>
+            </div>
+        `;
+    }
+    return `
+        <div class="scraper-batch-path">
+            <div class="scraper-path-heading">
+                <span>完整路径选词</span>
+                <span>${selected.size ? `已选择 ${selected.size} 个词块` : '请选择影视标题'}</span>
+            </div>
+            <div class="scraper-path-source" title="${escapeHtml(source)}">${escapeHtml(source)}</div>
+            <div class="scraper-path-tokens" role="listbox" aria-label="完整路径标题选词">
+                ${tokens.map((token, tokenIndex) => `
+                    <button
+                        type="button"
+                        class="scraper-path-token ${selected.has(tokenIndex) ? 'is-selected' : ''}"
+                        data-batch-path-token="${escapeHtml(String(index))}"
+                        data-batch-path-token-index="${escapeHtml(String(tokenIndex))}"
+                        role="option"
+                        aria-selected="${selected.has(tokenIndex) ? 'true' : 'false'}"
+                    >${escapeHtml(token.text || '')}</button>
+                `).join('')}
+            </div>
+            <div class="scraper-path-actions">
+                <button type="button" class="scraper-compact-btn" data-batch-path-clear="${escapeHtml(String(index))}" ${selected.size ? '' : 'disabled'}>清空</button>
+                <button type="button" class="scraper-compact-btn scraper-primary-soft" data-batch-path-complete="${escapeHtml(String(index))}" ${selected.size ? '' : 'disabled'}>完成选词</button>
+            </div>
+        </div>
+    `;
+}
+
+function renderBatchItem(item) {
+    const index = Number(item.item_index || 0);
+    const identify = getBatchIdentify(index);
+    const binding = getBatchBinding(index);
+    const included = state.batchIncluded.has(index);
+    const typeLabel = identify?.media_type === 'tv' ? '剧集' : (identify?.media_type === 'movie' ? '电影' : '未知');
+    const fileCount = Array.isArray(item.files) ? item.files.length : 0;
+    const dirBadge = item.is_dir ? '文件夹' : '文件';
+    let matchHtml = '';
+    let actionsHtml = '';
+    if (binding) {
+        const status = identify?.status || 'manual';
+        const badgeClass = 'is-auto';
+        const badgeText = status === 'auto' ? '自动匹配' : '已绑定';
+        matchHtml = `
+            <div class="scraper-batch-match-info">
+                <div class="scraper-batch-match">
+                    <span class="scraper-batch-badge ${badgeClass}">${badgeText}</span>
+                    <span class="scraper-batch-type">${typeLabel}</span>
+                </div>
+                <strong class="scraper-batch-title" title="${escapeHtml(getBatchCandidateTitle(binding))}">${escapeHtml(getBatchCandidateTitle(binding))}</strong>
+            </div>
+        `;
+        actionsHtml = `<button type="button" class="scraper-compact-btn" data-batch-search="${escapeHtml(String(index))}">改绑</button>`;
+    } else if (identify?.status === 'suggest' && Array.isArray(identify.candidates) && identify.candidates.length) {
+        const candidate = identify.candidates[0];
+        matchHtml = `
+            <div class="scraper-batch-match">
+                <span class="scraper-batch-badge is-suggest">建议</span>
+                <strong title="${escapeHtml(getBatchCandidateTitle(candidate))}">${escapeHtml(getBatchCandidateTitle(candidate))}</strong>
+                <span class="scraper-batch-type">${typeLabel}</span>
+                <button type="button" class="scraper-compact-btn scraper-primary-soft" data-batch-accept="${escapeHtml(String(index))}">接受</button>
+            </div>
+        `;
+        actionsHtml = `<button type="button" class="scraper-compact-btn" data-batch-search="${escapeHtml(String(index))}">搜索绑定</button>`;
+    } else if (item.no_media) {
+        matchHtml = `
+            <div class="scraper-batch-match">
+                <span class="scraper-batch-badge is-manual">无媒体</span>
+                <span class="scraper-batch-status-text">文件夹内没有可整理的媒体文件</span>
+            </div>
+        `;
+    } else {
+        const queryText = identify?.query || item.name || '';
+        matchHtml = `
+            <div class="scraper-batch-match">
+                <span class="scraper-batch-badge is-manual">未匹配</span>
+                <span class="scraper-batch-status-text">${identify ? `未找到可信条目（关键词：${escapeHtml(queryText)}）` : '等待识别'}</span>
+            </div>
+        `;
+        actionsHtml = `<button type="button" class="scraper-compact-btn" data-batch-search="${escapeHtml(String(index))}">搜索绑定</button>`;
+    }
+    const searchHtml = renderBatchItemSearch(index);
+    const posterUrl = binding ? (binding.tmdb_poster_url || binding.poster_url || '') : '';
+    const posterHtml = posterUrl
+        ? `
+            <div class="scraper-batch-poster-col">
+                <img class="scraper-batch-poster" src="${escapeHtml(posterUrl)}" alt="" loading="lazy">
+            </div>
+        `
+        : '';
+    return `
+        <div class="scraper-batch-row ${included ? 'is-included' : ''}">
+            <label class="scraper-batch-check">
+                <input type="checkbox" class="ui-checkbox ui-checkbox-sm" data-batch-toggle="${escapeHtml(String(index))}" ${included ? 'checked' : ''}>
+            </label>
+            <div class="scraper-batch-main">
+                <div class="scraper-batch-head">
+                    <span class="scraper-plan-badge">${dirBadge}</span>
+                    <strong title="${escapeHtml(item.name || '')}">${escapeHtml(item.name || '--')}</strong>
+                    <span class="scraper-batch-count">${fileCount} 个媒体文件</span>
+                </div>
+                ${matchHtml}
+                <div class="scraper-batch-actions">${actionsHtml}</div>
+                ${searchHtml}
+            </div>
+            ${posterHtml}
+        </div>
+    `;
+}
+
+function renderBatch() {
+    const summary = $('scraper-batch-summary');
+    const list = $('scraper-batch-list');
+    const buildBtn = $('scraper-batch-build-plan-btn');
+    if (!summary || !list) return;
+    const items = Array.isArray(state.batchScan?.items) ? state.batchScan.items : [];
+    const issues = Array.isArray(state.batchScan?.issues) ? state.batchScan.issues : [];
+    if (!items.length) {
+        if (state.batchBusy) {
+            summary.innerHTML = '<span class="scraper-busy-spinner inline" aria-hidden="true"></span>正在扫描并匹配 TMDB 条目，请稍候...';
+            list.innerHTML = '<div class="scraper-empty-row">正在识别中，请不要关闭页面</div>';
+        } else if (state.batchError) {
+            summary.textContent = `扫描失败：${state.batchError}`;
+            list.innerHTML = '';
+        } else {
+            summary.textContent = '勾选的条目中没有可整理的影视条目（文件夹或媒体文件）。';
+            list.innerHTML = '';
+        }
+        if (buildBtn) {
+            buildBtn.disabled = true;
+            buildBtn.classList.add('btn-disabled');
+        }
+        return;
+    }
+    const results = Array.isArray(state.batchIdentify) ? state.batchIdentify : [];
+    const autoCount = results.filter(item => item?.ok && item.status === 'auto').length;
+    const suggestCount = results.filter(item => item?.ok && item.status === 'suggest').length;
+    const manualCount = results.filter(item => item?.ok && item.status === 'manual').length;
+    const boundCount = Object.keys(state.batchBindings).length;
+    const includedCount = state.batchIncluded.size;
+    const hasPlanItems = items.some(item => {
+        const index = Number(item.item_index || 0);
+        return state.batchIncluded.has(index) && !!getBatchBinding(index);
+    });
+    if (state.batchBusy) {
+        summary.innerHTML = '<span class="scraper-busy-spinner inline" aria-hidden="true"></span>正在扫描并匹配 TMDB 条目，请稍候...';
+    } else {
+        summary.innerHTML = `
+            <span class="scraper-ok-text">${escapeHtml(String(items.length))} 个条目</span>
+            <span> / 自动匹配 ${escapeHtml(String(autoCount))}，建议 ${escapeHtml(String(suggestCount))}，待确认 ${escapeHtml(String(manualCount))}</span>
+            <span> / 已勾选 ${escapeHtml(String(includedCount))}（已绑定 ${escapeHtml(String(boundCount))}）</span>
+            ${issues.length ? `<em class="scraper-plan-warning">${escapeHtml(String(issues.length))} 个扫描提醒</em>` : ''}
+        `;
+    }
+    list.innerHTML = items.map(item => renderBatchItem(item)).join('');
+    if (buildBtn) {
+        const disabled = state.batchBusy || !hasPlanItems;
+        buildBtn.disabled = disabled;
+        buildBtn.classList.toggle('btn-disabled', disabled);
+    }
+    syncBatchOptionControls();
+    renderBatchSplitMode();
+}
+
+function toggleBatchInclude(itemIndex, checked) {
+    const index = Number(itemIndex || 0);
+    if (checked) {
+        state.batchIncluded.add(index);
+    } else {
+        state.batchIncluded.delete(index);
+    }
+    renderBatch();
+}
+
+function acceptBatchSuggestion(itemIndex) {
+    const index = Number(itemIndex || 0);
+    const identify = getBatchIdentify(index);
+    const candidates = Array.isArray(identify?.candidates) ? identify.candidates : [];
+    if (!candidates.length) return;
+    setBatchBinding(index, candidates[0]);
+    renderBatch();
+}
+
+function toggleBatchItemSearch(itemIndex) {
+    const index = Number(itemIndex || 0);
+    const item = getBatchItem(index);
+    const identify = getBatchIdentify(index);
+    const current = state.batchSearchState[String(index)] || {};
+    const wasOpen = !!current.open;
+    state.batchSearchState[String(index)] = {
+        open: !wasOpen,
+        query: wasOpen ? current.query : (identify?.query || item?.name || ''),
+        mediaType: current.mediaType || (identify?.media_type === 'tv' ? 'tv' : 'movie'),
+        results: [],
+        busy: false,
+        selection: current.selection || createBatchPathSelection(item),
+    };
+    renderBatch();
+}
+
+function createBatchPathSelection(item) {
+    if (!item?.entry) return null;
+    const pathSelection = window.ScraperPathSelection;
+    if (!pathSelection) return null;
+    try {
+        const selection = pathSelection.createSelection([item.entry], currentParentPath());
+        selection.expanded = true;
+        return selection;
+    } catch (error) {
+        return null;
+    }
+}
+
+function beginBatchPathSelection(event, index, tokenIndex) {
+    const current = state.batchSearchState[String(index)] || {};
+    const selection = current.selection;
+    if (!selection || !Number.isInteger(tokenIndex) || tokenIndex < 0) return;
+    event.preventDefault();
+    const selectedIndexes = Array.isArray(selection.selectedIndexes) ? selection.selectedIndexes : [];
+    state.batchPathGesture = {
+        pointerId: event.pointerId,
+        itemIndex: Number(index || 0),
+        startIndex: tokenIndex,
+        lastIndex: tokenIndex,
+        baseSelection: selectedIndexes.slice(),
+        shouldSelect: !selectedIndexes.includes(tokenIndex),
+    };
+    selection.selectedIndexes = window.MediaHubTextSelection.applySelectionRange(
+        state.batchPathGesture.baseSelection,
+        tokenIndex,
+        tokenIndex,
+        state.batchPathGesture.shouldSelect,
+    );
+    state.batchSearchState[String(index)] = { ...current, selection: { ...selection } };
+    syncBatchPathTokenDom(index);
+}
+
+function continueBatchPathSelection(event, index, tokenIndex) {
+    const gesture = state.batchPathGesture;
+    const current = state.batchSearchState[String(index)] || {};
+    const selection = current.selection;
+    if (
+        !gesture
+        || gesture.pointerId !== event.pointerId
+        || gesture.itemIndex !== Number(index || 0)
+        || !selection
+        || !Number.isInteger(tokenIndex)
+        || tokenIndex < 0
+        || gesture.lastIndex === tokenIndex
+    ) return;
+    gesture.lastIndex = tokenIndex;
+    selection.selectedIndexes = window.MediaHubTextSelection.applySelectionRange(
+        gesture.baseSelection,
+        gesture.startIndex,
+        tokenIndex,
+        gesture.shouldSelect,
+    );
+    state.batchSearchState[String(index)] = { ...current, selection: { ...selection } };
+    syncBatchPathTokenDom(index);
+}
+
+function syncBatchPathTokenDom(index) {
+    const selection = state.batchSearchState[String(index)]?.selection;
+    if (!selection) return;
+    const selected = new Set((Array.isArray(selection.selectedIndexes) ? selection.selectedIndexes : []).map(Number));
+    document.querySelectorAll(`[data-batch-path-token="${String(index)}"]`).forEach((button) => {
+        const tokenIndex = Number(button.dataset.batchPathTokenIndex || 0);
+        button.classList.toggle('is-selected', selected.has(tokenIndex));
+        button.setAttribute('aria-selected', selected.has(tokenIndex) ? 'true' : 'false');
+    });
+}
+
+function clearBatchPathSelection(index) {
+    const current = state.batchSearchState[String(index)] || {};
+    const selection = current.selection;
+    if (!selection) return;
+    selection.selectedIndexes = [];
+    state.batchSearchState[String(index)] = { ...current, query: '', selection: { ...selection } };
+    renderBatch();
+}
+
+function completeBatchPathSelection(index) {
+    const current = state.batchSearchState[String(index)] || {};
+    const selection = current.selection;
+    if (!selection) return;
+    const query = window.ScraperPathSelection?.composeQuery(selection) || '';
+    if (!query) {
+        showToast('请先选择影视标题文字', { tone: 'warn', duration: 2200, placement: 'top-center' });
+        return;
+    }
+    selection.expanded = false;
+    state.batchSearchState[String(index)] = { ...current, query, selection: { ...selection } };
+    renderBatch();
+}
+
+function reopenBatchPathSelection(index) {
+    const current = state.batchSearchState[String(index)] || {};
+    const selection = current.selection;
+    if (!selection) return;
+    selection.expanded = true;
+    state.batchSearchState[String(index)] = { ...current, selection: { ...selection } };
+    renderBatch();
+}
+
+async function fetchTmdbSearch(query, mediaType) {
+    const params = new URLSearchParams({
+        q: String(query || '').trim(),
+        media_type: String(mediaType || 'movie').trim(),
+    });
+    const data = await window.MediaHubApi.getJson(`/tmdb/search?${params.toString()}`);
+    return Array.isArray(data.items) ? data.items : [];
+}
+
+async function batchSearchTmdb(itemIndex) {
+    const index = Number(itemIndex || 0);
+    const searchState = state.batchSearchState[String(index)] || {};
+    const queryInput = document.querySelector(`[data-batch-query="${String(index)}"]`);
+    const typeSelect = document.querySelector(`[data-batch-query-type="${String(index)}"]`);
+    const query = String(queryInput?.value ?? searchState.query ?? '').trim();
+    const mediaType = String(typeSelect?.value || searchState.mediaType || 'movie').trim();
+    if (!query) {
+        showToast('请输入影视名称', { tone: 'warn', duration: 2200, placement: 'top-center' });
+        return;
+    }
+    state.batchSearchState[String(index)] = { ...searchState, query, mediaType, busy: true, results: [] };
+    renderBatch();
+    try {
+        const items = await fetchTmdbSearch(query, mediaType);
+        const next = state.batchSearchState[String(index)] || {};
+        state.batchSearchState[String(index)] = { ...next, busy: false, results: items };
+    } catch (error) {
+        const next = state.batchSearchState[String(index)] || {};
+        state.batchSearchState[String(index)] = { ...next, busy: false, results: [] };
+        showToast(`TMDB 搜索失败：${error.message || '未知错误'}`, { tone: 'error', duration: 3400, placement: 'top-center' });
+    }
+    renderBatch();
+}
+
+function batchBindItem(itemIndex, candidateIndex) {
+    const index = Number(itemIndex || 0);
+    const searchState = state.batchSearchState[String(index)] || {};
+    const results = Array.isArray(searchState.results) ? searchState.results : [];
+    const candidate = results[Number(candidateIndex || 0)];
+    if (!candidate) return;
+    setBatchBinding(index, candidate);
+    state.batchSearchState[String(index)] = { ...searchState, open: false, results: [] };
+    renderBatch();
+}
+
+async function buildBatchPlan() {
+    if (state.batchBusy) return;
+    const items = Array.isArray(state.batchScan?.items) ? state.batchScan.items : [];
+    const selected = items.filter(item => {
+        const index = Number(item.item_index || 0);
+        return state.batchIncluded.has(index) && !!getBatchBinding(index);
+    });
+    if (!selected.length) {
+        showToast('请先勾选并绑定要整理的条目', { tone: 'warn', duration: 2400, placement: 'top-center' });
+        return;
+    }
+    state.batchBusy = true;
+    const buildBtn = $('scraper-batch-build-plan-btn');
+    if (buildBtn) {
+        buildBtn.disabled = true;
+        buildBtn.textContent = '生成中...';
+    }
+    renderBatch();
+    const requestPayload = {
+        provider: state.provider,
+        base_cid: state.cid,
+        base_path: currentParentPath(),
+        options: collectBatchOptions(),
+        items: selected.map(item => ({
+            item_index: Number(item.item_index || 0),
+            name: item.name,
+            entry: item.entry,
+            tmdb: getBatchBinding(Number(item.item_index || 0)),
+        })),
+    };
+    state.batchPlanContext = requestPayload;
+    try {
+        const data = await window.MediaHubApi.postJson('/scraper/batch/plan', requestPayload);
+        applyPlanResponse(data);
+        closeBatchPanel();
+        renderPlan();
+        renderEntries();
+        showPlanReadyToast(data);
+    } catch (error) {
+        showToast(`生成批量预览失败：${error.message || '未知错误'}`, { tone: 'error', duration: 3600, placement: 'top-center' });
+    } finally {
+        state.batchBusy = false;
+        if (buildBtn) {
+            buildBtn.disabled = false;
+            buildBtn.textContent = '生成预览';
+        }
+        renderBatch();
     }
 }
 
@@ -1967,15 +2781,23 @@ async function requestPlan(payload, { resetPlan = false } = {}) {
 }
 
 function showPlanReadyToast(data) {
-    const warningCount = Array.isArray(data.warnings) ? data.warnings.length : 0;
+    const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+    const warningCount = warnings.length;
     const readyCount = Number(data.ready_count || 0);
     const totalCount = Number(data.total_count || 0);
     const unchangedCount = Number(data.unchanged_count || 0);
     const unchangedNote = unchangedCount > 0 ? `，已跳过 ${unchangedCount} 项无变化` : '';
+    const warningText = warnings
+        .map(text => String(text || '').trim())
+        .filter(Boolean)
+        .slice(0, 2)
+        .map(text => (text.length > 60 ? `${text.slice(0, 60)}…` : text))
+        .join('；');
+    const warningNote = warningText ? `：${warningText}${warningCount > 2 ? ' 等' : ''}` : '';
     const noChangeOnly = readyCount <= 0 && totalCount === 0 && unchangedCount > 0;
     showToast(
         readyCount > 0
-            ? (warningCount > 0 ? `预览已生成，含 ${warningCount} 个提醒${unchangedNote}` : `预览已生成，请勾选确认后执行${unchangedNote}`)
+            ? (warningCount > 0 ? `预览已生成，含 ${warningCount} 个提醒${warningNote}${unchangedNote}` : `预览已生成，请勾选确认后执行${unchangedNote}`)
             : (noChangeOnly ? '识别完成，没有需要改名的文件' : `预览没有可执行项，请处理冲突后再试${unchangedNote}`),
         {
             tone: readyCount > 0 ? (warningCount > 0 ? 'warn' : 'success') : (noChangeOnly ? 'info' : 'warn'),
@@ -2023,6 +2845,35 @@ async function updateManualEpisode(actionIndex, { clear = false } = {}) {
         }
         state.planEpisodeOverrides[entryId] = episode;
     }
+    if (state.plan?.tmdb?.batch && state.batchPlanContext) {
+        const itemIndex = Number(action.item_index || 0);
+        const items = (Array.isArray(state.batchPlanContext.items) ? state.batchPlanContext.items : [])
+            .map(item => ({ ...item }));
+        const target = items.find(item => Number(item.item_index || 0) === itemIndex);
+        if (!target) {
+            state.planEpisodeOverrides = previousOverrides;
+            showToast('批量预览上下文已失效，请重新生成预览', { tone: 'warn', duration: 2600, placement: 'top-center' });
+            return;
+        }
+        const overrides = { ...(target.episode_overrides || {}) };
+        if (clear) {
+            delete overrides[entryId];
+        } else {
+            overrides[entryId] = state.planEpisodeOverrides[entryId];
+        }
+        target.episode_overrides = overrides;
+        state.batchPlanContext = { ...state.batchPlanContext, items };
+        showToast(clear ? '正在恢复自动识别...' : '正在按手动集数更新预览...', { tone: 'info', duration: 1800, placement: 'top-center' });
+        try {
+            const data = await window.MediaHubApi.postJson('/scraper/batch/plan', state.batchPlanContext);
+            applyPlanResponse(data);
+            showToast(clear ? '已恢复自动识别' : '已应用手动集数', { tone: 'success', duration: 2200, placement: 'top-center' });
+        } catch (error) {
+            state.planEpisodeOverrides = previousOverrides;
+            showToast(`更新预览失败：${error.message || '未知错误'}`, { tone: 'error', duration: 3600, placement: 'top-center' });
+        }
+        return;
+    }
     let payload;
     try {
         payload = buildPlanRequestPayload();
@@ -2053,7 +2904,10 @@ async function executePlan() {
     const warningLines = Array.from(new Set(selectedActions
         .map(action => String(action.warning || '').trim())
         .filter(Boolean)));
-    let message = `确认执行已勾选的 ${selectedActions.length} 项重命名和移动吗？`;
+    const deleteCount = selectedActions.filter(action => !!action.delete).length;
+    let message = deleteCount > 0
+        ? `确认执行已勾选的 ${selectedActions.length} 项操作吗？其中 ${deleteCount} 项为删除广告文件（进入网盘回收站，整理任务不支持回退删除）`
+        : `确认执行已勾选的 ${selectedActions.length} 项重命名和移动吗？`;
     let title = '确认执行';
     let confirmText = '执行';
     if (warningLines.length > 0) {
@@ -2091,6 +2945,7 @@ async function executePlan() {
         state.plan = null;
         state.planSelections.clear();
         state.planEpisodeOverrides = {};
+        state.batchPlanContext = null;
         await refreshJobs();
         scheduleJobsPoll();
         await loadEntries({ force: true });
@@ -2197,22 +3052,50 @@ function selectRangeBetweenChecked() {
 
 function handlePointerDown(event) {
     const token = event.target.closest('[data-scraper-path-token-index]');
-    if (!token) return;
-    beginIdentifyPathSelection(event, Number(token.dataset.scraperPathTokenIndex));
+    if (token) {
+        beginIdentifyPathSelection(event, Number(token.dataset.scraperPathTokenIndex));
+        return;
+    }
+    const batchToken = event.target.closest('[data-batch-path-token]');
+    if (batchToken) {
+        beginBatchPathSelection(
+            event,
+            Number(batchToken.dataset.batchPathToken || 0),
+            Number(batchToken.dataset.batchPathTokenIndex || 0),
+        );
+    }
 }
 
 function handleGlobalPointerMove(event) {
     const gesture = state.identifyPathGesture;
-    if (!gesture || gesture.pointerId !== event.pointerId) return;
-    const token = document.elementFromPoint(event.clientX, event.clientY)
-        ?.closest?.('[data-scraper-path-token-index]');
-    if (!token) return;
-    continueIdentifyPathSelection(event, Number(token.dataset.scraperPathTokenIndex));
+    if (gesture && gesture.pointerId === event.pointerId) {
+        const token = document.elementFromPoint(event.clientX, event.clientY)
+            ?.closest?.('[data-scraper-path-token-index]');
+        if (!token) return;
+        continueIdentifyPathSelection(event, Number(token.dataset.scraperPathTokenIndex));
+        return;
+    }
+    const batchGesture = state.batchPathGesture;
+    if (batchGesture && batchGesture.pointerId === event.pointerId) {
+        const token = document.elementFromPoint(event.clientX, event.clientY)
+            ?.closest?.('[data-batch-path-token]');
+        if (!token) return;
+        continueBatchPathSelection(
+            event,
+            Number(batchGesture.itemIndex || 0),
+            Number(token.dataset.batchPathTokenIndex || 0),
+        );
+    }
 }
 
 function endIdentifyPathGesture(event) {
     if (state.identifyPathGesture?.pointerId === event.pointerId) {
         state.identifyPathGesture = null;
+    }
+    if (state.batchPathGesture?.pointerId === event.pointerId) {
+        const gesture = state.batchPathGesture;
+        state.batchPathGesture = null;
+        if (gesture.itemIndex) renderBatch();
     }
 }
 
@@ -2251,6 +3134,46 @@ function handleClick(event) {
         void rollbackJob(rollbackButton.dataset.scraperRollbackJob);
         return;
     }
+    const batchAcceptBtn = event.target.closest('[data-batch-accept]');
+    if (batchAcceptBtn) {
+        acceptBatchSuggestion(batchAcceptBtn.dataset.batchAccept);
+        return;
+    }
+    const batchSearchBtn = event.target.closest('[data-batch-search]');
+    if (batchSearchBtn) {
+        toggleBatchItemSearch(batchSearchBtn.dataset.batchSearch);
+        return;
+    }
+    const batchSearchRunBtn = event.target.closest('[data-batch-search-run]');
+    if (batchSearchRunBtn) {
+        void batchSearchTmdb(batchSearchRunBtn.dataset.batchSearchRun);
+        return;
+    }
+    const batchBindBtn = event.target.closest('[data-batch-bind]');
+    if (batchBindBtn) {
+        batchBindItem(batchBindBtn.dataset.batchBind, batchBindBtn.dataset.batchBindCandidate);
+        return;
+    }
+    const batchPathClear = event.target.closest('[data-batch-path-clear]');
+    if (batchPathClear) {
+        clearBatchPathSelection(Number(batchPathClear.dataset.batchPathClear || 0));
+        return;
+    }
+    const batchPathComplete = event.target.closest('[data-batch-path-complete]');
+    if (batchPathComplete) {
+        completeBatchPathSelection(Number(batchPathComplete.dataset.batchPathComplete || 0));
+        return;
+    }
+    const batchPathReopen = event.target.closest('[data-batch-path-reopen]');
+    if (batchPathReopen) {
+        reopenBatchPathSelection(Number(batchPathReopen.dataset.batchPathReopen || 0));
+        return;
+    }
+    const splitModeButton = event.target.closest('[data-split-mode]');
+    if (splitModeButton) {
+        setBatchSplitMode(splitModeButton.dataset.splitMode);
+        return;
+    }
     const actionButton = event.target.closest('[data-scraper-action]');
     if (!actionButton) return;
     const action = String(actionButton.dataset.scraperAction || '').trim();
@@ -2277,7 +3200,11 @@ function handleClick(event) {
     if (action === 'prepare-copy') prepareCopy();
     if (action === 'prepare-move') prepareMove();
     if (action === 'delete-selected') void deleteSelected();
-    if (action === 'identify') void identifySelected();
+    if (action === 'identify' || action === 'open-batch') openBatchPanel();
+    if (action === 'reopen-batch') reopenBatchPanel();
+    if (action === 'close-batch') closeBatchPanel();
+    if (action === 'rescan-batch') void scanBatch();
+    if (action === 'build-batch-plan') void buildBatchPlan();
     if (action === 'clear-identify') clearIdentifyMode();
     if (action === 'open-identify') {
         if (state.identifyResult || state.tmdb) {
@@ -2323,6 +3250,11 @@ function handleChange(event) {
         toggleAll(!!event.target.checked);
         return;
     }
+    const batchCheck = event.target.closest('[data-batch-toggle]');
+    if (batchCheck) {
+        toggleBatchInclude(batchCheck.dataset.batchToggle, !!batchCheck.checked);
+        return;
+    }
     const planCheck = event.target.closest('[data-scraper-plan-check]');
     if (planCheck) {
         const index = Number(planCheck.dataset.scraperPlanCheck || 0) || 0;
@@ -2361,6 +3293,11 @@ function handleChange(event) {
 
 function handleGlobalKeydown(event) {
     if (event.key !== 'Escape') return;
+    const batchPanel = $('scraper-batch-panel');
+    if (batchPanel && !batchPanel.classList.contains('hidden')) {
+        closeBatchPanel();
+        return;
+    }
     const panel = $('scraper-identify-panel');
     if (panel && !panel.classList.contains('hidden')) {
         closeIdentifyPanel();
@@ -2408,10 +3345,12 @@ async function refreshInitialData() {
     renderProviderTabs();
     renderIdentify();
     renderPlan();
+    await restoreScraperLocation();
     await Promise.all([
         loadEntries(),
         refreshJobs(),
     ]);
+    syncScraperLocationHash();
     if (hasActiveJobs()) scheduleJobsPoll();
 }
 

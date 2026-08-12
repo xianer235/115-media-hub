@@ -59,10 +59,10 @@
                                 <button type="button" class="scraper-compact-btn" data-scraper-action="prepare-copy">复制</button>
                                 <button type="button" class="scraper-compact-btn" data-scraper-action="prepare-move">移动</button>
                                 <button type="button" class="scraper-compact-btn scraper-danger-soft" data-scraper-action="delete-selected">删除</button>
-                                <button type="button" class="scraper-compact-btn scraper-primary-soft" data-scraper-action="identify">识别</button>
-                                <button type="button" class="scraper-compact-btn scraper-danger-soft hidden" data-scraper-action="clear-identify">退出识别</button>
+                                <button type="button" class="scraper-compact-btn scraper-primary-soft" data-scraper-action="open-batch" title="自动识别勾选的文件夹或文件；识别不准的条目可手动选词搜索并绑定">识别整理</button>
+                                <button id="scraper-reopen-batch-btn" type="button" class="scraper-compact-btn scraper-primary-soft hidden" data-scraper-action="reopen-batch" title="返回批量识别界面，可改绑或重新选词搜索">修改绑定</button>
                                 <button id="scraper-inline-build-plan-btn" type="button" class="scraper-compact-btn scraper-primary-soft hidden" data-scraper-action="build-plan">生成预览</button>
-                                <button id="scraper-clear-plan-btn" type="button" class="scraper-compact-btn hidden" data-scraper-action="clear-plan">退出预览</button>
+                                <button id="scraper-clear-plan-btn" type="button" class="scraper-compact-btn scraper-danger-soft hidden" data-scraper-action="clear-plan">退出预览</button>
                                 <button id="scraper-inline-execute-btn" type="button" class="scraper-compact-btn scraper-primary-soft hidden" data-scraper-action="execute-plan" disabled>执行重命名 0 项</button>
                             </div>
                         </div>
@@ -121,6 +121,33 @@
                                 <div id="scraper-manual-results" class="scraper-manual-results"></div>
                             </div>
 
+                            <div class="scraper-inspector-actions">
+                                <button id="scraper-build-plan-btn" type="button" class="scraper-main-btn" data-scraper-action="build-plan">生成预览</button>
+                            </div>
+                        </div>
+                    </aside>
+
+                    <aside id="scraper-batch-panel" class="scraper-inspector-panel hidden" aria-label="批量整理">
+                        <div class="scraper-panel scraper-batch-dialog" role="dialog" aria-modal="true" aria-labelledby="scraper-batch-title">
+                            <div class="scraper-panel-head">
+                                <div>
+                                    <div class="scraper-panel-kicker">Batch</div>
+                                    <h3 id="scraper-batch-title" class="scraper-panel-title">批量整理</h3>
+                                </div>
+                                <button type="button" class="scraper-icon-btn" data-scraper-action="close-batch" title="退出批量整理" aria-label="退出批量整理">
+                                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                        <path d="M7 7L17 17M17 7L7 17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                                    </svg>
+                                </button>
+                            </div>
+                            <div class="scraper-batch-dialog-body">
+                            <div id="scraper-batch-summary" class="scraper-status-box">正在扫描当前目录...</div>
+                            <div class="scraper-batch-split-mode" role="group" aria-label="文件夹拆分方式">
+                                <span class="scraper-batch-split-label">拆分方式：<em id="scraper-split-mode-text">自动判断</em></span>
+                                <button type="button" class="scraper-batch-split-option" data-split-mode="single">整个文件夹</button>
+                                <button type="button" class="scraper-batch-split-option" data-split-mode="split">按子目录拆分</button>
+                            </div>
+                            <div id="scraper-batch-list" class="scraper-batch-list"></div>
                             <div class="scraper-options">
                                 <div class="scraper-field-label">命名选项</div>
 
@@ -181,11 +208,16 @@
                                         <input id="scraper-rename-selected-folders" type="checkbox" class="ui-checkbox ui-checkbox-sm" checked>
                                         <span>选中单个文件夹时同步重命名文件夹</span>
                                     </label>
+                                    <label class="scraper-option-toggle">
+                                        <input id="scraper-delete-ad-files" type="checkbox" class="ui-checkbox ui-checkbox-sm">
+                                        <span>整理时删除广告文件（图片/网页/文本，删除进入网盘回收站）</span>
+                                    </label>
                                 </div>
                             </div>
-
                             <div class="scraper-inspector-actions">
-                                <button id="scraper-build-plan-btn" type="button" class="scraper-main-btn" data-scraper-action="build-plan">生成预览</button>
+                                <button type="button" class="scraper-compact-btn" data-scraper-action="rescan-batch" title="重新扫描并识别当前目录">重新扫描</button>
+                                <button id="scraper-batch-build-plan-btn" type="button" class="scraper-main-btn" data-scraper-action="build-batch-plan" disabled>生成预览</button>
+                            </div>
                             </div>
                         </div>
                     </aside>

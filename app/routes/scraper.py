@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from ..background import submit_background
 from ..core import parse_int
 from ..services.scraper import (
+    build_scraper_batch_plan,
     build_scraper_providers_payload,
     build_scraper_rename_plan,
     check_scraper_folder_rename_warning,
@@ -16,12 +17,14 @@ from ..services.scraper import (
     create_scraper_job_from_plan,
     delete_scraper_entries,
     get_scraper_jobs_state,
+    identify_scraper_batch_items,
     identify_scraper_media,
     list_scraper_entries,
     move_scraper_entries,
     rename_scraper_entry,
     rollback_scraper_job,
     run_scraper_job,
+    scan_scraper_batch_items,
 )
 
 router = APIRouter()
@@ -183,6 +186,50 @@ async def build_scraper_rename_plan_endpoint(request: Request) -> Dict[str, Any]
     payload = data if isinstance(data, dict) else {}
     try:
         return await asyncio.to_thread(build_scraper_rename_plan, payload)
+    except Exception as exc:
+        return _error_response(exc)
+
+
+@router.post("/scraper/batch/scan")
+async def scan_scraper_batch_endpoint(request: Request) -> Dict[str, Any]:
+    data = await request.json()
+    payload = data if isinstance(data, dict) else {}
+    provider = str(payload.get("provider", "115") or "115").strip()
+    cid = str(payload.get("cid", "0") or "0").strip() or "0"
+    base_path = str(payload.get("base_path", "") or "").strip()
+    selected = payload.get("selected") if isinstance(payload.get("selected"), list) else None
+    split_folders = bool(payload.get("split_folders", False))
+    split_mode = str(payload.get("split_mode", "auto") or "auto").strip()
+    try:
+        return await asyncio.to_thread(
+            scan_scraper_batch_items,
+            provider,
+            cid,
+            base_path,
+            selected,
+            split_folders,
+            split_mode,
+        )
+    except Exception as exc:
+        return _error_response(exc)
+
+
+@router.post("/scraper/batch/identify")
+async def identify_scraper_batch_endpoint(request: Request) -> Dict[str, Any]:
+    data = await request.json()
+    payload = data if isinstance(data, dict) else {}
+    try:
+        return await asyncio.to_thread(identify_scraper_batch_items, payload)
+    except Exception as exc:
+        return _error_response(exc)
+
+
+@router.post("/scraper/batch/plan")
+async def build_scraper_batch_plan_endpoint(request: Request) -> Dict[str, Any]:
+    data = await request.json()
+    payload = data if isinstance(data, dict) else {}
+    try:
+        return await asyncio.to_thread(build_scraper_batch_plan, payload)
     except Exception as exc:
         return _error_response(exc)
 

@@ -552,6 +552,7 @@ def build_tmdb_task_binding(detail: Dict[str, Any], media_type: str = "") -> Dic
         "tmdb_original_title": str(detail.get("original_title", "") or "").strip(),
         "tmdb_localized_title": str(detail.get("localized_title", "") or detail.get("title", "") or "").strip(),
         "tmdb_english_title": str(detail.get("english_title", "") or "").strip(),
+        "tmdb_poster_url": str(detail.get("poster_url", "") or "").strip(),
         "tmdb_year": normalize_tmdb_year(detail.get("year", "")),
         "tmdb_aliases": detail.get("aliases", []) if isinstance(detail.get("aliases"), list) else [],
         "tmdb_total_episodes": max(0, parse_int(detail.get("total_episodes", 0) or 0, 0)),

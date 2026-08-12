@@ -689,7 +689,7 @@ USERSCRIPT_MAGNET_HELPER_PATH = os.path.join(BASE_DIR, "115-magnet-helper-webhoo
 RESOURCE_SEASON_EPISODE_REGEX = re.compile(r"\bS(?:0|O)?(\d{1,2})\s*[-_. ]?\s*E(?:0|O)?(\d{1,4})\b", re.IGNORECASE)
 RESOURCE_EPISODE_ONLY_REGEX = re.compile(r"(?:第\s*)(\d{1,4})\s*(?:集|話|话)\b", re.IGNORECASE)
 RESOURCE_EPISODE_ONLY_CN_REGEX = re.compile(r"(?:第\s*)([零〇一二三四五六七八九十两兩]{1,4})\s*(?:集|話|话)\b", re.IGNORECASE)
-RESOURCE_EPISODE_CODE_REGEX = re.compile(r"(?<!\d)(?:EP|E)\s*[-_. ]?\s*(\d{1,4})\b", re.IGNORECASE)
+RESOURCE_EPISODE_CODE_REGEX = re.compile(r"(?<![A-Za-z0-9])(?:EP|E)\s*[-_. ]?\s*(\d{1,4})\b", re.IGNORECASE)
 RESOURCE_EPISODE_RANGE_REGEXES = [
     re.compile(
         r"(?:第?\s*)([零〇一二三四五六七八九十两兩\d]{1,4})\s*[-~～—–－至到]\s*([零〇一二三四五六七八九十两兩\d]{1,4})\s*(?:集|話|话)?\b",
@@ -1128,6 +1128,7 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "name": name,
         "webhook_enabled": normalize_bool(task.get("webhook_enabled", False), default=False),
+        "auto_scrape_on_new": normalize_bool(task.get("auto_scrape_on_new", False), default=False),
         "scan_path": normalize_remote_path(task.get("scan_path", "")),
         "target_path": normalize_relative_path(task.get("target_path", "")),
         "skip_by_dir_mtime": normalize_bool(task.get("skip_by_dir_mtime", False), default=False),

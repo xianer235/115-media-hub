@@ -5,7 +5,10 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 MEDIA_TAG_GROUP_ORDER = ("resolution", "source", "dynamic_range", "video", "audio")
 MEDIA_TAG_GROUPS = set(MEDIA_TAG_GROUP_ORDER)
-MEDIA_AUDIO_CHANNEL_REGEX = re.compile(r"(?<![0-9])(?:1\.0|2\.0|2\.1|5\.1|6\.1|7\.1)(?![0-9])", re.IGNORECASE)
+MEDIA_AUDIO_CHANNEL_REGEX = re.compile(
+    r"(?<![0-9])(?:1[ ]?[.]?[ ]?0|2[ ]?[.]?[ ]?0|2[ ]?[.]?[ ]?1|5[ ]?[.]?[ ]?1|6[ ]?[.]?[ ]?1|7[ ]?[.]?[ ]?1)(?![0-9])",
+    re.IGNORECASE,
+)
 
 
 MEDIA_TAG_RULES: Tuple[Tuple[str, str, str], ...] = (

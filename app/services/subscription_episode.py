@@ -329,7 +329,7 @@ def _extract_numeric_episode_from_filename(file_name: str) -> int:
         if not matched:
             continue
         value = max(0, int(matched.group(1) or 0))
-        if 0 < value <= 5000:
+        if 0 < value <= 5000 and not (1900 <= value <= 2099):
             return value
 
     quality_tail_match = re.match(
@@ -339,7 +339,19 @@ def _extract_numeric_episode_from_filename(file_name: str) -> int:
     )
     if quality_tail_match and _is_subscription_numeric_episode_quality_suffix(quality_tail_match.group("suffix")):
         value = max(0, int(quality_tail_match.group(1) or 0))
-        if 0 < value <= 5000:
+        if 0 < value <= 5000 and not (1900 <= value <= 2099):
+            return value
+
+    # “数字 + 分隔符 + 单集标题”（1. The Hedge Knight / 01 - Title / 02_Title）：
+    # 数字限 1-3 位并排除年份，且分隔符后必须有标题文字，避免 12 Monkeys、1.5 误判。
+    title_prefix_match = re.match(
+        r"^\s*0*(\d{1,3})\s*(?:[.\-_)\]）】：]\s*|(?:集|话|話)\s*)(?=.*[A-Za-z\u4e00-\u9fff])",
+        stem_tail_numeric,
+        re.IGNORECASE,
+    )
+    if title_prefix_match:
+        value = max(0, int(title_prefix_match.group(1) or 0))
+        if value > 0 and not (1900 <= value <= 2099):
             return value
     return 0
 

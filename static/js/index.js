@@ -3580,6 +3580,7 @@
                 skip_by_dir_mtime: document.getElementById('monitor_skip_by_dir_mtime').checked,
                 strm_write_mode: document.getElementById('monitor_strm_write_mode')?.value || 'incremental',
                 sync_clean: document.getElementById('monitor_sync_clean').checked,
+                auto_scrape_on_new: document.getElementById('monitor_auto_scrape_on_new').checked,
                 incremental: !document.getElementById('monitor_sync_clean').checked,
                 retries: parseInt(document.getElementById('monitor_retries').value || '3', 10) || 3,
                 list_delay_ms: document.getElementById('monitor_list_delay_ms').value === ''
@@ -3852,6 +3853,7 @@
             document.getElementById('monitor_skip_by_dir_mtime').checked = false;
             document.getElementById('monitor_strm_write_mode').value = 'incremental';
             document.getElementById('monitor_sync_clean').checked = true;
+            document.getElementById('monitor_auto_scrape_on_new').checked = false;
             document.getElementById('monitor_retries').value = 3;
             document.getElementById('monitor_list_delay_ms').value = 250;
             document.getElementById('monitor_min_file_size_mb').value = 0;
@@ -3936,6 +3938,7 @@
             document.getElementById('monitor_sync_clean').checked = Object.prototype.hasOwnProperty.call(task, 'sync_clean')
                 ? !!task.sync_clean
                 : !task.incremental;
+            document.getElementById('monitor_auto_scrape_on_new').checked = !!task.auto_scrape_on_new;
             document.getElementById('monitor_retries').value = task.retries ?? 3;
             document.getElementById('monitor_list_delay_ms').value = task.list_delay_ms ?? 250;
             document.getElementById('monitor_min_file_size_mb').value = task.min_file_size_mb ?? 0;
