@@ -1372,6 +1372,32 @@ def _resolve_scraper_manual_episode_info(
     return _resolve_scraper_tv_episode_info(task, {normalized_episode}, source_season or default_season)
 
 
+def _resolve_scraper_auto_episode_info(
+    task: Dict[str, Any],
+    entry: Dict[str, Any],
+    default_season: int,
+) -> Tuple[Dict[str, Any], str]:
+    """自动识别刮削文件的季集信息。
+
+    文件或父路径带明确季号时优先使用该季号（与手动集数覆盖保持一致），
+    完全没有季号时才用“未识别时默认季号”兜底。避免 S03E07 这类标准文件名
+    因页面默认季号为 1 而被单季模式以 season_mismatch 拒绝。
+    """
+    item = entry if isinstance(entry, dict) else {}
+    parent_path = normalize_relative_path(str(item.get("parent_path", "") or ""))
+    source_path = normalize_relative_path(str(item.get("path", "") or item.get("name", "")))
+    source_season = _extract_subscription_season_from_name(parent_path) or _extract_subscription_season_from_name(source_path)
+    effective_season = max(1, int(source_season or default_season or task.get("season", 1) or 1))
+    effective_task = dict(task)
+    effective_task["season"] = effective_season
+    episodes = _extract_task_episodes_from_file_entry(
+        effective_task,
+        str(item.get("path") or item.get("name") or ""),
+        parent_path=parent_path,
+    )
+    return _resolve_scraper_tv_episode_info(effective_task, episodes, effective_season)
+
+
 def _scraper_episode_width_from_value(value: int) -> int:
     return max(2, len(str(max(0, int(value or 0)))))
 
@@ -1451,14 +1477,9 @@ def _build_scraper_target_path(
         task = _build_task_from_tmdb(tmdb, options)
         resolved_episode_info = episode_info if isinstance(episode_info, dict) else {}
         if not resolved_episode_info:
-            episodes = _extract_task_episodes_from_file_entry(
+            resolved_episode_info, issue = _resolve_scraper_auto_episode_info(
                 task,
-                str(entry.get("path") or entry.get("name") or ""),
-                parent_path=normalize_relative_path(str(entry.get("parent_path", "") or "")),
-            )
-            resolved_episode_info, issue = _resolve_scraper_tv_episode_info(
-                task,
-                episodes,
+                entry,
                 max(1, parse_int(options.get("season") or task.get("season") or 1, 1)),
             )
             if issue:
@@ -1729,12 +1750,7 @@ def build_scraper_rename_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
                 )
                 file_episode_infos.append(manual_episode_info)
                 continue
-            episodes = _extract_task_episodes_from_file_entry(
-                task,
-                str(entry.get("path") or entry.get("name") or ""),
-                parent_path=normalize_relative_path(str(entry.get("parent_path", "") or "")),
-            )
-            episode_info, _ = _resolve_scraper_tv_episode_info(task, episodes, default_season)
+            episode_info, _ = _resolve_scraper_auto_episode_info(task, entry, default_season)
             file_episode_infos.append(episode_info)
         episode_widths_by_season = _build_scraper_episode_widths_by_season(
             task,
