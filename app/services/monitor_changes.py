@@ -11,6 +11,7 @@ from ..core import (
     is_subpath,
     list_remote_dir,
     normalize_task,
+    resolve_provider_relative_path,
     resolve_task_root,
 )
 from ..db import db_connection, ensure_db, now_text, safe_json_dumps, safe_json_loads, sqlite_row_to_dict
@@ -1898,7 +1899,7 @@ def get_manual_required_monitor_scopes(
     with db_connection() as conn:
         cursor = conn.execute(
             """
-            SELECT id, new_path
+            SELECT id, operation, old_path, new_path, created_at
             FROM monitor_change_events
             WHERE task_name = ? AND status = 'manual_required'
             ORDER BY id
@@ -1906,7 +1907,22 @@ def get_manual_required_monitor_scopes(
             (normalized_task_name,),
         )
         for row in cursor.fetchall():
-            provider_path = normalize_relative_path(str(row[1] or ""))
+            def _provider_relative(path_value: Any) -> str:
+                normalized = normalize_relative_path(str(path_value or ""))
+                try:
+                    _provider, resolved = resolve_provider_relative_path(
+                        active_cfg,
+                        str(path_value or ""),
+                        expected_provider="115",
+                    )
+                    return normalize_relative_path(resolved) or normalized
+                except Exception:
+                    return normalized
+
+            operation = str(row[1] or "")
+            old_path = _provider_relative(row[2])
+            new_path = _provider_relative(row[3])
+            provider_path = new_path
             context = _task_path_context(active_cfg, task, provider_path)
             if not context:
                 continue
@@ -1914,6 +1930,10 @@ def get_manual_required_monitor_scopes(
             scopes.append(
                 {
                     "event_id": int(row[0] or 0),
+                    "operation": operation,
+                    "old_path": old_path,
+                    "new_path": new_path,
+                    "created_at": str(row[4] or ""),
                     "provider_path": provider_path,
                     "remote_path": context["remote_path"],
                     "first_level_dir_rel": remote_rel_path.split("/", 1)[0] if remote_rel_path else "",

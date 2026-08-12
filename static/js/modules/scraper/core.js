@@ -194,6 +194,8 @@ function syncScraperLocationHash() {
     try {
         const raw = String(window.location.hash || '').replace(/^#/, '');
         const params = new URLSearchParams(raw);
+        // 只在刮削页写入刮削参数，避免污染其它 tab 的链接。
+        if (String(params.get('tab') || '').trim().toLowerCase() !== 'scraper') return;
         params.set('tab', 'scraper');
         params.set('provider', String(state.provider || '115'));
         const path = currentParentPath();

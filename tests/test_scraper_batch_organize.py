@@ -1279,6 +1279,39 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         go_trail_source = source[source.index("async function goTrail("):source.index("async function createFolder(")]
         self.assertIn("syncScraperLocationHash();", go_trail_source)
 
+    def test_scraper_url_params_are_tab_scoped(self):
+        import subprocess
+        import tempfile
+
+        url_sync = (ROOT / "static/js/modules/tabs/url-sync.js").read_text(encoding="utf-8")
+        self.assertIn("TAB_OWNED_PARAMS", url_sync)
+        self.assertIn("scraper: ['provider', 'path', 'cid']", url_sync)
+        self.assertIn("keys.forEach(key => params.delete(key));", url_sync)
+
+        source = SCRAPER_CORE_PATH.read_text(encoding="utf-8")
+        sync_source = source[source.index("function syncScraperLocationHash("):source.index("async function restoreScraperLocation(")]
+        self.assertIn("params.get('tab')", sync_source)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            module_path = os.path.join(tmpdir, "url-sync.mjs")
+            with open(module_path, "w", encoding="utf-8") as handle:
+                handle.write(url_sync)
+            script = (
+                f"import {{buildHashWithTab}} from 'file://{module_path}';\n"
+                "console.log(buildHashWithTab('monitor', '#tab=scraper&provider=115&path=abc&cid=1'));\n"
+                "console.log(buildHashWithTab('scraper', '#tab=monitor&provider=115&path=abc'));\n"
+            )
+            result = subprocess.run(
+                ["node", "--input-type=module", "-e", script],
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lines = result.stdout.strip().splitlines()
+        self.assertEqual(lines[0], "#tab=monitor")
+        self.assertIn("tab=scraper", lines[1])
+        self.assertIn("provider=115", lines[1])
+
     def test_preview_offers_return_to_binding_interface(self):
         html = (ROOT / "templates/partials/pages/scraper.html").read_text(encoding="utf-8")
         self.assertIn('id="scraper-reopen-batch-btn"', html)
@@ -2060,6 +2093,49 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         index_source = (ROOT / "static/js/index.js").read_text(encoding="utf-8")
         self.assertIn("auto_scrape_on_new: document.getElementById('monitor_auto_scrape_on_new').checked", index_source)
         self.assertIn("monitor_auto_scrape_on_new').checked = !!task.auto_scrape_on_new", index_source)
+
+    def test_manual_required_scopes_include_path_details(self):
+        from app.services.monitor_changes import get_manual_required_monitor_scopes
+
+        cfg = self._cfg()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO monitor_change_events(
+                    dedupe_key, provider, operation, old_path, new_path, entry_snapshot_json,
+                    task_name, source_action, status, created_at, updated_at
+                ) VALUES (?, '115', 'rename', ?, ?, '{}', '影视监控', 'test', 'manual_required', '2026-08-13 10:00:00', '2026-08-13 10:00:00')
+                """,
+                ("mr-1", "/115/Media/旧夹", "/115/Media/二级/新夹"),
+            )
+        scopes = get_manual_required_monitor_scopes("影视监控", cfg=cfg)
+        self.assertEqual(len(scopes), 1)
+        self.assertEqual(scopes[0]["new_path"], "Media/二级/新夹")
+        self.assertEqual(scopes[0]["old_path"], "Media/旧夹")
+        self.assertEqual(scopes[0]["operation"], "rename")
+        self.assertEqual(scopes[0]["remote_path"], "/115/Media/二级/新夹")
+        self.assertTrue(scopes[0]["created_at"])
+
+    def test_manual_required_modal_and_link_wiring(self):
+        html = (ROOT / "templates/partials/modals/monitor.html").read_text(encoding="utf-8")
+        self.assertIn('id="monitor-manual-required-modal"', html)
+        self.assertIn('id="monitor-manual-required-list"', html)
+        self.assertIn("rescanMonitorManualRequired()", html)
+
+        index_source = (ROOT / "static/js/index.js").read_text(encoding="utf-8")
+        self.assertIn("monitor-manual-required-link", index_source)
+        self.assertIn("function openMonitorManualRequired(", index_source)
+        self.assertIn("function closeMonitorManualRequired()", index_source)
+        self.assertIn("async function rescanMonitorManualRequired()", index_source)
+        self.assertIn("/monitor/manual-required?task_name=", index_source)
+        self.assertIn("window.openMonitorManualRequired = openMonitorManualRequired;", index_source)
+        self.assertIn("manualRequiredTaskArg", index_source)
+        self.assertNotIn("openMonitorManualRequired('${escapeHtml(taskKey)}')", index_source)
+        self.assertIn("OPERATION_LABELS", index_source)
+        self.assertIn("该目录变更时内容清单未确认", index_source)
+
+        css = (ROOT / "static/css/index.css").read_text(encoding="utf-8")
+        self.assertIn(".monitor-manual-required-link", css)
 
     def test_batch_item_search_renders_path_selection_and_shared_search(self):
         source = SCRAPER_CORE_PATH.read_text(encoding="utf-8")

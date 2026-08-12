@@ -3871,6 +3871,59 @@
             hideLockedModal('monitor-modal');
         }
 
+        async function openMonitorManualRequired(taskName) {
+            const modal = document.getElementById('monitor-manual-required-modal');
+            const listEl = document.getElementById('monitor-manual-required-list');
+            if (!modal || !listEl) return;
+            modal.dataset.taskName = String(taskName || '').trim();
+            listEl.innerHTML = '<div class="text-slate-500 text-sm">加载中...</div>';
+            showLockedModal('monitor-manual-required-modal');
+            try {
+                const data = await window.MediaHubApi.getJson(`/monitor/manual-required?task_name=${encodeURIComponent(taskName || '')}`);
+                const items = Array.isArray(data.items) ? data.items : [];
+                if (!items.length) {
+                    listEl.innerHTML = '<div class="text-slate-400 text-sm">当前没有需手动监控的路径（可能已被扫描清除）。</div>';
+                } else {
+                    const OPERATION_LABELS = { copy: '复制', move: '移动', rename: '重命名', delete: '删除', create: '新建' };
+                    listEl.innerHTML = items.map((item, index) => {
+                        const opLabel = OPERATION_LABELS[item.operation] || item.operation || '变更';
+                        const oldPath = String(item.old_path || '').trim();
+                        const newPath = String(item.remote_path || item.new_path || '').trim();
+                        const pathLine = oldPath && newPath && oldPath !== newPath
+                            ? `${escapeHtml(oldPath)} → ${escapeHtml(newPath)}`
+                            : escapeHtml(newPath || oldPath || '--');
+                        return `
+                            <div class="py-2 px-1 border-b border-slate-800 last:border-0">
+                                <div class="flex items-center gap-2 text-xs text-slate-400">
+                                    <span class="rounded bg-amber-500/15 text-amber-300 px-1.5 py-0.5 font-bold">#${escapeHtml(String(item.event_id || ''))}</span>
+                                    <span>${escapeHtml(opLabel)}</span>
+                                    ${item.created_at ? `<span>· ${escapeHtml(String(item.created_at))}</span>` : ''}
+                                </div>
+                                <div class="font-semibold text-slate-200 mt-1 break-all">${index + 1}. ${pathLine}</div>
+                                <div class="text-xs text-slate-500 mt-1">该目录变更时内容清单未确认；重新扫描该任务后会自动补齐 STRM 并清除此提示。</div>
+                            </div>
+                        `;
+                    }).join('');
+                }
+            } catch (error) {
+                listEl.innerHTML = `<div class="text-red-400 text-sm">加载失败：${escapeHtml(error.message || '未知错误')}</div>`;
+            }
+        }
+
+        function closeMonitorManualRequired() {
+            hideLockedModal('monitor-manual-required-modal');
+        }
+
+        async function rescanMonitorManualRequired() {
+            const taskName = String(document.getElementById('monitor-manual-required-modal')?.dataset.taskName || '').trim();
+            closeMonitorManualRequired();
+            if (taskName) await startMonitorTask(taskName);
+        }
+
+        window.openMonitorManualRequired = openMonitorManualRequired;
+        window.closeMonitorManualRequired = closeMonitorManualRequired;
+        window.rescanMonitorManualRequired = rescanMonitorManualRequired;
+
         function refreshWebhookHint() {
             const name = document.getElementById('monitor_name').value.trim() || '任务名';
             document.getElementById('webhook-hint').innerHTML = [
@@ -4100,9 +4153,13 @@
                 const pendingChanges = Math.max(0, Number(changeCount.pending || 0) || 0);
                 const failedChanges = Math.max(0, Number(changeCount.failed || 0) || 0);
                 const manualRequiredChanges = Math.max(0, Number(changeCount.manual_required || 0) || 0);
+                const manualRequiredTaskArg = String(taskName || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                const manualRequiredLabel = manualRequiredChanges
+                    ? `<button type="button" class="monitor-manual-required-link" onclick="openMonitorManualRequired('${escapeHtml(manualRequiredTaskArg)}')">需手动监控 ${manualRequiredChanges}</button>`
+                    : '';
                 const changeLabels = [
                     pendingChanges ? `待同步 ${pendingChanges}` : '',
-                    manualRequiredChanges ? `需手动监控 ${manualRequiredChanges}` : '',
+                    manualRequiredLabel,
                     failedChanges ? `同步失败 ${failedChanges}` : '',
                 ].filter(Boolean);
                 const changeCountHtml = changeLabels.length

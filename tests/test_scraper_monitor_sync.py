@@ -716,17 +716,16 @@ class ScraperMonitorSyncTest(unittest.TestCase):
         self.assertEqual(monitor_changes.get_monitor_change_counts(), {"影视监控": {"pending": 0, "failed": 0, "manual_required": 1}})
 
         scopes = monitor_changes.get_manual_required_monitor_scopes("影视监控", cfg=cfg)
-        self.assertEqual(
-            scopes,
-            [
-                {
-                    "event_id": prepared["event_ids"][0],
-                    "provider_path": "Media/ManualFolder",
-                    "remote_path": "/115/Media/ManualFolder",
-                    "first_level_dir_rel": "ManualFolder",
-                }
-            ],
-        )
+        self.assertEqual(len(scopes), 1)
+        scope = scopes[0]
+        self.assertEqual(scope["event_id"], prepared["event_ids"][0])
+        self.assertEqual(scope["operation"], "copy")
+        self.assertEqual(scope["provider_path"], "Media/ManualFolder")
+        self.assertEqual(scope["new_path"], "Media/ManualFolder")
+        self.assertEqual(scope["old_path"], "Outside/Source")
+        self.assertEqual(scope["remote_path"], "/115/Media/ManualFolder")
+        self.assertEqual(scope["first_level_dir_rel"], "ManualFolder")
+        self.assertTrue(scope["created_at"])
 
         self.assertEqual(
             monitor_changes.complete_manual_required_monitor_events(

@@ -14197,6 +14197,21 @@
             color: #e0f2fe;
         }
 
+        .monitor-manual-required-link {
+            background: none;
+            border: none;
+            padding: 0;
+            color: #fcd34d;
+            text-decoration: underline;
+            font-size: inherit;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        .monitor-manual-required-link:hover {
+            color: #fde68a;
+        }
+
         .scraper-batch-check {
             display: flex;
             align-items: flex-start;
@@ -14835,6 +14850,14 @@
             border-color: #38bdf8;
             background: #e0f2fe;
             color: #075985;
+        }
+
+        html.theme-day .monitor-manual-required-link {
+            color: #b45309;
+        }
+
+        html.theme-day .monitor-manual-required-link:hover {
+            color: #92400e;
         }
 
         html.theme-day .scraper-batch-poster {

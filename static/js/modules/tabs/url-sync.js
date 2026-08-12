@@ -1,4 +1,7 @@
 const TAB_HASH_KEY = 'tab';
+const TAB_OWNED_PARAMS = Object.freeze({
+    scraper: ['provider', 'path', 'cid'],
+});
 
 function toHashParams(hashValue) {
     const raw = String(hashValue || '').trim();
@@ -14,7 +17,12 @@ export function readTabFromHash(tabMeta, hashValue = window.location.hash) {
 }
 
 export function buildHashWithTab(tab, hashValue = window.location.hash) {
+    const normalizedTab = String(tab || '').trim().toLowerCase();
     const params = toHashParams(hashValue);
-    params.set(TAB_HASH_KEY, String(tab || '').trim().toLowerCase());
+    for (const [owner, keys] of Object.entries(TAB_OWNED_PARAMS)) {
+        if (owner === normalizedTab) continue;
+        keys.forEach(key => params.delete(key));
+    }
+    params.set(TAB_HASH_KEY, normalizedTab);
     return `#${params.toString()}`;
 }

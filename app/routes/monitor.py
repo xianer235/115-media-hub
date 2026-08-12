@@ -139,6 +139,20 @@ async def get_monitor_status(request: Request) -> Dict[str, Any]:
     return build_monitor_status_payload(compact=compact)
 
 
+@router.get("/monitor/manual-required")
+async def get_manual_required_monitor_endpoint(request: Request) -> Dict[str, Any]:
+    task_name = str(request.query_params.get("task_name", "") or "").strip()
+    if not task_name:
+        return {"ok": False, "items": [], "count": 0, "msg": "缺少任务名称"}
+    try:
+        from ..services.monitor_changes import get_manual_required_monitor_scopes
+
+        items = await asyncio.to_thread(get_manual_required_monitor_scopes, task_name)
+        return {"ok": True, "task_name": task_name, "items": items, "count": len(items)}
+    except Exception as exc:
+        return {"ok": False, "items": [], "count": 0, "msg": str(exc)}
+
+
 @router.get("/monitor/logs/tasks")
 async def get_monitor_log_tasks(request: Request) -> Dict[str, Any]:
     offset = max(0, int(request.query_params.get("offset", 0) or 0))
