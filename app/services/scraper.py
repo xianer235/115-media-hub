@@ -2553,8 +2553,45 @@ def create_scraper_job_from_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise RuntimeError("改名计划仍存在冲突或未识别项，请先处理后再执行")
     options = plan.get("options") if isinstance(plan.get("options"), dict) else {}
     tmdb = plan.get("tmdb") if isinstance(plan.get("tmdb"), dict) else {}
+    tmdb = _derive_scraper_batch_job_title(plan, actions, tmdb)
     job_id = _insert_scraper_job(provider, plan, options, tmdb)
     return {"ok": True, "job_id": job_id}
+
+
+def _derive_scraper_batch_job_title(
+    plan: Dict[str, Any],
+    actions: List[Dict[str, Any]],
+    tmdb: Dict[str, Any],
+) -> Dict[str, Any]:
+    """批量任务的任务名按实际执行的条目展示 TMDB 标题：
+    单条用“标题 (年份)”，多条用“首部标题 等 N 项”；无条目信息时维持原任务名。"""
+    if not tmdb.get("batch"):
+        return tmdb
+    items = [
+        item
+        for item in plan.get("items", [])
+        if isinstance(item, dict) and str(item.get("title") or item.get("name") or "").strip()
+    ]
+    if not items:
+        return tmdb
+    selected_indexes = {max(0, int(item.get("item_index", 0) or 0)) for item in actions}
+    if selected_indexes:
+        matched = [
+            item
+            for item in items
+            if max(0, int(item.get("item_index", 0) or 0)) in selected_indexes
+        ]
+        if matched:
+            items = matched
+    first_title = str(items[0].get("title") or items[0].get("name") or "").strip()
+    if not first_title:
+        return tmdb
+    if len(items) == 1:
+        year = str(items[0].get("year") or "").strip()
+        job_title = f"{first_title} ({year})" if year else first_title
+    else:
+        job_title = f"{first_title} 等 {len(items)} 项"
+    return {**tmdb, "title": job_title}
 
 
 def _serialize_scraper_action_row(row: Any) -> Dict[str, Any]:

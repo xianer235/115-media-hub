@@ -14552,7 +14552,7 @@
 
             .scraper-selection-actions {
                 display: grid;
-                grid-template-columns: repeat(5, minmax(0, 1fr));
+                grid-template-columns: repeat(6, minmax(0, 1fr));
                 gap: 0.4rem;
                 overflow-x: visible;
                 padding-bottom: 0;
@@ -14575,12 +14575,6 @@
 
             #scraper-inline-execute-btn {
                 grid-column: span 2;
-            }
-
-            @media (max-width: 360px) {
-                .scraper-selection-actions {
-                    grid-template-columns: repeat(4, minmax(0, 1fr));
-                }
             }
 
             .scraper-browser-toolbar {

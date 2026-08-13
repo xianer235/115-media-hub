@@ -146,6 +146,43 @@ class ScraperPathSelectionIntegrationTest(unittest.TestCase):
         self.assertIn("html.theme-day .scraper-path-token", source)
         self.assertIn("overflow-wrap: anywhere", source)
 
+    def test_scraper_selection_actions_keep_six_main_buttons_on_one_row(self):
+        stylesheet = STYLESHEET_PATH.read_text(encoding="utf-8")
+        start = stylesheet.index("@media (max-width: 760px) {")
+        end = stylesheet.index("html.theme-day .scraper-page", start)
+        mobile_block = stylesheet[start:end]
+
+        self.assertIn("repeat(6, minmax(0, 1fr))", mobile_block)
+        self.assertNotIn("repeat(5", mobile_block)
+        self.assertNotIn("repeat(4", mobile_block)
+
+    def test_scraper_options_expose_language_and_subtitle_preserve_tags(self):
+        template = SCRAPER_TEMPLATE_PATH.read_text(encoding="utf-8")
+
+        self.assertIn('data-scraper-tag="language"', template)
+        self.assertIn('data-scraper-tag="subtitle"', template)
+        audio_index = template.index('data-scraper-tag="audio"')
+        language_index = template.index('data-scraper-tag="language"')
+        subtitle_index = template.index('data-scraper-tag="subtitle"')
+        self.assertLess(audio_index, language_index)
+        self.assertLess(language_index, subtitle_index)
+
+    def test_scraper_folder_options_grouped_before_file_cleanup(self):
+        template = SCRAPER_TEMPLATE_PATH.read_text(encoding="utf-8")
+
+        season_index = template.index('id="scraper-use-season-subfolder"')
+        tmdb_index = template.index('id="scraper-include-tmdb-id"')
+        rename_index = template.index('id="scraper-rename-selected-folders"')
+        delete_index = template.index('id="scraper-delete-ad-files"')
+        structure_index = template.index("文件夹结构")
+        cleanup_index = template.index("文件清理")
+
+        self.assertLess(structure_index, cleanup_index)
+        self.assertLess(structure_index, season_index)
+        self.assertLess(season_index, tmdb_index)
+        self.assertLess(tmdb_index, rename_index)
+        self.assertLess(cleanup_index, delete_index)
+
     def test_completing_path_selection_clears_stale_tmdb_results_from_the_dom(self):
         source = SCRAPER_CORE_PATH.read_text(encoding="utf-8")
         start = source.index("function completeIdentifyPathSelection")
@@ -154,6 +191,18 @@ class ScraperPathSelectionIntegrationTest(unittest.TestCase):
 
         self.assertIn("state.manualResults = [];", function_body)
         self.assertIn("renderIdentify();", function_body)
+
+    def test_batch_search_results_render_tmdb_poster_covers(self):
+        source = SCRAPER_CORE_PATH.read_text(encoding="utf-8")
+        start = source.index("function renderBatchItemSearch")
+        end = source.index("\nfunction ", start + 1)
+        function_body = source[start:end]
+
+        self.assertIn("renderPoster(candidate)", function_body)
+
+        stylesheet = STYLESHEET_PATH.read_text(encoding="utf-8")
+        self.assertIn(".scraper-batch-result", stylesheet)
+        self.assertIn(".scraper-result-poster", stylesheet)
 
     def test_preview_allows_manual_episode_override_for_unrecognized_files(self):
         source = SCRAPER_CORE_PATH.read_text(encoding="utf-8")

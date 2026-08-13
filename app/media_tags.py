@@ -3,7 +3,7 @@ import unicodedata
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 
-MEDIA_TAG_GROUP_ORDER = ("resolution", "source", "dynamic_range", "video", "audio")
+MEDIA_TAG_GROUP_ORDER = ("resolution", "source", "dynamic_range", "video", "audio", "language", "subtitle")
 MEDIA_TAG_GROUPS = set(MEDIA_TAG_GROUP_ORDER)
 MEDIA_AUDIO_CHANNEL_REGEX = re.compile(
     r"(?<![0-9])(?:1[ ]?[.]?[ ]?0|2[ ]?[.]?[ ]?0|2[ ]?[.]?[ ]?1|5[ ]?[.]?[ ]?1|6[ ]?[.]?[ ]?1|7[ ]?[.]?[ ]?1)(?![0-9])",
@@ -50,6 +50,33 @@ MEDIA_TAG_RULES: Tuple[Tuple[str, str, str], ...] = (
     ("audio", r"(?<![A-Za-z0-9])opus(?![A-Za-z0-9])", "Opus"),
     ("audio", r"(?<![A-Za-z0-9])mp3(?![A-Za-z0-9])", "MP3"),
     ("audio", r"(?<![A-Za-z0-9])atmos(?![A-Za-z0-9])", "Atmos"),
+    # 音轨语言：整短语优先，独立“国语/粤语/英语/双语”要求两侧都不是中文或字母数字，
+    # 避免把“我的英语老师 / 双语教师”这类真实片名误判成标签。
+    ("language", r"国语中字", "国语"),
+    ("language", r"粤语中字", "粤语"),
+    ("language", r"英语中字", "英语"),
+    ("language", r"国粤双语|国英双语|中英双语", "双语"),
+    ("language", r"台配国语", "台配"),
+    ("language", r"(?<![一-龥A-Za-z0-9])台配(?![一-龥A-Za-z0-9])", "台配"),
+    ("language", r"(?<![一-龥A-Za-z0-9])国语(?![一-龥A-Za-z0-9])", "国语"),
+    ("language", r"(?<![一-龥A-Za-z0-9])粤语(?![一-龥A-Za-z0-9])", "粤语"),
+    ("language", r"(?<![一-龥A-Za-z0-9])英语(?![一-龥A-Za-z0-9])", "英语"),
+    ("language", r"(?<![一-龥A-Za-z0-9])双语(?![一-龥A-Za-z0-9])", "双语"),
+    # 字幕：整短语优先，避免“中英字幕 / 简中英字”再被拆成冗余小标签。
+    ("subtitle", r"国语中字", "中字"),
+    ("subtitle", r"粤语中字", "中字"),
+    ("subtitle", r"英语中字", "中字"),
+    ("subtitle", r"内封中字", "内封中字"),
+    ("subtitle", r"外挂中字", "外挂中字"),
+    ("subtitle", r"简中英字", "简中英字"),
+    ("subtitle", r"双语字幕", "双语字幕"),
+    ("subtitle", r"中英字幕", "中英字幕"),
+    ("subtitle", r"国英字幕", "国英字幕"),
+    ("subtitle", r"(?<![一-龥A-Za-z0-9])简中(?![一-龥A-Za-z0-9])", "简中"),
+    ("subtitle", r"(?<![一-龥A-Za-z0-9])繁中(?![一-龥A-Za-z0-9])", "繁中"),
+    ("subtitle", r"(?<![一-龥A-Za-z0-9])中字(?![一-龥A-Za-z0-9])", "中字"),
+    ("subtitle", r"(?<![一-龥A-Za-z0-9])英字(?![一-龥A-Za-z0-9])", "英字"),
+    ("subtitle", r"(?<![一-龥A-Za-z0-9])无字幕(?![一-龥A-Za-z0-9])", "无字幕"),
 )
 
 COMPILED_MEDIA_TAG_RULES: Tuple[Tuple[str, re.Pattern[str], str], ...] = tuple(
@@ -74,10 +101,23 @@ def _normalize_enabled_groups(enabled_groups: Any) -> Optional[set]:
 
 def _find_nearby_channel(text: str, start: int, end: int) -> Tuple[str, Optional[Tuple[int, int]]]:
     for match in MEDIA_AUDIO_CHANNEL_REGEX.finditer(text, end, min(len(text), end + 14)):
+        if _is_false_audio_channel(text, match):
+            continue
         return match.group(0), match.span()
     for match in MEDIA_AUDIO_CHANNEL_REGEX.finditer(text, max(0, start - 8), start):
+        if _is_false_audio_channel(text, match):
+            continue
         return match.group(0), match.span()
     return "", None
+
+
+def _is_false_audio_channel(text: str, match: "re.Match[str]") -> bool:
+    """把 10bit / hi10p 里的 “10” 排除掉，避免被当成 1.0 声道。"""
+    if match.group(0) != "10":
+        return False
+    after = re.sub(r"[^a-z0-9]", "", text[match.end(): match.end() + 8].lower())
+    before = re.sub(r"[^a-z0-9]", "", text[max(0, match.start() - 8): match.start()].lower())
+    return after.startswith("bit") or before.endswith("bit") or before.endswith("hi")
 
 
 def _add_media_tag(groups: Dict[str, List[str]], seen: set, group: str, label: str) -> None:

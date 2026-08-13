@@ -2274,6 +2274,7 @@ function renderBatchItemSearch(itemIndex) {
         : (results.length
             ? results.map((candidate, candidateIndex) => `
                 <div class="scraper-batch-result">
+                    ${renderPoster(candidate)}
                     <div class="scraper-batch-result-main">
                         <strong title="${escapeHtml(getBatchCandidateTitle(candidate))}">${escapeHtml(getBatchCandidateTitle(candidate))}</strong>
                         <span>${candidate.media_type === 'tv' ? '剧集' : '电影'} #${escapeHtml(String(candidate.id || ''))}</span>

@@ -191,23 +191,29 @@
                                         <label><input type="checkbox" class="ui-checkbox ui-checkbox-sm" data-scraper-tag="dynamic_range" checked disabled> HDR/DV</label>
                                         <label><input type="checkbox" class="ui-checkbox ui-checkbox-sm" data-scraper-tag="video" checked disabled> 视频编码</label>
                                         <label><input type="checkbox" class="ui-checkbox ui-checkbox-sm" data-scraper-tag="audio" checked disabled> 音频规格</label>
+                                        <label><input type="checkbox" class="ui-checkbox ui-checkbox-sm" data-scraper-tag="language" checked disabled> 语言</label>
+                                        <label><input type="checkbox" class="ui-checkbox ui-checkbox-sm" data-scraper-tag="subtitle" checked disabled> 字幕</label>
                                     </div>
                                 </div>
 
                                 <div class="scraper-options-group">
-                                    <div class="scraper-options-group-title">目录处理</div>
-                                    <label class="scraper-option-toggle">
-                                        <input id="scraper-include-tmdb-id" type="checkbox" class="ui-checkbox ui-checkbox-sm">
-                                        <span>在媒体文件夹名中写入 TMDB ID</span>
-                                    </label>
+                                    <div class="scraper-options-group-title">文件夹结构</div>
                                     <label id="scraper-use-season-subfolder-wrap" class="scraper-option-toggle">
                                         <input id="scraper-use-season-subfolder" type="checkbox" class="ui-checkbox ui-checkbox-sm" checked>
                                         <span>电视剧目录中创建 Season 子文件夹</span>
+                                    </label>
+                                    <label class="scraper-option-toggle">
+                                        <input id="scraper-include-tmdb-id" type="checkbox" class="ui-checkbox ui-checkbox-sm">
+                                        <span>在媒体文件夹名中写入 TMDB ID</span>
                                     </label>
                                     <label id="scraper-rename-selected-folders-wrap" class="scraper-option-toggle">
                                         <input id="scraper-rename-selected-folders" type="checkbox" class="ui-checkbox ui-checkbox-sm" checked>
                                         <span>选中单个文件夹时同步重命名文件夹</span>
                                     </label>
+                                </div>
+
+                                <div class="scraper-options-group">
+                                    <div class="scraper-options-group-title">文件清理</div>
                                     <label class="scraper-option-toggle">
                                         <input id="scraper-delete-ad-files" type="checkbox" class="ui-checkbox ui-checkbox-sm">
                                         <span>整理时删除广告文件（图片/网页/文本，删除进入网盘回收站）</span>

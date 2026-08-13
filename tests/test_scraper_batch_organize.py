@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import sqlite3
 import tempfile
@@ -2338,3 +2339,111 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         self.assertNotIn("www", cleaned.lower())
         self.assertEqual(scraper._extract_scraper_title_candidates("【XX字幕组】剧名.S01E01.mkv"), ["剧名"])
         self.assertEqual(scraper._extract_scraper_title_candidates("男子心如钻[中英字幕].S01E01.mkv"), ["男子心如钻"])
+
+
+class ScraperBatchJobTitleTest(unittest.TestCase):
+    """批量任务任务名按实际执行的条目展示 TMDB 标题。"""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.tmpdir.name, "data.db")
+        self.original_db_path = db.DB_PATH
+        self.original_db_ensured = db._DB_ENSURED
+        db.DB_PATH = self.db_path
+        db._DB_ENSURED = False
+        db.ensure_db()
+
+    def tearDown(self):
+        db.DB_PATH = self.original_db_path
+        db._DB_ENSURED = self.original_db_ensured
+        self.tmpdir.cleanup()
+
+    @staticmethod
+    def _job_payload(items, actions, tmdb=None):
+        plan = {
+            "provider": "115",
+            "base_cid": "root",
+            "base_path": "影视",
+            "options": {},
+            "tmdb": tmdb
+            or {
+                "batch": True,
+                "title": "批量整理",
+                "tmdb_id": 0,
+                "media_type": "movie",
+            },
+            "items": items,
+            "actions": actions,
+        }
+        return {"plan": plan}
+
+    @staticmethod
+    def _action(index, item_index=1):
+        return {
+            "action_index": index,
+            "entry_id": f"f{index}",
+            "is_dir": False,
+            "old_path": f"影视/旧名{index}.mkv",
+            "new_path": f"影视/新名 (2026) - S01E{index:02d}.mkv",
+            "item_index": item_index,
+            "item_name": f"条目{item_index}",
+            "ready": True,
+        }
+
+    def _job_title(self, payload):
+        result = scraper.create_scraper_job_from_plan(payload)
+        job_id = int(result["job_id"])
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT tmdb_json FROM scraper_jobs WHERE id = ?",
+                (job_id,),
+            ).fetchone()
+        return json.loads(row[0])["title"]
+
+    def test_single_executed_item_uses_tmdb_title_with_year(self):
+        items = [{"item_index": 1, "name": "旧名1", "title": "云秀行", "year": "2026"}]
+        payload = self._job_payload(items, [self._action(0, item_index=1)])
+
+        self.assertEqual(self._job_title(payload), "云秀行 (2026)")
+
+    def test_multiple_executed_items_use_first_title_with_count(self):
+        items = [
+            {"item_index": 1, "name": "旧名1", "title": "云秀行", "year": "2026"},
+            {"item_index": 2, "name": "旧名2", "title": "大奉打更人", "year": "2024"},
+        ]
+        payload = self._job_payload(
+            items,
+            [self._action(0, item_index=1), self._action(1, item_index=2)],
+        )
+
+        self.assertEqual(self._job_title(payload), "云秀行 等 2 项")
+
+    def test_partial_execution_names_after_executed_items_only(self):
+        items = [
+            {"item_index": 1, "name": "旧名1", "title": "云秀行", "year": "2026"},
+            {"item_index": 2, "name": "旧名2", "title": "大奉打更人", "year": "2024"},
+            {"item_index": 3, "name": "旧名3", "title": "凡人修仙传", "year": "2025"},
+        ]
+        payload = self._job_payload(
+            items,
+            [self._action(0, item_index=1), self._action(1, item_index=3)],
+        )
+
+        self.assertEqual(self._job_title(payload), "云秀行 等 2 项")
+
+    def test_non_batch_job_keeps_binding_title(self):
+        tmdb = {
+            "tmdb_id": 239901,
+            "media_type": "tv",
+            "tmdb_title": "云秀行",
+            "tmdb_year": "2026",
+            "title": "云秀行",
+        }
+        payload = self._job_payload([], [self._action(0)], tmdb=tmdb)
+
+        self.assertEqual(self._job_title(payload), "云秀行")
+
+    def test_batch_without_item_summaries_keeps_default_title(self):
+        payload = self._job_payload([], [self._action(0)])
+
+        self.assertEqual(self._job_title(payload), "批量整理")
