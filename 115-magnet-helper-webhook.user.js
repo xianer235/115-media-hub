@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         115-media-hub助手
 // @namespace    http://tampermonkey.net/
-// @version      2.4.4
+// @version      2.5.0
 // @description  检测网页 magnet / torrent / 115 / 夸克分享链接并生成快捷按钮
 // @author       仙儿
 // @license      MIT
@@ -12,7 +12,6 @@
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
 // @run-at       document-end
-// @connect      hub.shuxian.fun
 // ==/UserScript==
 
 (function () {
@@ -58,18 +57,36 @@
         'user-select:none'
     ].join(';');
 
-    let tasks = loadTasks();
+    let tasks = [];
+    let secret = '';
     let toastTimer = null;
     let managerEditorState = { mode: 'none', taskId: '' };
 
-    function readStore(key, fallback) {
+    const NO_GM_VALUE = {};
+
+    function gmGetValue(key, fallback) {
         try {
-            if (typeof GM_getValue === 'function') {
-                const val = GM_getValue(key, fallback);
-                return typeof val === 'undefined' ? fallback : val;
+            if (typeof GM_getValue === 'function') return GM_getValue(key, fallback);
+            if (typeof GM !== 'undefined' && GM && typeof GM.getValue === 'function') {
+                return GM.getValue(key, fallback);
             }
         } catch (err) {
             console.warn(`[${APP_NAME}] GM_getValue 读取失败`, err);
+        }
+        return NO_GM_VALUE;
+    }
+
+    // iOS 的 Userscripts 等管理器把 GM_getValue/GM_setValue 实现为异步 Promise，
+    // Tampermonkey 桌面端是同步的；这里统一 await 兼容两种行为。
+    async function readStore(key, fallback) {
+        const gmVal = gmGetValue(key, fallback);
+        if (gmVal !== NO_GM_VALUE) {
+            try {
+                const val = await Promise.resolve(gmVal);
+                return typeof val === 'undefined' ? fallback : val;
+            } catch (err) {
+                console.warn(`[${APP_NAME}] GM_getValue 读取失败`, err);
+            }
         }
         try {
             const raw = window.localStorage.getItem(key);
@@ -80,10 +97,18 @@
         }
     }
 
-    function writeStore(key, value) {
+    async function writeStore(key, value) {
+        const writeWith = async (fn) => {
+            const result = fn(key, value);
+            if (result && typeof result.then === 'function') await result;
+        };
         try {
             if (typeof GM_setValue === 'function') {
-                GM_setValue(key, value);
+                await writeWith(GM_setValue);
+                return;
+            }
+            if (typeof GM !== 'undefined' && GM && typeof GM.setValue === 'function') {
+                await writeWith(GM.setValue);
                 return;
             }
         } catch (err) {
@@ -94,6 +119,15 @@
         } catch (err) {
             console.warn(`[${APP_NAME}] localStorage 写入失败`, err);
         }
+    }
+
+    async function loadPersistedState() {
+        const [storedTasks, storedSecret] = await Promise.all([
+            readStore(STORE_TASKS_KEY, []),
+            readStore(STORE_SECRET_KEY, '')
+        ]);
+        tasks = normalizeTaskList(storedTasks);
+        secret = String(storedSecret || '').trim();
     }
 
     function normalizeSavePath(path) {
@@ -319,39 +353,31 @@
         };
     }
 
-    function loadTasks() {
-        const stored = readStore(STORE_TASKS_KEY, []);
-        const list = Array.isArray(stored) ? stored : [];
+    function normalizeTaskList(rawList) {
         const out = [];
         const seen = new Set();
-        list.map(normalizeTask).forEach((task) => {
-            if (!task.id || seen.has(task.id)) return;
-            seen.add(task.id);
-            out.push(task);
-        });
-        return out;
-    }
-
-    function saveTasks(nextTasks) {
-        const deduped = [];
-        const seen = new Set();
-        (Array.isArray(nextTasks) ? nextTasks : [])
+        (Array.isArray(rawList) ? rawList : [])
             .map(normalizeTask)
             .forEach((task) => {
                 if (!task.id || seen.has(task.id)) return;
                 seen.add(task.id);
-                deduped.push(task);
+                out.push(task);
             });
-        tasks = deduped;
-        writeStore(STORE_TASKS_KEY, deduped);
+        return out;
+    }
+
+    function saveTasks(nextTasks) {
+        tasks = normalizeTaskList(nextTasks);
+        writeStore(STORE_TASKS_KEY, tasks);
     }
 
     function getSecret() {
-        return String(readStore(STORE_SECRET_KEY, '') || '').trim();
+        return secret;
     }
 
-    function setSecret(secret) {
-        writeStore(STORE_SECRET_KEY, String(secret || '').trim());
+    function setSecret(nextSecret) {
+        secret = String(nextSecret || '').trim();
+        writeStore(STORE_SECRET_KEY, secret);
     }
 
     function showToast(message, tone = 'success') {
@@ -626,9 +652,15 @@
         return bytes.slice(infoStart, infoEnd);
     }
 
-    function fetchArrayBuffer(url) {
+    function gmRequestSupported() {
+        return typeof GM_xmlhttpRequest === 'function'
+            || (typeof GM !== 'undefined' && GM && typeof GM.xmlHttpRequest === 'function');
+    }
+
+    function fetchArrayBufferByGM(url) {
         return new Promise((resolve, reject) => {
-            GM_xmlhttpRequest({
+            const gmReq = typeof GM_xmlhttpRequest === 'function' ? GM_xmlhttpRequest : GM.xmlHttpRequest;
+            gmReq({
                 method: 'GET',
                 url,
                 timeout: 26000,
@@ -653,6 +685,32 @@
                 ontimeout: () => reject(new Error('下载 torrent 失败: 请求超时'))
             });
         });
+    }
+
+    async function fetchArrayBufferByFetch(url) {
+        const res = await fetch(url, {
+            method: 'GET',
+            mode: 'cors',
+            cache: 'no-store'
+        });
+        if (!res.ok) {
+            throw new Error(`下载 torrent 失败: ${res.status || '网络错误'}`);
+        }
+        return res.arrayBuffer();
+    }
+
+    async function fetchArrayBuffer(url) {
+        if (gmRequestSupported()) {
+            try {
+                return await fetchArrayBufferByGM(url);
+            } catch (err) {
+                console.warn(
+                    `[${APP_NAME}] GM 下载 torrent 失败，尝试 fetch 备用`,
+                    err && err.message ? err.message : err
+                );
+            }
+        }
+        return fetchArrayBufferByFetch(url);
     }
 
     async function sha1Hex(data) {
@@ -722,20 +780,114 @@
         return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
     }
 
+    // 纯 JS SHA-256/HMAC：http 页面没有 WebCrypto 时兜底签名（iOS 磁力站多为 http）
+    function rotr32(value, bits) {
+        return ((value >>> bits) | (value << (32 - bits))) >>> 0;
+    }
+
+    function jsSha256Words(bytes) {
+        const K = [
+            0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+            0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+            0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+            0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+            0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+            0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+            0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+            0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+        ];
+        let h0 = 0x6a09e667, h1 = 0xbb67ae85, h2 = 0x3c6ef372, h3 = 0xa54ff53a;
+        let h4 = 0x510e527f, h5 = 0x9b05688c, h6 = 0x1f83d9ab, h7 = 0x5be0cd19;
+        const bitLen = bytes.length * 8;
+        const padded = new Uint8Array(Math.ceil((bytes.length + 9) / 64) * 64);
+        padded.set(bytes);
+        padded[bytes.length] = 0x80;
+        const dv = new DataView(padded.buffer);
+        dv.setUint32(padded.length - 8, Math.floor(bitLen / 0x100000000));
+        dv.setUint32(padded.length - 4, bitLen >>> 0);
+        const w = new Array(64);
+        let a, b, c, d, e, f, g, hh;
+        for (let offset = 0; offset < padded.length; offset += 64) {
+            for (let i = 0; i < 16; i += 1) w[i] = dv.getUint32(offset + i * 4);
+            for (let i = 16; i < 64; i += 1) {
+                const s0 = rotr32(w[i - 15], 7) ^ rotr32(w[i - 15], 18) ^ (w[i - 15] >>> 3);
+                const s1 = rotr32(w[i - 2], 17) ^ rotr32(w[i - 2], 19) ^ (w[i - 2] >>> 10);
+                w[i] = (w[i - 16] + s0 + w[i - 7] + s1) >>> 0;
+            }
+            a = h0; b = h1; c = h2; d = h3; e = h4; f = h5; g = h6; hh = h7;
+            for (let i = 0; i < 64; i += 1) {
+                const S1 = rotr32(e, 6) ^ rotr32(e, 11) ^ rotr32(e, 25);
+                const ch = (e & f) ^ (~e & g);
+                const temp1 = (hh + S1 + ch + K[i] + w[i]) >>> 0;
+                const S0 = rotr32(a, 2) ^ rotr32(a, 13) ^ rotr32(a, 22);
+                const maj = (a & b) ^ (a & c) ^ (b & c);
+                const temp2 = (S0 + maj) >>> 0;
+                hh = g; g = f; f = e; e = (d + temp1) >>> 0; d = c; c = b; b = a; a = (temp1 + temp2) >>> 0;
+            }
+            h0 = (h0 + a) >>> 0; h1 = (h1 + b) >>> 0; h2 = (h2 + c) >>> 0; h3 = (h3 + d) >>> 0;
+            h4 = (h4 + e) >>> 0; h5 = (h5 + f) >>> 0; h6 = (h6 + g) >>> 0; h7 = (h7 + hh) >>> 0;
+        }
+        return [h0, h1, h2, h3, h4, h5, h6, h7];
+    }
+
+    function jsWordsToBytes(words) {
+        const out = new Uint8Array(words.length * 4);
+        const dv = new DataView(out.buffer);
+        words.forEach((word, index) => dv.setUint32(index * 4, word >>> 0));
+        return out;
+    }
+
+    function jsSha256Bytes(bytes) {
+        return jsWordsToBytes(jsSha256Words(bytes));
+    }
+
+    function jsHmacSha256Bytes(secretBytes, messageBytes) {
+        const blockSize = 64;
+        let key = secretBytes instanceof Uint8Array ? secretBytes : new Uint8Array(secretBytes);
+        if (key.length > blockSize) key = jsSha256Bytes(key);
+        const paddedKey = new Uint8Array(blockSize);
+        paddedKey.set(key);
+        const ipad = new Uint8Array(blockSize);
+        const opad = new Uint8Array(blockSize);
+        for (let i = 0; i < blockSize; i += 1) {
+            ipad[i] = paddedKey[i] ^ 0x36;
+            opad[i] = paddedKey[i] ^ 0x5c;
+        }
+        const inner = new Uint8Array(blockSize + messageBytes.length);
+        inner.set(ipad);
+        inner.set(messageBytes, blockSize);
+        const innerHash = jsSha256Bytes(inner);
+        const outer = new Uint8Array(blockSize + innerHash.length);
+        outer.set(opad);
+        outer.set(innerHash, blockSize);
+        return jsSha256Bytes(outer);
+    }
+
+    function jsHmacSha256Hex(secret, message) {
+        const secretBytes = secret instanceof Uint8Array ? secret : new Uint8Array(secret);
+        const messageBytes = message instanceof Uint8Array ? message : new Uint8Array(message);
+        return arrayBufferToHex(jsHmacSha256Bytes(secretBytes, messageBytes).buffer);
+    }
+
     async function hmacSha256Hex(secret, message) {
-        if (!window.crypto || !window.crypto.subtle || typeof TextEncoder === 'undefined') {
-            throw new Error('当前页面不支持 WebCrypto HMAC');
+        if (window.crypto && window.crypto.subtle && typeof TextEncoder !== 'undefined') {
+            const encoder = new TextEncoder();
+            const key = await window.crypto.subtle.importKey(
+                'raw',
+                encoder.encode(secret),
+                { name: 'HMAC', hash: 'SHA-256' },
+                false,
+                ['sign']
+            );
+            const signBuffer = await window.crypto.subtle.sign('HMAC', key, encoder.encode(message));
+            return arrayBufferToHex(signBuffer);
+        }
+        // 非安全上下文（http 页面）没有 WebCrypto，用纯 JS 实现兜底
+        if (typeof TextEncoder === 'undefined') {
+            throw new Error('当前页面不支持 HMAC 签名（缺少 TextEncoder）');
         }
         const encoder = new TextEncoder();
-        const key = await window.crypto.subtle.importKey(
-            'raw',
-            encoder.encode(secret),
-            { name: 'HMAC', hash: 'SHA-256' },
-            false,
-            ['sign']
-        );
-        const signBuffer = await window.crypto.subtle.sign('HMAC', key, encoder.encode(message));
-        return arrayBufferToHex(signBuffer);
+        return jsHmacSha256Hex(encoder.encode(String(secret || '')), encoder.encode(String(message || '')));
     }
 
     async function buildSignedHeaders(secret, bodyText) {
@@ -752,25 +904,34 @@
 
     function postJsonByGM(requestUrl, headers, bodyText) {
         return new Promise((resolve) => {
-            GM_xmlhttpRequest({
-                method: 'POST',
-                url: requestUrl,
-                headers,
-                data: bodyText,
-                timeout: 18000,
-                onload: (res) => resolve({
-                    ok: res.status >= 200 && res.status < 300,
-                    status: res.status,
-                    body: String(res.responseText || '')
-                }),
-                onerror: (err) => {
-                    const detail = err && (err.error || err.message || err.type)
-                        ? `: ${String(err.error || err.message || err.type)}`
-                        : '';
-                    resolve({ ok: false, status: 0, body: `网络错误${detail}` });
-                },
-                ontimeout: () => resolve({ ok: false, status: 0, body: `请求超时: ${requestUrl}` })
-            });
+            if (!gmRequestSupported()) {
+                resolve({ ok: false, status: 0, body: 'GM_xmlhttpRequest 不可用，尝试 fetch 备用请求' });
+                return;
+            }
+            try {
+                const gmReq = typeof GM_xmlhttpRequest === 'function' ? GM_xmlhttpRequest : GM.xmlHttpRequest;
+                gmReq({
+                    method: 'POST',
+                    url: requestUrl,
+                    headers,
+                    data: bodyText,
+                    timeout: 18000,
+                    onload: (res) => resolve({
+                        ok: res.status >= 200 && res.status < 300,
+                        status: res.status,
+                        body: String(res.responseText || '')
+                    }),
+                    onerror: (err) => {
+                        const detail = err && (err.error || err.message || err.type)
+                            ? `: ${String(err.error || err.message || err.type)}`
+                            : '';
+                        resolve({ ok: false, status: 0, body: `网络错误${detail}` });
+                    },
+                    ontimeout: () => resolve({ ok: false, status: 0, body: `请求超时: ${requestUrl}` })
+                });
+            } catch (err) {
+                resolve({ ok: false, status: 0, body: `GM 请求异常: ${err && err.message ? err.message : '未知错误'}` });
+            }
         });
     }
 
@@ -800,7 +961,12 @@
 
     async function postJson(url, headers, bodyText) {
         const requestUrl = encodeUrlForRequest(url);
-        const gmResult = await postJsonByGM(requestUrl, headers, bodyText);
+        let gmResult;
+        try {
+            gmResult = await postJsonByGM(requestUrl, headers, bodyText);
+        } catch (err) {
+            gmResult = { ok: false, status: 0, body: `GM 请求异常: ${err && err.message ? err.message : '未知错误'}` };
+        }
         if (gmResult.ok || gmResult.status > 0) return gmResult;
         const fetchResult = await postJsonByFetch(requestUrl, headers, bodyText);
         if (fetchResult.ok || fetchResult.status > 0) return fetchResult;
@@ -817,7 +983,8 @@
 
     async function chooseTask(candidates, sourceLink) {
         if (!candidates.length) return null;
-        if (candidates.length === 1) return candidates[0];
+        // 即使只有一个任务也弹出选择器：iOS 没有油猴菜单，任务管理器入口在选择器底部，
+        // 直接推送会让用户无法再进入配置。
         const source = normalizeSourceLink(sourceLink);
         const currentTitle = parseMagnetTitle(source) || parseTorrentNameFromUrl(source);
         const currentHash = extractMagnetHash(source) || tryExtractBtihFromUrl(source);
@@ -867,6 +1034,9 @@
                             </button>
                         `).join('')}
                     </div>
+                    <div style="margin-top:12px;padding-top:12px;border-top:1px solid #334155;display:flex;justify-content:flex-end;">
+                        <button type="button" data-mh-picker-action="manage" style="padding:7px 12px;border-radius:9px;border:1px solid #334155;background:#1e293b;color:#93c5fd;cursor:pointer;">任务管理</button>
+                    </div>
                 </div>
             `;
 
@@ -893,6 +1063,11 @@
                 const action = String(btn.dataset.mhPickerAction || '').trim();
                 if (action === 'cancel') {
                     done(null);
+                    return;
+                }
+                if (action === 'manage') {
+                    done(null);
+                    openTaskManager();
                     return;
                 }
                 if (action === 'pick') {
@@ -985,7 +1160,8 @@
             if (button.disabled) return;
             const list = activeTasks();
             if (!list.length) {
-                await showPageAlert('没有可用任务，请先通过菜单配置任务并启用', { title: '暂无可用任务' });
+                showToast('尚未配置任务，正在打开任务管理器');
+                openTaskManager();
                 return;
             }
             const task = await chooseTask(list, source);
@@ -1452,11 +1628,12 @@
         GM_registerMenuCommand(`${APP_NAME}：打开任务管理器`, openTaskManager);
     }
 
-    function init() {
+    async function init() {
+        await loadPersistedState();
         registerMenus();
 
         if (!getSecret() || !activeTasks().length) {
-            showToast('首次使用请先在油猴菜单打开“任务管理器”配置密钥和任务', 'error');
+            showToast('尚未配置签名密钥和任务，点击任意“115”按钮或油猴菜单即可配置', 'error');
         }
 
         scanPage();
@@ -1467,6 +1644,36 @@
             timer = window.setTimeout(scanPage, 260);
         });
         observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    }
+
+    // node 测试环境（tests/test_magnet_helper_userscript.py）只导出内部 API，不初始化 DOM
+    if (typeof module !== 'undefined' && module && module.exports) {
+        module.exports = {
+            __mhTest: {
+                readStore,
+                writeStore,
+                loadPersistedState,
+                getSecret,
+                setSecret,
+                saveTasks,
+                getTasks: () => tasks,
+                normalizeTaskList,
+                validateManagerTask,
+                gmRequestSupported,
+                fetchArrayBuffer,
+                postJson,
+                postJsonByGM,
+                postJsonByFetch,
+                hmacSha256Hex,
+                jsHmacSha256Hex,
+                jsSha256Hex: (bytes) => arrayBufferToHex(jsSha256Bytes(bytes).buffer),
+                buildSignedHeaders,
+                registerMenus,
+                createPushButton,
+                chooseTask
+            }
+        };
+        return;
     }
 
     if (document.readyState === 'loading') {

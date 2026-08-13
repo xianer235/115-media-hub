@@ -289,6 +289,16 @@ POST /webhook/{任务名}
 - `GET /userscript/magnet-helper.user.js`（推荐，直接触发 Tampermonkey 安装）
 - `GET /download/userscript/magnet-helper.user.js`（兼容旧地址，会重定向到新地址）
 
+### iOS / iPadOS 使用
+
+iOS 无法安装 Tampermonkey 等浏览器扩展，建议使用 App Store 的 Userscripts（开源免费）：
+
+1. 安装并启用 Userscripts 扩展（设置 > Safari > 扩展，勾选“允许访问所有网站”）；
+2. 用 Safari 打开 `https://你的域名/userscript/magnet-helper.user.js`，点右上角 Userscripts 图标安装；
+3. 点击任意磁力/torrent 链接旁的“115”按钮：未配置任务时直接打开任务管理器，已配置时弹出任务选择器（底部有“任务管理”入口）；配置保存在脚本全局存储中，跨网站生效。
+
+脚本已兼容 Userscripts 的异步 `GM_getValue/GM_setValue`；没有 `GM_xmlhttpRequest` 时会自动改用 `fetch`（后台默认开放跨域）；http 页面没有 WebCrypto 时使用内置 SHA-256/HMAC 签名兜底。
+
 ## 版本与更新
 
 - 当前版本信息见 `version.json`
