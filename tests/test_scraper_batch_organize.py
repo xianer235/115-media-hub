@@ -1363,6 +1363,30 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         self.assertEqual(scraper._extract_scraper_title_candidates("无字天书.S01E01.mkv"), ["无字天书"])
         self.assertEqual(scraper._extract_scraper_title_candidates("独家记忆.S01E01.mkv"), ["独家记忆"])
 
+    def test_guoyu_dubbing_and_standalone_chinese_cleaned_but_embedded_kept(self):
+        # 复合短语（国语配音/中文字幕等）任意位置清洗；单独“中文/国语”只按独立词清洗，
+        # 不误伤“我的中文老师”这类真实片名。
+        self.assertEqual(
+            scraper._extract_scraper_title_candidates("监狱星级餐厅[国语配音][中文].2024.1080p.mkv"),
+            ["监狱星级餐厅"],
+        )
+        self.assertEqual(
+            scraper._extract_scraper_title_candidates("监狱星级餐厅.国语配音.中文.1080p.mkv"),
+            ["监狱星级餐厅"],
+        )
+        self.assertEqual(
+            scraper._extract_scraper_title_candidates("监狱星级餐厅.中文.国语.1080p.mkv"),
+            ["监狱星级餐厅"],
+        )
+        self.assertTrue(scraper._is_scraper_generic_keyword("中文"))
+        self.assertTrue(scraper._is_scraper_generic_keyword("国语"))
+        self.assertEqual(scraper._extract_scraper_title_candidates("中文字幕"), [])
+        self.assertFalse(scraper._is_scraper_generic_keyword("我的中文老师"))
+        self.assertEqual(
+            scraper._extract_scraper_title_candidates("我的中文老师.2024.mp4"),
+            ["我的中文老师"],
+        )
+
     def test_batch_matching_busy_shows_spinner_with_items(self):
         source = SCRAPER_CORE_PATH.read_text(encoding="utf-8")
         render_batch_source = source[source.index("function renderBatch("):source.index("function toggleBatchInclude(")]

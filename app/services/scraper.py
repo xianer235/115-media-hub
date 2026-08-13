@@ -1053,8 +1053,9 @@ _SCRAPER_CN_AD_SITE_ACTION_RE = re.compile(
 SCRAPER_COMMON_NOISE_PHRASES = (
     "无字片源", "无字幕版", "无字幕", "无水印", "无广告", "无删减", "未删减", "未删节",
     "完整版", "加长版", "剧场版", "导演剪辑版", "重制版", "修复版", "高清修复版", "4k修复版",
-    "国配版", "国语版", "粤语版", "双音轨", "多音轨", "中英双语", "国粤双语",
+    "国配版", "国语版", "国语配音", "粤语版", "双音轨", "多音轨", "中英双语", "国粤双语",
     "特效中字", "内嵌中字", "外挂字幕", "简体中字", "繁体中字",
+    "中文字幕", "中文配音", "中文音轨", "中文版",
     "提取码", "磁力链接", "种子下载", "网盘下载", "百度网盘", "夸克网盘", "阿里云盘", "天翼云盘", "城通网盘",
     "全网首发", "独家首发", "地址发布页", "发布地址", "永久地址", "备用地址",
     "最新地址", "官网地址", "防走丢", "收藏本站", "最新网址", "发布页",
@@ -1063,6 +1064,18 @@ SCRAPER_COMMON_NOISE_PHRASES = (
 _SCRAPER_COMMON_NOISE_RE = re.compile(
     "|".join(re.escape(phrase) for phrase in SCRAPER_COMMON_NOISE_PHRASES),
     re.IGNORECASE,
+)
+
+# 只在词边界出现的独立噪声词：不能按子串全局替换（会误伤“我的中文老师”这类真实片名），
+# 只清理作为独立 token 出现的“中文/国语”（如 片名.中文.1080p、片名[国语]）。
+SCRAPER_STANDALONE_NOISE_WORDS = ("中文", "国语")
+_SCRAPER_STANDALONE_NOISE_KEYS = frozenset(
+    _normalize_scraper_keyword_compact(word) for word in SCRAPER_STANDALONE_NOISE_WORDS
+)
+_SCRAPER_STANDALONE_NOISE_RE = re.compile(
+    "(?<![\u4e00-\u9fff])(?:"
+    + "|".join(re.escape(word) for word in SCRAPER_STANDALONE_NOISE_WORDS)
+    + ")(?![\u4e00-\u9fff])"
 )
 
 
@@ -1346,6 +1359,8 @@ def _is_scraper_generic_keyword(value: str) -> bool:
         return True
     if not _normalize_scraper_keyword_compact(_SCRAPER_COMMON_NOISE_RE.sub(" ", str(value or ""))):
         return True
+    if key in _SCRAPER_STANDALONE_NOISE_KEYS:
+        return True
     for fragment in _scraper_cn_ad_site_matches(value):
         if _normalize_scraper_keyword_compact(fragment) == key:
             return True
@@ -1384,6 +1399,7 @@ def _clean_search_title(value: str) -> str:
     )
     text = re.sub(r"(?:简繁英|简中|繁中|中英|国英|国粤|中法|双语|内嵌|外挂|特效|简繁|繁简)?(?:字幕|双字)(?!组|站|网)", " ", text)
     text = _SCRAPER_COMMON_NOISE_RE.sub(" ", text)
+    text = _SCRAPER_STANDALONE_NOISE_RE.sub(" ", text)
     text = re.sub(r"[\[\(（【][^\]\)）】]{0,90}?(?:第.+?季|s\d{1,2}e\d{1,4})[^\]\)）】]{0,90}?[\]\)）】]", " ", text, flags=re.I)
     text = re.sub(r"^[\[\(（【][A-Za-z0-9][A-Za-z0-9._ +&-]{0,40}[\]\)）】]\s*", " ", text)
     text = re.sub(r"[\[\(（【][A-Za-z0-9][A-Za-z0-9._ +&-]{0,60}[\]\)）】]", " ", text)
