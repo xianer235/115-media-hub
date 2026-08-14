@@ -1,10 +1,10 @@
 {
-  "version": "0.6.2",
+  "version": "0.7.0",
   "buildDate": "2026-08-14T00:00:00+08:00",
   "notes": [
-    "任务中心手机端操作按钮可收缩换行不再溢出，按钮文案精简（取消/重试/立即刷新/无需刷新/未绑定监控），禁用配色不变",
-    "搜索/识别提示与结果副标题的长关键词（磁力/链接）改为中间省略显示，避免手机端横向溢出，原文预览保留完整内容",
-    "任务历史清理改为后台周期执行：完成/失败记录超出保留上限时由后台任务自动清理（默认每 10 分钟，RESOURCE_JOB_PRUNE_INTERVAL_SECONDS 可调），打开资源中心不再触发删除"
+    "新增宿主机命令行 CLI（合并外部贡献 PR #5 并适配当前 API）：25 个子命令覆盖搜索/订阅/转存/监控/刮削/STRM/运维等，AI 代理可无需网页完成全流程管理",
+    "CLI 登录不再静默使用默认 admin/admin123：要求 MH_USERNAME/MH_PASSWORD 环境变量或交互式输入，会话 Cookie 落盘 0600；修复 search --cancel 解析、subscribe remove 走 /subscription/delete、monitor start/stop/remove 按任务名操作、scrape jobs-create 真实三步流（识别→选 TMDB→生成计划→建任务）",
+    "刮削 rename/move/copy/delete 端点支持可选 path（move/copy 另支持 dest）入参，仅 115、复用现有分页路径解析；identify/rename-plan 支持纯路径条目；新增发现源注册表（Telegram/PanSou 内置）与 requirements-cli.txt"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

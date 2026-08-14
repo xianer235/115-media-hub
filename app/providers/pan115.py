@@ -197,7 +197,7 @@ def _normalize_115_file_entry(item: Dict[str, Any]) -> Dict[str, Any]:
     source = item if isinstance(item, dict) else {}
     name = str(source.get("n") or source.get("name") or "").strip()
     folder_id = str(source.get("cid") or "").strip()
-    file_id = str(source.get("fid") or source.get("file_id") or "").strip()
+    file_id = str(source.get("fid") or source.get("file_id") or source.get("id") or "").strip()
     sha1 = str(source.get("sha1") or source.get("sha") or "").strip()
     is_dir = bool(folder_id) and not file_id and not sha1
     entry_id = folder_id if is_dir else (file_id or str(source.get("pick_code") or source.get("pc") or sha1).strip())
@@ -753,6 +753,65 @@ def resolve_115_folder_id_by_path(cookie: str, relative_path: str) -> str:
             raise RuntimeError(f"115 网盘目录不存在：{join_relative_path(*walked_parts)}")
         current_cid = str(matched.get("id", "") or matched.get("cid", "") or "").strip() or "0"
     return current_cid
+
+def resolve_115_entry_by_name(cookie: str, parent_cid: str, entry_name: str) -> Dict[str, Any]:
+    """按名称在 115 目录中查找文件或文件夹（自动分页，最多 80 页）。
+
+    返回与 ``list_115_entries`` 一致的规范化条目；未找到时返回空字典。
+    供按路径操作（刮削 rename/move/copy/delete 等）复用，避免大目录漏匹配。
+    """
+    target_name = str(entry_name or "").strip()
+    if not target_name:
+        return {}
+    normalized_cid = str(parent_cid or "0").strip() or "0"
+    page_size = 300
+    max_pages = 80
+    offset = 0
+    headers = {
+        "Cookie": str(cookie or "").strip(),
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://115.com/",
+        "User-Agent": "Mozilla/5.0 115-media-hub",
+    }
+
+    def matches(entry: Dict[str, Any]) -> bool:
+        return bool(entry) and str(entry.get("name", "") or "").strip() == target_name
+
+    first_page_loaded = False
+    try:
+        first_page = list_115_entries(cookie, normalized_cid)
+        first_page_loaded = True
+    except Exception:
+        first_page = []
+    for entry in first_page:
+        if matches(entry):
+            return dict(entry)
+    offset = max(len(first_page), page_size) if first_page_loaded else 0
+
+    pages_scanned = 0
+    while pages_scanned < max_pages:
+        pages_scanned += 1
+        throttle_115_api_requests()
+        url = (
+            "https://aps.115.com/natsort/files.php"
+            f"?aid=1&cid={urllib.parse.quote(normalized_cid)}"
+            f"&offset={max(0, int(offset))}&limit={page_size}&show_dir=1&natsort=1&format=json"
+        )
+        result = http_request_json(url, extra_headers=headers, timeout=45)
+        if not bool(result.get("state", False)):
+            break
+        raw_items = result.get("data") or []
+        if not raw_items:
+            break
+        for raw_item in raw_items:
+            raw = raw_item if isinstance(raw_item, dict) else {}
+            entry = _normalize_115_file_entry(raw)
+            if matches(entry):
+                return entry
+        if len(raw_items) < page_size:
+            break
+        offset += len(raw_items)
+    return {}
 
 def list_115_folders(cookie: str, cid: str = "0") -> List[Dict[str, str]]:
     return [

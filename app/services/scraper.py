@@ -6,7 +6,11 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..core import *  # noqa: F401,F403
 from ..db import db_connection
-from ..providers.pan115 import invalidate_115_entries_cache
+from ..providers.pan115 import (
+    invalidate_115_entries_cache,
+    resolve_115_entry_by_name,
+    resolve_115_folder_id_by_path,
+)
 from ..providers.registry import get_or_none as get_provider_or_none, list_enabled as list_enabled_providers
 from ..media_tags import media_tag_labels, parse_media_tags, remove_media_tags
 from ..services.subscription_episode import (
@@ -727,6 +731,70 @@ def list_scraper_entries(provider: str, cid: str = "0", force_refresh: bool = Fa
             "file_count": max(0, parse_int(summary.get("file_count", 0), 0)),
         },
     }
+
+
+def resolve_scraper_path_entry(provider: str, path: str) -> Dict[str, Any]:
+    """把人类可读路径解析成 115 的刮削条目（id/parent_id/name/is_dir/path）。
+
+    仅支持 115：父目录复用现有分页解析 ``resolve_115_folder_id_by_path``，
+    叶子条目复用分页查找 ``resolve_115_entry_by_name``，避免大目录漏匹配。
+    返回的条目可直接作为 rename/move/copy/delete 的 ``entries`` 快照，
+    保证监控同步事件链不丢失。
+    """
+    normalized = normalize_scraper_provider(provider)
+    if normalized != "115":
+        raise RuntimeError(f"路径操作当前仅支持 115，{normalized} 请改用 entry_id/entry_ids 参数")
+    cfg = get_config()
+    cookie = str(cfg.get("cookie_115", "") or "").strip()
+    if not cookie:
+        raise RuntimeError("115 Cookie 未配置")
+    normalized_path = normalize_relative_path(str(path or "").strip())
+    if not normalized_path:
+        raise RuntimeError("路径无效")
+    leaf_name = str(os.path.basename(normalized_path) or "").strip()
+    if not leaf_name:
+        raise RuntimeError("路径必须包含文件名或目录名")
+    parent_rel = normalize_relative_path(os.path.dirname(normalized_path))
+    parent_cid = resolve_115_folder_id_by_path(cookie, parent_rel) if parent_rel else "0"
+    matched = resolve_115_entry_by_name(cookie, parent_cid, leaf_name)
+    entry = _compact_scraper_entry(matched, parent_cid) if matched else {}
+    if not entry:
+        raise RuntimeError(f"未找到文件/目录: {normalized_path}")
+    entry["path"] = normalized_path
+    return entry
+
+
+def resolve_scraper_dest_folder_id(provider: str, dest: str) -> str:
+    """解析 move/copy 的目标目录路径为 115 目录 ID（仅支持 115）。"""
+    normalized = normalize_scraper_provider(provider)
+    if normalized != "115":
+        raise RuntimeError(f"目标路径操作当前仅支持 115，{normalized} 请改用 target_cid 参数")
+    cfg = get_config()
+    cookie = str(cfg.get("cookie_115", "") or "").strip()
+    if not cookie:
+        raise RuntimeError("115 Cookie 未配置")
+    normalized_dest = normalize_relative_path(str(dest or "").strip())
+    if not normalized_dest:
+        raise RuntimeError("目标路径无效")
+    return resolve_115_folder_id_by_path(cookie, normalized_dest)
+
+
+def _resolve_scraper_selected_paths(
+    provider: str,
+    selected: Optional[List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    """把只带 ``path`` 的条目解析成带 id/name 的条目（仅 115 支持路径）。"""
+    normalized: List[Dict[str, Any]] = []
+    for raw in selected or []:
+        item = raw if isinstance(raw, dict) else {}
+        entry_id = str(item.get("id", "") or "").strip()
+        entry_path = str(item.get("path", "") or "").strip()
+        if not entry_id and entry_path:
+            resolved = resolve_scraper_path_entry(provider, entry_path)
+            if resolved:
+                item = {**item, **resolved}
+        normalized.append(item)
+    return normalized
 
 
 def create_scraper_folder(
@@ -1642,7 +1710,9 @@ def _score_tmdb_candidate(
 
 def identify_scraper_media(payload: Dict[str, Any]) -> Dict[str, Any]:
     provider = normalize_scraper_provider(payload.get("provider", "115")) or "115"
-    selected = _normalize_scraper_selected_entries(payload.get("entries", []) if isinstance(payload.get("entries"), list) else [])
+    selected = _normalize_scraper_selected_entries(
+        _resolve_scraper_selected_paths(provider, payload.get("entries", []) if isinstance(payload.get("entries"), list) else [])
+    )
     names = [str(item.get("path") or item.get("name") or "").strip() for item in selected if isinstance(item, dict)]
     if not names:
         return {"ok": True, "provider": provider, "query": "", "media_type": "movie", "year": "", "keywords": [], "items": [], "candidates": []}
@@ -2162,7 +2232,9 @@ def build_scraper_rename_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
     options = payload.get("options") if isinstance(payload.get("options"), dict) else {}
     base_cid = str(payload.get("base_cid", "0") or "0").strip() or "0"
     base_path = normalize_relative_path(str(payload.get("base_path", "") or ""))
-    selected = _normalize_scraper_selected_entries(payload.get("entries", []) if isinstance(payload.get("entries"), list) else [])
+    selected = _normalize_scraper_selected_entries(
+        _resolve_scraper_selected_paths(provider, payload.get("entries", []) if isinstance(payload.get("entries"), list) else [])
+    )
     if not base_path and selected:
         selected_parent_paths = {
             normalize_relative_path(str(item.get("parent_path", "") or "").strip())

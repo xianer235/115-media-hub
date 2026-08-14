@@ -111,6 +111,35 @@ docker compose up -d
 
 首次登录后，建议立刻到「参数配置」页修改后台账号密码，并配置 `webhook_secret`。
 
+## 命令行工具（CLI）
+
+`cli.py` 是运行在宿主机上的命令行客户端（不进入容器镜像），通过面板自身的 HTTP API 完成
+搜索、订阅、转存、监控、刮削等操作，方便 AI 代理或脚本直接管理媒体中心，无需打开网页。
+
+安装依赖（仅宿主机需要，与容器镜像无关）：
+
+```bash
+python3 -m venv .cli-venv
+.cli-venv/bin/pip install -r requirements-cli.txt
+```
+
+使用（登录账号密码与网页登录一致，需先设置环境变量；非交互环境未提供凭据时会直接报错）：
+
+```bash
+export MH_USERNAME=admin
+export MH_PASSWORD=你的面板密码
+export MH_API_BASE=http://127.0.0.1:18080   # 可选，默认即本机
+.cli-venv/bin/python cli.py status
+.cli-venv/bin/python cli.py search "黑客帝国 4K"
+.cli-venv/bin/python cli.py subscribe list
+```
+
+常用命令：`status` / `version` / `search <关键词>|--cancel` / `channels sync` /
+`subscribe list|add|remove|start` / `jobs list|retry|cancel` / `scrape jobs-create` /
+`monitor list|start|stop` / `tree run` / `sources search` / `daemon status|logs|restart`。
+完整命令列表见 `CLI-API-AUDIT.md`；`sources` / `daemon` 等容器运维命令需要宿主机安装 Docker，
+容器名自动识别 `115-media-hub` / `115-media-hub-test`，也可用环境变量 `MH_CONTAINER` 覆盖。
+
 ## 首次配置顺序
 
 建议第一次按下面顺序配置，这样最省回头路：
