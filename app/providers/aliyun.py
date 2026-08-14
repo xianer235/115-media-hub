@@ -48,7 +48,7 @@ class AliyunProvider(CloudProvider):
             token_endpoints = [
                 "https://auth.alipan.com/v2/account/token",
                 "https://auth.aliyundrive.com/v2/account/token",
-                "https://api-cf.nn.ci/alist/ali_open/token",
+                "https://api.alistgo.com/alist/ali_open/token",
             ]
             for url in token_endpoints:
                 try:

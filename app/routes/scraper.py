@@ -5,7 +5,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from ..background import submit_background
-from ..core import parse_int
+from ..core import normalize_relative_path, parse_int
 from ..services.scraper import (
     build_scraper_batch_plan,
     build_scraper_providers_payload,
@@ -25,6 +25,8 @@ from ..services.scraper import (
     rollback_scraper_job,
     run_scraper_job,
     scan_scraper_batch_items,
+    resolve_scraper_dest_folder_id,
+    resolve_scraper_path_entry,
 )
 
 router = APIRouter()
@@ -77,7 +79,18 @@ async def rename_scraper_entry_endpoint(provider: str, request: Request) -> Dict
     entry = data.get("entry") if isinstance(data.get("entry"), dict) else None
     request_id = str(data.get("request_id", "") or "").strip()
     if not entry_id:
-        return JSONResponse(status_code=400, content={"ok": False, "msg": "文件 ID 不能为空"})
+        path = str(data.get("path", "") or "").strip()
+        if not path:
+            return JSONResponse(status_code=400, content={"ok": False, "msg": "文件 ID 或路径不能为空"})
+        try:
+            resolved_entry = await asyncio.to_thread(resolve_scraper_path_entry, provider, path)
+        except Exception as exc:
+            return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
+        if not resolved_entry:
+            return JSONResponse(status_code=400, content={"ok": False, "msg": f"未找到文件/目录: {path}"})
+        entry_id = str(resolved_entry.get("id", "") or "").strip()
+        parent_id = str(resolved_entry.get("parent_id", "") or parent_id).strip()
+        entry = resolved_entry
     if not name:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "新名称不能为空"})
     try:
@@ -109,7 +122,26 @@ async def move_scraper_entries_endpoint(provider: str, request: Request) -> Dict
     target_parent_path = data.get("target_parent_path") if "target_parent_path" in data else None
     request_id = str(data.get("request_id", "") or "").strip()
     if not isinstance(entry_ids, list) or not entry_ids:
-        return JSONResponse(status_code=400, content={"ok": False, "msg": "请选择要移动的条目"})
+        path = str(data.get("path", "") or "").strip()
+        if not path:
+            return JSONResponse(status_code=400, content={"ok": False, "msg": "请选择要移动的条目"})
+        try:
+            resolved_entry = await asyncio.to_thread(resolve_scraper_path_entry, provider, path)
+        except Exception as exc:
+            return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
+        if not resolved_entry:
+            return JSONResponse(status_code=400, content={"ok": False, "msg": f"未找到文件/目录: {path}"})
+        entry_ids = [str(resolved_entry.get("id", "") or "").strip()]
+        entries = [resolved_entry]
+        if not source_cid:
+            source_cid = str(resolved_entry.get("parent_id", "") or "").strip()
+    dest = str(data.get("dest", "") or "").strip()
+    if not target_cid and dest:
+        try:
+            target_cid = await asyncio.to_thread(resolve_scraper_dest_folder_id, provider, dest)
+        except Exception as exc:
+            return JSONResponse(status_code=400, content={"ok": False, "msg": f"目标路径解析失败: {exc}"})
+        target_parent_path = normalize_relative_path(dest)
     if not target_cid:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "目标目录不能为空"})
     try:
@@ -137,7 +169,26 @@ async def copy_scraper_entries_endpoint(provider: str, request: Request) -> Dict
     target_parent_path = data.get("target_parent_path") if "target_parent_path" in data else None
     request_id = str(data.get("request_id", "") or "").strip()
     if not isinstance(entry_ids, list) or not entry_ids:
-        return JSONResponse(status_code=400, content={"ok": False, "msg": "请选择要复制的条目"})
+        path = str(data.get("path", "") or "").strip()
+        if not path:
+            return JSONResponse(status_code=400, content={"ok": False, "msg": "请选择要复制的条目"})
+        try:
+            resolved_entry = await asyncio.to_thread(resolve_scraper_path_entry, provider, path)
+        except Exception as exc:
+            return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
+        if not resolved_entry:
+            return JSONResponse(status_code=400, content={"ok": False, "msg": f"未找到文件/目录: {path}"})
+        entry_ids = [str(resolved_entry.get("id", "") or "").strip()]
+        entries = [resolved_entry]
+        if not source_cid:
+            source_cid = str(resolved_entry.get("parent_id", "") or "").strip()
+    dest = str(data.get("dest", "") or "").strip()
+    if not target_cid and dest:
+        try:
+            target_cid = await asyncio.to_thread(resolve_scraper_dest_folder_id, provider, dest)
+        except Exception as exc:
+            return JSONResponse(status_code=400, content={"ok": False, "msg": f"目标路径解析失败: {exc}"})
+        target_parent_path = normalize_relative_path(dest)
     if not target_cid:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "目标目录不能为空"})
     try:
@@ -163,7 +214,19 @@ async def delete_scraper_entries_endpoint(provider: str, request: Request) -> Di
     entries = data.get("entries") if isinstance(data.get("entries"), list) else None
     request_id = str(data.get("request_id", "") or "").strip()
     if not isinstance(entry_ids, list) or not entry_ids:
-        return JSONResponse(status_code=400, content={"ok": False, "msg": "请选择要删除的条目"})
+        path = str(data.get("path", "") or "").strip()
+        if not path:
+            return JSONResponse(status_code=400, content={"ok": False, "msg": "请选择要删除的条目"})
+        try:
+            resolved_entry = await asyncio.to_thread(resolve_scraper_path_entry, provider, path)
+        except Exception as exc:
+            return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
+        if not resolved_entry:
+            return JSONResponse(status_code=400, content={"ok": False, "msg": f"未找到文件/目录: {path}"})
+        entry_ids = [str(resolved_entry.get("id", "") or "").strip()]
+        entries = [resolved_entry]
+        if not parent_id:
+            parent_id = str(resolved_entry.get("parent_id", "") or "").strip()
     try:
         return await asyncio.to_thread(delete_scraper_entries, provider, entry_ids, parent_id, entries, request_id)
     except Exception as exc:

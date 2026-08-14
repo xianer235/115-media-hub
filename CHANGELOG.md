@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.0] - 2026-08-14
+
+### 新增：宿主机命令行 CLI（合并外部贡献 PR #5 并适配当前 API）
+
+- 新增 `cli.py`（约 2000 行）：25 个子命令覆盖 `status / version / search / channels / subscribe / jobs / settings / logs / cookies / sign / tmdb / monitor / tree / browse / share / scrape / watchlist / strm / resource / sources / api / providers / health / stats / daemon`，全部通过面板 HTTP API 操作，AI 代理或脚本可无需网页完成“搜索→订阅→转存→监控→STRM→播放”全流程。新增 `requirements-cli.txt` 与 README 用法说明（仅宿主机依赖，不影响容器镜像）。
+- 登录安全：不再静默使用默认 `admin/admin123` 自动登录，要求 `MH_USERNAME` / `MH_PASSWORD` 环境变量或交互式输入（密码与网页登录一致）；会话 Cookie 文件默认 `/tmp/.115_cookies.txt`（0600，可用 `MH_COOKIE_FILE` 覆盖）。`sources` / `daemon` 等容器运维命令需宿主机 Docker，容器名可用 `MH_CONTAINER` 覆盖。
+- 命令修复：`search --cancel` 改为显式标志（原 `search cancel` 会被当成关键词）；`subscribe remove` 改用 `/subscription/delete` 清除队列与运行记录；`monitor start/stop/remove` 按任务名操作；`scrape jobs-create` 改为真实三步流（identify → TMDB 选择（多候选时列出并要求 `--tmdb-id`）→ rename-plan → jobs/create）。
+- 二次审查修复：`logs` 尾数改用 `--tail N`（原 `logs <N>` 会被位置参数拒绝）；`resource delete` 改用 `--id`（原 ID 会被 quick-links 子操作吞掉）；115 分页回退把 `id` 字段纳入文件判定避免文件误判为目录；`browse tree` 只递归文件夹；identify/rename-plan 的路径解析错误不再吞掉而是返回真实原因；`scrape jobs-create` 计划未就绪时先列出冲突再退出；任务/资源 ID 非法时给出中文提示而非 traceback。
+- 细节体验修复：`subscribe add` 不传 `--savepath` 时按媒体类型从常用目录自动推断（修复剧集默认存 `/电影`）；`--schedule-weekdays` 非法 JSON、`settings` 数字字段、`tmdb detail`/`watchlist` 的 ID 非法时给出中文提示而非 traceback；`channels sync` 文案改为“已提交（后台执行）”；`daemon`/`health`/`sources` 自动识别 `115-media-hub` 与 `115-media-hub-test` 容器名；115 分页回退复用统一条目规范化 `_normalize_115_file_entry`，并把 `id` 兜底为文件 ID，避免两处语义漂移。
+- 后端适配：`/scraper/{provider}/rename|move|copy|delete` 增量支持可选 `path`（move/copy 另支持 `dest`）入参，完整保留现有 `entry/entries/request_id/parent_path/target_parent_path` 参数与监控同步事件；路径解析仅支持 115 并复用现有分页实现（`resolve_115_folder_id_by_path` + 新增 `resolve_115_entry_by_name`）；`identify` / `rename-plan` 支持纯路径条目，由服务端预解析。
+- 新增发现源注册表：`app/providers/discovery_base.py`（`DiscoveryProvider` 抽象 + `DiscoveryResult`）与 `app/providers/discovery_registry.py`（注册表 + 内置 Telegram / PanSou provider，异常隔离、重复注册保护），供 CLI `sources` 命令与未来扩展使用。
+
+感谢 [Li-Qifeng](https://github.com/Li-Qifeng) 贡献 CLI 扩展、CLI-API-AUDIT 字段审计与发现源注册表设计（PR #5）。
+
 ## [0.6.2] - 2026-08-14
 
 - 任务中心手机端操作按钮不再向左溢出：按钮行改为可收缩并自动换行（去掉 `shrink-0`，改为 `min-w-0 flex-1 justify-end`），四个按钮放不下时换行显示而不是把页面撑破；同时精简按钮文案（取消任务→取消、重试任务→重试、立即触发刷新→立即刷新、无需手动刷新→无需刷新、当前目录不触发→未绑定监控），禁用态配色保持不变；≤640px 下按钮内边距与字号微调，绝大多数手机一行放下。
