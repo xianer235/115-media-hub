@@ -3958,8 +3958,14 @@ RESOURCE_JOB_RECOVERY_INTERVAL_SECONDS = max(
     5,
     min(300, int(os.environ.get("RESOURCE_JOB_RECOVERY_INTERVAL_SECONDS", 20) or 20)),
 )
+RESOURCE_JOB_PRUNE_INTERVAL_SECONDS = max(
+    60,
+    min(86400, int(os.environ.get("RESOURCE_JOB_PRUNE_INTERVAL_SECONDS", 600) or 600)),
+)
 resource_job_recovery_lock = threading.Lock()
 resource_job_recovery_last_ts = 0.0
+resource_job_prune_lock = threading.Lock()
+resource_job_prune_last_ts = 0.0
 resource_state_snapshot_lock = threading.Lock()
 resource_state_snapshot_epoch = 0
 resource_jobs_state_snapshot_cache: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
@@ -5807,11 +5813,41 @@ def recover_resource_jobs_if_due(force: bool = False) -> Dict[str, Any]:
             "skipped": False,
             "stale": recover_stale_resource_jobs(),
             "submitted_without_monitor": recover_submitted_resource_jobs_without_monitor(),
-            "history_pruned": prune_resource_job_history(),
         }
 
     try:
         return retry_sqlite_locked(run_recovery)
+    except sqlite3.OperationalError as exc:
+        if force or not is_sqlite_locked_error(exc):
+            raise
+        return {"skipped": True, "reason": "database_locked"}
+
+
+def prune_resource_jobs_if_due(force: bool = False) -> Dict[str, Any]:
+    global resource_job_prune_last_ts
+    now_ts = time.time()
+    if (
+        not force
+        and resource_job_prune_last_ts > 0
+        and (now_ts - resource_job_prune_last_ts) < RESOURCE_JOB_PRUNE_INTERVAL_SECONDS
+    ):
+        return {"skipped": True}
+
+    with resource_job_prune_lock:
+        now_ts = time.time()
+        if (
+            not force
+            and resource_job_prune_last_ts > 0
+            and (now_ts - resource_job_prune_last_ts) < RESOURCE_JOB_PRUNE_INTERVAL_SECONDS
+        ):
+            return {"skipped": True}
+        resource_job_prune_last_ts = now_ts
+
+    try:
+        return {
+            "skipped": False,
+            "history_pruned": prune_resource_job_history(),
+        }
     except sqlite3.OperationalError as exc:
         if force or not is_sqlite_locked_error(exc):
             raise

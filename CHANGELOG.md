@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.2] - 2026-08-14
+
+- 任务中心手机端操作按钮不再向左溢出：按钮行改为可收缩并自动换行（去掉 `shrink-0`，改为 `min-w-0 flex-1 justify-end`），四个按钮放不下时换行显示而不是把页面撑破；同时精简按钮文案（取消任务→取消、重试任务→重试、立即触发刷新→立即刷新、无需手动刷新→无需刷新、当前目录不触发→未绑定监控），禁用态配色保持不变；≤640px 下按钮内边距与字号微调，绝大多数手机一行放下。
+- 搜索/识别提示条与搜索结果频道副标题里的长关键词（磁力链接、长 URL 等）改为中间省略显示（前 26 + 后 21 字符，共 48 字符），避免手机端长文本从右侧溢出或把页面压缩成窄条；命中数等逻辑仍使用完整关键词计算。提示条、副标题与导入弹窗“资源文案预览”增加 `overflow-wrap: anywhere` 兜底，极端窄屏下也会在框内换行。
+- 任务历史清理从页面请求中拆出：完成/失败记录超过保留上限（`RESOURCE_JOB_COMPLETED_KEEP=1000` / `RESOURCE_JOB_FAILED_KEEP=500`，均可环境变量调整）时，由后台周期任务自动清理，默认每 10 分钟一次（`RESOURCE_JOB_PRUNE_INTERVAL_SECONDS` 可调，范围 60–86400 秒）；打开资源中心/任务中心不再触发删除，任务状态恢复逻辑保持不变。新增 2 项回归测试，完整 unittest 382 项、compileall、改动 JS `node --check` 与 git diff --check 均通过；Docker 未重建。
+
 ## [0.6.1] - 2026-08-13
 
 - 批量整理面板“搜索绑定”结果行显示 TMDB 封面，无封面显示占位，与单条手动搜索一致。

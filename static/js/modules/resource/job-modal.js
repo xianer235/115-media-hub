@@ -338,7 +338,7 @@
                             </div>
                         </div>
                         <div class="resource-job-card-actions">
-                            <div class="flex flex-wrap gap-2 shrink-0">
+                            <div class="flex flex-wrap gap-2 min-w-0 flex-1 justify-end">
                                 <button type="button" data-scraper-job-action="toggle" data-scraper-job-id="${escapeHtml(String(jobId))}" class="px-4 py-2 rounded-xl text-sm font-bold bg-slate-700 hover:bg-slate-600 text-slate-100">${expanded ? '收起文件' : `展开文件（${escapeHtml(String(actionCount))}）`}</button>
                                 <button type="button" data-scraper-job-action="rollback" data-scraper-job-id="${escapeHtml(String(jobId))}" class="px-4 py-2 rounded-xl text-sm font-bold ${canRollback ? 'bg-amber-600 hover:bg-amber-500 text-white' : 'bg-slate-700 text-slate-400 btn-disabled'}" ${canRollback ? '' : 'disabled'}>${rollbackLabel}</button>
                             </div>
@@ -390,9 +390,9 @@
                 const canCancel = ['pending', 'running', 'submitted'].includes(normalizedStatus);
                 const canRetry = normalizedStatus === 'failed';
                 const canDelete = ['completed', 'failed'].includes(normalizedStatus);
-                const manualRefreshLabel = !hasMonitorTask ? '当前目录不触发' : (canManualRefresh ? '立即触发刷新' : '无需手动刷新');
-                const cancelLabel = canCancel ? '取消任务' : '不可取消';
-                const retryLabel = canRetry ? '重试任务' : '不可重试';
+                const manualRefreshLabel = !hasMonitorTask ? '未绑定监控' : (canManualRefresh ? '立即刷新' : '无需刷新');
+                const cancelLabel = canCancel ? '取消' : '不可取消';
+                const retryLabel = canRetry ? '重试' : '不可重试';
                 const autoRefreshText = hasMonitorTask
                     ? (job.auto_refresh ? `自动刷新 ${escapeHtml(String(job.refresh_delay_seconds || 0))} 秒` : '手动刷新')
                     : '未绑定监控';
@@ -435,7 +435,7 @@
                             </div>
                         </div>
                         <div class="resource-job-card-actions">
-                            <div class="flex flex-wrap gap-2 shrink-0">
+                            <div class="flex flex-wrap gap-2 min-w-0 flex-1 justify-end">
                                 <button type="button" data-resource-job-action="cancel" data-resource-job-id="${job.id}" class="px-4 py-2 rounded-xl text-sm font-bold ${canCancel ? 'bg-amber-600 hover:bg-amber-500 text-white' : 'bg-slate-700 text-slate-400 btn-disabled'}" ${canCancel ? '' : 'disabled'}>${cancelLabel}</button>
                                 <button type="button" data-resource-job-action="retry" data-resource-job-id="${job.id}" class="px-4 py-2 rounded-xl text-sm font-bold ${canRetry ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-slate-700 text-slate-400 btn-disabled'}" ${canRetry ? '' : 'disabled'}>${retryLabel}</button>
                                 <button type="button" data-resource-job-action="refresh" data-resource-job-id="${job.id}" class="px-4 py-2 rounded-xl text-sm font-bold ${canManualRefresh ? 'bg-sky-600 hover:bg-sky-500 text-white' : 'bg-slate-700 text-slate-400 btn-disabled'}" ${canManualRefresh ? '' : 'disabled'}>${manualRefreshLabel}</button>

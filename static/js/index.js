@@ -1003,6 +1003,16 @@
                 .replaceAll("'", '&#39;');
         }
 
+        function truncateMiddleText(text, maxLength = 48, keepHead = 26, keepTail = 21) {
+            const raw = String(text || '').trim();
+            const chars = Array.from(raw);
+            if (chars.length <= maxLength) return raw;
+            const head = Math.max(1, Math.min(Math.floor(keepHead), maxLength - 1));
+            const tail = Math.max(1, Math.min(Math.floor(keepTail), maxLength - head - 1));
+            if (head + tail >= chars.length) return raw;
+            return `${chars.slice(0, head).join('')}…${chars.slice(-tail).join('')}`;
+        }
+
         function uniquePreserveOrder(values) {
             const seen = new Set();
             const result = [];
@@ -3282,7 +3292,7 @@
                     });
                 } else if (!text) {
                     if (directImport) {
-                        text = `资源识别执行中 · 关键词「${keyword || '...'}」 · 已开始`;
+                        text = `资源识别执行中 · 关键词「${truncateMiddleText(keyword || '...')}」 · 已开始`;
                     } else {
                         if (typeof buildResourceSearchStatusText === 'function') {
                             text = buildResourceSearchStatusText({
@@ -3298,7 +3308,7 @@
                             const latencyText = resourceSearchSource === 'pansou'
                                 ? '已开始'
                                 : (tgProgressText || 'TG 延迟检测中');
-                            text = `${sourceLabel} · 关键词「${keyword || '...'}」 · ${latencyText}`;
+                            text = `${sourceLabel} · 关键词「${truncateMiddleText(keyword || '...')}」 · ${latencyText}`;
                         }
                     }
                 }

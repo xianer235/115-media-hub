@@ -2239,7 +2239,7 @@
                 : `缓存 ${escapeHtml(String(section.item_count || (section.items || []).length || 0))}`;
             const latestPublishedAt = String(section?.latest_published_at || section?.channel_profile?.latest_published_at || '').trim();
             const subtleText = isSearchSection
-                ? (isPansouSection ? `关键词「${escapeHtml(keyword)}」 · 类型 ${escapeHtml(getResourceProviderFilterLabel())}` : `关键词「${escapeHtml(keyword)}」`)
+                ? (isPansouSection ? `关键词「${escapeHtml(truncateMiddleText(keyword))}」 · 类型 ${escapeHtml(getResourceProviderFilterLabel())}` : `关键词「${escapeHtml(truncateMiddleText(keyword))}」`)
                 : `最近资源 ${escapeHtml(latestPublishedAt ? formatTimeText(latestPublishedAt) : '--')} · 最近同步 ${escapeHtml(formatResourceSyncTime(section.last_sync_at))}`;
             const footerText = isSearchSection
                 ? (isPansouSection ? `当前已显示 ${escapeHtml(String(shownCount))} 条盘搜结果。` : `当前已显示 ${escapeHtml(String(shownCount))} 条命中结果。`)
@@ -2384,11 +2384,12 @@
         } = {}) {
             const normalizedSource = normalizeResourceSearchSource(source);
             const keywordText = String(keyword || resourceState?.search || '').trim() || '...';
+            const displayKeyword = truncateMiddleText(keywordText);
             const normalizedProviderFilter = normalizeResourceProviderFilter(providerFilter);
             const providerLabel = getResourceProviderFilterLabel(normalizedProviderFilter);
             const parts = [
                 normalizedSource === 'pansou' ? '盘搜中' : '频道搜索中',
-                `关键词「${keywordText}」`,
+                `关键词「${displayKeyword}」`,
             ];
             if (normalizedProviderFilter !== 'all') parts.push(`类型 ${providerLabel}`);
             if (normalizedSource === 'tg') {
@@ -2406,7 +2407,7 @@
             };
             const keywordText = String(active.keyword || resourceState?.search || '').trim() || '...';
             if (active.directImportMode) {
-                return `资源识别执行中 · 关键词「${keywordText}」 · 已开始`;
+                return `资源识别执行中 · 关键词「${truncateMiddleText(keywordText)}」 · 已开始`;
             }
             return buildResourceSearchRunningStatusText({
                 source: active.source || resourceSearchSource,
@@ -2436,6 +2437,7 @@
             const meta = state?.search_meta && typeof state.search_meta === 'object' ? state.search_meta : {};
             const sourceLabel = getResourceSearchSourceLabel(normalizedSource);
             const keywordText = String(keyword || state?.search || '').trim() || '...';
+            const displayKeyword = truncateMiddleText(keywordText);
             const providerLabel = getResourceProviderFilterLabel(providerFilter);
             const errors = Array.isArray(meta.errors) ? meta.errors : [];
             const searchedSources = Number(meta.searched_sources || 0);
@@ -2457,7 +2459,7 @@
 
             const parts = [
                 `${sourceLabel}${phaseLabel}`,
-                `关键词「${keywordText}」`,
+                `关键词「${displayKeyword}」`,
                 `类型 ${providerLabel}`,
             ];
 

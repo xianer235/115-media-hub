@@ -3840,6 +3840,7 @@
             font-size: 0.72rem;
             line-height: 1.45;
             color: #cbd5e1;
+            overflow-wrap: anywhere;
         }
         .resource-search-sub.is-loading {
             color: #7dd3fc;
@@ -5884,6 +5885,7 @@
             max-height: 320px;
             overflow: auto;
             white-space: pre-wrap;
+            overflow-wrap: anywhere;
             font-size: 0.82rem;
             line-height: 1.75;
             color: #cbd5e1;
@@ -7332,6 +7334,11 @@
             }
             .resource-job-card-grid {
                 grid-template-columns: 1fr;
+            }
+            .resource-job-card-actions button {
+                padding-left: 0.7rem;
+                padding-right: 0.7rem;
+                font-size: 0.76rem;
             }
             .scraper-task-file-row {
                 grid-template-columns: 1fr;
@@ -11580,6 +11587,7 @@
             font-size: 0.72rem;
             line-height: 1.45;
             color: var(--shell-text-soft);
+            overflow-wrap: anywhere;
         }
 
         .resource-section-actions {

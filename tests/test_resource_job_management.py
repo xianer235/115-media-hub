@@ -34,6 +34,8 @@ class ResourceJobManagementTest(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self.signal_patcher.stop()
         self.invalidate_patcher.stop()
+        core.resource_job_prune_last_ts = 0.0
+        core.resource_job_recovery_last_ts = 0.0
         db.DB_PATH = self.original_db_path
         db._DB_ENSURED = self.original_db_ensured
         self.temp_dir.cleanup()
@@ -148,6 +150,34 @@ class ResourceJobManagementTest(unittest.IsolatedAsyncioTestCase):
         page = resource_jobs.list_resource_jobs_page(limit=999999)
 
         self.assertEqual(page["pagination"]["limit"], 25000)
+
+    def test_prune_resource_jobs_if_due_throttles_by_interval(self):
+        core.resource_job_prune_last_ts = 0.0
+        with mock.patch.object(
+            core,
+            "prune_resource_job_history",
+            return_value={"completed": 0, "failed": 0, "deleted": 0},
+        ) as prune_fn:
+            first = core.prune_resource_jobs_if_due()
+            second = core.prune_resource_jobs_if_due()
+
+        self.assertEqual(first["skipped"], False)
+        self.assertEqual(first["history_pruned"], {"completed": 0, "failed": 0, "deleted": 0})
+        self.assertEqual(second["skipped"], True)
+        self.assertEqual(prune_fn.call_count, 1)
+
+    def test_recover_resource_jobs_if_due_does_not_prune_history(self):
+        core.resource_job_recovery_last_ts = 0.0
+        with mock.patch.object(core, "prune_resource_job_history", return_value={}) as prune_fn, mock.patch.object(
+            core, "recover_stale_resource_jobs", return_value={"recovered": 0}
+        ), mock.patch.object(
+            core, "recover_submitted_resource_jobs_without_monitor", return_value={"recovered": 0}
+        ):
+            result = core.recover_resource_jobs_if_due(force=True)
+
+        self.assertEqual(result["skipped"], False)
+        self.assertNotIn("history_pruned", result)
+        prune_fn.assert_not_called()
 
     async def test_resource_state_payload_keeps_the_full_history_window(self):
         with mock.patch.object(core, "get_config", return_value={}), mock.patch.object(

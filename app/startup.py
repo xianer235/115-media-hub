@@ -233,11 +233,18 @@ async def startup() -> None:
             await asyncio.to_thread(release_process_memory, "runtime-housekeeping")
             await asyncio.sleep(MEMORY_HOUSEKEEPING_INTERVAL_SECONDS)
 
+    async def resource_jobs_housekeeper() -> None:
+        await asyncio.sleep(5)
+        while True:
+            await asyncio.to_thread(_run_prune_step, prune_resource_jobs_if_due)
+            await asyncio.sleep(RESOURCE_JOB_PRUNE_INTERVAL_SECONDS)
+
     asyncio.create_task(scheduler())
     asyncio.create_task(monitor_scheduler())
     asyncio.create_task(subscription_scheduler())
     asyncio.create_task(sign115_scheduler())
     asyncio.create_task(memory_housekeeper())
+    asyncio.create_task(resource_jobs_housekeeper())
 
 
 @app.on_event("shutdown")
