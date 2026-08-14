@@ -406,7 +406,7 @@
                                     <div class="resource-job-card-title">${escapeHtml(job.title || `任务 #${job.id}`)}</div>
                                     ${buildResourceStatusBadge(job.status)}
                                     <span class="${getResourceLinkTypeBadgeClass(job.link_type || '')}">${escapeHtml(linkTypeLabel)}</span>
-                                    <span class="text-[10px] px-3 py-1 rounded-full bg-violet-500/10 text-violet-200 border border-violet-500/20">${escapeHtml(sourceLabel)}</span>
+                                    <span class="text-[10px] px-3 py-1 rounded-full bg-violet-500/15 text-violet-300 border border-violet-500/20">${escapeHtml(sourceLabel)}</span>
                                     <span class="text-[10px] px-3 py-1 rounded-full bg-slate-700 text-slate-100">#${job.id}</span>
                                 </div>
                                 <div class="resource-job-card-grid">

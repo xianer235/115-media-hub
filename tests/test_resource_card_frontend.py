@@ -8,6 +8,7 @@ SETTINGS_PATH = ROOT / "static/js/modules/tabs/settings.js"
 CSS_PATH = ROOT / "static/css/index.css"
 CORE_PATH = ROOT / "static/js/modules/resource/core.js"
 IMPORT_MODAL_PATH = ROOT / "static/js/modules/resource/import-modal.js"
+JOB_MODAL_PATH = ROOT / "static/js/modules/resource/job-modal.js"
 
 
 def extract_css_block(source: str, marker: str) -> str:
@@ -87,6 +88,28 @@ class ResourceCardFrontendTest(unittest.TestCase):
                 r"padding-inline:\s*0\.35rem;",
                 re.DOTALL,
             ),
+        )
+
+    def test_job_source_tag_uses_day_readable_violet_badge_classes(self):
+        modal = JOB_MODAL_PATH.read_text(encoding="utf-8")
+        css = CSS_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            'bg-violet-500/15 text-violet-300 border border-violet-500/20',
+            modal,
+        )
+        self.assertNotIn("text-violet-200", modal)
+        self.assertIn(
+            'html.theme-day .text-violet-300 { color: #6d28d9 !important; }',
+            css,
+        )
+        self.assertIn(
+            'html.theme-day .bg-violet-500\\/15 { background: rgba(109, 40, 217, 0.1) !important; }',
+            css,
+        )
+        self.assertIn(
+            'html.theme-day .border-violet-500\\/20 { border-color: rgba(109, 40, 217, 0.28) !important; }',
+            css,
         )
 
 
