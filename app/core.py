@@ -6705,6 +6705,16 @@ async def write_monitor_task_header(task: Dict[str, Any], trigger: str, payload:
         if webhook_bits:
             prefix = "Webhook" if trigger == "webhook" else "资源导入"
             await write_monitor_log(f"{prefix}: {' | '.join(webhook_bits)}", "info")
+    elif payload and trigger == "manual":
+        savepaths = payload.get("savepaths")
+        if isinstance(savepaths, list) and savepaths:
+            savepath_preview = ", ".join(str(path_item or "").strip() for path_item in savepaths[:5])
+            if len(savepaths) > 5:
+                savepath_preview += "..."
+            await write_monitor_log(
+                f"指定目录扫描: {len(savepaths)} 个目录 | {savepath_preview}",
+                "info",
+            )
 
 
 async def write_monitor_task_footer(task_name: str, status: str, level: str = "task-divider") -> None:

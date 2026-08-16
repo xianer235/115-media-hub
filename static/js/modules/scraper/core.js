@@ -348,6 +348,15 @@ function getSelectionParentPath(entry = {}) {
     return normalizePath(item.parent_path || currentParentPath());
 }
 
+function buildMonitorScanScopes(entries) {
+    const scopeSet = new Set();
+    (Array.isArray(entries) ? entries : []).forEach(item => {
+        if (!item || !item.name) return;
+        scopeSet.add(item.is_dir ? getSelectionPath(item) : getSelectionParentPath(item));
+    });
+    return Array.from(scopeSet).filter(path => path && path !== '');
+}
+
 function buildMutationRequestId() {
     if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
     return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -793,6 +802,16 @@ function renderSelection() {
         button.disabled = state.loading || !enabled;
         button.classList.toggle('btn-disabled', state.loading || !enabled);
     });
+    const monitorScanButton = document.querySelector('[data-scraper-action="monitor-scan"]');
+    if (monitorScanButton) {
+        const canMonitorScan = !hasPlan && hasSelection;
+        monitorScanButton.classList.toggle('hidden', hasPlan);
+        monitorScanButton.disabled = state.loading || !canMonitorScan;
+        monitorScanButton.classList.toggle('btn-disabled', state.loading || !canMonitorScan);
+        monitorScanButton.title = canMonitorScan
+            ? '对勾选的文件夹（或文件所在目录）执行监控扫描并刷新 STRM'
+            : (hasPlan ? '退出预览后再扫描监控' : '请先勾选要扫描的文件夹或文件');
+    }
     const batchButton = document.querySelector('[data-scraper-action="open-batch"]');
     if (batchButton) {
         const canBatch = supportsProviderOperation('scrape') && isProviderConfigured() && !hasPlan && selectedEntries.length > 0;
@@ -2974,6 +2993,52 @@ async function refreshJobs() {
     }
 }
 
+async function scanMonitorDir() {
+    const selectedEntries = getSelectedEntries();
+    if (!selectedEntries.length) {
+        showToast('请先勾选要扫描的文件夹或文件', { tone: 'warn', duration: 2600, placement: 'top-center' });
+        return;
+    }
+    const scopes = buildMonitorScanScopes(selectedEntries);
+    if (!scopes.length) {
+        showToast('未识别到可扫描的目录', { tone: 'error', duration: 3200, placement: 'top-center' });
+        return;
+    }
+    if (scopes.length > 50) {
+        showToast('勾选范围超过 50 个目录，请缩小选择范围', { tone: 'error', duration: 3400, placement: 'top-center' });
+        return;
+    }
+    const preview = scopes.length <= 3
+        ? scopes.join(' / ')
+        : `${scopes.slice(0, 3).join(' / ')} 等 ${scopes.length} 个目录`;
+    const confirmed = await showConfirm(
+        `将对以下目录执行监控扫描并刷新 STRM：\n${preview}\n\n继续？`,
+        { title: '扫描监控', confirmText: '开始扫描' },
+    );
+    if (!confirmed) return;
+    try {
+        const data = await window.MediaHubApi.postJson('/monitor/scan', {
+            provider: state.provider,
+            paths: scopes,
+        });
+        const tasks = Array.isArray(data.tasks) ? data.tasks : [];
+        const unmatchedCount = Array.isArray(data.unmatched) ? data.unmatched.length : 0;
+        if (tasks.length) {
+            const taskLabels = tasks.map(item => `${item.task_name}（${item.status}）`).join('、');
+            const unmatchedText = unmatchedCount > 0 ? `，${unmatchedCount} 个目录未匹配监控任务` : '';
+            showToast(`已加入监控队列：${taskLabels}${unmatchedText}`, {
+                tone: 'success',
+                duration: 4200,
+                placement: 'top-center',
+            });
+        } else {
+            showToast(data.msg || '未匹配到监控任务', { tone: 'warn', duration: 3600, placement: 'top-center' });
+        }
+    } catch (error) {
+        showToast(error.message || '扫描入队失败', { tone: 'error', duration: 3600, placement: 'top-center' });
+    }
+}
+
 function hasActiveJobs() {
     return state.jobs.some(job => SCRAPER_JOB_ACTIVE_STATUSES.has(String(job.status || '').trim()));
 }
@@ -3231,6 +3296,7 @@ function handleClick(event) {
     }
     if (action === 'execute-plan') void executePlan();
     if (action === 'refresh-jobs') void refreshJobs();
+    if (action === 'monitor-scan') void scanMonitorDir();
     if (action === 'copy-here') void copyHere();
     if (action === 'move-here') void moveHere();
     if (action === 'clear-copy') {

@@ -7,6 +7,7 @@ from .strm_files import delete_managed_strm_file, managed_strm_file_path, remove
 
 
 MONITOR_DIR_MISSING_RELEASE_CONFIRMATIONS = 2
+MONITOR_SCAN_SAVEPATHS_MAX = 50
 _monitor_dispatch_pending = False
 
 
@@ -570,17 +571,55 @@ async def run_monitor_task(
         task_scan_path = normalize_remote_path(task["scan_path"])
         extensions = get_user_extensions(cfg)
         min_bytes = int(task["min_file_size_mb"] * 1024 * 1024)
-        start_remote_path = task_scan_path
+        start_remote_paths: List[str] = [task_scan_path]
         refresh_source_label = ""
         if trigger in ("webhook", "resource") and payload:
             hinted_path = extract_webhook_refresh_path(task, payload, cfg)
             source_label = "Webhook" if trigger == "webhook" else "资源导入"
             refresh_source_label = source_label
             if hinted_path:
-                start_remote_path = hinted_path
-                await write_monitor_log(f"{source_label} 定位刷新目录: {start_remote_path}", "info")
+                start_remote_paths = [hinted_path]
+                await write_monitor_log(f"{source_label} 定位刷新目录: {hinted_path}", "info")
             else:
                 await write_monitor_log(f"{source_label} 未识别到有效子目录，回退全任务路径刷新", "warn")
+        elif trigger == "manual" and payload:
+            raw_savepaths = payload.get("savepaths")
+            if isinstance(raw_savepaths, list) and raw_savepaths:
+                scan_provider = str(payload.get("provider", "115") or "115").strip()
+                resolved_paths: List[str] = []
+                dropped_paths: List[str] = []
+                for raw_path in raw_savepaths:
+                    savepath = normalize_relative_path(str(raw_path or "").strip())
+                    if not savepath:
+                        continue
+                    matched = match_monitor_task_for_savepath(cfg, savepath, provider=scan_provider)
+                    matched_task = str(matched.get("task_name", "") or "").strip()
+                    full_path = normalize_remote_path(matched.get("full_path", "") or "")
+                    if matched_task == task_name and full_path and is_subpath(full_path, task_scan_path):
+                        if full_path not in resolved_paths:
+                            resolved_paths.append(full_path)
+                    else:
+                        dropped_paths.append(savepath)
+                if resolved_paths:
+                    refresh_source_label = "指定目录扫描"
+                    start_remote_paths = resolved_paths
+                    path_preview = ", ".join(resolved_paths[:5])
+                    if len(resolved_paths) > 5:
+                        path_preview += "..."
+                    await write_monitor_log(
+                        f"指定目录扫描定位 {len(resolved_paths)} 个目录: {path_preview}",
+                        "info",
+                    )
+                    if dropped_paths:
+                        drop_preview = ", ".join(dropped_paths[:5])
+                        if len(dropped_paths) > 5:
+                            drop_preview += "..."
+                        await write_monitor_log(
+                            f"指定目录扫描忽略任务外路径 {len(dropped_paths)} 条: {drop_preview}",
+                            "warn",
+                        )
+                else:
+                    await write_monitor_log("指定目录扫描未匹配到任务内目录，回退全任务路径刷新", "warn")
 
         manual_required_scopes: List[Dict[str, Any]] = []
         manual_required_first_level_dirs: Set[str] = set()
@@ -608,10 +647,20 @@ async def run_monitor_task(
                     "warn",
                 )
 
-        if refresh_source_label and start_remote_path != task_scan_path:
-            # 115 目录在新建后偶发短暂不可见，先刷新父目录再进入目标目录更稳妥。
-            parent_remote_path = normalize_remote_path(os.path.dirname(start_remote_path))
-            if parent_remote_path != start_remote_path and is_subpath(parent_remote_path, task_scan_path):
+        if refresh_source_label:
+            parent_refresh_paths: List[str] = []
+            for start_remote_path in start_remote_paths:
+                if start_remote_path == task_scan_path:
+                    continue
+                # 115 目录在新建后偶发短暂不可见，先刷新父目录再进入目标目录更稳妥。
+                parent_remote_path = normalize_remote_path(os.path.dirname(start_remote_path))
+                if (
+                    parent_remote_path != start_remote_path
+                    and is_subpath(parent_remote_path, task_scan_path)
+                    and parent_remote_path not in parent_refresh_paths
+                ):
+                    parent_refresh_paths.append(parent_remote_path)
+            for parent_remote_path in parent_refresh_paths:
                 try:
                     await write_monitor_log(f"{refresh_source_label} 预刷新父目录: {parent_remote_path}", "info")
                     await list_remote_dir(cfg, parent_remote_path, True, task)
@@ -627,8 +676,11 @@ async def run_monitor_task(
             local_sub_path = normalize_relative_path(os.path.relpath(remote_path, task_scan_path))
             return join_relative_path(task_root, local_sub_path)
 
-        start_local_rel = build_local_dir_rel(start_remote_path)
-        queue: List[Tuple[str, str, Optional[str]]] = [(start_remote_path, start_local_rel, None)]
+        scan_scope_rels: List[str] = [build_local_dir_rel(path_item) for path_item in start_remote_paths]
+        queue: List[Tuple[str, str, Optional[str]]] = [
+            (path_item, local_rel, None)
+            for path_item, local_rel in zip(start_remote_paths, scan_scope_rels)
+        ]
         scanned_dirs = set()
         fallback_guard_expected_path = ""
         fallback_guard_parent_path = ""
@@ -641,8 +693,10 @@ async def run_monitor_task(
         manual_required_failed_first_level_dirs: Set[str] = set()
         monitor_file_index_replaced = False
 
-        if start_local_rel != task_root:
-            start_dir_rel = _dir_rel_from_local(task_root, start_local_rel)
+        for scope_local_rel in scan_scope_rels:
+            if scope_local_rel == task_root:
+                continue
+            start_dir_rel = _dir_rel_from_local(task_root, scope_local_rel)
             first_level_dir_rel = start_dir_rel.split("/", 1)[0] if start_dir_rel else ""
             if first_level_dir_rel:
                 _mark_monitor_dir_dirty(cursor, task_name, first_level_dir_rel)
@@ -680,19 +734,18 @@ async def run_monitor_task(
                 await write_monitor_log(f"读取目录失败: {remote_dir} ({exc})", "error")
                 if (
                     refresh_source_label
-                    and remote_dir == start_remote_path
+                    and remote_dir in start_remote_paths
                     and remote_dir != task_scan_path
                 ):
                     fallback_remote_path = normalize_remote_path(os.path.dirname(remote_dir))
                     if fallback_remote_path != remote_dir and is_subpath(fallback_remote_path, task_scan_path):
                         fallback_guard_expected_path = remote_dir
                         fallback_guard_parent_path = fallback_remote_path
-                        start_remote_path = fallback_remote_path
-                        start_local_rel = build_local_dir_rel(start_remote_path)
-                        if not any(item[0] == start_remote_path for item in queue):
-                            queue.insert(0, (start_remote_path, start_local_rel, None))
+                        fallback_start_local_rel = build_local_dir_rel(fallback_remote_path)
+                        if not any(item[0] == fallback_remote_path for item in queue):
+                            queue.insert(0, (fallback_remote_path, fallback_start_local_rel, None))
                         await write_monitor_log(
-                            f"{refresh_source_label} 起始目录暂不可见，回退父目录重试: {start_remote_path}",
+                            f"{refresh_source_label} 起始目录暂不可见，回退父目录重试: {fallback_remote_path}",
                             "warn",
                         )
                         await write_monitor_log(
@@ -875,13 +928,16 @@ async def run_monitor_task(
                 await sleep_interruptible(task["list_delay_ms"] / 1000)
 
         await write_monitor_section("清理校正")
-        await write_monitor_log(f"清理范围: {start_remote_path}", "info")
+        scope_preview = ", ".join(start_remote_paths[:5])
+        if len(start_remote_paths) > 5:
+            scope_preview += "..."
+        await write_monitor_log(f"清理范围: {scope_preview}", "info")
         if stats["success_dirs"] == 0:
             raise RuntimeError("未成功读取任何目录，已停止并跳过过期 STRM 清理（避免误删）")
 
         cleanup_enabled = bool(task.get("sync_clean", not task.get("incremental", False)))
         if cleanup_enabled and stats["failed_dirs"] == 0:
-            if start_local_rel == task_root:
+            if task_root in scan_scope_rels:
                 cursor.execute(
                     """
                     SELECT local_rel_path FROM monitor_files
@@ -891,15 +947,14 @@ async def run_monitor_task(
                     (task_name,),
                 )
             else:
-                scope_like = _sql_like_descendant_pattern(start_local_rel)
+                scope_sql, scope_params = _monitor_scope_sql(scan_scope_rels)
                 cursor.execute(
-                    """
+                    f"""
                     SELECT local_rel_path FROM monitor_files
-                    WHERE task_name = ?
-                    AND (local_rel_path = ? OR local_rel_path LIKE ? ESCAPE '\\')
+                    WHERE task_name = ? AND ({scope_sql})
                     AND local_rel_path NOT IN (SELECT local_rel_path FROM current_scan)
                     """,
-                    (task_name, start_local_rel, scope_like),
+                    [task_name, *scope_params],
                 )
             stale_files = [row[0] for row in cursor.fetchall()]
             for local_rel_path in stale_files:
@@ -915,16 +970,16 @@ async def run_monitor_task(
             cursor.execute("BEGIN IMMEDIATE")
             try:
                 if cleanup_enabled and stats["failed_dirs"] == 0:
-                    if start_local_rel == task_root:
+                    if task_root in scan_scope_rels:
                         cursor.execute("DELETE FROM monitor_files WHERE task_name = ?", (task_name,))
                     else:
-                        scope_like = _sql_like_descendant_pattern(start_local_rel)
+                        scope_sql, scope_params = _monitor_scope_sql(scan_scope_rels)
                         cursor.execute(
-                            """
+                            f"""
                             DELETE FROM monitor_files
-                            WHERE task_name = ? AND (local_rel_path = ? OR local_rel_path LIKE ? ESCAPE '\\')
+                            WHERE task_name = ? AND ({scope_sql})
                             """,
-                            (task_name, start_local_rel, scope_like),
+                            [task_name, *scope_params],
                         )
                 else:
                     cursor.execute(
@@ -1275,6 +1330,21 @@ def _normalize_monitor_queue_payload(payload: Optional[Dict[str, Any]]) -> Dict[
     if savepath:
         normalized["savepath"] = savepath
 
+    raw_savepaths = raw_payload.get("savepaths")
+    if not isinstance(raw_savepaths, list):
+        raw_savepaths = []
+    savepaths: List[str] = []
+    for raw_path in raw_savepaths:
+        savepath_item = normalize_relative_path(str(raw_path or "").strip())
+        if savepath_item and savepath_item not in savepaths:
+            savepaths.append(savepath_item)
+    if savepaths:
+        normalized["savepaths"] = savepaths[:MONITOR_SCAN_SAVEPATHS_MAX]
+
+    provider = str(raw_payload.get("provider", "") or "").strip()
+    if provider:
+        normalized["provider"] = provider
+
     sharetitle = normalize_relative_path(raw_payload.get("sharetitle", ""))
     if sharetitle:
         normalized["sharetitle"] = sharetitle
@@ -1346,12 +1416,37 @@ def _monitor_queue_scope(payload: Optional[Dict[str, Any]]) -> str:
     return normalize_remote_path("/" + savepath)
 
 
+def _monitor_savepath_scopes(payload: Optional[Dict[str, Any]]) -> List[str]:
+    normalized_payload = _normalize_monitor_queue_payload(payload)
+    scopes: List[str] = []
+    single_scope = _monitor_queue_scope(normalized_payload)
+    if single_scope:
+        scopes.append(single_scope)
+    for raw_path in normalized_payload.get("savepaths", []) or []:
+        scope = normalize_remote_path("/" + normalize_relative_path(raw_path))
+        if scope and scope not in scopes:
+            scopes.append(scope)
+    return scopes
+
+
+def _monitor_scope_sql(scope_rels: List[str]) -> Tuple[str, List[Any]]:
+    fragments: List[str] = []
+    params: List[Any] = []
+    for scope_rel in scope_rels:
+        fragments.append("(local_rel_path = ? OR local_rel_path LIKE ? ESCAPE '\\')")
+        params.append(scope_rel)
+        params.append(_sql_like_descendant_pattern(scope_rel))
+    return " OR ".join(fragments), params
+
+
 def _merge_monitor_queue_payload(existing: Optional[Dict[str, Any]], incoming: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     existing_payload = _normalize_monitor_queue_payload(existing)
     incoming_payload = _normalize_monitor_queue_payload(incoming)
 
     existing_scope = _monitor_queue_scope(existing_payload)
     incoming_scope = _monitor_queue_scope(incoming_payload)
+    existing_has_multi = bool(existing_payload.get("savepaths"))
+    incoming_has_multi = bool(incoming_payload.get("savepaths"))
     merged_delay = max(
         int(existing_payload.get("delayTime", 0) or 0),
         int(incoming_payload.get("delayTime", 0) or 0),
@@ -1361,7 +1456,26 @@ def _merge_monitor_queue_payload(existing: Optional[Dict[str, Any]], incoming: O
         str(existing_payload.get("mode", "") or "").strip().lower() == "change"
         or str(incoming_payload.get("mode", "") or "").strip().lower() == "change"
     ) else "scan"
-    merged_payload: Dict[str, Any] = {"mode": "change"} if merged_mode == "change" else {}
+    if existing_has_multi or incoming_has_multi:
+        merged_savepaths: List[str] = []
+        for scope in _monitor_savepath_scopes(existing_payload) + _monitor_savepath_scopes(incoming_payload):
+            scope_rel = normalize_relative_path(scope.lstrip("/"))
+            if scope_rel and scope_rel not in merged_savepaths:
+                merged_savepaths.append(scope_rel)
+        merged_payload: Dict[str, Any] = {"mode": "change"} if merged_mode == "change" else {}
+        if merged_savepaths and len(merged_savepaths) <= MONITOR_SCAN_SAVEPATHS_MAX:
+            merged_payload["savepaths"] = merged_savepaths
+            provider = str(
+                existing_payload.get("provider", "") or incoming_payload.get("provider", "") or ""
+            ).strip()
+            if provider:
+                merged_payload["provider"] = provider
+        if merged_delay > 0:
+            merged_payload["delayTime"] = merged_delay
+        merged_payload.update(_merge_monitor_subscription_context(existing_payload, incoming_payload))
+        return merged_payload
+
+    merged_payload = {"mode": "change"} if merged_mode == "change" else {}
     if not existing_scope or not incoming_scope:
         merged_payload = {"mode": "change"} if merged_mode == "change" else {}
     elif existing_scope == incoming_scope:
@@ -1442,3 +1556,41 @@ def queue_monitor_job(task_name: str, trigger: str, payload: Optional[Dict[str, 
         submit_background(start_next_monitor_job, label="monitor-next")
         return "started"
     return "queued"
+
+
+def queue_monitor_dir_scan(cfg: Dict[str, Any], provider: str, paths: List[str]) -> Dict[str, Any]:
+    scan_provider = normalize_mount_provider(provider) or "115"
+    scopes: List[str] = []
+    for raw_path in paths or []:
+        scope = normalize_relative_path(str(raw_path or "").strip())
+        if scope and scope not in scopes:
+            scopes.append(scope)
+    if not scopes:
+        raise ValueError("未提供有效的扫描目录")
+    if len(scopes) > MONITOR_SCAN_SAVEPATHS_MAX:
+        raise ValueError(f"扫描目录数量超过上限 {MONITOR_SCAN_SAVEPATHS_MAX} 个，请缩小勾选范围")
+
+    tasks: Dict[str, Dict[str, Any]] = {}
+    unmatched: List[str] = []
+    for scope in scopes:
+        matched = match_monitor_task_for_savepath(cfg, scope, provider=scan_provider)
+        task_name = str(matched.get("task_name", "") or "").strip()
+        if not task_name:
+            unmatched.append(scope)
+            continue
+        tasks.setdefault(task_name, {"savepaths": []})["savepaths"].append(scope)
+
+    if not tasks:
+        raise ValueError("所选目录未匹配到任何监控任务")
+
+    result_tasks: List[Dict[str, Any]] = []
+    for task_name, entry in tasks.items():
+        status = queue_monitor_job(
+            task_name,
+            "manual",
+            {"provider": scan_provider, "savepaths": entry["savepaths"]},
+        )
+        result_tasks.append(
+            {"task_name": task_name, "status": status, "matched": len(entry["savepaths"])}
+        )
+    return {"ok": True, "tasks": result_tasks, "unmatched": unmatched}

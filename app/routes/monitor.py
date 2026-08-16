@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from ..background import submit_background
 from ..core import *  # noqa: F401,F403
 from ..db import retry_sqlite_locked
-from ..services.monitor import queue_monitor_job
+from ..services.monitor import queue_monitor_dir_scan, queue_monitor_job
 from ..services.resource import run_resource_job
 
 router = APIRouter()
@@ -20,6 +20,11 @@ webhook_router = APIRouter()
 USERSCRIPT_WEBHOOK_SOURCE = "userscript_webhook"
 WEBHOOK_SIGNATURE_TTL_SECONDS = 10 * 60
 webhook_used_nonce_cache: Dict[str, int] = {}
+
+
+def _error_response(exc: Exception, status_code: int = 400) -> JSONResponse:
+    message = str(exc or "") or "未知错误"
+    return JSONResponse(status_code=status_code, content={"ok": False, "msg": message})
 
 
 def _cleanup_webhook_nonce_cache(now_ts: int) -> None:
@@ -216,6 +221,22 @@ async def start_monitor(request: Request) -> Dict[str, Any]:
         return JSONResponse(status_code=404, content={"ok": False, "msg": "任务不存在"})
     status = queue_monitor_job(task_name, "manual")
     return {"ok": True, "status": status}
+
+
+@router.post("/monitor/scan")
+async def scan_monitor_dir(request: Request) -> Dict[str, Any]:
+    data = await request.json()
+    provider = str(data.get("provider", "115") or "115").strip()
+    raw_paths = data.get("paths")
+    if not isinstance(raw_paths, list) or not raw_paths:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "缺少扫描目录列表 paths"})
+    try:
+        result = await asyncio.to_thread(queue_monitor_dir_scan, get_config(), provider, raw_paths)
+    except ValueError as exc:
+        return JSONResponse(status_code=404, content={"ok": False, "msg": str(exc)})
+    except Exception as exc:
+        return _error_response(exc)
+    return result
 
 
 @router.post("/monitor/stop")
