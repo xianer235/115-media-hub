@@ -135,6 +135,99 @@ class CliPayloadTest(unittest.TestCase):
         cli.cmd_scrape(_parse(["scrape", "jobs-clear"]), c)
         self.assertIn(("POST", "/scraper/jobs/clear", {}), c.requests)
 
+    def test_scraper_batch_preferences_get(self):
+        c = _RecordingClient()
+        cli.cmd_scrape(_parse(["scrape", "batch-preferences", "get", "--provider", "115"]), c)
+        self.assertIn(("GET", "/scraper/115/batch/preferences", None), c.requests)
+
+    def test_scraper_batch_preferences_set_sends_options(self):
+        c = _RecordingClient()
+        cli.cmd_scrape(
+            _parse(
+                [
+                    "scrape", "batch-preferences", "set", "--provider", "115",
+                    "--options-json", '{"file_name_mode":"clean","delete_ad_files":true}',
+                ]
+            ),
+            c,
+        )
+        self.assertIn(
+            ("POST", "/scraper/115/batch/preferences", {"options": {"file_name_mode": "clean", "delete_ad_files": True}}),
+            c.requests,
+        )
+
+    def test_scraper_batch_preferences_clear_sends_empty_options(self):
+        c = _RecordingClient()
+        cli.cmd_scrape(_parse(["scrape", "batch-preferences", "clear", "--provider", "115"]), c)
+        self.assertIn(("POST", "/scraper/115/batch/preferences", {"options": {}}), c.requests)
+
+    def test_scraper_batch_preferences_invalid_sub_fails_cleanly(self):
+        c = _RecordingClient()
+        with self.assertRaises(SystemExit) as ctx:
+            cli.cmd_scrape(_parse(["scrape", "batch-preferences", "nope"]), c)
+        self.assertIn("get | set | clear", str(ctx.exception))
+        self.assertEqual(c.requests, [])
+
+    def test_scraper_batch_preferences_invalid_json_fails_cleanly(self):
+        c = _RecordingClient()
+        with self.assertRaises(SystemExit) as ctx:
+            cli.cmd_scrape(
+                _parse(["scrape", "batch-preferences", "set", "--options-json", "{bad"]),
+                c,
+            )
+        self.assertIn("合法 JSON", str(ctx.exception))
+        self.assertEqual(c.requests, [])
+
+    def test_scraper_rename_plan_sends_naming_options(self):
+        c = _RecordingClient()
+        cli.cmd_scrape(
+            _parse(
+                [
+                    "scrape", "rename-plan", "/影视/旧剧集名", "--provider", "115",
+                    "--file-name-mode", "keep", "--no-season-subfolder",
+                    "--delete-ad-files", "--season", "2",
+                ]
+            ),
+            c,
+        )
+        self.assertIn(
+            (
+                "POST",
+                "/scraper/rename-plan",
+                {
+                    "entries": [{"path": "/影视/旧剧集名"}],
+                    "provider": "115",
+                    "options": {
+                        "file_name_mode": "keep",
+                        "use_season_subfolder": False,
+                        "delete_ad_files": True,
+                        "season": 2,
+                    },
+                },
+            ),
+            c.requests,
+        )
+
+    def test_monitor_add_auto_scrape_options(self):
+        c = _RecordingClient({
+            ("GET", "/get_settings"): {"monitor_tasks": []},
+        })
+        cli.cmd_monitor(
+            _parse(
+                [
+                    "monitor", "add", "影视监控", "--scan-path", "/115/一级",
+                    "--auto-scrape-on-new",
+                    "--auto-scrape-options-json", '{"file_name_mode":"keep","delete_ad_files":true}',
+                ]
+            ),
+            c,
+        )
+        saved = next(body for method, path, body in c.requests if path == "/save_settings")
+        task = saved["monitor_tasks"][0]
+        self.assertTrue(task["auto_scrape_on_new"])
+        self.assertEqual(task["auto_scrape_options"]["file_name_mode"], "keep")
+        self.assertEqual(task["auto_scrape_options"]["delete_ad_files"], True)
+
     def test_scraper_jobs_create_runs_identify_then_plan(self):
         plan = {
             "ok": True,

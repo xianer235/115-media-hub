@@ -157,12 +157,29 @@ export MH_API_BASE=http://127.0.0.1:18080   # 可选，默认即本机
 ```
 
 常用命令：`status` / `version` / `search <关键词>|--cancel` / `channels sync` /
-`subscribe list|add|remove|start` / `jobs list|retry|cancel` / `scrape jobs-create` /
+`subscribe list|add|remove|start` / `jobs list|retry|cancel` / `scrape jobs-create|batch-preferences` /
 `monitor list|start|stop` / `tree run` / `sources search` / `daemon status|logs|restart`。
 
 - 完整命令列表见 `CLI-API-AUDIT.md`；每个子命令都支持 `--help` 查看参数
 - 会话 Cookie 默认保存到 `/tmp/.115_cookies.txt`（权限 0600），可用 `MH_COOKIE_FILE` 覆盖
 - `sources` / `daemon` 等容器运维命令需要宿主机安装 Docker，容器名自动识别 `115-media-hub` / `115-media-hub-test`，也可用环境变量 `MH_CONTAINER` 覆盖
+
+批量整理与监控任务相关命令（0.7.1 起）：
+
+```bash
+# 读取 / 设置 / 清除某网盘的批量整理偏好（文件命名方式、文件夹开关、删除广告等）
+.cli-venv/bin/python cli.py scrape batch-preferences get --provider 115
+.cli-venv/bin/python cli.py scrape batch-preferences set --provider 115 --options-json '{"file_name_mode":"keep"}'
+.cli-venv/bin/python cli.py scrape batch-preferences clear --provider 115
+
+# 生成重命名预览时传入命名选项（keep 保持原名 / clean 仅清理广告 / standard 标准重命名）
+.cli-venv/bin/python cli.py scrape rename-plan "/影视/剧集" --file-name-mode clean --no-season-subfolder --delete-ad-files
+
+# 创建监控任务时启用新增资源自动刮削整理并配置该任务的整理选项
+.cli-venv/bin/python cli.py monitor add 自存影视 --scan-path /115/自存影视 --auto-scrape-on-new --auto-scrape-options-json '{"file_name_mode":"keep","delete_ad_files":true}'
+```
+
+`scrape rename-plan` 支持 `--file-name-mode keep|clean|standard`、`--no-rename-folders`、`--no-season-subfolder`、`--include-tmdb-id`、`--delete-ad-files`、`--title-language auto|zh|en`、`--season`、`--episode-mode auto|seasonal|absolute`、`--preserve-file-info`，或直接用 `--options-json` 传完整选项对象；`monitor add` 还支持 `--auto-scrape-options-json` 传该任务的自动整理选项（未配置时保持默认行为）。
 
 ## Webhook 说明
 
@@ -283,7 +300,8 @@ CLI 专属环境变量（见「命令行工具」）：`MH_USERNAME` / `MH_PASSW
 
 ## 近期更新（以 `version.json` 为准）
 
-- 当前版本：`0.7.1`
+- 当前版本：`0.7.2`
+- CLI 补齐：`scrape batch-preferences get|set|clear` 读写/清除批量整理偏好；`scrape rename-plan` 支持文件命名方式等命名选项；`monitor add` 支持 `--auto-scrape-on-new` 与自动整理选项。
 - 批量整理体验优化：入口按钮统一为“批量整理”，命名选项按「文件夹 → 文件命名 → 文件清理」三段重排；新增“文件命名方式”三档——标准重命名 / 仅清理广告信息（保留原始命名）/ 保持原名（不重命名），保持原名与仅清理档位下文件不移动，Season 子文件夹作为独立结构操作仍可生效。
 - 批量整理选项按网盘记忆：服务端保存每个网盘上次的整理选项，页面加载或切换网盘自动恢复，变更自动保存，支持一键“恢复默认”。
 - 监控任务“新增资源自动刮削整理”支持按任务配置整理选项：文件夹重命名 / Season 子文件夹 / TMDB ID / 文件命名方式 / 保留细节 / 删除广告文件，每个任务独立保存；未配置任务保持原行为。

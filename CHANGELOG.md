@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.2] - 2026-08-17
+
+### CLI：批量整理与监控任务选项支持
+
+- `scrape` 新增 `batch-preferences get|set|clear` 子命令（`--provider` 指定网盘），可读取 / 设置 / 清除该网盘的批量整理偏好；`rename-plan` 新增 `--file-name-mode`（keep/clean/standard）、`--no-rename-folders`、`--no-season-subfolder`、`--include-tmdb-id`、`--delete-ad-files`、`--title-language`、`--season`、`--episode-mode`、`--preserve-file-info` 参数，也可用 `--options-json` 直接传完整选项对象。
+- `monitor add` 新增 `--auto-scrape-on-new` 与 `--auto-scrape-options-json`，创建监控任务时即可配置“新增资源自动刮削整理”及其整理选项。
+- README CLI 段落补充上述命令用法与参数说明；交接记录规则新增“涉及 CLI 能力的改动须同步补齐 `cli.py` 支持与 README CLI 文档”。
+
 ## [0.7.1] - 2026-08-17
 
 ### 批量整理：操作分组、文件命名方式与选项记忆

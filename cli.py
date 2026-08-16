@@ -24,7 +24,7 @@
   115 browse ls|tree|folders|create-folder
                                        网盘浏览
   115 share preview|receive|preview-batch  分享管理
-  115 scrape identify|rename-plan|rename|diff|jobs|providers|entries|folders|rename-warning|jobs-create|move|copy|delete|rollback|jobs-clear
+  115 scrape identify|rename-plan|rename|diff|jobs|providers|entries|folders|rename-warning|jobs-create|move|copy|delete|rollback|jobs-clear|batch-preferences
                                        刮削管理
   115 watchlist list|add|remove|update  推荐清单
   115 strm orphans|cleanup|dirs         STRM 管理
@@ -854,6 +854,8 @@ def cmd_monitor(args, c: Client):
             "retries": args.retries or 3,
             "list_delay_ms": args.list_delay_ms or 250,
             "min_file_size_mb": args.min_file_size_mb or 0,
+            "auto_scrape_on_new": args.auto_scrape_on_new,
+            "auto_scrape_options": _parse_auto_scrape_options(args.auto_scrape_options_json),
         }
         tasks.append(new_task)
         cfg["monitor_tasks"] = tasks
@@ -1268,6 +1270,51 @@ def cmd_share(args, c: Client):
 
 # ── Phase 3: scrape ────────────────────────────────────────────────────────
 
+def _build_scrape_plan_options(args) -> Dict[str, Any]:
+    """把 rename-plan 命令行参数组装成 options；未传任何选项时返回空 dict。"""
+    options: Dict[str, Any] = {}
+    if args.file_name_mode:
+        options["file_name_mode"] = args.file_name_mode
+    if args.no_rename_folders:
+        options["rename_selected_folders"] = False
+    if args.no_season_subfolder:
+        options["use_season_subfolder"] = False
+    if args.include_tmdb_id:
+        options["include_tmdb_id"] = True
+    if args.delete_ad_files:
+        options["delete_ad_files"] = True
+    if args.title_language:
+        options["title_language"] = args.title_language
+    if args.season is not None:
+        options["season"] = max(1, min(99, args.season))
+    if args.episode_mode:
+        options["episode_mode"] = args.episode_mode
+    if args.preserve_file_info:
+        options["preserve_file_info"] = True
+    if args.options_json:
+        try:
+            extra = json.loads(args.options_json)
+        except (ValueError, TypeError):
+            sys.exit("--options-json 必须是合法 JSON 对象")
+        if not isinstance(extra, dict):
+            sys.exit("--options-json 必须是 JSON 对象")
+        options.update(extra)
+    return options
+
+
+def _parse_auto_scrape_options(raw: str) -> Dict[str, Any]:
+    """解析 monitor add 的 --auto-scrape-options-json，非法 JSON 直接报错退出。"""
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        sys.exit("--auto-scrape-options-json 必须是合法 JSON 对象")
+    if not isinstance(parsed, dict):
+        sys.exit("--auto-scrape-options-json 必须是 JSON 对象")
+    return parsed
+
+
 def cmd_scrape(args, c: Client):
     """刮削管理"""
     if args.action == "identify":
@@ -1287,7 +1334,31 @@ def cmd_scrape(args, c: Client):
         payload = {"entries": [{"path": path}]}
         if args.provider:
             payload["provider"] = args.provider
+        options = _build_scrape_plan_options(args)
+        if options:
+            payload["options"] = options
         data = c.json("POST", "/scraper/rename-plan", payload)
+        print(fmt_json(data))
+
+    elif args.action == "batch-preferences":
+        sub = " ".join(args.path).strip() if args.path else ""
+        if sub not in ("get", "set", "clear"):
+            sys.exit("batch-preferences 需要子动作：get | set | clear")
+        provider = args.provider or "115"
+        if sub == "get":
+            data = c.json("GET", f"/scraper/{provider}/batch/preferences")
+        else:
+            options: Dict[str, Any] = {}
+            if sub == "set":
+                if not args.options_json:
+                    sys.exit("batch-preferences set 需要 --options-json")
+                try:
+                    options = json.loads(args.options_json)
+                except (ValueError, TypeError):
+                    sys.exit("--options-json 必须是合法 JSON 对象")
+                if not isinstance(options, dict):
+                    sys.exit("--options-json 必须是 JSON 对象")
+            data = c.json("POST", f"/scraper/{provider}/batch/preferences", {"options": options})
         print(fmt_json(data))
 
     elif args.action == "diff":
@@ -2010,6 +2081,8 @@ def _build_parser() -> argparse.ArgumentParser:
     sp_mon.add_argument("--retries", type=int, default=3, help="最大重试次数 (add)")
     sp_mon.add_argument("--list-delay-ms", type=int, default=250, help="列表请求延迟毫秒数 (add)")
     sp_mon.add_argument("--min-file-size-mb", type=float, default=0.0, help="最小文件大小 MB (add)")
+    sp_mon.add_argument("--auto-scrape-on-new", action="store_true", help="新增资源自动刮削整理 (add)")
+    sp_mon.add_argument("--auto-scrape-options-json", default="", help="自动整理选项 JSON 对象 (add)，如 {\"file_name_mode\":\"keep\"}")
 
     # tree
     sp_tree = sp.add_parser("tree", help="目录树同步")
@@ -2051,8 +2124,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # scrape
     sp_scrape = sp.add_parser("scrape", help="刮削管理")
-    sp_scrape.add_argument("action", choices=["identify", "rename-plan", "diff", "jobs", "providers", "entries", "folders", "rename", "rename-warning", "jobs-create", "move", "copy", "delete", "rollback", "jobs-clear"])
-    sp_scrape.add_argument("path", nargs="*", help="文件路径 (identify/rename-plan/move/copy/delete/rename/rename-warning/jobs-create)")
+    sp_scrape.add_argument("action", choices=["identify", "rename-plan", "diff", "jobs", "providers", "entries", "folders", "rename", "rename-warning", "jobs-create", "move", "copy", "delete", "rollback", "jobs-clear", "batch-preferences"])
+    sp_scrape.add_argument("path", nargs="*", help="文件路径 (identify/rename-plan/move/copy/delete/rename/rename-warning/jobs-create) 或子动作 get|set|clear (batch-preferences)")
     sp_scrape.add_argument("--job-id", default="", help="Job ID (diff/rollback)")
     sp_scrape.add_argument("--provider", default="", help="提供商 (jobs/move/copy/delete/rename)")
     sp_scrape.add_argument("--limit", type=int, default=20, help="列表条数 (jobs)")
@@ -2065,6 +2138,16 @@ def _build_parser() -> argparse.ArgumentParser:
     sp_scrape.add_argument("--source-cid", default="", help="源目录 ID (move/copy)")
     sp_scrape.add_argument("--tmdb-id", default="", help="TMDB ID (jobs-create, 可选)")
     sp_scrape.add_argument("--media-type", default="", choices=["movie", "tv"], help="TMDB 媒体类型 (jobs-create)")
+    sp_scrape.add_argument("--file-name-mode", default="", choices=["keep", "clean", "standard"], help="文件命名方式 (rename-plan/batch-preferences set)")
+    sp_scrape.add_argument("--no-rename-folders", action="store_true", help="不重命名文件夹 (rename-plan)")
+    sp_scrape.add_argument("--no-season-subfolder", action="store_true", help="不创建 Season 子文件夹 (rename-plan)")
+    sp_scrape.add_argument("--include-tmdb-id", action="store_true", help="文件夹名写入 TMDB ID (rename-plan)")
+    sp_scrape.add_argument("--delete-ad-files", action="store_true", help="整理时删除广告文件 (rename-plan)")
+    sp_scrape.add_argument("--title-language", default="", choices=["auto", "zh", "en"], help="标题语言 (rename-plan)")
+    sp_scrape.add_argument("--season", type=int, default=None, help="未识别时默认季号 (rename-plan)")
+    sp_scrape.add_argument("--episode-mode", default="", choices=["auto", "seasonal", "absolute"], help="季集识别方式 (rename-plan)")
+    sp_scrape.add_argument("--preserve-file-info", action="store_true", help="保留原文件细节标签 (rename-plan)")
+    sp_scrape.add_argument("--options-json", default="", help="JSON 选项对象 (rename-plan / batch-preferences set)")
 
     # watchlist
     sp_wl = sp.add_parser("watchlist", help="推荐清单")
