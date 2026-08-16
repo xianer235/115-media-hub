@@ -1125,10 +1125,13 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
     strm_write_mode = str(task.get("strm_write_mode", "incremental") or "incremental").strip().lower()
     if strm_write_mode not in {"incremental", "full"}:
         strm_write_mode = "incremental"
+    raw_auto_scrape_options = task.get("auto_scrape_options")
+    auto_scrape_options = raw_auto_scrape_options if isinstance(raw_auto_scrape_options, dict) else {}
     return {
         "name": name,
         "webhook_enabled": normalize_bool(task.get("webhook_enabled", False), default=False),
         "auto_scrape_on_new": normalize_bool(task.get("auto_scrape_on_new", False), default=False),
+        "auto_scrape_options": auto_scrape_options,
         "scan_path": normalize_remote_path(task.get("scan_path", "")),
         "target_path": normalize_relative_path(task.get("target_path", "")),
         "skip_by_dir_mtime": normalize_bool(task.get("skip_by_dir_mtime", False), default=False),

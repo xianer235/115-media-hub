@@ -3580,6 +3580,87 @@
             } catch (e) {}
         }
 
+        function syncMonitorAutoScrapeOptions() {
+            const enabled = !!document.getElementById('monitor_auto_scrape_on_new')?.checked;
+            const optionsEl = document.getElementById('monitor-auto-scrape-options');
+            if (optionsEl) optionsEl.classList.toggle('hidden', !enabled);
+            const standard = String(document.getElementById('monitor_asc_file_name_mode')?.value || 'standard') === 'standard';
+            const standardWrap = document.getElementById('monitor-asc-standard-wrap');
+            if (standardWrap) {
+                standardWrap.classList.toggle('hidden', !standard);
+                standardWrap.querySelectorAll('input, select').forEach((control) => {
+                    control.disabled = !standard;
+                });
+            }
+            const preserve = !!document.getElementById('monitor_asc_preserve_file_info')?.checked;
+            document.querySelectorAll('[data-monitor-asc-tag]').forEach((input) => {
+                input.disabled = !preserve;
+            });
+        }
+
+        function collectMonitorAutoScrapeOptions() {
+            const preserveTags = {};
+            document.querySelectorAll('[data-monitor-asc-tag]').forEach((input) => {
+                preserveTags[String(input.dataset.monitorAscTag || '').trim()] = !!input.checked;
+            });
+            return {
+                file_name_mode: String(document.getElementById('monitor_asc_file_name_mode')?.value || 'standard'),
+                title_language: String(document.getElementById('monitor_asc_title_language')?.value || 'auto'),
+                season: Math.max(1, Number(document.getElementById('monitor_asc_season')?.value || 1) || 1),
+                episode_mode: String(document.getElementById('monitor_asc_episode_mode')?.value || 'auto'),
+                include_tmdb_id: !!document.getElementById('monitor_asc_include_tmdb_id')?.checked,
+                use_season_subfolder: document.getElementById('monitor_asc_season_subfolder')?.checked !== false,
+                rename_selected_folders: document.getElementById('monitor_asc_rename_folders')?.checked !== false,
+                delete_ad_files: !!document.getElementById('monitor_asc_delete_ad_files')?.checked,
+                preserve_file_info: !!document.getElementById('monitor_asc_preserve_file_info')?.checked,
+                preserve_tags: preserveTags,
+            };
+        }
+
+        function applyMonitorAutoScrapeOptions(options = {}) {
+            const opts = options && typeof options === 'object' ? options : {};
+            const setCheck = (id, value) => {
+                const el = document.getElementById(id);
+                if (el) el.checked = !!value;
+            };
+            const setSelect = (id, value, allowed) => {
+                const el = document.getElementById(id);
+                if (el) el.value = allowed.includes(String(value || '')) ? String(value) : allowed[0];
+            };
+            setCheck('monitor_asc_rename_folders', opts.rename_selected_folders !== false);
+            setCheck('monitor_asc_season_subfolder', opts.use_season_subfolder !== false);
+            setCheck('monitor_asc_include_tmdb_id', opts.include_tmdb_id);
+            setCheck('monitor_asc_delete_ad_files', opts.delete_ad_files);
+            setCheck('monitor_asc_preserve_file_info', opts.preserve_file_info);
+            setSelect('monitor_asc_file_name_mode', opts.file_name_mode, ['standard', 'clean', 'keep']);
+            setSelect('monitor_asc_title_language', opts.title_language, ['auto', 'zh', 'en']);
+            setSelect('monitor_asc_episode_mode', opts.episode_mode, ['auto', 'seasonal', 'absolute']);
+            const seasonEl = document.getElementById('monitor_asc_season');
+            if (seasonEl) seasonEl.value = String(Math.max(1, Math.min(99, Number(opts.season || 1) || 1)));
+            const tags = (opts.preserve_tags && typeof opts.preserve_tags === 'object') ? opts.preserve_tags : {};
+            document.querySelectorAll('[data-monitor-asc-tag]').forEach((input) => {
+                const key = String(input.dataset.monitorAscTag || '').trim();
+                if (Object.prototype.hasOwnProperty.call(tags, key)) input.checked = !!tags[key];
+            });
+            syncMonitorAutoScrapeOptions();
+        }
+
+        function resetMonitorAutoScrapeOptions() {
+            document.getElementById('monitor_asc_rename_folders').checked = true;
+            document.getElementById('monitor_asc_season_subfolder').checked = true;
+            document.getElementById('monitor_asc_include_tmdb_id').checked = false;
+            document.getElementById('monitor_asc_delete_ad_files').checked = false;
+            document.getElementById('monitor_asc_preserve_file_info').checked = false;
+            document.getElementById('monitor_asc_file_name_mode').value = 'standard';
+            document.getElementById('monitor_asc_title_language').value = 'auto';
+            document.getElementById('monitor_asc_episode_mode').value = 'auto';
+            document.getElementById('monitor_asc_season').value = '1';
+            document.querySelectorAll('[data-monitor-asc-tag]').forEach((input) => {
+                input.checked = true;
+            });
+            syncMonitorAutoScrapeOptions();
+        }
+
         function currentMonitorFormData() {
             const rawScanPath = document.getElementById('monitor_scan_path').value.trim();
             return {
@@ -3591,6 +3672,7 @@
                 strm_write_mode: document.getElementById('monitor_strm_write_mode')?.value || 'incremental',
                 sync_clean: document.getElementById('monitor_sync_clean').checked,
                 auto_scrape_on_new: document.getElementById('monitor_auto_scrape_on_new').checked,
+                auto_scrape_options: collectMonitorAutoScrapeOptions(),
                 incremental: !document.getElementById('monitor_sync_clean').checked,
                 retries: parseInt(document.getElementById('monitor_retries').value || '3', 10) || 3,
                 list_delay_ms: document.getElementById('monitor_list_delay_ms').value === ''
@@ -3864,6 +3946,7 @@
             document.getElementById('monitor_strm_write_mode').value = 'incremental';
             document.getElementById('monitor_sync_clean').checked = true;
             document.getElementById('monitor_auto_scrape_on_new').checked = false;
+            resetMonitorAutoScrapeOptions();
             document.getElementById('monitor_retries').value = 3;
             document.getElementById('monitor_list_delay_ms').value = 250;
             document.getElementById('monitor_min_file_size_mb').value = 0;
@@ -4002,6 +4085,7 @@
                 ? !!task.sync_clean
                 : !task.incremental;
             document.getElementById('monitor_auto_scrape_on_new').checked = !!task.auto_scrape_on_new;
+            applyMonitorAutoScrapeOptions(task.auto_scrape_options);
             document.getElementById('monitor_retries').value = task.retries ?? 3;
             document.getElementById('monitor_list_delay_ms').value = task.list_delay_ms ?? 250;
             document.getElementById('monitor_min_file_size_mb').value = task.min_file_size_mb ?? 0;

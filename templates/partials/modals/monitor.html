@@ -63,9 +63,82 @@
                         清理过期 STRM（不删除字幕、海报、NFO 等刮削元数据）
                     </label>
                     <label class="flex items-center gap-3 cursor-pointer text-sm">
-                        <input type="checkbox" id="monitor_auto_scrape_on_new" class="ui-checkbox">
-                        新增资源自动刮削整理（仅整理高置信度自动匹配的条目，失败仅记录日志）
+                        <input type="checkbox" id="monitor_auto_scrape_on_new" class="ui-checkbox" onchange="syncMonitorAutoScrapeOptions()">
+                        <span>新增资源自动刮削整理（仅整理高置信度自动匹配的条目，失败仅记录日志）</span>
                     </label>
+                    <div id="monitor-auto-scrape-options" class="hidden space-y-3 rounded-xl border border-slate-700 bg-slate-900/60 p-3">
+                        <div class="text-xs font-bold text-slate-300">自动整理选项</div>
+                        <div class="space-y-2">
+                            <div class="text-[11px] font-bold text-slate-500 uppercase tracking-wide">文件夹</div>
+                            <label class="flex items-center gap-3 cursor-pointer text-sm">
+                                <input type="checkbox" id="monitor_asc_rename_folders" class="ui-checkbox" checked>
+                                <span>重命名文件夹（按识别结果标准化）</span>
+                            </label>
+                            <label class="flex items-center gap-3 cursor-pointer text-sm">
+                                <input type="checkbox" id="monitor_asc_season_subfolder" class="ui-checkbox" checked>
+                                <span>电视剧目录中创建 Season 子文件夹</span>
+                            </label>
+                            <label class="flex items-center gap-3 cursor-pointer text-sm">
+                                <input type="checkbox" id="monitor_asc_include_tmdb_id" class="ui-checkbox">
+                                <span>在媒体文件夹名中写入 TMDB ID</span>
+                            </label>
+                        </div>
+                        <div class="space-y-2">
+                            <div class="text-[11px] font-bold text-slate-500 uppercase tracking-wide">文件命名</div>
+                            <label class="block">
+                                <span class="text-xs text-slate-500">文件命名方式</span>
+                                <select id="monitor_asc_file_name_mode" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none" onchange="syncMonitorAutoScrapeOptions()">
+                                    <option value="standard">按识别结果重命名</option>
+                                    <option value="clean">仅清理广告信息（保留原始命名）</option>
+                                    <option value="keep">保持原名（不重命名）</option>
+                                </select>
+                            </label>
+                            <div id="monitor-asc-standard-wrap" class="space-y-2">
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <label class="block">
+                                        <span class="text-xs text-slate-500">标题语言</span>
+                                        <select id="monitor_asc_title_language" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none">
+                                            <option value="auto">跟随 TMDB 配置</option>
+                                            <option value="zh">中文名</option>
+                                            <option value="en">英文名</option>
+                                        </select>
+                                    </label>
+                                    <label class="block">
+                                        <span class="text-xs text-slate-500">未识别时默认季号</span>
+                                        <input id="monitor_asc_season" type="number" min="1" max="99" value="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none">
+                                    </label>
+                                </div>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">季集识别方式</span>
+                                    <select id="monitor_asc_episode_mode" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none">
+                                        <option value="auto">自动跟随 TMDB</option>
+                                        <option value="seasonal">单季：按季号识别</option>
+                                        <option value="absolute">多季：按 TMDB 连续编号</option>
+                                    </select>
+                                </label>
+                                <label class="flex items-center gap-3 cursor-pointer text-sm">
+                                    <input type="checkbox" id="monitor_asc_preserve_file_info" class="ui-checkbox" onchange="syncMonitorAutoScrapeOptions()">
+                                    <span>保留原文件名中的清晰度 / 片源 / 编码信息</span>
+                                </label>
+                                <div class="grid grid-cols-2 gap-2 text-xs text-slate-400">
+                                    <label class="flex items-center gap-2"><input type="checkbox" class="ui-checkbox" data-monitor-asc-tag="resolution" checked disabled> 清晰度</label>
+                                    <label class="flex items-center gap-2"><input type="checkbox" class="ui-checkbox" data-monitor-asc-tag="source" checked disabled> 片源</label>
+                                    <label class="flex items-center gap-2"><input type="checkbox" class="ui-checkbox" data-monitor-asc-tag="dynamic_range" checked disabled> HDR/DV</label>
+                                    <label class="flex items-center gap-2"><input type="checkbox" class="ui-checkbox" data-monitor-asc-tag="video" checked disabled> 视频编码</label>
+                                    <label class="flex items-center gap-2"><input type="checkbox" class="ui-checkbox" data-monitor-asc-tag="audio" checked disabled> 音频规格</label>
+                                    <label class="flex items-center gap-2"><input type="checkbox" class="ui-checkbox" data-monitor-asc-tag="language" checked disabled> 语言</label>
+                                    <label class="flex items-center gap-2"><input type="checkbox" class="ui-checkbox" data-monitor-asc-tag="subtitle" checked disabled> 字幕</label>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="space-y-2">
+                            <div class="text-[11px] font-bold text-slate-500 uppercase tracking-wide">文件清理</div>
+                            <label class="flex items-center gap-3 cursor-pointer text-sm">
+                                <input type="checkbox" id="monitor_asc_delete_ad_files" class="ui-checkbox">
+                                <span>整理时删除广告文件（图片/网页/文本，删除进入网盘回收站）</span>
+                            </label>
+                        </div>
+                    </div>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <label class="block">
                             <span class="text-xs text-slate-500">读取失败尝试次数</span>

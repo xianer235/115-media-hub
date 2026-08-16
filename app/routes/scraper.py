@@ -16,6 +16,7 @@ from ..services.scraper import (
     create_scraper_folder,
     create_scraper_job_from_plan,
     delete_scraper_entries,
+    get_scraper_batch_preferences,
     get_scraper_jobs_state,
     identify_scraper_batch_items,
     identify_scraper_media,
@@ -24,6 +25,7 @@ from ..services.scraper import (
     rename_scraper_entry,
     rollback_scraper_job,
     run_scraper_job,
+    save_scraper_batch_preferences,
     scan_scraper_batch_items,
     resolve_scraper_dest_folder_id,
     resolve_scraper_path_entry,
@@ -283,6 +285,24 @@ async def identify_scraper_batch_endpoint(request: Request) -> Dict[str, Any]:
     payload = data if isinstance(data, dict) else {}
     try:
         return await asyncio.to_thread(identify_scraper_batch_items, payload)
+    except Exception as exc:
+        return _error_response(exc)
+
+
+@router.get("/scraper/{provider}/batch/preferences")
+async def get_scraper_batch_preferences_endpoint(provider: str) -> Dict[str, Any]:
+    try:
+        return await asyncio.to_thread(get_scraper_batch_preferences, provider)
+    except Exception as exc:
+        return _error_response(exc)
+
+
+@router.post("/scraper/{provider}/batch/preferences")
+async def save_scraper_batch_preferences_endpoint(provider: str, request: Request) -> Dict[str, Any]:
+    data = await request.json()
+    options = data.get("options") if isinstance(data.get("options"), dict) else {}
+    try:
+        return await asyncio.to_thread(save_scraper_batch_preferences, provider, options)
     except Exception as exc:
         return _error_response(exc)
 

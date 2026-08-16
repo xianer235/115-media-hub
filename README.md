@@ -283,7 +283,10 @@ CLI 专属环境变量（见「命令行工具」）：`MH_USERNAME` / `MH_PASSW
 
 ## 近期更新（以 `version.json` 为准）
 
-- 当前版本：`0.7.0`
+- 当前版本：`0.7.1`
+- 批量整理体验优化：入口按钮统一为“批量整理”，命名选项按「文件夹 → 文件命名 → 文件清理」三段重排；新增“文件命名方式”三档——标准重命名 / 仅清理广告信息（保留原始命名）/ 保持原名（不重命名），保持原名与仅清理档位下文件不移动，Season 子文件夹作为独立结构操作仍可生效。
+- 批量整理选项按网盘记忆：服务端保存每个网盘上次的整理选项，页面加载或切换网盘自动恢复，变更自动保存，支持一键“恢复默认”。
+- 监控任务“新增资源自动刮削整理”支持按任务配置整理选项：文件夹重命名 / Season 子文件夹 / TMDB ID / 文件命名方式 / 保留细节 / 删除广告文件，每个任务独立保存；未配置任务保持原行为。
 - 新增宿主机命令行 CLI（合并外部贡献 PR #5 并适配当前 API）：25 个子命令覆盖搜索/订阅/转存/监控/刮削/STRM/运维等，AI 代理或脚本可无需网页完成“搜索→订阅→转存→监控→STRM→播放”全流程；登录不再静默使用默认 `admin/admin123`，要求 `MH_USERNAME`/`MH_PASSWORD` 环境变量或交互式输入，会话 Cookie 默认落盘 `/tmp/.115_cookies.txt`（0600，可用 `MH_COOKIE_FILE` 覆盖）。
 - CLI 体验修复：`search --cancel` 改为显式标志、`subscribe remove` 走 `/subscription/delete` 清除队列与运行记录、`monitor` 按任务名操作、`scrape jobs-create` 真实三步流（识别 → TMDB 选择 → 计划 → 建任务）；另有 `logs --tail N`、`resource delete --id`、非法 ID 中文提示等 12 项审查修复。
 - 刮削 rename/move/copy/delete 接口支持可选 `path`（move/copy 另支持 `dest`）入参，仅 115 可用并复用现有分页路径解析；identify/rename-plan 支持纯路径条目；新增发现源注册表（Telegram / PanSou 内置）供 `sources` 命令使用。

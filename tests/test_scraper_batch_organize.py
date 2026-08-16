@@ -1201,7 +1201,7 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         html_path = ROOT / "templates/partials/pages/scraper.html"
         html = html_path.read_text(encoding="utf-8")
         self.assertEqual(html.count('data-scraper-action="open-batch"'), 1)
-        self.assertIn(">识别整理</button>", html)
+        self.assertIn(">批量整理</button>", html)
         self.assertNotIn('data-scraper-action="identify"', html)
         # 工具栏只保留“退出预览”，不再有“退出识别”；旧面板头部的关闭图标保留。
         self.assertEqual(html.count('data-scraper-action="clear-identify"'), 1)
@@ -1549,6 +1549,80 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         self.assertEqual(captured_options[0].get("delete_ad_files"), True)
         self.assertEqual(plan["total_count"], 1)
         self.assertTrue(plan["actions"][0].get("delete"))
+
+    def test_batch_plan_passes_file_name_mode_to_item_plans(self):
+        payload = {
+            "provider": "115",
+            "base_cid": "root",
+            "base_path": "影视",
+            "options": {"title_language": "zh", "file_name_mode": "clean"},
+            "items": [
+                {
+                    "item_index": 1,
+                    "name": "文件夹A",
+                    "entry": {"id": "d1", "name": "文件夹A", "is_dir": True, "parent_id": "root", "parent_path": "影视", "path": "影视/文件夹A"},
+                    "tmdb": {"tmdb_id": 7, "media_type": "movie", "tmdb_media_type": "movie", "tmdb_year": "2024"},
+                }
+            ],
+        }
+        captured_options = []
+
+        def fake_binding(binding, cfg):
+            return {
+                **binding,
+                "tmdb_id": 7,
+                "tmdb_media_type": "movie",
+                "tmdb_title": "新标题",
+                "tmdb_year": "2024",
+                "tmdb_original_title": "New Title",
+                "tmdb_localized_title": "新标题",
+                "tmdb_aliases": [],
+                "tmdb_total_episodes": 0,
+                "tmdb_total_seasons": 0,
+                "tmdb_season_episode_map": {},
+                "tmdb_episode_mode": "seasonal",
+            }
+
+        def fake_item_plan(payload):
+            captured_options.append(dict(payload.get("options", {})))
+            return {
+                "actions": [
+                    {
+                        "entry_id": "f1",
+                        "is_dir": False,
+                        "old_parent_id": "root",
+                        "old_name": "Movie.2024.www.ad.com.1080p.mkv",
+                        "old_path": "影视/文件夹A/Movie.2024.www.ad.com.1080p.mkv",
+                        "new_name": "Movie.2024.1080p.mkv",
+                        "new_path": "影视/文件夹A/Movie.2024.1080p.mkv",
+                        "target_parent_path": "文件夹A",
+                        "file_size": 10,
+                        "remote_modified": "",
+                        "issue": "",
+                        "warning": "",
+                        "ready": True,
+                    }
+                ],
+                "issues": [],
+                "warnings": [],
+                "unchanged_count": 0,
+                "ignored_count": 0,
+            }
+
+        with (
+            patch.object(scraper, "_require_scraper_operation"),
+            patch.object(scraper, "_resolve_batch_tmdb_binding", side_effect=fake_binding),
+            patch.object(scraper, "build_scraper_rename_plan", side_effect=fake_item_plan),
+            patch.object(
+                scraper,
+                "get_config",
+                return_value={"tmdb_enabled": True, "tmdb_api_key": "key"},
+            ),
+        ):
+            plan = scraper.build_scraper_batch_plan(payload)
+
+        self.assertEqual(captured_options[0].get("file_name_mode"), "clean")
+        self.assertEqual(plan["actions"][0]["new_name"], "Movie.2024.1080p.mkv")
 
     def test_frontend_ad_delete_switch_and_preview_rendering(self):
         html = (ROOT / "templates/partials/pages/scraper.html").read_text(encoding="utf-8")
@@ -2026,6 +2100,101 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         base = {"name": "影视监控", "scan_path": "/115/一级", "target_path": "媒体库"}
         self.assertFalse(normalize_task(base)["auto_scrape_on_new"])
         self.assertTrue(normalize_task({**base, "auto_scrape_on_new": True})["auto_scrape_on_new"])
+        self.assertEqual(normalize_task(base)["auto_scrape_options"], {})
+        self.assertEqual(
+            normalize_task({**base, "auto_scrape_options": {"file_name_mode": "keep"}})["auto_scrape_options"],
+            {"file_name_mode": "keep"},
+        )
+        self.assertEqual(
+            normalize_task({**base, "auto_scrape_options": "not-a-dict"})["auto_scrape_options"],
+            {},
+        )
+
+    def test_auto_scrape_uses_task_auto_scrape_options(self):
+        cfg = self._cfg()
+        items = [
+            {
+                "id": "f1",
+                "fid": "f1",
+                "name": "逐玉.S01E01.mkv",
+                "size": 1024,
+                "remote_rel": "一级/逐玉.S01E01.mkv",
+                "local_rel": "媒体库/一级/逐玉.S01E01.mkv",
+            }
+        ]
+        scan_item = {
+            "item_index": 1,
+            "name": "逐玉",
+            "entry": {
+                "id": "f1",
+                "name": "逐玉.S01E01.mkv",
+                "is_dir": False,
+                "parent_id": "cid1",
+                "parent_path": "一级",
+                "path": "一级/逐玉.S01E01.mkv",
+            },
+            "files": [{"id": "f1"}],
+        }
+        captured_options = []
+
+        def fake_plan(payload):
+            captured_options.append(dict(payload.get("options", {})))
+            return {"ready_count": 1}
+
+        with (
+            patch.object(scraper, "_walk_existing_folder", return_value=("cid1", True)),
+            patch.object(scraper, "scan_scraper_batch_items", return_value={"items": [scan_item]}),
+            patch.object(
+                scraper,
+                "identify_scraper_batch_items",
+                return_value={
+                    "results": [
+                        {
+                            "item_index": 1,
+                            "status": "auto",
+                            "auto_pick": {"id": 1, "media_type": "tv", "title": "逐玉", "year": "2026"},
+                        }
+                    ]
+                },
+            ),
+            patch.object(scraper, "build_scraper_batch_plan", side_effect=fake_plan),
+            patch.object(scraper, "create_scraper_job_from_plan", return_value={"job_id": 9}),
+            patch.object(scraper, "run_scraper_job"),
+        ):
+            message = monitor._auto_scrape_new_media_items(
+                cfg,
+                self._task(auto_scrape_options={"file_name_mode": "keep", "delete_ad_files": True}),
+                items,
+            )
+        self.assertIn("已自动整理 1 项", message)
+        self.assertEqual(captured_options[0]["file_name_mode"], "keep")
+        self.assertEqual(captured_options[0]["delete_ad_files"], True)
+
+        captured_options.clear()
+        with (
+            patch.object(scraper, "_walk_existing_folder", return_value=("cid1", True)),
+            patch.object(scraper, "scan_scraper_batch_items", return_value={"items": [scan_item]}),
+            patch.object(
+                scraper,
+                "identify_scraper_batch_items",
+                return_value={
+                    "results": [
+                        {
+                            "item_index": 1,
+                            "status": "auto",
+                            "auto_pick": {"id": 1, "media_type": "tv", "title": "逐玉", "year": "2026"},
+                        }
+                    ]
+                },
+            ),
+            patch.object(scraper, "build_scraper_batch_plan", side_effect=fake_plan),
+            patch.object(scraper, "create_scraper_job_from_plan", return_value={"job_id": 9}),
+            patch.object(scraper, "run_scraper_job"),
+        ):
+            monitor._auto_scrape_new_media_items(cfg, self._task(), items)
+        self.assertEqual(captured_options[0]["title_language"], "zh")
+        self.assertEqual(captured_options[0]["delete_ad_files"], False)
+        self.assertNotIn("file_name_mode", captured_options[0])
 
     def test_auto_scrape_helper_skips_non_auto_and_runs_auto(self):
         cfg = self._cfg()
@@ -2115,9 +2284,20 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
     def test_monitor_task_modal_has_auto_scrape_toggle(self):
         html = (ROOT / "templates/partials/modals/monitor.html").read_text(encoding="utf-8")
         self.assertIn('id="monitor_auto_scrape_on_new"', html)
+        self.assertIn('id="monitor-auto-scrape-options"', html)
+        self.assertIn('id="monitor_asc_file_name_mode"', html)
+        self.assertIn('id="monitor_asc_rename_folders"', html)
+        self.assertIn('id="monitor_asc_season_subfolder"', html)
+        self.assertIn('id="monitor_asc_include_tmdb_id"', html)
+        self.assertIn('id="monitor_asc_delete_ad_files"', html)
+        self.assertIn('data-monitor-asc-tag="audio"', html)
         index_source = (ROOT / "static/js/index.js").read_text(encoding="utf-8")
         self.assertIn("auto_scrape_on_new: document.getElementById('monitor_auto_scrape_on_new').checked", index_source)
+        self.assertIn("auto_scrape_options: collectMonitorAutoScrapeOptions()", index_source)
         self.assertIn("monitor_auto_scrape_on_new').checked = !!task.auto_scrape_on_new", index_source)
+        self.assertIn("applyMonitorAutoScrapeOptions(task.auto_scrape_options)", index_source)
+        self.assertIn("function syncMonitorAutoScrapeOptions(", index_source)
+        self.assertIn("function collectMonitorAutoScrapeOptions(", index_source)
 
     def test_manual_required_scopes_include_path_details(self):
         from app.services.monitor_changes import get_manual_required_monitor_scopes
@@ -2226,6 +2406,106 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         folder_b = next(action for action in plan_b["actions"] if action["is_dir"])
         self.assertEqual(folder_a["new_name"], "逐玉 (2026) [tmdbid-100]")
         self.assertEqual(folder_b["new_name"], "逐玉 (2026) [tmdbid-100]")
+
+    # ------------------------------------------------------------------
+    # 文件命名方式：keep（保持原名）/ clean（仅清理广告）/ standard（标准重命名）
+    # ------------------------------------------------------------------
+
+    def test_file_name_mode_keep_keeps_names_and_only_renames_folder(self):
+        tmdb = self._tmdb_binding(title="逐玉", year="2026", media_type="tv")
+        plan = self._rename_plan_with_files(
+            ["Show.S01E01.mkv", "Show.S01E02.mkv"],
+            tmdb,
+            folder_name="旧剧集名",
+            options={
+                "rename_selected_folders": True,
+                "use_season_subfolder": False,
+                "file_name_mode": "keep",
+            },
+        )
+        self.assertEqual(plan["options"]["file_name_mode"], "keep")
+        folder_actions = [action for action in plan["actions"] if action["is_dir"]]
+        self.assertEqual([action["new_name"] for action in folder_actions], ["逐玉 (2026)"])
+        self.assertEqual(plan["unchanged_count"], 2)
+        self.assertEqual(
+            {row["old_name"] for row in plan["unchanged_rows"]},
+            {"Show.S01E01.mkv", "Show.S01E02.mkv"},
+        )
+        file_actions = [action for action in plan["actions"] if not action["is_dir"]]
+        self.assertEqual(file_actions, [])
+
+    def test_file_name_mode_keep_with_season_subfolder_moves_files_keeping_names(self):
+        tmdb = self._tmdb_binding(title="逐玉", year="2026", media_type="tv")
+        plan = self._rename_plan_with_files(
+            ["Show.S01E01.mkv"],
+            tmdb,
+            folder_name="旧剧集名",
+            options={
+                "rename_selected_folders": True,
+                "use_season_subfolder": True,
+                "file_name_mode": "keep",
+            },
+        )
+        file_actions = [action for action in plan["actions"] if not action["is_dir"]]
+        self.assertEqual(len(file_actions), 1)
+        self.assertTrue(file_actions[0]["new_path"].startswith("影视/逐玉 (2026)/Season 01/"))
+        self.assertEqual(file_actions[0]["new_name"], "Show.S01E01.mkv")
+
+    def test_file_name_mode_clean_strips_ad_but_keeps_original_info(self):
+        tmdb = self._tmdb_binding(title="逐玉", year="2026", media_type="tv")
+        plan = self._rename_plan_with_files(
+            ["Movie.2024.www.ad.com.1080p.mkv"],
+            tmdb,
+            folder_name="旧剧集名",
+            options={
+                "rename_selected_folders": True,
+                "use_season_subfolder": False,
+                "file_name_mode": "clean",
+            },
+        )
+        file_actions = [action for action in plan["actions"] if not action["is_dir"]]
+        self.assertEqual(len(file_actions), 1)
+        self.assertEqual(file_actions[0]["new_name"], "Movie.2024.1080p.mkv")
+        self.assertEqual(file_actions[0]["target_parent_path"], "旧剧集名")
+
+    def test_file_name_mode_clean_without_ad_is_unchanged(self):
+        tmdb = self._tmdb_binding(title="逐玉", year="2026", media_type="tv")
+        plan = self._rename_plan_with_files(
+            ["Show.S01E01.1080p.mkv"],
+            tmdb,
+            folder_name="旧剧集名",
+            options={
+                "rename_selected_folders": True,
+                "use_season_subfolder": False,
+                "file_name_mode": "clean",
+            },
+        )
+        self.assertEqual(plan["unchanged_count"], 1)
+        self.assertEqual(plan["unchanged_rows"][0]["new_name"], "Show.S01E01.1080p.mkv")
+
+    def test_file_name_mode_default_stays_standard(self):
+        tmdb = self._tmdb_binding(title="逐玉", year="2026", media_type="tv")
+        plan = self._rename_plan_with_files(
+            ["Show.S01E01.mkv"],
+            tmdb,
+            folder_name="旧剧集名",
+            options={"rename_selected_folders": True},
+        )
+        self.assertEqual(plan["options"]["file_name_mode"], "standard")
+        file_actions = [action for action in plan["actions"] if not action["is_dir"]]
+        self.assertIn("逐玉 (2026) - S01E01", file_actions[0]["new_path"])
+
+    def test_clean_scraper_filename_strips_ad_sites_only(self):
+        cases = [
+            ("Movie.2024.www.ad.com.1080p.mkv", "Movie.2024.1080p.mkv"),
+            ("www.UIndex.org - Movie.2024.mkv", "Movie.2024.mkv"),
+            ("UIndex.org - Movie.2024.mkv", "Movie.2024.mkv"),
+            ("高清剧集网发布.Movie.2024.mkv", "Movie.2024.mkv"),
+            ("Movie.2024.mkv", "Movie.2024.mkv"),
+            ("Show.S01E01.1080p.mkv", "Show.S01E01.1080p.mkv"),
+        ]
+        for raw, want in cases:
+            self.assertEqual(scraper._clean_scraper_filename(raw), want, raw)
 
     # ------------------------------------------------------------------
     # 剧集集数解析：EP02 不被年份抢占、纯数字序号可识别
@@ -2447,3 +2727,101 @@ class ScraperBatchJobTitleTest(unittest.TestCase):
         payload = self._job_payload([], [self._action(0)])
 
         self.assertEqual(self._job_title(payload), "批量整理")
+
+    # ------------------------------------------------------------------
+    # 批量整理选项记忆（服务端、按网盘分开）
+    # ------------------------------------------------------------------
+
+    def test_batch_preferences_save_get_roundtrip_per_provider(self):
+        options = {
+            "split_mode": "split",
+            "title_language": "zh",
+            "season": "9",
+            "episode_mode": "absolute",
+            "include_tmdb_id": True,
+            "use_season_subfolder": False,
+            "rename_selected_folders": False,
+            "delete_ad_files": True,
+            "preserve_file_info": True,
+            "preserve_tags": {"resolution": False},
+            "file_name_mode": "clean",
+            "unknown_field": "should-be-dropped",
+        }
+        saved = scraper.save_scraper_batch_preferences("115", options)
+        self.assertTrue(saved["ok"])
+        self.assertEqual(saved["options"]["season"], 9)
+        self.assertEqual(saved["options"]["file_name_mode"], "clean")
+        self.assertEqual(saved["options"]["preserve_tags"]["resolution"], False)
+        self.assertEqual(saved["options"]["preserve_tags"]["source"], True)
+        self.assertNotIn("unknown_field", saved["options"])
+
+        loaded = scraper.get_scraper_batch_preferences("115")
+        self.assertEqual(loaded["options"], saved["options"])
+        self.assertEqual(loaded["provider"], "115")
+
+        other = scraper.get_scraper_batch_preferences("quark")
+        self.assertEqual(other["options"]["file_name_mode"], "standard")
+        self.assertEqual(other["options"]["split_mode"], "auto")
+
+    def test_batch_preferences_empty_options_resets_to_defaults(self):
+        scraper.save_scraper_batch_preferences("115", {"file_name_mode": "keep", "delete_ad_files": True})
+        reset = scraper.save_scraper_batch_preferences("115", {})
+        self.assertEqual(reset["options"]["file_name_mode"], "standard")
+        self.assertEqual(reset["options"]["delete_ad_files"], False)
+        loaded = scraper.get_scraper_batch_preferences("115")
+        self.assertEqual(loaded["options"]["file_name_mode"], "standard")
+
+    def test_batch_preferences_rejects_invalid_provider(self):
+        with self.assertRaises(RuntimeError):
+            scraper.get_scraper_batch_preferences("not-a-provider")
+        with self.assertRaises(RuntimeError):
+            scraper.save_scraper_batch_preferences("not-a-provider", {"file_name_mode": "keep"})
+
+    def test_batch_preferences_normalizes_invalid_values(self):
+        saved = scraper.save_scraper_batch_preferences(
+            "115",
+            {
+                "file_name_mode": "weird",
+                "title_language": "jp",
+                "episode_mode": "nope",
+                "split_mode": "x",
+                "season": 0,
+            },
+        )
+        self.assertEqual(saved["options"]["file_name_mode"], "standard")
+        self.assertEqual(saved["options"]["title_language"], "auto")
+        self.assertEqual(saved["options"]["episode_mode"], "auto")
+        self.assertEqual(saved["options"]["split_mode"], "auto")
+        self.assertEqual(saved["options"]["season"], 1)
+
+    # ------------------------------------------------------------------
+    # 前端：文件命名方式控件、选项分组顺序、偏好加载/保存
+    # ------------------------------------------------------------------
+
+    def test_frontend_file_name_mode_control_and_option_group_order(self):
+        html = (ROOT / "templates/partials/pages/scraper.html").read_text(encoding="utf-8")
+        self.assertIn('id="scraper-file-name-mode"', html)
+        self.assertIn('data-scraper-action="reset-batch-preferences"', html)
+        folder_index = html.index(">文件夹</div>")
+        file_index = html.index(">文件命名</div>")
+        clean_index = html.index(">文件清理</div>")
+        self.assertLess(folder_index, file_index)
+        self.assertLess(file_index, clean_index)
+
+    def test_frontend_collects_file_name_mode_in_payloads(self):
+        source = SCRAPER_CORE_PATH.read_text(encoding="utf-8")
+        self.assertIn("file_name_mode: String($('scraper-file-name-mode')?.value || 'standard')", source)
+        self.assertIn("function syncFileNamingModeControls(", source)
+        self.assertIn("function applyBatchPreferences(", source)
+        self.assertIn("function loadBatchPreferences(", source)
+        self.assertIn("function scheduleBatchPreferenceSave(", source)
+        self.assertIn("function resetBatchPreferences(", source)
+
+    def test_frontend_preference_save_and_reset_wired(self):
+        source = SCRAPER_CORE_PATH.read_text(encoding="utf-8")
+        handle_source = source[source.index("function handleClick("):]
+        self.assertIn("if (action === 'reset-batch-preferences') void resetBatchPreferences();", handle_source)
+        change_source = source[source.index("function handleChange("):]
+        self.assertIn("scraper-file-name-mode", change_source)
+        self.assertIn("scheduleBatchPreferenceSave();", change_source)
+        self.assertIn("#scraper-delete-ad-files", change_source)

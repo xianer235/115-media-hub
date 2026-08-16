@@ -366,6 +366,7 @@ def _auto_scrape_new_media_items(
 ) -> str:
     """新增媒体文件自动刮削整理：只对高置信度自动匹配条目执行一次，失败仅记录。"""
     from .scraper import (
+        _normalize_scraper_batch_preferences,
         _walk_existing_folder,
         build_scraper_batch_plan,
         create_scraper_job_from_plan,
@@ -473,12 +474,16 @@ def _auto_scrape_new_media_items(
         for item in scan_items
         if max(0, int(item.get("item_index", 0) or 0)) in auto_indexes
     ]
+    raw_auto_options = task.get("auto_scrape_options") if isinstance(task.get("auto_scrape_options"), dict) else {}
+    auto_options = {"title_language": "zh", "delete_ad_files": False}
+    if raw_auto_options:
+        auto_options.update(_normalize_scraper_batch_preferences(raw_auto_options))
     plan = build_scraper_batch_plan(
         {
             "provider": "115",
             "base_cid": "0",
             "base_path": "",
-            "options": {"title_language": "zh", "delete_ad_files": False},
+            "options": auto_options,
             "items": plan_items,
         }
     )

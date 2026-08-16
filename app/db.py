@@ -394,6 +394,15 @@ def ensure_db() -> None:
             )
             cursor.execute(
                 """
+                CREATE TABLE IF NOT EXISTS scraper_batch_preferences (
+                    provider TEXT PRIMARY KEY,
+                    options_json TEXT NOT NULL DEFAULT '{}',
+                    updated_at TEXT NOT NULL DEFAULT ''
+                )
+                """
+            )
+            cursor.execute(
+                """
                 CREATE TABLE IF NOT EXISTS recommendation_watchlist (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     tmdb_id INTEGER NOT NULL,

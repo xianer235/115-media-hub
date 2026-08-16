@@ -1188,6 +1188,34 @@ def _strip_scraper_site_prefix(text: str) -> str:
     return text
 
 
+_SCRAPER_EMBEDDED_AD_URL_RE = re.compile(
+    r"(?i)(?:https?://[^\s]+|www[\s.]*[a-z0-9][a-z0-9.-]*[\s.]*\."
+    + SCRAPER_SITE_TLD_PATTERN
+    + r"\b)"
+)
+
+
+def _clean_scraper_filename(name: str) -> str:
+    """仅清理文件名中的广告网址与站点名称，保留其余原始命名信息。"""
+    value = str(name or "")
+    stem, ext = os.path.splitext(value)
+    cleaned = _strip_scraper_cn_ad_phrases(stem, leading_only=True)
+    # 裸域名前缀仅在带分隔符（如 “UIndex.org - ”）时清理，避免误伤影视名。
+    cleaned = re.sub(
+        r"(?i)^\s*(?:[a-z0-9][a-z0-9.-]*\.)+"
+        + SCRAPER_SITE_TLD_PATTERN
+        + r"\b\s*[-–—]\s*",
+        " ",
+        cleaned,
+    )
+    cleaned = _SCRAPER_EMBEDDED_AD_URL_RE.sub(" ", cleaned)
+    cleaned = re.sub(r"\s*\.\s*\.+", ".", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .-_")
+    if not cleaned:
+        return value
+    return f"{cleaned}{ext}"
+
+
 _SCRAPER_ANCHOR_YEAR_RE = re.compile(r"(?<![0-9])(?:19|20)\d{2}(?![0-9])")
 _SCRAPER_ANCHOR_EPISODE_RE = re.compile(
     r"(?i)(?:\bs\d{1,2}\s*e\d{1,4}\b|\bep?\s*\d{1,4}\b|\be\d{1,4}\b|\bseason\s*\d{1,2}\b|"
@@ -1988,50 +2016,86 @@ def _build_scraper_target_path(
         str(options.get("base_path", "") or ""),
     )
     _, ext = os.path.splitext(str(entry.get("name", "") or ""))
-    tags = media_tag_labels(str(entry.get("name", "") or ""), options.get("preserve_tags", {})) if bool(options.get("preserve_file_info", False)) else []
+    file_name_mode = str(options.get("file_name_mode", "standard") or "standard")
+    keep_original_name = file_name_mode in ("keep", "clean")
+    tags = (
+        media_tag_labels(str(entry.get("name", "") or ""), options.get("preserve_tags", {}))
+        if (not keep_original_name and bool(options.get("preserve_file_info", False)))
+        else []
+    )
     tag_suffix = _build_tag_suffix(tags)
     subtitle_part = f" ({subtitle_index})" if subtitle_index > 1 else ""
     _, file_title, folder_title = _build_scraper_media_titles(tmdb, options, str(entry.get("name", "") or ""))
     if media_type == "tv":
         task = _build_task_from_tmdb(tmdb, options)
         resolved_episode_info = episode_info if isinstance(episode_info, dict) else {}
+        episode_issue = ""
         if not resolved_episode_info:
-            resolved_episode_info, issue = _resolve_scraper_auto_episode_info(
+            resolved_episode_info, episode_issue = _resolve_scraper_auto_episode_info(
                 task,
                 entry,
                 max(1, parse_int(options.get("season") or task.get("season") or 1, 1)),
             )
+        season_folder_allowed = bool(use_season_subfolder)
+        if keep_original_name:
+            season_folder_allowed = season_folder_allowed and bool(resolved_episode_info)
+            season_no = max(
+                1,
+                int(
+                    (resolved_episode_info or {}).get("season")
+                    or options.get("season")
+                    or task.get("season")
+                    or 1
+                ),
+            )
+            file_name = (
+                str(entry.get("name", "") or "")
+                if file_name_mode == "keep"
+                else _clean_scraper_filename(str(entry.get("name", "") or ""))
+            )
+        else:
+            if episode_issue:
+                return "", episode_issue
+            season_no = max(1, int(resolved_episode_info.get("season") or options.get("season") or task.get("season") or 1))
+            episode_width = (
+                episode_widths_by_season.get(season_no, 2)
+                if isinstance(episode_widths_by_season, dict)
+                else 2
+            )
+            if episode_width <= 2 and not (isinstance(episode_widths_by_season, dict) and season_no in episode_widths_by_season):
+                fallback_widths = _build_scraper_episode_widths_by_season(task, [resolved_episode_info])
+                episode_width = fallback_widths.get(season_no, episode_width)
+            episode_code, issue = _format_tv_episode_code(resolved_episode_info, episode_width)
             if issue:
                 return "", issue
-        season_no = max(1, int(resolved_episode_info.get("season") or options.get("season") or 1))
-        episode_width = (
-            episode_widths_by_season.get(season_no, 2)
-            if isinstance(episode_widths_by_season, dict)
-            else 2
-        )
-        if episode_width <= 2 and not (isinstance(episode_widths_by_season, dict) and season_no in episode_widths_by_season):
-            fallback_widths = _build_scraper_episode_widths_by_season(task, [resolved_episode_info])
-            episode_width = fallback_widths.get(season_no, episode_width)
-        episode_code, issue = _format_tv_episode_code(resolved_episode_info, episode_width)
-        if issue:
-            return "", issue
-        file_name = sanitize_scraper_name(
-            f"{file_title} - {episode_code}{tag_suffix}{subtitle_part}{subtitle_suffix}"
-        ) + ext
+            file_name = sanitize_scraper_name(
+                f"{file_title} - {episode_code}{tag_suffix}{subtitle_part}{subtitle_suffix}"
+            ) + ext
         if preserve_source_parent_path:
             return normalize_relative_path(join_relative_path(source_relative_parent_path, file_name)), ""
         if not organize_into_media_folder:
             return file_name, ""
-        organize_root = source_relative_parent_path if organize_inside_source_folder else folder_title
-        if not use_season_subfolder:
+        if keep_original_name and not season_folder_allowed:
+            # 保持/清理模式下文件不移动：文件夹重命名由文件夹动作覆盖，文件留在原目录。
+            organize_root = source_relative_parent_path
+        else:
+            organize_root = source_relative_parent_path if organize_inside_source_folder else folder_title
+        if not season_folder_allowed:
             return normalize_relative_path(join_relative_path(organize_root, file_name)), ""
         return normalize_relative_path(join_relative_path(organize_root, f"Season {season_no:02d}", file_name)), ""
-    file_name = sanitize_scraper_name(f"{file_title}{tag_suffix}{subtitle_part}{subtitle_suffix}") + ext
+    if keep_original_name:
+        file_name = (
+            str(entry.get("name", "") or "")
+            if file_name_mode == "keep"
+            else _clean_scraper_filename(str(entry.get("name", "") or ""))
+        )
+    else:
+        file_name = sanitize_scraper_name(f"{file_title}{tag_suffix}{subtitle_part}{subtitle_suffix}") + ext
     if preserve_source_parent_path:
         return normalize_relative_path(join_relative_path(source_relative_parent_path, file_name)), ""
     if not organize_into_media_folder:
         return file_name, ""
-    organize_root = source_relative_parent_path if organize_inside_source_folder else folder_title
+    organize_root = source_relative_parent_path if (keep_original_name or organize_inside_source_folder) else folder_title
     return normalize_relative_path(join_relative_path(organize_root, file_name)), ""
 
 
@@ -2244,6 +2308,7 @@ def build_scraper_rename_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
         if len(selected_parent_paths) == 1:
             base_path = next(iter(selected_parent_paths))
     plan_options = dict(options)
+    plan_options["file_name_mode"] = _normalize_scraper_file_name_mode(plan_options.get("file_name_mode"))
     selection_mode = _resolve_scraper_selection_mode(selected, plan_options)
     folder_mode = selection_mode == "folder"
     plan_options["selection_mode"] = selection_mode
@@ -2386,11 +2451,20 @@ def build_scraper_rename_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
             ignored_names.append(entry_name)
             continue
         episode_info = file_episode_infos[file_index] if file_index < len(file_episode_infos) else None
-        if media_type == "tv" and category in ("subtitle", "image") and not episode_info:
+        if (
+            plan_options.get("file_name_mode") == "standard"
+            and media_type == "tv"
+            and category in ("subtitle", "image")
+            and not episode_info
+        ):
             # 剧集字幕/封面解析不到集数时保留原名，不生成改名动作。
             ignored_names.append(entry_name)
             continue
-        subtitle_suffix = _scraper_subtitle_suffix(entry_name) if category == "subtitle" else ""
+        subtitle_suffix = (
+            _scraper_subtitle_suffix(entry_name)
+            if category == "subtitle" and plan_options.get("file_name_mode") == "standard"
+            else ""
+        )
         execution_target_path, issue = _build_scraper_target_path(
             entry,
             tmdb,
@@ -3359,6 +3433,136 @@ def rollback_scraper_job(job_id: int) -> None:
 
 SCRAPER_BATCH_MAX_ITEMS = 200
 SCRAPER_LIBRARY_SPLIT_MAX_DEPTH = 4
+SCRAPER_BATCH_FILE_NAME_MODES = ("keep", "clean", "standard")
+SCRAPER_BATCH_PREFERENCE_KEYS = frozenset(
+    {
+        "split_mode",
+        "title_language",
+        "season",
+        "episode_mode",
+        "include_tmdb_id",
+        "use_season_subfolder",
+        "rename_selected_folders",
+        "delete_ad_files",
+        "preserve_file_info",
+        "preserve_tags",
+        "file_name_mode",
+    }
+)
+SCRAPER_BATCH_PRESERVE_TAG_KEYS = frozenset(
+    {
+        "resolution",
+        "source",
+        "dynamic_range",
+        "video",
+        "audio",
+        "language",
+        "subtitle",
+    }
+)
+
+
+def _normalize_scraper_file_name_mode(value: Any) -> str:
+    """批量整理文件命名方式：standard（标准重命名）/ clean（仅清理广告）/ keep（保持原名）。"""
+    mode = str(value or "").strip().lower()
+    return mode if mode in SCRAPER_BATCH_FILE_NAME_MODES else "standard"
+
+
+def _normalize_scraper_batch_preferences(raw: Any) -> Dict[str, Any]:
+    """白名单归一化批量整理偏好，过滤未知字段并修正类型。"""
+    data = raw if isinstance(raw, dict) else {}
+    data = {key: data[key] for key in SCRAPER_BATCH_PREFERENCE_KEYS if key in data}
+    title_language = str(data.get("title_language") or "auto").strip().lower()
+    if title_language not in ("auto", "zh", "en"):
+        title_language = "auto"
+    episode_mode = str(data.get("episode_mode") or "auto").strip().lower()
+    if episode_mode not in ("auto", "seasonal", "absolute"):
+        episode_mode = "auto"
+    split_mode = str(data.get("split_mode") or "auto").strip().lower()
+    if split_mode not in ("auto", "single", "split"):
+        split_mode = "auto"
+    season = max(1, min(99, parse_int(data.get("season"), 1)))
+    raw_tags = data.get("preserve_tags") if isinstance(data.get("preserve_tags"), dict) else {}
+    preserve_tags = {
+        key: bool(raw_tags.get(key, True))
+        for key in SCRAPER_BATCH_PRESERVE_TAG_KEYS
+    }
+    return {
+        "split_mode": split_mode,
+        "title_language": title_language,
+        "season": season,
+        "episode_mode": episode_mode,
+        "include_tmdb_id": bool(data.get("include_tmdb_id", False)),
+        "use_season_subfolder": bool(data.get("use_season_subfolder", True)),
+        "rename_selected_folders": bool(data.get("rename_selected_folders", True)),
+        "delete_ad_files": bool(data.get("delete_ad_files", False)),
+        "preserve_file_info": bool(data.get("preserve_file_info", False)),
+        "preserve_tags": preserve_tags,
+        "file_name_mode": _normalize_scraper_file_name_mode(data.get("file_name_mode")),
+    }
+
+
+def get_scraper_batch_preferences(provider: str) -> Dict[str, Any]:
+    """读取某网盘上次保存的批量整理选项；无记录时返回默认值。"""
+    normalized = normalize_scraper_provider(provider)
+    if not normalized:
+        raise RuntimeError("不支持的网盘")
+    ensure_db()
+    updated_at = ""
+    options: Dict[str, Any] = {}
+    with db_connection() as conn:
+        row = conn.execute(
+            "SELECT options_json, updated_at FROM scraper_batch_preferences WHERE provider = ?",
+            (normalized,),
+        ).fetchone()
+        if row:
+            options = safe_json_loads(str(row[0] or "{}"), {})
+            updated_at = str(row[1] or "")
+    return {
+        "ok": True,
+        "provider": normalized,
+        "options": _normalize_scraper_batch_preferences(options),
+        "updated_at": updated_at,
+    }
+
+
+def save_scraper_batch_preferences(provider: str, options: Any) -> Dict[str, Any]:
+    """保存某网盘的批量整理选项；空 options 表示清除记忆并恢复默认。"""
+    normalized = normalize_scraper_provider(provider)
+    if not normalized:
+        raise RuntimeError("不支持的网盘")
+    raw = options if isinstance(options, dict) else {}
+    ensure_db()
+    if not raw:
+        with db_connection() as conn:
+            conn.execute(
+                "DELETE FROM scraper_batch_preferences WHERE provider = ?",
+                (normalized,),
+            )
+            conn.commit()
+        return get_scraper_batch_preferences(normalized)
+    normalized_options = _normalize_scraper_batch_preferences(raw)
+    now = now_text()
+    with db_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO scraper_batch_preferences(provider, options_json, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(provider) DO UPDATE SET
+                options_json = excluded.options_json,
+                updated_at = excluded.updated_at
+            """,
+            (normalized, safe_json_dumps(normalized_options), now),
+        )
+        conn.commit()
+    return {
+        "ok": True,
+        "provider": normalized,
+        "options": normalized_options,
+        "updated_at": now,
+    }
+
+
 SCRAPER_LIBRARY_CONTAINER_KEYS = {
     "电影", "电视剧", "剧集", "动漫", "动画", "番剧", "新番", "综艺", "纪录片", "紀錄片", "纪录", "紀錄",
     "影视", "资源", "資源", "视频", "視頻", "电影库", "影视库", "电视剧库", "剧集库", "动漫库", "动画库",

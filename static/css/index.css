@@ -14008,6 +14008,34 @@
             gap: 0.82rem;
         }
 
+        .scraper-options-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.6rem;
+        }
+
+        .scraper-options-head .scraper-field-label {
+            margin-bottom: 0;
+        }
+
+        .scraper-options-reset-btn {
+            padding: 0.18rem 0.5rem;
+            font-size: 0.72rem;
+        }
+
+        .scraper-standard-naming-wrap {
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+            margin-top: 0.42rem;
+        }
+
+        .scraper-standard-naming-wrap.is-disabled,
+        .scraper-standard-naming-wrap.hidden {
+            display: none;
+        }
+
         .scraper-field-label {
             color: #e2e8f0;
             font-size: 0.82rem;

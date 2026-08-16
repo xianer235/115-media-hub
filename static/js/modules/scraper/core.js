@@ -52,6 +52,9 @@ const state = {
     batchPlanContext: null,
     batchError: '',
     batchSelection: [],
+    batchPreferencesLoaded: false,
+    batchPreferenceProvider: '',
+    batchPreferenceSaveTimer: null,
     planBusy: false,
     plan: null,
     planSelections: new Set(),
@@ -819,8 +822,8 @@ function renderSelection() {
         batchButton.disabled = state.loading || !canBatch;
         batchButton.classList.toggle('btn-disabled', state.loading || !canBatch);
         batchButton.title = canBatch
-            ? `识别整理勾选的 ${selectedEntries.length} 个条目`
-            : (hasPlan ? '退出预览后再识别整理' : '请先勾选要识别的文件夹或文件');
+            ? `批量整理勾选的 ${selectedEntries.length} 个条目`
+            : (hasPlan ? '退出预览后再批量整理' : '请先勾选要批量整理的文件夹或文件');
     }
     const reopenBatchButton = $('scraper-reopen-batch-btn');
     if (reopenBatchButton) {
@@ -1255,6 +1258,19 @@ function syncBatchOptionControls() {
     syncFileInfoControls();
 }
 
+function syncFileNamingModeControls() {
+    const mode = String($('scraper-file-name-mode')?.value || 'standard').trim();
+    const standard = mode === 'standard';
+    const wrap = $('scraper-standard-naming-wrap');
+    if (wrap) {
+        wrap.classList.toggle('hidden', !standard);
+        wrap.classList.toggle('is-disabled', !standard);
+        wrap.querySelectorAll('input, select').forEach((control) => {
+            control.disabled = !standard;
+        });
+    }
+}
+
 function getDisplayEntries() {
     const manager = getFileManager();
     const keyword = String(state.search || '').trim().toLowerCase();
@@ -1517,6 +1533,7 @@ function renderIdentify() {
     syncEpisodeModeControl();
     syncFileInfoControls();
     syncFolderScopedControls();
+    syncFileNamingModeControls();
     syncBuildPlanControls();
 }
 
@@ -1529,6 +1546,7 @@ function collectOptions() {
     const folderMode = selectionMode === 'folder';
     return {
         selection_mode: selectionMode,
+        file_name_mode: String($('scraper-file-name-mode')?.value || 'standard'),
         title_language: String($('scraper-title-language')?.value || 'zh'),
         season: Math.max(1, Number($('scraper-season')?.value || 1) || 1),
         episode_mode: String($('scraper-episode-mode')?.value || 'auto'),
@@ -1734,6 +1752,7 @@ async function switchProvider(provider) {
     closeIdentifyPanel();
     renderProviderTabs();
     renderIdentify();
+    await loadBatchPreferences();
     await loadEntries();
     syncScraperLocationHash();
 }
@@ -2094,6 +2113,7 @@ function collectBatchOptions() {
     });
     return {
         selection_mode: 'batch',
+        file_name_mode: String($('scraper-file-name-mode')?.value || 'standard'),
         title_language: String($('scraper-title-language')?.value || 'zh'),
         season: Math.max(1, Number($('scraper-season')?.value || 1) || 1),
         episode_mode: String($('scraper-episode-mode')?.value || 'auto'),
@@ -2104,6 +2124,98 @@ function collectBatchOptions() {
         preserve_file_info: !!$('scraper-preserve-file-info')?.checked,
         preserve_tags: preserveTags,
     };
+}
+
+function applyBatchPreferences(prefs = {}) {
+    const options = (prefs && typeof prefs === 'object' ? prefs.options : {}) || {};
+    const setCheck = (id, value) => {
+        const input = $(id);
+        if (input) input.checked = !!value;
+    };
+    const setSelect = (id, value, allowed) => {
+        const select = $(id);
+        if (select) select.value = allowed.includes(String(value || '')) ? String(value) : allowed[0];
+    };
+    setCheck('scraper-include-tmdb-id', options.include_tmdb_id);
+    setCheck('scraper-use-season-subfolder', options.use_season_subfolder !== false);
+    setCheck('scraper-rename-selected-folders', options.rename_selected_folders !== false);
+    setCheck('scraper-delete-ad-files', options.delete_ad_files);
+    setCheck('scraper-preserve-file-info', options.preserve_file_info);
+    setSelect('scraper-file-name-mode', options.file_name_mode, ['standard', 'clean', 'keep']);
+    setSelect('scraper-title-language', options.title_language, ['auto', 'zh', 'en']);
+    setSelect('scraper-episode-mode', options.episode_mode, ['auto', 'seasonal', 'absolute']);
+    const seasonInput = $('scraper-season');
+    if (seasonInput) {
+        seasonInput.value = String(Math.max(1, Math.min(99, Number(options.season || 1) || 1)));
+    }
+    const tags = (options.preserve_tags && typeof options.preserve_tags === 'object') ? options.preserve_tags : {};
+    document.querySelectorAll('[data-scraper-tag]').forEach((input) => {
+        const key = String(input.dataset.scraperTag || '').trim();
+        if (Object.prototype.hasOwnProperty.call(tags, key)) {
+            input.checked = !!tags[key];
+        }
+    });
+    const splitMode = String(options.split_mode || 'auto').trim();
+    state.batchSplitMode = ['single', 'split'].includes(splitMode) ? splitMode : 'auto';
+    syncFileInfoControls();
+    syncBatchOptionControls();
+    syncFileNamingModeControls();
+    renderBatchSplitMode();
+}
+
+async function loadBatchPreferences() {
+    const provider = normalizeProvider(state.provider);
+    if (!provider) return;
+    if (state.batchPreferenceProvider === provider && state.batchPreferencesLoaded) return;
+    state.batchPreferenceProvider = provider;
+    state.batchPreferencesLoaded = false;
+    try {
+        const data = await window.MediaHubApi.getJson(`/scraper/${encodeURIComponent(provider)}/batch/preferences`);
+        state.batchPreferencesLoaded = true;
+        applyBatchPreferences(data || {});
+    } catch (error) {
+        // 偏好加载失败不阻塞批量整理，沿用当前控件值。
+        state.batchPreferencesLoaded = false;
+    }
+}
+
+async function persistBatchPreferences() {
+    const provider = normalizeProvider(state.provider);
+    if (!provider || !state.batchPreferencesLoaded) return;
+    try {
+        await window.MediaHubApi.postJson(`/scraper/${encodeURIComponent(provider)}/batch/preferences`, {
+            options: {
+                ...collectBatchOptions(),
+                split_mode: state.batchSplitMode || 'auto',
+            },
+        });
+    } catch (error) {
+        // 保存失败静默处理，避免打断用户操作。
+    }
+}
+
+function scheduleBatchPreferenceSave() {
+    if (!state.batchPreferencesLoaded) return;
+    if (state.batchPreferenceSaveTimer) clearTimeout(state.batchPreferenceSaveTimer);
+    state.batchPreferenceSaveTimer = setTimeout(() => {
+        state.batchPreferenceSaveTimer = null;
+        void persistBatchPreferences();
+    }, 400);
+}
+
+async function resetBatchPreferences() {
+    const provider = normalizeProvider(state.provider);
+    if (!provider) return;
+    try {
+        await window.MediaHubApi.postJson(`/scraper/${encodeURIComponent(provider)}/batch/preferences`, {
+            options: {},
+        });
+    } catch (error) {
+        // 清除失败不阻塞恢复默认。
+    }
+    state.batchPreferencesLoaded = true;
+    applyBatchPreferences({});
+    showToast('已恢复默认选项', { tone: 'success', duration: 2400, placement: 'top-center' });
 }
 
 function resetBatchContext() {
@@ -2123,6 +2235,7 @@ function openBatchPanel() {
         showToast(`${getProviderLabel()} 暂不支持批量整理`, { tone: 'warn', duration: 2400, placement: 'top-center' });
         return;
     }
+    if (!state.batchPreferencesLoaded) void loadBatchPreferences();
     const entries = getEffectiveSelectedEntries();
     if (!entries.length) {
         showToast('请先勾选要整理的文件夹或文件（可全选当前目录）', { tone: 'warn', duration: 2800, placement: 'top-center' });
@@ -2163,6 +2276,7 @@ function setBatchSplitMode(mode) {
     if (state.batchSplitMode === normalized) return;
     state.batchSplitMode = normalized;
     renderBatchSplitMode();
+    scheduleBatchPreferenceSave();
     if (state.batchSelection.length && !state.batchBusy) {
         void scanBatch();
     }
@@ -2500,6 +2614,7 @@ function renderBatch() {
         buildBtn.classList.toggle('btn-disabled', disabled);
     }
     syncBatchOptionControls();
+    syncFileNamingModeControls();
     renderBatchSplitMode();
 }
 
@@ -3273,6 +3388,7 @@ function handleClick(event) {
     if (action === 'close-batch') closeBatchPanel();
     if (action === 'rescan-batch') void scanBatch();
     if (action === 'build-batch-plan') void buildBatchPlan();
+    if (action === 'reset-batch-preferences') void resetBatchPreferences();
     if (action === 'clear-identify') clearIdentifyMode();
     if (action === 'open-identify') {
         if (state.identifyResult || state.tmdb) {
@@ -3348,15 +3464,24 @@ function handleChange(event) {
     }
     if (event.target?.id === 'scraper-episode-mode') {
         clearPlan();
+        scheduleBatchPreferenceSave();
         return;
     }
     if (event.target?.id === 'scraper-preserve-file-info') {
         syncFileInfoControls();
         clearPlan();
+        scheduleBatchPreferenceSave();
         return;
     }
-    if (event.target?.matches('[data-scraper-tag], #scraper-title-language, #scraper-season, #scraper-include-tmdb-id, #scraper-use-season-subfolder, #scraper-rename-selected-folders')) {
+    if (event.target?.id === 'scraper-file-name-mode') {
+        syncFileNamingModeControls();
         clearPlan();
+        scheduleBatchPreferenceSave();
+        return;
+    }
+    if (event.target?.matches('[data-scraper-tag], #scraper-title-language, #scraper-season, #scraper-include-tmdb-id, #scraper-use-season-subfolder, #scraper-rename-selected-folders, #scraper-delete-ad-files')) {
+        clearPlan();
+        scheduleBatchPreferenceSave();
     }
 }
 
@@ -3415,6 +3540,7 @@ async function refreshInitialData() {
     renderIdentify();
     renderPlan();
     await restoreScraperLocation();
+    await loadBatchPreferences();
     await Promise.all([
         loadEntries(),
         refreshJobs(),

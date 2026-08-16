@@ -174,13 +174,16 @@ class ScraperPathSelectionIntegrationTest(unittest.TestCase):
         tmdb_index = template.index('id="scraper-include-tmdb-id"')
         rename_index = template.index('id="scraper-rename-selected-folders"')
         delete_index = template.index('id="scraper-delete-ad-files"')
-        structure_index = template.index("文件夹结构")
+        structure_index = template.index(">文件夹</div>")
+        file_naming_index = template.index(">文件命名</div>")
         cleanup_index = template.index("文件清理")
 
+        self.assertLess(structure_index, file_naming_index)
+        self.assertLess(file_naming_index, cleanup_index)
         self.assertLess(structure_index, cleanup_index)
         self.assertLess(structure_index, season_index)
+        self.assertLess(rename_index, season_index)
         self.assertLess(season_index, tmdb_index)
-        self.assertLess(tmdb_index, rename_index)
         self.assertLess(cleanup_index, delete_index)
 
     def test_completing_path_selection_clears_stale_tmdb_results_from_the_dom(self):
