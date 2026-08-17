@@ -57,7 +57,7 @@ import shutil
 import subprocess
 import sys
 from typing import Any, Dict, Optional
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 
@@ -911,8 +911,85 @@ def cmd_monitor(args, c: Client):
 def cmd_tree(args, c: Client):
     """目录树同步"""
     if args.action == "run":
-        data = c.json("POST", "/start", {})
-        print(f"✅ 目录树同步已触发: {json.dumps(data, ensure_ascii=False)}")
+        if getattr(args, "id", None):
+            data = c.json("POST", f"/tree/tasks/{args.id}/run", {})
+            print(f"✅ 目录树任务已触发: {json.dumps(data, ensure_ascii=False)}")
+        else:
+            data = c.json("POST", "/tree/sync-all", {})
+            print(f"✅ 目录树全部同步已触发: {json.dumps(data, ensure_ascii=False)}")
+    elif args.action == "full":
+        if not getattr(args, "id", None):
+            print("❌ 全量重写需要 --id 指定目录树任务")
+            return
+        data = c.json("POST", f"/tree/tasks/{args.id}/full", {})
+        print(f"✅ 目录树全量重写已触发: {json.dumps(data, ensure_ascii=False)}")
+    elif args.action == "list":
+        data = c.json("GET", "/tree/tasks")
+        tasks = data.get("tasks", []) if isinstance(data, dict) else []
+        if not tasks:
+            print("无目录树任务")
+            return
+        for task in tasks:
+            print(
+                f"  • {task.get('id', '')}  {task.get('folder_path', '')}  →  {task.get('tree_name', '')}  "
+                f"[前缀={task.get('prefix', '')} 排除={task.get('exclude', 1)}]"
+            )
+    elif args.action == "create":
+        folder = getattr(args, "folder", None)
+        if not folder:
+            print("❌ 创建目录树任务需要 --folder 指定 115 文件夹路径")
+            return
+        payload = {"folder_path": folder}
+        if getattr(args, "name", None):
+            payload["tree_name"] = args.name
+        data = c.json("POST", "/tree/tasks", payload)
+        print(f"✅ 目录树任务已创建: {json.dumps(data, ensure_ascii=False)}")
+    elif args.action == "defaults":
+        folder = getattr(args, "folder", None)
+        if not folder:
+            print("❌ 查看自动填充参数需要 --folder 指定 115 文件夹路径")
+            return
+        data = c.json("GET", f"/tree/task-defaults?folder_path={quote(folder)}")
+        defaults = data.get("defaults", {}) if isinstance(data, dict) else {}
+        print(
+            f"  树文件名: {defaults.get('tree_name', '')}\n"
+            f"  父文件夹路径前缀: {defaults.get('prefix', '') or '（空）'}\n"
+            f"  排除层级: {defaults.get('exclude', 1)}"
+        )
+    elif args.action == "update":
+        task_id = getattr(args, "id", None)
+        if not task_id:
+            print("❌ 更新目录树任务需要 --id")
+            return
+        payload = {}
+        if getattr(args, "folder", None):
+            payload["folder_path"] = args.folder
+        if getattr(args, "name", None):
+            payload["tree_name"] = args.name
+        if not payload:
+            print("❌ 更新目录树任务需要 --folder 或 --name")
+            return
+        data = c.json("POST", f"/tree/tasks/{task_id}", payload)
+        print(f"✅ 目录树任务已更新: {json.dumps(data, ensure_ascii=False)}")
+    elif args.action == "delete":
+        if not getattr(args, "id", None):
+            print("❌ 删除目录树任务需要 --id")
+            return
+        data = c.json("DELETE", f"/tree/tasks/{args.id}")
+        print(f"✅ 目录树任务已删除: {json.dumps(data, ensure_ascii=False)}")
+    elif args.action == "jobs":
+        data = c.json("GET", "/tree/jobs")
+        jobs = data.get("jobs", []) if isinstance(data, dict) else []
+        if not jobs:
+            print("无目录树任务记录")
+            return
+        for job in jobs:
+            print(
+                f"  #{job.get('id', '')}  {job.get('folder_path', '')}  "
+                f"[{job.get('status', '')}] changed={job.get('changed', 0)}  "
+                f"parsed={job.get('parsed_count', 0)}  generated={job.get('generated_count', 0)}  "
+                f"export={job.get('export_id', '') or '-'}  {job.get('submitted_at', '')}"
+            )
     elif args.action == "status":
         data = c.json("GET", "/status-summary")
         main = data.get("main", {})
@@ -927,7 +1004,7 @@ def cmd_tree(args, c: Client):
             if detail:
                 print(f"  详情: {detail}")
     elif args.action == "logs":
-        data = c.json("GET", "/logs")
+        data = c.json("GET", "/tree/logs")
         if isinstance(data, list):
             for line in data:
                 text = str(line.get("text", line)) if isinstance(line, dict) else str(line)
@@ -938,7 +1015,7 @@ def cmd_tree(args, c: Client):
                 text = str(line.get("text", line)) if isinstance(line, dict) else str(line)
                 print(text)
     elif args.action == "logs-clear":
-        data = c.json("POST", "/logs/clear")
+        data = c.json("POST", "/tree/logs/clear")
         print(f"✅ 目录树日志已清除: {json.dumps(data, ensure_ascii=False)}")
 
 
@@ -2086,7 +2163,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # tree
     sp_tree = sp.add_parser("tree", help="目录树同步")
-    sp_tree.add_argument("action", choices=["run", "status", "logs", "logs-clear"])
+    sp_tree.add_argument(
+        "action",
+        choices=["run", "full", "list", "create", "update", "delete", "defaults", "jobs", "status", "logs", "logs-clear"],
+    )
+    sp_tree.add_argument("--id", help="目录树任务 id（run/full/update/delete 使用）")
+    sp_tree.add_argument("--folder", help="115 文件夹路径（create/update/defaults 使用，如 影视库/电视剧）")
+    sp_tree.add_argument("--name", help="树文件名（create/update 可选，默认 目录树-路径段…）")
 
     # api
     sp_api = sp.add_parser("api", help="通用 API 调用")

@@ -81,10 +81,10 @@
 | 54 | `share receive` | POST /resource/jobs/create | `resource_id, savepath` | (同 jobs create) | 🟡 同 jobs create，缺多个可选字段 |
 | 55 | **`monitor add`** | POST /save_settings | `name, scan_path, cron_minutes, webhook_enabled, delay_seconds, enabled` | `normalize_task()` 接受 `name, scan_path, cron_minutes, webhook_enabled, delay_seconds, enabled, target_path, skip_by_dir_mtime, strm_write_mode, sync_clean, retries, list_delay_ms, min_file_size_mb` | 🟡 通过 /save_settings 间接保存；缺 target_path/skip_by_dir_mtime/strm_write_mode/sync_clean/retries/list_delay_ms/min_file_size_mb |
 | 56 | `monitor start/stop/status/logs/logs-clear/userscript-jobs` | 各独立端点 | (无 body 或简单请求) | | ✅ 无问题 |
-| 57 | `tree run` | POST /start | `{}` | `use_local, force_full(body)` | 🟢 缺 use_local/force_full |
+| 57 | `tree run/full/list/create/update/delete/defaults/jobs` | POST /tree/tasks/{id}/run、/full、POST /tree/tasks、POST /tree/tasks/{id}、DELETE、GET /tree/task-defaults、/tree/sync-all 等 | `folder_path/tree_name` | `folder_path, tree_name(body)`；prefix/exclude 由后端按文件夹自动推导，不接受手动覆盖 | 🟢 无参数缺失；`run` 不带 `--id` 时走 /tree/sync-all（不导出，仅对比更新） |
 | 58 | `tree status` | GET /status-summary | (无) | (从 summary 读 main 字段) | ✅ 无问题 |
-| 59 | `tree logs` | GET /logs | (无) | `compact(query)` | ✅ 无问题 |
-| 60 | `tree logs-clear` | POST /logs/clear | (无 body) | (无 body) | ✅ 无问题 |
+| 59 | `tree logs` | GET /tree/logs | (无) | `compact(query)` | ✅ 无问题 |
+| 60 | `tree logs-clear` | POST /tree/logs/clear | (无 body) | (无 body) | ✅ 无问题 |
 | 61 | **`scrape jobs-create`** | POST /scraper/jobs/create | **`path`** | **`plan.actions` (从 payload.get("plan", {}).get("actions", []))** | **🔴 结构性不匹配：`create_scraper_job_from_plan()` 读取 payload.plan.actions（改名计划操作列表），CLI 只发 `{"path": path}`，plan 和 actions 均为空 → API 返回 400 "没有可执行的改名计划"。需要先调 rename-plan 再提交** |
 | 62 | **`scrape rename-warning`** | POST /scraper/{provider}/rename-warning | **`path`** | **`old_path, new_path(body)`** | **🔴 字段名不匹配：CLI 发 `path`，API 读 `old_path` AND `new_path`（两个都是必填）。缺少 new_path 导致 API 返回 400。** |
 | 63 | `scrape identify` | POST /scraper/identify | `entries: [{path}]` | `payload.get("entries", [])` → `identify_scraper_media(payload)` | ✅ 已修复（原发 `{"path": path}`，现发 `{"entries": [{"path": path}]}`） |
@@ -161,7 +161,7 @@
 | L9 | `browse ls` | compact, force_refresh |
 | L10 | `browse tree` | compact, force_refresh |
 | L11 | `browse folders` | compact, force_refresh |
-| L12 | `tree run` | use_local, force_full |
+| L12 | `tree run` | --id |
 | L13 | `subscribe start-with-link` | receive_code |
 | L14 | `jobs list` | offset |
 | L15 | `strm cleanup` | paths, root |

@@ -1,35 +1,92 @@
         <div id="page-task" class="page-panel module-page hidden space-y-6">
             <div class="group-card">
-                <h3 class="group-title mb-2">目录树同步</h3>
-                <div class="text-xs text-slate-400 leading-6">
-                    读取官方目录树TXT文件，生成STRM文件。
-                </div>
-            </div>
-            <div class="bg-slate-800 p-6 rounded-3xl border border-slate-700 shadow-2xl">
-                <div class="flex justify-between items-end mb-4">
+                <div class="flex flex-wrap justify-between gap-3 items-center">
                     <div>
-                        <span id="prog-step" class="text-2xl font-black text-white">就绪</span>
-                        <div id="next-run-container" class="hidden text-xs text-emerald-400 mt-1 font-bold">⏱ 下次自动同步: <span id="next-run-time">--:--:--</span></div>
-                        <div id="prog-detail" class="text-xs text-slate-400 mt-1 italic">等待指令...</div>
+                        <h3 class="group-title mb-2">目录树任务</h3>
+                        <div class="text-xs text-slate-400 leading-6">选择 115 文件夹后点击「生成并同步」：官方服务器导出目录树（存放在网盘根目录，命名为「目录树-路径段…」），自动删除根目录同名旧树并原地重命名；随后对比 sha1，内容未变化则跳过下载与解析，避免重复扫描。无需再去 115 生活 App 手动导出。</div>
                     </div>
-                    <div class="text-right"><span id="prog-percent" class="text-3xl font-mono font-black text-sky-500">0%</span></div>
+                    <div class="flex items-center gap-3 flex-wrap">
+                        <button id="tree-task-add-btn" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold min-h-[42px]">+ 新增目录树任务</button>
+                        <button id="tree-sync-all-btn" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-sm font-bold min-h-[42px]">全部同步</button>
+                    </div>
                 </div>
-                <div class="w-full bg-slate-950 rounded-full h-4 p-1 overflow-hidden shadow-inner">
-                    <div id="prog-bar" class="bg-gradient-to-r from-sky-600 to-sky-400 h-full rounded-full transition-width prog-glow" style="width: 0%"></div>
+                <div class="mt-5 rounded-2xl border border-slate-700 bg-slate-900/60 p-4">
+                    <div class="flex justify-between items-end mb-3">
+                        <div>
+                            <span id="prog-step" class="text-xl font-black text-white">就绪</span>
+                            <div id="prog-detail" class="text-xs text-slate-400 mt-1 italic">等待指令...</div>
+                        </div>
+                        <div class="text-right"><span id="prog-percent" class="text-2xl font-mono font-black text-sky-400">0%</span></div>
+                    </div>
+                    <div class="w-full bg-slate-950 rounded-full h-3 p-0.5 overflow-hidden shadow-inner">
+                        <div id="prog-bar" class="bg-gradient-to-r from-sky-600 to-sky-400 h-full rounded-full transition-width prog-glow" style="width: 0%"></div>
+                    </div>
+                </div>
+                <div id="tree-tasks-container" class="space-y-3 mt-5"></div>
+            </div>
+
+            <div id="tree-sync-strategy" class="group-card">
+                <h3 class="group-title mb-3">同步策略</h3>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
+                    <label class="flex items-center gap-3 cursor-pointer text-sm hover:text-white transition-colors">
+                        <input type="checkbox" id="tree_sha1_skip" class="ui-checkbox"> sha1 未变化时跳过下载与解析（默认开）
+                    </label>
+                    <label class="flex items-center gap-3 cursor-pointer text-sm hover:text-white transition-colors">
+                        <input type="checkbox" id="tree_sync_clean" class="ui-checkbox"> 清理任务范围内的残留 STRM
+                    </label>
                 </div>
             </div>
-            <div class="task-action-grid grid grid-cols-1 gap-4">
-                <button onclick="triggerTask(false, false)" class="task-action-btn btn-ctrl bg-sky-600 hover:bg-sky-500 p-5 rounded-2xl font-bold transition-all active:scale-95 shadow-lg text-white">🌐 联网增量写入</button>
-                <button onclick="triggerTask(true, false)" class="task-action-btn btn-ctrl bg-slate-700 hover:bg-slate-600 p-5 rounded-2xl font-bold transition-all active:scale-95 shadow-lg text-white">🛠 本地调试解析</button>
-                <button onclick="triggerTask(false, true)" class="task-action-btn btn-ctrl border-2 border-red-500/50 text-red-400 hover:bg-red-500/10 p-5 rounded-2xl font-bold transition-all active:scale-95 shadow-lg">🔥 强制全量重写</button>
-                <button onclick="openStrmCleanupTool()" class="task-action-btn task-cleanup-entry-btn bg-slate-700 hover:bg-slate-600 p-5 rounded-2xl font-bold transition-all active:scale-95 shadow-lg text-white">
-                    清理 STRM 残留目录
-                </button>
+
+            <div id="tree-strm-cleanup" class="group-card">
+                <h3 class="group-title mb-3">STRM 残留目录清理</h3>
+                <div class="text-xs text-slate-400 leading-6 mb-3">扫描本地 STRM 目录下的空文件夹与残留目录，勾选后批量清理。</div>
+                <button onclick="openStrmCleanupTool()" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-sm font-bold transition-all">🧹 打开清理工具</button>
             </div>
-            <div class="bg-slate-950/80 rounded-3xl border border-slate-800 p-4 shadow-inner">
-                <div class="flex justify-end mb-2">
+
+            <div class="group-card">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="group-title mb-0">任务日志</h3>
                     <button onclick="clearMainLogs()" class="px-3 py-1 text-xs rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300">清空日志</button>
                 </div>
-                <div id="log-box" class="overflow-y-auto font-mono text-[13px] p-2 scroll-smooth"></div>
+                <div class="bg-slate-950/80 rounded-3xl border border-slate-800 p-4 shadow-inner">
+                    <div id="log-box" class="overflow-y-auto font-mono text-[13px] p-2 scroll-smooth"></div>
+                </div>
+            </div>
+
+            <div id="tree-task-modal" class="hidden fixed inset-0 bg-black/60 z-50 p-4">
+                <div class="w-full max-w-2xl mx-auto mt-[6vh] max-h-[92vh] overflow-y-auto group-card modal-card">
+                    <div class="flex items-center justify-between">
+                        <h3 id="tree-task-modal-title" class="group-title mb-0">新增目录树任务</h3>
+                        <button id="tree-task-modal-close" class="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm">关闭</button>
+                    </div>
+                    <div class="space-y-4 mt-5">
+                        <div class="space-y-2">
+                            <div class="text-xs text-slate-500">选择 115 文件夹</div>
+                            <div class="resource-save-path-grid">
+                                <input id="tree_folder_path" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" placeholder="请选择文件夹" readonly>
+                                <button type="button" id="tree-folder-pick-btn" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">浏览目录</button>
+                            </div>
+                        </div>
+                        <label class="block">
+                            <span class="text-xs text-slate-500">树文件名</span>
+                            <input id="tree_task_name" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="自动填充，可修改">
+                            <div class="text-[11px] text-slate-500 mt-2">树文件统一放在网盘根目录，同路径旧文件会先删除（进回收站）再替换。</div>
+                        </label>
+                        <label class="block">
+                            <span class="text-xs text-slate-500">父文件夹路径前缀</span>
+                            <input id="tree_task_prefix" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 opacity-70 cursor-not-allowed" readonly>
+                            <div class="text-[11px] text-slate-500 mt-2">由所选文件夹自动计算（父级链，根级为空），不可修改。</div>
+                        </label>
+                        <label class="block">
+                            <span class="text-xs text-slate-500">排除层级</span>
+                            <input id="tree_task_exclude" type="number" min="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 opacity-70 cursor-not-allowed" value="1" readonly>
+                            <div class="text-[11px] text-slate-500 mt-2">固定为 1（去掉导出首层的根/父级），不可修改。</div>
+                        </label>
+                    </div>
+                    <div class="flex justify-end gap-3 mt-6 pt-4 border-t border-slate-700/70">
+                        <button id="tree-task-save-btn" class="task-modal-save-btn">保存任务</button>
+                        <button id="tree-task-cancel-btn" class="task-modal-cancel-btn">取消</button>
+                    </div>
+                </div>
             </div>
         </div>

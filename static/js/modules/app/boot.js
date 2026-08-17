@@ -161,11 +161,6 @@
                     tgSyncLimitInput.value = String(Math.min(30, Math.max(1, Number.isFinite(rawTgSyncLimit) ? rawTgSyncLimit : 10)));
                 }
 
-                const container = document.getElementById('trees-container');
-                container.innerHTML = '';
-                if (cfg.trees && cfg.trees.length > 0) cfg.trees.forEach(t => addTreeRow(t));
-                else addTreeRow();
-
                 applyMonitorState({ ...monitorState, tasks: cfg.monitor_tasks || [] }, { forceRender: true });
                 applySubscriptionState({ ...subscriptionState, tasks: cfg.subscription_tasks || [] }, { forceRender: true });
                 const dynamicFavDirs = { '115': [], quark: [] };

@@ -213,8 +213,11 @@
             showToast('已刷新当前目录', { tone: 'success', duration: 2200, placement: 'top-center' });
         }
 
-        async function openSubscriptionFolderModal() {
-            const provider = getCurrentSubscriptionProvider();
+        let subscriptionFolderPickerCallback = null;
+
+        async function openSubscriptionFolderModal(pickerCallback = null, providerOverride = '') {
+            const provider = String(providerOverride || '').trim() || getCurrentSubscriptionProvider();
+            subscriptionFolderPickerCallback = typeof pickerCallback === 'function' ? pickerCallback : null;
             const providerLabel = getResourceProviderLabel(provider);
             if (!isProviderCookieConfigured(provider)) {
                 showToast(`请先在参数配置中填写${providerLabel} Cookie`, { tone: 'warn', duration: 2800, placement: 'top-center' });
@@ -229,6 +232,7 @@
         }
 
         function closeSubscriptionFolderModal() {
+            subscriptionFolderPickerCallback = null;
             hideLockedModal('subscription-folder-modal');
             setSubscriptionFolderCreateBusy(false);
         }
@@ -292,6 +296,13 @@
         function selectCurrentSubscriptionFolder() {
             const current = subscriptionFolderTrail[subscriptionFolderTrail.length - 1] || { id: '0', name: '根目录' };
             const displayPath = subscriptionFolderTrail.slice(1).map(item => item.name).join('/');
+            if (subscriptionFolderPickerCallback) {
+                const callback = subscriptionFolderPickerCallback;
+                subscriptionFolderPickerCallback = null;
+                closeSubscriptionFolderModal();
+                callback({ cid: current.id || '0', path: displayPath });
+                return;
+            }
             setSubscriptionSavepath(current.id || '0', displayPath, { trail: subscriptionFolderTrail });
             closeSubscriptionFolderModal();
         }

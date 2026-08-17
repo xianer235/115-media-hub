@@ -880,14 +880,11 @@ _SETTINGS_CONFIG_KEY_ORDER_AFTER_AUTH: Tuple[str, ...] = (
     "api_115_download_url_cache_ttl_seconds",
     "extensions",
     "strm_play_mode",
-    # 3. 目录树源配置
-    "trees",
-    # 4. 目录树同步策略与执行模式
-    "sync_mode",
-    "cron_hour",
-    "check_hash",
+    # 3. 目录树任务（任务化配置，页面维护）
+    "tree_tasks",
+    # 4. 目录树同步策略
+    "sha1_skip",
     "sync_clean",
-    "last_hash",
     # 5. TG 订阅源管理
     "tg_channel_threads",
     "tg_channel_sync_limit",
@@ -1024,12 +1021,9 @@ def default_config() -> Dict[str, Any]:
         "pansou_plugins": "",
         "mount_points": [dict(item) for item in DEFAULT_MOUNT_POINTS],
         "extensions": DEFAULT_EXTENSIONS,
-        "trees": [{"source_type": "tree_file", "path": "", "prefix": "", "exclude": 1}],
-        "sync_mode": "incremental",
+        "tree_tasks": [],
+        "sha1_skip": True,
         "sync_clean": True,
-        "check_hash": True,
-        "cron_hour": "",
-        "last_hash": "",
         "monitor_tasks": [],
         "subscription_tasks": [],
         "resource_sources": [],
@@ -2464,27 +2458,24 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     if "resource_favorite_dirs" not in merged or not isinstance(merged["resource_favorite_dirs"], dict):
         merged["resource_favorite_dirs"] = {"115": [], "quark": []}
 
-    merged["trees"] = merged.get("trees") or [{"source_type": "tree_file", "path": "", "prefix": "", "exclude": 1}]
     if not str(merged.get("extensions", "")).strip() or merged.get("extensions") == LEGACY_DEFAULT_EXTENSIONS:
         merged["extensions"] = DEFAULT_EXTENSIONS
-    normalized_trees = []
-    for raw_tree in merged["trees"]:
-        tree = raw_tree or {}
-        source_type = normalize_tree_source_type(tree.get("source_type", "tree_file"), fallback="tree_file")
-        tree_path = str(tree.get("path", "")).strip()
-        try:
-            exclude_val = int(tree.get("exclude", 1) or 1)
-        except (TypeError, ValueError):
-            exclude_val = 1
-        normalized_trees.append(
-            {
-                "source_type": source_type,
-                "path": tree_path,
-                "prefix": str(tree.get("prefix", "")).strip(),
-                "exclude": max(1, exclude_val),
-            }
-        )
-    merged["trees"] = normalized_trees
+    # 旧静态树源配置废弃：不再读取 trees/sync_mode/check_hash/cron_hour/last_hash。
+    for legacy_key in ("trees", "sync_mode", "check_hash", "cron_hour", "last_hash"):
+        merged.pop(legacy_key, None)
+    raw_tree_tasks = merged.get("tree_tasks")
+    if not isinstance(raw_tree_tasks, list):
+        raw_tree_tasks = []
+    normalized_tree_tasks = []
+    seen_tree_task_ids = set()
+    for raw_task in raw_tree_tasks:
+        task = normalize_tree_task(raw_task or {})
+        if task["id"] and task["folder_path"] and task["id"] not in seen_tree_task_ids:
+            normalized_tree_tasks.append(task)
+            seen_tree_task_ids.add(task["id"])
+    merged["tree_tasks"] = normalized_tree_tasks
+    if not isinstance(merged.get("sha1_skip"), bool):
+        merged["sha1_skip"] = True
     normalized_tasks = []
     seen_names = set()
     for raw_task in merged["monitor_tasks"]:
@@ -2618,6 +2609,26 @@ def get_config() -> Dict[str, Any]:
 
 def save_config(cfg: Dict[str, Any]) -> None:
     _get_config_store().save(cfg)
+
+
+def cleanup_legacy_tree_config_file() -> bool:
+    """settings.json 若还残留旧目录树配置字段（trees/sync_mode/check_hash/cron_hour/last_hash），
+    用归一化后的配置重写一次并返回 True，避免旧字段一直留在磁盘上。"""
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except Exception:
+        return False
+    if not isinstance(raw, dict):
+        return False
+    legacy_keys = ("trees", "sync_mode", "check_hash", "cron_hour", "last_hash")
+    if not any(key in raw for key in legacy_keys):
+        return False
+    try:
+        save_config(get_config())
+        return True
+    except Exception:
+        return False
 
 
 def unique_preserve_order(values: List[str]) -> List[str]:
@@ -3755,13 +3766,13 @@ def validate_tree_runtime_config(cfg: Dict[str, Any], use_local: bool) -> Option
         return "请先在参数配置中填写 115 Cookie"
     if not str(get_mount_prefix(cfg, "115")).strip():
         return "请先在参数配置中填写 115 网盘路径前缀"
-    trees = [
+    tree_tasks = [
         t
-        for t in cfg.get("trees", [])
-        if str((t or {}).get("path", "")).strip()
+        for t in cfg.get("tree_tasks", [])
+        if str((t or {}).get("folder_path", "")).strip()
     ]
-    if not trees:
-        return "未配置任何有效的目录树文件路径"
+    if not tree_tasks:
+        return "未配置任何有效的目录树任务"
     strm_play_error = validate_strm_play_runtime_config(cfg)
     if strm_play_error:
         return strm_play_error
@@ -6830,7 +6841,10 @@ from .providers.tmdb import (
 )
 from .providers.pan115 import (
     create_115_folder,
+    delete_115_entries,
     ensure_115_folder_id_by_path,
+    get_115_file_info,
+    get_115_file_sha1_by_id,
     invalidate_115_entries_cache,
     is_115_share_receive_duplicate_response,
     list_115_entries,
@@ -6840,14 +6854,18 @@ from .providers.pan115 import (
     load_115_share_page_cache,
     load_115_share_snap_cache,
     prepare_115_share_receive,
+    query_115_export_dir_status,
+    rename_115_entry,
     resolve_115_folder_id_by_path,
     resolve_115_share_payload,
     sanitize_115_folder_name,
     save_115_share_page_cache,
     save_115_share_snap_cache,
+    submit_115_export_dir,
     submit_115_offline_task,
     submit_115_share_receive,
     throttle_115_api_requests,
+    wait_115_export_dir,
 )
 from .providers.quark import (
     create_quark_folder,
@@ -7089,6 +7107,51 @@ def parse_last_hash_state(raw: Any) -> Dict[str, Any]:
     except Exception:
         return {}
     return {}
+
+
+TREE_EXPORT_CONTENT_INCLUDES_PARENT = True
+
+
+def build_tree_task_defaults(folder_path: str) -> Dict[str, Any]:
+    segments = [part for part in normalize_relative_path(folder_path).split("/") if part]
+    if not segments:
+        return {"tree_name": "", "prefix": "", "exclude": 1}
+    if TREE_EXPORT_CONTENT_INCLUDES_PARENT and len(segments) > 1:
+        prefix = "/".join(segments[:-1])
+    else:
+        prefix = "" if TREE_EXPORT_CONTENT_INCLUDES_PARENT else "/".join(segments)
+    return {
+        "tree_name": "目录树-" + "-".join(segments),
+        "prefix": prefix,
+        "exclude": 1,
+    }
+
+
+def normalize_tree_task(raw: Any) -> Dict[str, Any]:
+    source = raw if isinstance(raw, dict) else {}
+    folder_path = normalize_relative_path(str(source.get("folder_path", "") or "").strip())
+    task_id = str(source.get("id", "") or "").strip()
+    if not task_id:
+        task_id = (
+            hashlib.md5(("tree-task:" + folder_path).encode("utf-8")).hexdigest()[:16]
+            if folder_path
+            else ""
+        )
+    try:
+        exclude_val = max(0, int(source.get("exclude", 1) or 1))
+    except (TypeError, ValueError):
+        exclude_val = 1
+    defaults = build_tree_task_defaults(folder_path) if folder_path else {"tree_name": "", "prefix": "", "exclude": 1}
+    raw_prefix = str(source.get("prefix", "") or "").strip()
+    return {
+        "id": task_id,
+        "folder_path": folder_path,
+        "tree_name": str(source.get("tree_name", "") or "").strip() or defaults["tree_name"],
+        "prefix": normalize_relative_path(raw_prefix) if raw_prefix else defaults["prefix"],
+        "exclude": exclude_val,
+        "last_remote_sha1": str(source.get("last_remote_sha1", "") or "").strip(),
+        "last_local_md5": str(source.get("last_local_md5", "") or "").strip(),
+    }
 
 
 def build_tree_cache_key(tree: Dict[str, Any]) -> str:

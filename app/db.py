@@ -421,6 +421,30 @@ def ensure_db() -> None:
                 )
                 """
             )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS tree_export_jobs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id TEXT NOT NULL DEFAULT '',
+                    folder_path TEXT NOT NULL DEFAULT '',
+                    tree_name TEXT NOT NULL DEFAULT '',
+                    prefix TEXT NOT NULL DEFAULT '',
+                    exclude INTEGER NOT NULL DEFAULT 1,
+                    export_id TEXT NOT NULL DEFAULT '',
+                    file_id TEXT NOT NULL DEFAULT '',
+                    file_name TEXT NOT NULL DEFAULT '',
+                    pick_code TEXT NOT NULL DEFAULT '',
+                    sha1 TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    changed INTEGER NOT NULL DEFAULT 0,
+                    parsed_count INTEGER NOT NULL DEFAULT 0,
+                    generated_count INTEGER NOT NULL DEFAULT 0,
+                    error TEXT NOT NULL DEFAULT '',
+                    submitted_at TEXT NOT NULL DEFAULT '',
+                    completed_at TEXT NOT NULL DEFAULT ''
+                )
+                """
+            )
             cursor.execute("PRAGMA table_info(local_files)")
             local_file_columns = {str(row[1]) for row in cursor.fetchall()}
             if "scan_token" not in local_file_columns:

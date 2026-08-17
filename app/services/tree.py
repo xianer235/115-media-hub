@@ -1,9 +1,10 @@
 import io
+import threading
 from http.cookies import SimpleCookie
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from ..core import *  # noqa: F401,F403
-from ..db import retry_sqlite_locked
+from ..db import now_text, retry_sqlite_locked
 from ..memory import release_process_memory
 from .strm_files import delete_managed_strm_file, managed_strm_file_path
 
@@ -16,6 +17,14 @@ TREE_SYNC_SQLITE_SELECT_CHUNK_SIZE = 800
 
 def _format_tree_elapsed_seconds(seconds: float) -> str:
     return f"{max(0.0, float(seconds or 0.0)):.2f}秒"
+
+
+def _tree_stage_seconds(started_at: float) -> str:
+    return _format_tree_elapsed_seconds(time.perf_counter() - started_at)
+
+
+def _tree_flow_total_seconds(durations: Dict[str, float]) -> str:
+    return _format_tree_elapsed_seconds(sum(max(0.0, float(value or 0.0)) for value in (durations or {}).values()))
 
 
 def _normalize_tree_source_relative_path(raw_source: Any, cfg: Dict[str, Any]) -> str:
@@ -461,340 +470,663 @@ def _mark_local_files_seen_batch(
     return retry_sqlite_locked(transactional_write)
 
 
-async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
-    if task_status["running"]:
+TREE_EXPORT_TARGET_ROOT = "U_1_0"
+TREE_EXPORT_DEFAULT_TIMEOUT_SECONDS = 600
+TREE_EXPORT_POLL_INTERVAL_SECONDS = 2
+TREE_EXPORT_FILE_READY_ATTEMPTS = 8
+TREE_EXPORT_FILE_READY_INTERVAL_SECONDS = 1.0
+TREE_EXPORT_REPLACE_ATTEMPTS = 6
+TREE_EXPORT_REPLACE_VERIFY_ATTEMPTS = 5
+TREE_EXPORT_REPLACE_SETTLE_SECONDS = 1.0
+_tree_task_running = False
+_tree_task_lock = threading.Lock()
+
+
+def _tree_task_busy() -> bool:
+    with _tree_task_lock:
+        return bool(_tree_task_running)
+
+
+def _set_tree_task_running(flag: bool) -> None:
+    global _tree_task_running
+    with _tree_task_lock:
+        _tree_task_running = bool(flag)
+
+
+def _get_tree_task_by_id(cfg: Dict[str, Any], task_id: str) -> Dict[str, Any]:
+    normalized_id = str(task_id or "").strip()
+    for task in cfg.get("tree_tasks", []):
+        if str((task or {}).get("id", "") or "").strip() == normalized_id:
+            return dict(task or {})
+    return {}
+
+
+def find_tree_task_name_conflict(
+    cfg: Dict[str, Any],
+    tree_name: str,
+    folder_path: str,
+) -> Optional[Dict[str, Any]]:
+    normalized_name = str(tree_name or "").strip()
+    normalized_folder = normalize_relative_path(folder_path)
+    for task in cfg.get("tree_tasks", []):
+        task_dict = task or {}
+        if (
+            str(task_dict.get("tree_name", "") or "").strip() == normalized_name
+            and normalize_relative_path(str(task_dict.get("folder_path", "") or "").strip()) != normalized_folder
+        ):
+            return dict(task_dict)
+    return None
+
+
+def _tree_task_cache_paths(task: Dict[str, Any]) -> Tuple[str, str, str]:
+    tree_key = build_tree_cache_key(
+        {
+            "source_type": "tree_task",
+            "path": str(task.get("tree_name", "") or "").strip(),
+            "prefix": normalize_relative_path(task.get("prefix", "")),
+            "exclude": max(0, int(task.get("exclude", 1) or 1)),
+        }
+    )
+    return (
+        tree_key,
+        os.path.join(TREE_DIR, f"cache_{tree_key}.txt"),
+        os.path.join(TREE_DIR, f"raw_{tree_key}.txt"),
+    )
+
+
+def _tree_file_remote_name(tree_name: str) -> str:
+    """115 导出的是 txt 文件，重命名时会自动补 .txt 后缀，统一用远程实际名。"""
+    name = str(tree_name or "").strip()
+    if not name:
+        return ""
+    return name if name.lower().endswith(".txt") else name + ".txt"
+
+
+def _upsert_tree_task(cfg: Dict[str, Any], updated_task: Dict[str, Any]) -> None:
+    task_id = str(updated_task.get("id", "") or "").strip()
+    tasks = [
+        task
+        for task in cfg.get("tree_tasks", [])
+        if str((task or {}).get("id", "") or "").strip() != task_id
+    ]
+    tasks.append(dict(updated_task))
+    cfg["tree_tasks"] = tasks
+    save_config(cfg)
+
+
+def _create_tree_export_job(task: Dict[str, Any], status: str = "running", error: str = "") -> int:
+    def create() -> int:
+        with db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO tree_export_jobs
+                    (task_id, folder_path, tree_name, prefix, exclude, status, error, submitted_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(task.get("id", "") or "").strip(),
+                    str(task.get("folder_path", "") or "").strip(),
+                    str(task.get("tree_name", "") or "").strip(),
+                    str(task.get("prefix", "") or "").strip(),
+                    max(0, int(task.get("exclude", 1) or 1)),
+                    status,
+                    error,
+                    now_text(),
+                ),
+            )
+            conn.commit()
+            return int(cursor.lastrowid or 0)
+
+    return retry_sqlite_locked(create)
+
+
+def _update_tree_export_job(job_id: int, **fields: Any) -> None:
+    if not job_id:
         return
-    task_status["running"] = True
-    schedule_ui_state_push(0)
-    cfg = get_config()
-    os.makedirs(TREE_DIR, exist_ok=True)
-    run_started_at = time.perf_counter()
-    prefetch_elapsed_seconds = 0.0
-    generate_elapsed_seconds = 0.0
-    cleanup_elapsed_seconds = 0.0
+    allowed = {
+        "export_id",
+        "file_id",
+        "file_name",
+        "pick_code",
+        "sha1",
+        "status",
+        "changed",
+        "parsed_count",
+        "generated_count",
+        "error",
+        "completed_at",
+    }
+    updates = {key: value for key, value in fields.items() if key in allowed}
+    if not updates:
+        return
+    assignments = ", ".join(f"{key} = ?" for key in updates)
+    values = list(updates.values()) + [int(job_id)]
+
+    def update() -> None:
+        with db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"UPDATE tree_export_jobs SET {assignments} WHERE id = ?", values)
+            conn.commit()
+
+    retry_sqlite_locked(update)
+
+
+def list_tree_export_jobs(limit: int = 30) -> List[Dict[str, Any]]:
+    normalized_limit = max(1, min(200, int(limit or 30)))
+
+    def load() -> List[Dict[str, Any]]:
+        with db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM tree_export_jobs ORDER BY id DESC LIMIT ?",
+                (normalized_limit,),
+            )
+            columns = [item[0] for item in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+    return retry_sqlite_locked(load)
+
+
+def _wait_115_export_file_ready(cookie: str, new_file_id: str) -> None:
+    """等导出文件可查询后再继续操作（get_info 直查优先），避免与 115 内部后处理竞争。"""
+    normalized_id = str(new_file_id or "").strip()
+    attempts = max(1, int(TREE_EXPORT_FILE_READY_ATTEMPTS or 8))
+    interval = max(0.0, float(TREE_EXPORT_FILE_READY_INTERVAL_SECONDS or 1.0))
+    last_error = ""
+    for _attempt in range(attempts):
+        try:
+            info = get_115_file_info(cookie, normalized_id)
+            if str(info.get("name", "") or "").strip():
+                return
+        except Exception as exc:
+            last_error = str(exc)
+        try:
+            entries = list_115_entries(cookie, "0", force_refresh=True)
+            matched = next(
+                (item for item in entries if str(item.get("id", "") or "").strip() == normalized_id),
+                None,
+            )
+            if matched and str(matched.get("name", "") or "").strip():
+                return
+        except Exception as exc:
+            last_error = str(exc)
+        if interval > 0:
+            time.sleep(interval)
+    raise RuntimeError(
+        f"115 导出文件尚未就绪（file_id={normalized_id}）"
+        + (f"：{last_error}" if last_error else "")
+    )
+
+
+def _replace_115_tree_file(cookie: str, new_file_id: str, tree_name: str) -> None:
+    """删除根目录同名旧树文件并把新文件重命名为 tree_name。
+
+    115 列表接口在删除/重命名后存在秒级延迟，重命名撞名时会自动加 (1)。
+    因此循环重试：先删同名旧文件，再重命名，并在每次操作后留出间隔重新校验，
+    直到新文件名称正确为止。
+    """
+    normalized_id = str(new_file_id or "").strip()
+    if not normalized_id:
+        raise RuntimeError("115 导出目录树文件 ID 为空，无法重命名")
+    remote_name = _tree_file_remote_name(tree_name)
+    if not remote_name:
+        raise RuntimeError("目录树文件名不能为空")
+    attempts = max(1, int(TREE_EXPORT_REPLACE_ATTEMPTS or 6))
+    verify_attempts = max(1, int(TREE_EXPORT_REPLACE_VERIFY_ATTEMPTS or 5))
+    settle = max(0.0, float(TREE_EXPORT_REPLACE_SETTLE_SECONDS or 1.0))
+    last_error = ""
+    for _attempt in range(attempts):
+        try:
+            entries = list_115_entries(cookie, "0", force_refresh=True)
+            old = next(
+                (
+                    item
+                    for item in entries
+                    if (not bool(item.get("is_dir")))
+                    and str(item.get("name", "") or "").strip() == remote_name
+                ),
+                None,
+            )
+            new_entry = next(
+                (item for item in entries if str(item.get("id", "") or "").strip() == normalized_id),
+                None,
+            )
+            if old and str(old.get("id", "") or "").strip() != normalized_id:
+                delete_115_entries(cookie, [str(old.get("id", "") or "").strip()], "0")
+            if new_entry and str(new_entry.get("name", "") or "").strip() == remote_name:
+                return
+            rename_115_entry(cookie, normalized_id, remote_name, "0")
+            verified = False
+            for _verify in range(verify_attempts):
+                if settle > 0:
+                    time.sleep(settle)
+                try:
+                    info = get_115_file_info(cookie, normalized_id)
+                except Exception as exc:
+                    last_error = str(exc)
+                    info = {}
+                if str(info.get("name", "") or "").strip() == remote_name:
+                    verified = True
+                    break
+            if verified:
+                return
+            # 重命名撞名被 115 改成 (1) 时，删除残留的同名冲突文件后重试。
+            entries = list_115_entries(cookie, "0", force_refresh=True)
+            conflict = next(
+                (
+                    item
+                    for item in entries
+                    if (not bool(item.get("is_dir")))
+                    and str(item.get("name", "") or "").strip() == remote_name
+                    and str(item.get("id", "") or "").strip() != normalized_id
+                ),
+                None,
+            )
+            if conflict:
+                delete_115_entries(cookie, [str(conflict.get("id", "") or "").strip()], "0")
+            last_error = f"重命名后名称未同步（仍不是 {remote_name}）"
+        except Exception as exc:
+            last_error = str(exc)
+            if settle > 0:
+                time.sleep(settle)
+    raise RuntimeError(
+        f"115 目录树文件重命名未完成（多次重试仍不是 {remote_name}）"
+        + (f"：{last_error}" if last_error else "")
+    )
+
+
+def _download_exported_tree_bytes(cookie: str, pick_code: str) -> bytes:
+    download_urls, download_cookie = _resolve_115_download_payload(cookie, pick_code)
+    return _download_tree_file_bytes(download_urls, cookie, download_cookie)
+
+
+async def _write_tree_timing_summary(durations: Dict[str, float], _gen_subtotal: float) -> None:
+    order = (
+        ("提交导出", "提交导出"),
+        ("等待官方生成", "等待"),
+        ("替换网盘树文件", "替换"),
+        ("sha1 对比", "sha1 对比"),
+        ("下载并解析", "下载解析"),
+    )
+    parts = [
+        f"{label} {_format_tree_elapsed_seconds(durations.get(key, 0.0))}"
+        for key, label in order
+        if key in durations
+    ]
+    if parts:
+        await write_log("步骤耗时：" + "｜".join(parts))
+    await write_log(f"总用时：{_tree_flow_total_seconds(durations)}")
+
+
+def _scope_sql_pattern(scope: str) -> str:
+    escaped = (
+        str(scope or "")
+        .replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
+    return escaped + "/%"
+
+
+async def _sync_task_tree_bytes(
+    cfg: Dict[str, Any],
+    task: Dict[str, Any],
+    raw_bytes: bytes,
+    force_full: bool = False,
+) -> Dict[str, int]:
+    user_exts = get_user_extensions(cfg)
+    _tree_key, cache_path, raw_path = _tree_task_cache_paths(task)
+    await asyncio.to_thread(_save_tree_raw_cache, raw_path, raw_bytes)
+    ensure_db()
+    conn = open_db()
+    conn.isolation_level = None
+    cursor = conn.cursor()
+    scan_token = f"tree-{task.get('id', '')}-{int(time.time())}-{secrets.token_hex(8)}"
+    pending_rel_paths: List[str] = []
+    total_files = 0
     generated_file_count = 0
     unchanged_file_count = 0
     duplicate_scan_count = 0
-    total_files = 0
-    stale_file_candidates = 0
     deleted_file_count = 0
     delete_failed_file_count = 0
-    stale_index_count = 0
-    conn: Optional[sqlite3.Connection] = None
 
-    try:
-        config_error = validate_tree_runtime_config(cfg, use_local)
-        if config_error:
-            raise RuntimeError(config_error)
-
-        if use_local:
-            await write_log("ℹ 目录树本地调试模式已弃用：当前统一使用容器内 115 源")
-
-        trees = [t for t in cfg.get("trees", []) if str((t or {}).get("path", "")).strip()]
-        fetched_tree_count = 0
-        local_raw_cache_count = 0
-        parsed_tree_count = 0
-        skipped_tree_count = 0
-        user_exts = get_user_extensions(cfg)
-        check_hash_enabled = bool(cfg.get("check_hash", False))
-        can_skip_by_hash = check_hash_enabled and cfg.get("sync_mode") != "full" and not force_full
-        last_hash_state = parse_last_hash_state(cfg.get("last_hash", ""))
-        last_tree_hashes = last_hash_state.get("trees", {}) if isinstance(last_hash_state.get("trees", {}), dict) else {}
-        last_tree_keys = last_hash_state.get("tree_keys", []) if isinstance(last_hash_state.get("tree_keys", []), list) else []
-        current_tree_hashes: Dict[str, Dict[str, str]] = {}
-        current_tree_keys: List[str] = []
-        if check_hash_enabled:
-            if can_skip_by_hash:
-                await write_log("ℹ 已开启 MD5 校验：目录树内容无变化时将复用缓存并跳过同步")
-            else:
-                await write_log("ℹ 已开启 MD5 校验，但当前为全量重写 STRM，跳过策略不生效")
-
-        write_mode_label = "全量重写 STRM" if cfg.get("sync_mode") == "full" or force_full else "增量写入 STRM"
-        cleanup_mode_label = "开启" if cfg.get("sync_clean", True) else "关闭"
-        await write_log(
-            f"━━━━━━━━━━【任务开始 | 目录树文件 | 源 {len(trees)} 个 | 写入 {write_mode_label} | 清理过期 STRM {cleanup_mode_label}】━━━━━━━━━━",
-            "task-divider",
-        )
-
-        mount_prefix_115 = get_mount_prefix(cfg, "115")
-        if not mount_prefix_115:
-            raise RuntimeError("请先在参数配置中填写 115 网盘路径前缀")
-
-        source_contexts: List[Dict[str, Any]] = []
-        for idx, tree in enumerate(trees):
-            raw_source = tree.get("path", "")
-            source_rel = _normalize_tree_source_relative_path(raw_source, cfg)
-            prefix = normalize_relative_path(tree.get("prefix", ""))
-            exclude = max(0, int(tree.get("exclude", 1) or 1))
-            source_label = "/" + source_rel if source_rel else "/"
-            tree_key = build_tree_cache_key(
-                {
-                    "source_type": "tree_file",
-                    "path": str(raw_source or "").strip(),
-                    "prefix": prefix,
-                    "exclude": exclude,
-                }
-            )
-            current_tree_keys.append(tree_key)
-            tree_cache_path = os.path.join(TREE_DIR, f"cache_{tree_key}.txt")
-            tree_raw_cache_path = os.path.join(TREE_DIR, f"raw_{tree_key}.txt")
-
-            await update_progress(
-                "读取目录树文件",
-                (idx / max(len(trees), 1) * 35),
-                f"源 {idx + 1}/{len(trees)}：{source_label}",
-            )
-            await write_log(f"读取目录树文件源: {source_label}")
-
-            cookie = str(cfg.get("cookie_115", "")).strip()
-            source_fetch_started_at = time.perf_counter()
-            try:
-                raw_bytes = await asyncio.to_thread(_fetch_115_tree_file_bytes, cookie, source_rel)
-                fetched_tree_count += 1
-                await asyncio.to_thread(_save_tree_raw_cache, tree_raw_cache_path, raw_bytes)
-            except Exception as exc:
-                cached_raw_bytes = await asyncio.to_thread(_load_tree_raw_cache, tree_raw_cache_path)
-                if cached_raw_bytes is None:
-                    raise
-                raw_bytes = cached_raw_bytes
-                local_raw_cache_count += 1
-                await write_log(
-                    f"⚠ 源 {idx + 1} 联网读取失败，已使用上次成功保存的本地目录树副本：{exc}",
-                    "warn",
-                )
-            prefetch_elapsed_seconds += max(0.0, time.perf_counter() - source_fetch_started_at)
-            file_hash = hashlib.md5(raw_bytes).hexdigest()
-            parse_signature = build_tree_parse_signature(file_hash, user_exts)
-            current_tree_hashes[tree_key] = {"parse_signature": parse_signature}
-            old_state = last_tree_hashes.get(tree_key, {})
-            old_signature = old_state.get("parse_signature", "") if isinstance(old_state, dict) else ""
-            unchanged = bool(
-                can_skip_by_hash
-                and old_signature
-                and old_signature == parse_signature
-                and os.path.exists(tree_cache_path)
-            )
-            source_contexts.append(
-                {
-                    "idx": idx,
-                    "source_rel": source_rel,
-                    "source_label": source_label,
-                    "prefix": prefix,
-                    "exclude": exclude,
-                    "tree_cache_path": tree_cache_path,
-                    "tree_raw_cache_path": tree_raw_cache_path,
-                    "unchanged": unchanged,
-                }
-            )
-            del raw_bytes
-
-        tree_layout_changed = sorted(last_tree_keys) != sorted(current_tree_keys)
-        all_trees_unchanged = bool(source_contexts) and all(context["unchanged"] for context in source_contexts)
-        if can_skip_by_hash and all_trees_unchanged and tree_layout_changed:
-            await write_log("ℹ 目录树源配置有变更，继续执行同步以校正结果")
-        if can_skip_by_hash and all_trees_unchanged and not tree_layout_changed:
-            prefetch_elapsed_seconds = max(0.0, time.perf_counter() - run_started_at)
-            await write_log(
-                f"本轮概况：联网读取 {fetched_tree_count} 个，本地副本 {local_raw_cache_count} 个，缓存复用 0 个，解析 0 个"
-            )
-            await write_log("✅ MD5 校验命中：全部目录树无变动，跳过解析与同步")
-            await write_log(
-                f"任务耗时：前置处理 {_format_tree_elapsed_seconds(prefetch_elapsed_seconds)} | 总 {_format_tree_elapsed_seconds(prefetch_elapsed_seconds)}"
-            )
-            await write_log("━━━━━━━━━━【任务结束 | 目录树文件 | MD5 校验命中】━━━━━━━━━━", "task-divider")
-            await update_progress("任务完成", 100, "MD5 校验命中：无变动")
+    def generate_strm_for_rel_path(rel_path: str) -> None:
+        nonlocal total_files, generated_file_count, unchanged_file_count
+        normalized = normalize_relative_path(rel_path)
+        if not normalized:
             return
+        total_files += 1
+        target = managed_strm_file_path(normalized)
+        needs_regenerate = (not os.path.exists(target)) or force_full
+        if needs_regenerate:
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            remote_path = build_provider_remote_path(cfg, "115", normalized)
+            strm_url = build_strm_play_url(cfg, remote_path)
+            with open(target, "w", encoding="utf-8") as sf:
+                sf.write(strm_url)
+            generated_file_count += 1
+        else:
+            unchanged_file_count += 1
 
-        ensure_db()
-        conn = open_db()
-        conn.isolation_level = None
-        cursor = conn.cursor()
-        scan_token = f"tree-{int(time.time())}-{secrets.token_hex(8)}"
-        generate_started_at = time.perf_counter()
-        current_source_state: Dict[str, str] = {"label": ""}
-        pending_rel_paths: List[str] = []
+    def flush_path_batch() -> None:
+        nonlocal duplicate_scan_count
+        if not pending_rel_paths:
+            return
+        batch_paths = list(pending_rel_paths)
+        pending_rel_paths.clear()
+        fresh_paths, batch_duplicates = _mark_local_files_seen_batch(cursor, batch_paths, scan_token)
+        duplicate_scan_count += batch_duplicates
+        for fresh_path in fresh_paths:
+            generate_strm_for_rel_path(fresh_path)
 
-        def generate_strm_for_rel_path(rel_path: str) -> None:
-            nonlocal total_files, duplicate_scan_count, generated_file_count, unchanged_file_count
-            normalized = normalize_relative_path(rel_path)
-            if not normalized:
-                return
-            total_files += 1
-            target = managed_strm_file_path(normalized)
-            needs_regenerate = (not os.path.exists(target)) or cfg["sync_mode"] == "full" or force_full
-            if needs_regenerate:
-                os.makedirs(os.path.dirname(target), exist_ok=True)
-                remote_path = build_provider_remote_path(cfg, "115", normalized)
-                strm_url = build_strm_play_url(cfg, remote_path)
-                with open(target, "w", encoding="utf-8") as sf:
-                    sf.write(strm_url)
-                generated_file_count += 1
-            else:
-                unchanged_file_count += 1
-
-            if total_files % 1000 == 0:
-                task_status["progress"].update(
-                    {
-                        "step": "生成STRM",
-                        "percent": 40,
-                        "detail": f"{current_source_state['label']} | 已处理 {total_files} 条",
-                    }
-                )
-                schedule_ui_state_push(0)
-
-        def flush_path_batch() -> None:
-            nonlocal duplicate_scan_count
-            if not pending_rel_paths:
-                return
-            batch_paths = list(pending_rel_paths)
-            pending_rel_paths.clear()
-            fresh_paths, batch_duplicates = _mark_local_files_seen_batch(cursor, batch_paths, scan_token)
-            duplicate_scan_count += batch_duplicates
-            for fresh_path in fresh_paths:
-                generate_strm_for_rel_path(fresh_path)
-
-        def process_rel_path(rel_path: str) -> None:
-            normalized = normalize_relative_path(rel_path)
-            if not normalized:
-                return
-            pending_rel_paths.append(normalized)
-            if len(pending_rel_paths) >= TREE_SYNC_PATH_BATCH_SIZE:
-                flush_path_batch()
-
-        scanned_tree_line_total = 0
-        scanned_tree_node_total = 0
-        for source_context in source_contexts:
-            idx = int(source_context["idx"])
-            source_rel = str(source_context["source_rel"])
-            current_source_state["label"] = f"源 {idx + 1}/{len(trees)}：{source_context['source_label']}"
-            if source_context["unchanged"]:
-                reused_count = _replay_tree_cache(source_context["tree_cache_path"], process_rel_path)
-                skipped_tree_count += 1
-                await write_log(f"源 {idx + 1} MD5 无变化，复用缓存 {reused_count} 条")
-                continue
-
-            try:
-                raw_bytes = _load_tree_raw_cache(source_context["tree_raw_cache_path"])
-                if raw_bytes is None:
-                    raise RuntimeError(f"目录树本地副本不存在：{source_rel}")
-                matched_count, scanned_lines, scanned_nodes = _stream_tree_matches_to_cache(
-                    source_context["tree_cache_path"],
-                    raw_bytes,
-                    user_exts,
-                    source_context["prefix"],
-                    source_context["exclude"],
-                    process_rel_path,
-                )
-            except RuntimeError as exc:
-                if str(exc) == "目录树文件为空":
-                    raise RuntimeError(f"目录树文件为空：{source_rel}") from exc
-                raise
-
-            parsed_tree_count += 1
-            scanned_tree_line_total += scanned_lines
-            scanned_tree_node_total += scanned_nodes
-            await write_log(f"源 {idx + 1} 解析完成: 行 {scanned_lines} | 节点 {scanned_nodes} | 命中 {matched_count}")
-            del raw_bytes
+    def process_rel_path(rel_path: str) -> None:
+        normalized = normalize_relative_path(rel_path)
+        if not normalized:
+            return
+        pending_rel_paths.append(normalized)
+        if len(pending_rel_paths) >= TREE_SYNC_PATH_BATCH_SIZE:
             flush_path_batch()
 
+    try:
+        matched_count, scanned_lines, scanned_nodes = _stream_tree_matches_to_cache(
+            cache_path,
+            raw_bytes,
+            user_exts,
+            str(task.get("prefix", "") or "").strip(),
+            max(0, int(task.get("exclude", 1) or 1)),
+            process_rel_path,
+        )
         flush_path_batch()
 
-        if check_hash_enabled:
-            cfg["last_hash"] = json.dumps(
-                {"version": 2, "tree_keys": current_tree_keys, "trees": current_tree_hashes},
-                ensure_ascii=False,
-                sort_keys=True,
+        scope = normalize_relative_path(str(task.get("folder_path", "") or "").strip())
+        scope_pattern = _scope_sql_pattern(scope)
+        if cfg.get("sync_clean", True):
+            cursor.execute(
+                """
+                SELECT relative_path FROM local_files
+                WHERE scan_token <> ? AND (relative_path = ? OR relative_path LIKE ? ESCAPE '\\')
+                """,
+                (scan_token, scope, scope_pattern),
             )
-            save_config(cfg)
-
-        if duplicate_scan_count > 0:
-            await write_log(f"检测到重复路径 {duplicate_scan_count} 条，已去重后继续同步")
-        generate_elapsed_seconds = max(0.0, time.perf_counter() - generate_started_at)
-        await write_log(
-            (
-                f"本轮概况：联网读取 {fetched_tree_count} 个 | 本地副本 {local_raw_cache_count} 个 | 缓存复用 {skipped_tree_count} 个 | 解析 {parsed_tree_count} 个 | "
-                f"目录树行 {scanned_tree_line_total} | 目录树节点 {scanned_tree_node_total} | 命中 {total_files}"
+            for (dead_path,) in cursor.fetchall():
+                try:
+                    if delete_managed_strm_file(str(dead_path or "")):
+                        deleted_file_count += 1
+                except Exception:
+                    delete_failed_file_count += 1
+            cursor.execute(
+                """
+                DELETE FROM local_files
+                WHERE scan_token <> ? AND (relative_path = ? OR relative_path LIKE ? ESCAPE '\\')
+                """,
+                (scan_token, scope, scope_pattern),
             )
-        )
-        await write_log(f"解析完成，共发现 {total_files} 个有效文件")
-        if total_files == 0:
-            if fetched_tree_count > 0 or local_raw_cache_count > 0 or use_local:
-                await write_log("⚠ 目录树读取成功，但未匹配到可生成文件；本次按成功结束并跳过过期 STRM 清理")
-                total_elapsed_seconds = max(0.0, time.perf_counter() - run_started_at)
-                await write_log(
-                    f"任务耗时：前置处理 {_format_tree_elapsed_seconds(prefetch_elapsed_seconds)} | 总 {_format_tree_elapsed_seconds(total_elapsed_seconds)}"
-                )
-                await write_log("━━━━━━━━━━【任务结束 | 目录树文件 | 执行成功】━━━━━━━━━━", "task-divider")
-                await update_progress("任务完成", 100, "目录树读取成功，但未匹配可生成文件")
-                return
-            raise RuntimeError("扫描结果为空，且未成功读取目录树文件")
+            conn.commit()
 
-        cleanup_started_at = time.perf_counter()
-        await update_progress("清理过期STRM", 90, f"准备校验 {total_files} 条扫描结果")
-
-        cursor.execute("SELECT COUNT(*) FROM local_files WHERE scan_token <> ?", (scan_token,))
-        stale_file_candidates = int((cursor.fetchone() or (0,))[0] or 0)
-        if stale_file_candidates > 0 and cfg.get("sync_clean", True):
-            cursor.execute("SELECT relative_path FROM local_files WHERE scan_token <> ?", (scan_token,))
-            while True:
-                rows = cursor.fetchmany(1000)
-                if not rows:
-                    break
-                for (dead_path,) in rows:
-                    try:
-                        if delete_managed_strm_file(str(dead_path or "")):
-                            deleted_file_count += 1
-                    except Exception:
-                        delete_failed_file_count += 1
-
-        def delete_stale_local_files() -> int:
-            cursor.execute("BEGIN IMMEDIATE")
-            try:
-                cursor.execute("DELETE FROM local_files WHERE scan_token <> ?", (scan_token,))
-                deleted_count = max(0, int(cursor.rowcount or 0))
-                conn.commit()
-                return deleted_count
-            except Exception:
-                conn.rollback()
-                raise
-
-        stale_index_count = retry_sqlite_locked(delete_stale_local_files)
-        cleanup_elapsed_seconds = max(0.0, time.perf_counter() - cleanup_started_at)
-
-        cleanup_mode_label = "开启" if cfg.get("sync_clean", True) else "关闭"
-        await update_progress("任务完成", 100, f"同步成功: {total_files} 文件")
         await write_log(
-            f"生成汇总: 新增/更新 {generated_file_count} | 保持不变 {unchanged_file_count} | 总扫描 {total_files}"
+            f"任务解析: 命中 {matched_count} | 生成/更新 {generated_file_count} | 保持不变 {unchanged_file_count} | "
+            f"清理残留 {deleted_file_count}"
         )
-        await write_log(
-            (
-                f"清理汇总: 清理过期 STRM {cleanup_mode_label} | 过期记录 {stale_file_candidates} | 删除 STRM {deleted_file_count} | "
-                f"删除失败 {delete_failed_file_count} | 索引清理 {stale_index_count}"
-            )
-        )
-        total_elapsed_seconds = max(0.0, time.perf_counter() - run_started_at)
-        await write_log(
-            (
-                f"任务耗时: 前置处理 {_format_tree_elapsed_seconds(prefetch_elapsed_seconds)} | "
-                f"生成写入 {_format_tree_elapsed_seconds(generate_elapsed_seconds)} | "
-                f"清理落库 {_format_tree_elapsed_seconds(cleanup_elapsed_seconds)} | "
-                f"总 {_format_tree_elapsed_seconds(total_elapsed_seconds)}"
-            )
-        )
-        await write_log("━━━━━━━━━━【任务结束 | 目录树文件 | 执行成功】━━━━━━━━━━", "task-divider")
-    except Exception as exc:
-        await write_log(f"❌ 运行故障: {exc}")
-        failed_elapsed_seconds = max(0.0, time.perf_counter() - run_started_at)
-        await write_log(f"任务耗时: 总 {_format_tree_elapsed_seconds(failed_elapsed_seconds)}", "warn")
-        await write_log("━━━━━━━━━━【任务结束 | 目录树文件 | 执行失败】━━━━━━━━━━", "task-divider")
-        await update_progress("任务中止", 0, str(exc))
     finally:
-        try:
-            if conn is not None:
-                conn.close()
-                conn = None
-        except Exception:
-            pass
-        await asyncio.to_thread(release_process_memory, "tree-sync", True)
+        conn.close()
+
+    return {
+        "matched_count": matched_count,
+        "parsed_count": total_files,
+        "generated_count": generated_file_count,
+        "unchanged_count": unchanged_file_count,
+        "duplicate_count": duplicate_scan_count,
+        "deleted_count": deleted_file_count,
+        "delete_failed_count": delete_failed_file_count,
+    }
+
+
+async def run_tree_task(task_id: str, full: bool = False) -> Dict[str, Any]:
+    if task_status["running"] or _tree_task_busy():
+        raise RuntimeError("已有目录树任务在运行，请稍后再试")
+    cfg = get_config()
+    task = _get_tree_task_by_id(cfg, task_id)
+    if not task:
+        raise RuntimeError("目录树任务不存在")
+    config_error = validate_tree_runtime_config(cfg, False)
+    if config_error:
+        raise RuntimeError(config_error)
+    _set_tree_task_running(True)
+    task_status["running"] = True
+    schedule_ui_state_push(0)
+    job_id = _create_tree_export_job(task, status="running")
+    started_at = time.perf_counter()
+    try:
+        result = await _run_tree_task_flow(cfg, task, job_id, full)
+        elapsed = _format_tree_elapsed_seconds(time.perf_counter() - started_at)
+        if bool(result.get("changed")):
+            await write_log(
+                f"结果汇总: ✅ 已完成 | 解析 {result.get('parsed_count', 0)} 条 | 写入 {result.get('generated_count', 0)} 条 | "
+                f"清理 {result.get('deleted_count', 0)} 条"
+                + (f" | sha1={str(result.get('sha1', '') or '')[:12]}…" if result.get("sha1") else "")
+            )
+            await write_log(
+                f"━━━━━━━━━━【目录树任务结束 | 执行成功 | 总用时 {elapsed}】━━━━━━━━━━",
+                "task-divider",
+            )
+        else:
+            await write_log(
+                f"结果汇总: ⏭ 未变化跳过（sha1 相同）"
+                + (f" | sha1={str(result.get('sha1', '') or '')[:12]}…" if result.get("sha1") else "")
+            )
+            await write_log(
+                f"━━━━━━━━━━【目录树任务结束 | 未变化跳过 | 总用时 {elapsed}】━━━━━━━━━━",
+                "task-divider",
+            )
+        await update_progress("任务完成", 100, f"完成: {task['folder_path']}（{task['tree_name']}）")
+        return result
+    except Exception as exc:
+        await write_log(f"❌ 目录树任务失败：{task['folder_path']}（{task['tree_name']}）| {exc}", "error")
+        await write_log(
+            f"━━━━━━━━━━【目录树任务结束 | 执行失败 | 总用时 {_format_tree_elapsed_seconds(time.perf_counter() - started_at)}】━━━━━━━━━━",
+            "task-divider",
+        )
+        _update_tree_export_job(job_id, status="failed", error=str(exc), completed_at=now_text())
+        raise
+    finally:
+        _set_tree_task_running(False)
         task_status["running"] = False
+        task_status["progress"].update({"step": "就绪", "percent": 0, "detail": "等待指令..."})
         schedule_ui_state_push(0)
+        await asyncio.to_thread(release_process_memory, "tree-task", True)
+
+
+async def _run_tree_task_flow(cfg: Dict[str, Any], task: Dict[str, Any], job_id: int, full: bool) -> Dict[str, Any]:
+    cookie = str(cfg.get("cookie_115", "") or "").strip()
+    folder_path = str(task.get("folder_path", "") or "").strip()
+    tree_name = str(task.get("tree_name", "") or "").strip()
+    durations: Dict[str, float] = {}
+    mode_label = "全量重写" if full else "生成并同步"
+    await write_log(
+        f"━━━━━━━━━━【目录树任务开始 | {folder_path} → {tree_name} | {mode_label}】━━━━━━━━━━",
+        "task-divider",
+    )
+    await write_log("【生成目录数】")
+
+    await update_progress("校验文件夹", 5, folder_path)
+    folder_id = await asyncio.to_thread(resolve_115_folder_id_by_path, cookie, folder_path)
+
+    stage_started = time.perf_counter()
+    await update_progress("提交官方导出", 12, folder_path)
+    export_id = await asyncio.to_thread(submit_115_export_dir, cookie, folder_id, TREE_EXPORT_TARGET_ROOT, 0)
+    durations["提交导出"] = max(0.0, time.perf_counter() - stage_started)
+    _update_tree_export_job(job_id, export_id=export_id, status="exporting")
+    await write_log(f"提交导出：{_format_tree_elapsed_seconds(durations['提交导出'])}（export_id={export_id}）")
+
+    stage_started = time.perf_counter()
+    await update_progress("等待官方生成", 35, folder_path)
+    result = await asyncio.to_thread(
+        wait_115_export_dir,
+        cookie,
+        export_id,
+        TREE_EXPORT_DEFAULT_TIMEOUT_SECONDS,
+        TREE_EXPORT_POLL_INTERVAL_SECONDS,
+    )
+    durations["等待官方生成"] = max(0.0, time.perf_counter() - stage_started)
+    await write_log(f"等待官方生成：{_format_tree_elapsed_seconds(durations['等待官方生成'])}")
+    file_id = str(result.get("file_id", "") or "").strip()
+    file_name = str(result.get("file_name", "") or "").strip()
+    pick_code = str(result.get("pick_code", "") or "").strip()
+    if not file_id or not pick_code:
+        raise RuntimeError(f"115 导出目录树结果不完整：{result}")
+    _update_tree_export_job(job_id, file_id=file_id, file_name=file_name, pick_code=pick_code, status="replacing")
+
+    stage_started = time.perf_counter()
+    await update_progress("替换网盘树文件", 60, tree_name)
+    await asyncio.to_thread(_wait_115_export_file_ready, cookie, file_id)
+    await asyncio.to_thread(_replace_115_tree_file, cookie, file_id, tree_name)
+    durations["替换网盘树文件"] = max(0.0, time.perf_counter() - stage_started)
+    await write_log(f"替换网盘树文件：{_format_tree_elapsed_seconds(durations['替换网盘树文件'])}")
+    gen_subtotal = durations.get("提交导出", 0.0) + durations.get("等待官方生成", 0.0) + durations.get("替换网盘树文件", 0.0)
+    await write_log(f"生成目录数小计：{_format_tree_elapsed_seconds(gen_subtotal)}")
+
+    await write_log("【解析目录树】")
+    stage_started = time.perf_counter()
+    sha1 = await asyncio.to_thread(get_115_file_sha1_by_id, cookie, file_id)
+    durations["sha1 对比"] = max(0.0, time.perf_counter() - stage_started)
+    await write_log(f"sha1 对比：{_format_tree_elapsed_seconds(durations['sha1 对比'])}（{str(sha1 or '')[:12]}…）")
+    if sha1:
+        _update_tree_export_job(job_id, sha1=sha1)
+
+    last_sha1 = str(task.get("last_remote_sha1", "") or "").strip()
+    last_local_md5 = str(task.get("last_local_md5", "") or "").strip()
+    sha1_skip_enabled = bool(cfg.get("sha1_skip", True))
+    remote_same = bool(sha1 and last_sha1 and sha1 == last_sha1)
+    if remote_same and (not full) and sha1_skip_enabled:
+        await write_log(f"sha1 未变化（{sha1[:12]}…），跳过下载与解析")
+        await write_log(f"解析目录树小计：{_format_tree_elapsed_seconds(durations.get('sha1 对比', 0.0))}（未变化跳过）")
+        await _write_tree_timing_summary(durations, gen_subtotal)
+        _update_tree_export_job(job_id, status="completed", changed=0, completed_at=now_text())
+        return {"status": "skipped", "changed": False, "sha1": sha1}
+
+    stage_started = time.perf_counter()
+    raw_bytes = None
+    if remote_same and full:
+        _tree_key, _cache_path, raw_path = _tree_task_cache_paths(task)
+        raw_bytes = await asyncio.to_thread(_load_tree_raw_cache, raw_path)
+    if raw_bytes is None:
+        await update_progress("下载目录树", 70, tree_name)
+        raw_bytes = await asyncio.to_thread(_download_exported_tree_bytes, cookie, pick_code)
+
+    local_md5 = hashlib.md5(raw_bytes).hexdigest()
+    if (not remote_same) and (not sha1) and last_local_md5 and local_md5 == last_local_md5 and (not full) and sha1_skip_enabled:
+        await write_log("远端 sha1 不可用，本地缓存 md5 未变化，跳过解析")
+        durations["下载并解析"] = max(0.0, time.perf_counter() - stage_started)
+        await write_log(f"解析目录树小计：{_format_tree_elapsed_seconds(durations.get('sha1 对比', 0.0) + durations.get('下载并解析', 0.0))}（未变化跳过）")
+        await _write_tree_timing_summary(durations, gen_subtotal)
+        _update_tree_export_job(job_id, status="completed", changed=0, completed_at=now_text())
+        return {"status": "skipped", "changed": False, "sha1": sha1}
+
+    await update_progress("解析写入 STRM", 80, tree_name)
+    counts = await _sync_task_tree_bytes(cfg, task, raw_bytes, force_full=full)
+    durations["下载并解析"] = max(0.0, time.perf_counter() - stage_started)
+    await write_log(f"下载并解析：{_format_tree_elapsed_seconds(durations['下载并解析'])}（命中 {counts.get('matched_count', 0)} 条）")
+    parse_subtotal = durations.get("sha1 对比", 0.0) + durations.get("下载并解析", 0.0)
+    await write_log(f"解析目录树小计：{_format_tree_elapsed_seconds(parse_subtotal)}")
+    await _write_tree_timing_summary(durations, gen_subtotal)
+
+    new_task = dict(task)
+    if sha1:
+        new_task["last_remote_sha1"] = sha1
+    new_task["last_local_md5"] = local_md5
+    _upsert_tree_task(cfg, new_task)
+    _update_tree_export_job(
+        job_id,
+        status="completed",
+        changed=1,
+        parsed_count=int(counts.get("parsed_count", 0) or 0),
+        generated_count=int(counts.get("generated_count", 0) or 0),
+        completed_at=now_text(),
+    )
+    return {"status": "completed", "changed": True, "sha1": sha1, **counts}
+
+
+async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
+    """目录树全部同步：遍历任务读取现有树文件，sha1 未变化则跳过，不触发官方导出。"""
+    if task_status["running"] or _tree_task_busy():
+        return
+    cfg = get_config()
+    config_error = validate_tree_runtime_config(cfg, use_local)
+    if config_error:
+        await write_log(f"❌ 目录树全部同步未执行：{config_error}", "error")
+        return
+    tasks = [
+        task
+        for task in cfg.get("tree_tasks", [])
+        if str((task or {}).get("folder_path", "") or "").strip()
+    ]
+    if not tasks:
+        await write_log("⚠ 未配置任何目录树任务", "warn")
+        return
+    _set_tree_task_running(True)
+    task_status["running"] = True
+    schedule_ui_state_push(0)
+    started_at = time.perf_counter()
+    try:
+        await write_log(
+            f"━━━━━━━━━━【目录树任务开始 | 全部同步 | {len(tasks)} 个任务（不触发导出，仅对比更新）】━━━━━━━━━━",
+            "task-divider",
+        )
+        for idx, task in enumerate(tasks):
+            await update_progress(
+                "全部同步",
+                (idx / max(len(tasks), 1)) * 90,
+                f"{task.get('folder_path', '')}（{task.get('tree_name', '')}）",
+            )
+            task_started = time.perf_counter()
+            try:
+                await _sync_existing_tree_task(cfg, task, force_full=force_full)
+                await write_log(
+                    f"任务 {task.get('folder_path', '')}：{_tree_stage_seconds(task_started)}"
+                )
+            except Exception as exc:
+                await write_log(
+                    f"⚠ 任务 {task.get('folder_path', '')} 同步失败（{_tree_stage_seconds(task_started)}）：{exc}",
+                    "warn",
+                )
+        await write_log(f"总用时：{_tree_stage_seconds(started_at)}")
+        await update_progress("任务完成", 100, "全部同步完成")
+        await write_log(
+            f"━━━━━━━━━━【目录树任务结束 | 全部同步完成 | 总用时 {_tree_stage_seconds(started_at)}】━━━━━━━━━━",
+            "task-divider",
+        )
+    finally:
+        _set_tree_task_running(False)
+        task_status["running"] = False
+        task_status["progress"].update({"step": "就绪", "percent": 0, "detail": "等待指令..."})
+        schedule_ui_state_push(0)
+        await asyncio.to_thread(release_process_memory, "tree-sync", True)
+
+
+async def _sync_existing_tree_task(cfg: Dict[str, Any], task: Dict[str, Any], force_full: bool = False) -> None:
+    cookie = str(cfg.get("cookie_115", "") or "").strip()
+    tree_name = str(task.get("tree_name", "") or "").strip()
+    remote_name = _tree_file_remote_name(tree_name)
+    entry = _resolve_115_file_entry_by_relative_path(cookie, remote_name)
+    sha1 = str(entry.get("sha1", "") or "").strip()
+    last_sha1 = str(task.get("last_remote_sha1", "") or "").strip()
+    if (
+        sha1
+        and last_sha1
+        and sha1 == last_sha1
+        and (not force_full)
+        and bool(cfg.get("sha1_skip", True))
+    ):
+        await write_log(f"跳过：{remote_name} sha1 未变化（{sha1[:12]}…）")
+        return
+    raw_bytes = await asyncio.to_thread(_fetch_115_tree_file_bytes, cookie, remote_name)
+    counts = await _sync_task_tree_bytes(cfg, task, raw_bytes, force_full=force_full)
+    new_task = dict(task)
+    if sha1:
+        new_task["last_remote_sha1"] = sha1
+    new_task["last_local_md5"] = hashlib.md5(raw_bytes).hexdigest()
+    _upsert_tree_task(cfg, new_task)
+    await write_log(
+        f"{remote_name} 同步完成：生成/更新 {counts.get('generated_count', 0)} | 清理残留 {counts.get('deleted_count', 0)}"
+    )

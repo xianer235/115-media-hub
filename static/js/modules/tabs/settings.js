@@ -141,8 +141,6 @@ function collectSettingsPayload({
         'pansou_src',
         'pansou_channels',
         'pansou_plugins',
-        'cron_hour',
-        'sync_mode',
         'extensions',
         'username',
         'password',
@@ -157,8 +155,8 @@ function collectSettingsPayload({
         cfg[id] = value;
     });
 
-    cfg.check_hash = !!document.getElementById('check_hash')?.checked;
-    cfg.sync_clean = !!document.getElementById('sync_clean')?.checked;
+    const syncCleanElement = document.getElementById('sync_clean');
+    if (syncCleanElement) cfg.sync_clean = !!syncCleanElement.checked;
     cfg.sign115_enabled = !!document.getElementById('sign115_enabled')?.checked;
     cfg.tg_proxy_enabled = !!document.getElementById('tg_proxy_enabled')?.checked;
     cfg.notify_push_enabled = !!document.getElementById('notify_push_enabled')?.checked;
@@ -192,18 +190,6 @@ function collectSettingsPayload({
     cfg.tg_channel_sync_limit = Math.min(30, Math.max(1, Number.isFinite(rawTgSyncLimit) ? rawTgSyncLimit : 10));
 
     cfg.monitor_tasks = typeof getMonitorTasks === 'function' ? (getMonitorTasks() || []) : [];
-    cfg.trees = [];
-
-    document.querySelectorAll('.tree-row').forEach((row) => {
-        const path = row.querySelector('.t-url')?.value?.trim();
-        if (!path) return;
-        cfg.trees.push({
-            source_type: 'tree_file',
-            path,
-            prefix: row.querySelector('.t-prefix')?.value?.trim() || '',
-            exclude: parseInt(row.querySelector('.t-exclude')?.value || '1', 10) || 1
-        });
-    });
 
     return cfg;
 }

@@ -2167,32 +2167,6 @@
             return matched ? normalizeRemotePathInput(matched.prefix || '') : '';
         }
 
-        function addTreeRow(data = { path: '', prefix: '', exclude: 1 }) {
-            const container = document.getElementById('trees-container');
-            const row = document.createElement('div');
-            row.className = "tree-row grid grid-cols-12 gap-3 items-end bg-slate-900/50 p-4 rounded-2xl border border-slate-800 hover:border-slate-700 transition-colors";
-            const sourcePath = String(data.path || '').trim();
-            row.innerHTML = `
-                <div class="col-span-12 md:col-span-6">
-                    <span class="text-[10px] text-slate-500 ml-1 font-bold uppercase">115 目录树文件路径（相对 115 根目录）</span>
-                    <input class="t-url w-full bg-slate-950 border-slate-700 rounded-lg p-2.5 text-sm mt-1 outline-none focus:border-sky-500" value="${escapeHtml(sourcePath)}" placeholder="例如 目录树.txt 或 子目录/目录树.txt">
-                    <div class="text-[10px] text-slate-500 leading-4 mt-1">根目录填 目录树.txt；子目录填 子目录/目录树.txt。兼容 /目录树.txt、/115/目录树.txt、完整 URL。</div>
-                </div>
-                <div class="col-span-6 md:col-span-4">
-                    <span class="text-[10px] text-slate-500 ml-1 font-bold uppercase">父文件夹路径前缀 (选填)</span>
-                    <input class="t-prefix w-full bg-slate-950 border-slate-700 rounded-lg p-2.5 text-sm mt-1 outline-none focus:border-sky-500" value="${escapeHtml(data.prefix)}" placeholder="补全丢失的路径，如: 电影/漫威">
-                </div>
-                <div class="col-span-4 md:col-span-1">
-                    <span class="text-[10px] text-slate-500 ml-1 font-bold uppercase">排除层级</span>
-                    <input type="number" min="1" class="t-exclude w-full bg-slate-950 border-slate-700 rounded-lg p-2.5 text-sm mt-1 outline-none focus:border-sky-500" value="${Number(data.exclude || 1)}">
-                </div>
-                <div class="col-span-2 md:col-span-1">
-                    <button onclick="this.parentElement.parentElement.remove()" class="w-full bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white p-2.5 rounded-lg transition-colors text-sm font-bold">✕</button>
-                </div>
-            `;
-            container.appendChild(row);
-        }
-
         async function resetExtensions() {
             if (await showAppConfirm("确定要恢复默认扫描后缀名吗？\n(恢复后请手动点击下方的保存全部配置)")) {
                 document.getElementById('extensions').value = DEFAULT_EXTENSIONS;
@@ -2214,7 +2188,7 @@
                 return;
             }
             if (isRunning) return;
-            const data = await window.MediaHubApi.postJson('/start', { use_local: local, force_full: full }).catch(() => null);
+            const data = await window.MediaHubApi.postJson('/tree/sync-all', {}).catch(() => null);
             if (data?.status === 'started') updateButtonState(true);
         }
 

@@ -15,7 +15,6 @@ from .services.monitor_changes import (
 from .services.resource import schedule_resource_job_refresh
 from .services.sign115 import refresh_sign115_status, run_sign115_job
 from .services.subscription import queue_subscription_job
-from .services.tree import run_sync
 
 
 MEMORY_HOUSEKEEPING_INTERVAL_SECONDS = max(
@@ -61,6 +60,11 @@ async def startup() -> None:
     bind_ui_event_loop()
     start_background_runtime()
     ensure_db()
+    try:
+        if cleanup_legacy_tree_config_file():
+            await write_log("已清理 settings.json 中的旧目录树配置字段（trees/sync_mode/check_hash/cron_hour/last_hash）", "info")
+    except Exception:
+        pass
     # Reconcile mutations left between the remote operation and local STRM
     # processing before normal schedulers start issuing scans.
     recover_monitor_change_events(cfg=get_config())
@@ -71,33 +75,6 @@ async def startup() -> None:
         if job.get("status") == "submitted" and job.get("auto_refresh") and not str(job.get("last_triggered_at", "")).strip():
             submit_background(schedule_resource_job_refresh, int(job["id"]), label="resource-refresh-recover")
     submit_background(refresh_sign115_status, force_remote=False, trigger="startup", label="sign115-startup-status")
-
-    async def scheduler() -> None:
-        await asyncio.sleep(5)
-        last_run = time.time()
-        while True:
-            cfg = get_config()
-            prev_next_run = task_status.get("next_run")
-            raw_interval = cfg.get("cron_hour")
-            try:
-                interval_min = int(str(raw_interval).strip() or 0)
-            except (TypeError, ValueError):
-                interval_min = 0
-
-            # 目录树定时频率 <= 0 表示关闭定时任务
-            if interval_min > 0:
-                next_ts = last_run + (interval_min * 60)
-                task_status["next_run"] = datetime.fromtimestamp(next_ts).strftime("%H:%M:%S")
-                if time.time() >= next_ts and not task_status["running"]:
-                    last_run = time.time()
-                    submit_background(run_sync, label="tree-cron-sync")
-            else:
-                task_status["next_run"] = None
-                # 关闭期间重置参考时间，避免重新启用后立刻连发
-                last_run = time.time()
-            if task_status.get("next_run") != prev_next_run:
-                schedule_ui_state_push(0)
-            await asyncio.sleep(5)
 
     async def monitor_scheduler() -> None:
         await asyncio.sleep(5)
@@ -239,7 +216,6 @@ async def startup() -> None:
             await asyncio.to_thread(_run_prune_step, prune_resource_jobs_if_due)
             await asyncio.sleep(RESOURCE_JOB_PRUNE_INTERVAL_SECONDS)
 
-    asyncio.create_task(scheduler())
     asyncio.create_task(monitor_scheduler())
     asyncio.create_task(subscription_scheduler())
     asyncio.create_task(sign115_scheduler())

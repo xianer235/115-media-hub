@@ -120,6 +120,175 @@ def submit_115_offline_task(cookie: str, resource_url: str, folder_id: str) -> D
         mark_cookie_health_failure("115", exc, trigger="runtime:submit_115_offline_task")
         raise
 
+
+def submit_115_export_dir(
+    cookie: str,
+    file_ids: Any,
+    target: str = "U_1_0",
+    layer_limit: int = 0,
+) -> str:
+    """提交官方“导出目录树”异步任务，返回任务 id。"""
+    cookie = str(cookie or "").strip()
+    if not cookie:
+        raise RuntimeError("115 Cookie 未配置")
+    normalized_ids = str(file_ids or "").strip()
+    if not normalized_ids:
+        raise RuntimeError("导出目录不能为空")
+    payload = {"file_ids": normalized_ids, "target": str(target or "U_1_0").strip() or "U_1_0"}
+    try:
+        layer_limit = max(0, min(25, int(layer_limit or 0)))
+    except (TypeError, ValueError):
+        layer_limit = 0
+    if layer_limit > 0:
+        payload["layer_limit"] = layer_limit
+    headers = {
+        "Cookie": cookie,
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://115.com/",
+        "Origin": "https://115.com",
+        "User-Agent": "Mozilla/5.0 115-media-hub",
+    }
+    try:
+        response = http_request_form_json(
+            "https://webapi.115.com/files/export_dir",
+            payload,
+            timeout=45,
+            extra_headers=headers,
+        )
+        if not bool((response or {}).get("state", False)):
+            detail = (
+                str((response or {}).get("error", "")).strip()
+                or str((response or {}).get("msg", "")).strip()
+                or str((response or {}).get("message", "")).strip()
+                or "115 导出目录树提交失败"
+            )
+            raise RuntimeError(detail)
+        data = (response or {}).get("data") or {}
+        export_id = str((data or {}).get("export_id", "") or "").strip()
+        if not export_id:
+            raise RuntimeError("115 导出目录树未返回任务 ID")
+        mark_cookie_health_success("115", trigger="runtime:submit_115_export_dir")
+        return export_id
+    except Exception as exc:
+        mark_cookie_health_failure("115", exc, trigger="runtime:submit_115_export_dir")
+        raise
+
+
+def query_115_export_dir_status(cookie: str, export_id: str) -> Dict[str, Any]:
+    """查询导出目录树任务状态；完成时返回 {export_id,file_id,file_name,pick_code}，否则返回空字典。"""
+    cookie = str(cookie or "").strip()
+    if not cookie:
+        raise RuntimeError("115 Cookie 未配置")
+    normalized_id = str(export_id or "").strip()
+    if not normalized_id:
+        raise RuntimeError("导出任务 ID 不能为空")
+    url = "https://webapi.115.com/files/export_dir?export_id=" + urllib.parse.quote(normalized_id)
+    result = _request_115_webapi_json(url, headers=_build_115_webapi_headers(cookie))
+    if not bool((result or {}).get("state", False)):
+        detail = (
+            str((result or {}).get("error", "")).strip()
+            or str((result or {}).get("msg", "")).strip()
+            or "115 导出目录树状态查询失败"
+        )
+        raise RuntimeError(detail)
+    data = (result or {}).get("data") or {}
+    if not isinstance(data, dict) or not data:
+        return {}
+    return {
+        key: str(data.get(key, "") or "").strip()
+        for key in ("export_id", "file_id", "file_name", "pick_code")
+        if str(data.get(key, "") or "").strip()
+    }
+
+
+def wait_115_export_dir(
+    cookie: str,
+    export_id: str,
+    timeout_seconds: int = 600,
+    check_interval: float = 2.0,
+) -> Dict[str, Any]:
+    """轮询导出目录树直到完成；超时抛错（任务仍在服务端执行）。"""
+    started = time.monotonic()
+    interval = max(0.5, float(check_interval or 2.0))
+    timeout = max(0, int(timeout_seconds or 600))
+    while True:
+        throttle_115_api_requests()
+        data = query_115_export_dir_status(cookie, export_id)
+        if data:
+            return data
+        if timeout > 0 and time.monotonic() - started >= timeout:
+            raise RuntimeError(
+                f"115 导出目录树超时（{timeout} 秒，export_id={export_id}），任务可能仍在服务端执行"
+            )
+        time.sleep(interval)
+
+
+def get_115_file_sha1_by_id(cookie: str, file_id: str, attempts: int = 3) -> str:
+    """按 file_id 取新导出文件的 sha1（优先 get_info 直查）；拿不到时返回空字符串。"""
+    cookie = str(cookie or "").strip()
+    normalized_id = str(file_id or "").strip()
+    if not cookie or not normalized_id:
+        return ""
+    for _ in range(max(1, int(attempts or 3))):
+        try:
+            info = get_115_file_info(cookie, normalized_id)
+            if info:
+                sha1 = str(info.get("sha1", "") or "").strip()
+                if sha1:
+                    return sha1
+        except Exception:
+            pass
+        try:
+            entries = list_115_entries(cookie, "0", force_refresh=True)
+            matched = next(
+                (item for item in entries if str(item.get("id", "") or "").strip() == normalized_id),
+                None,
+            )
+            if matched:
+                sha1 = str(matched.get("sha1", "") or "").strip()
+                if sha1:
+                    return sha1
+        except Exception:
+            pass
+        time.sleep(1.0)
+    return ""
+
+
+def get_115_file_info(cookie: str, file_id: str) -> Dict[str, Any]:
+    """按 file_id 直查 115 文件信息（即时，不受目录列表缓存延迟影响）。"""
+    cookie = str(cookie or "").strip()
+    normalized_id = str(file_id or "").strip()
+    if not cookie:
+        raise RuntimeError("115 Cookie 未配置")
+    if not normalized_id:
+        raise RuntimeError("文件 ID 不能为空")
+    url = "https://webapi.115.com/files/get_info?file_id=" + urllib.parse.quote(normalized_id)
+    result = _request_115_webapi_json(url, headers=_build_115_webapi_headers(cookie))
+    if not bool((result or {}).get("state", False)):
+        detail = (
+            str((result or {}).get("error", "")).strip()
+            or str((result or {}).get("msg", "")).strip()
+            or "115 文件信息查询失败"
+        )
+        raise RuntimeError(detail)
+    raw_items = (result or {}).get("data") or []
+    items = raw_items if isinstance(raw_items, list) else ([raw_items] if isinstance(raw_items, dict) else [])
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("fid") or item.get("file_id") or item.get("id") or "").strip()
+        if item_id and item_id != normalized_id:
+            continue
+        return {
+            "id": item_id or normalized_id,
+            "name": str(item.get("n") or item.get("name") or "").strip(),
+            "sha1": str(item.get("sha") or item.get("sha1") or "").strip(),
+            "pick_code": str(item.get("pc") or item.get("pick_code") or "").strip(),
+            "size": parse_int(item.get("s") or item.get("size") or 0),
+        }
+    raise RuntimeError(f"115 文件不存在或已删除：{normalized_id}")
+
+
 def throttle_115_api_requests(rate_limit_seconds: float = 0.0) -> None:
     global _api_115_last_request_monotonic
     min_interval = float(rate_limit_seconds or 0.0)

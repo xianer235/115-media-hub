@@ -12,7 +12,7 @@
 | 资源推荐 | Explore 筛选与资源发现，多维度筛选与快速导入 |
 | 影视订阅任务 | 电影/剧集自动匹配资源并入库，支持多网盘 provider、周期时段调度、评分阈值、质量偏好、TMDB 绑定与追更状态 |
 | 文件夹监控任务 | 扫描网盘目录变化，支持手动、定时、Webhook 触发，并可按 savepath/sharetitle 局部刷新；智能补扫失败子目录 |
-| 目录树任务 | 基于 115 官方目录树 TXT 文件批量生成 `.strm`，流式解析支持超大目录树 |
+| 目录树任务 | 选择 115 文件夹后调用官方“导出目录树”接口生成树文件，自动替换旧树并对比 sha1 增量更新 `.strm`，支持全量重写 |
 | 刮削管理 | 网盘文件浏览、TMDB 识别绑定、批量重命名预览与执行，支持任务中心统一管理 |
 | 命令行管理（CLI） | 宿主机命令行客户端，通过面板 HTTP API 完成搜索/订阅/转存/监控/刮削/STRM/运维，适合 AI 代理与脚本自动化 |
 | 企业微信通知推送 | 可对订阅成功和监控生成成功事件推送提醒，支持机器人和应用两种通道 |
@@ -108,8 +108,8 @@ docker compose up -d
 ### 方案一：先建库，再持续增量
 
 1. 在「参数配置」中填好 115 Cookie 与 STRM 对外访问地址（网盘前缀映射已内置：`115 -> /115`、`Quark -> /quark`、`天翼 -> /tianyi`、`123 -> /pan123`、`阿里 -> /aliyun`）
-2. 在「目录树任务」里配置一个或多个目录树源
-3. 先跑一次目录树任务，完成 `.strm` 初始化
+2. 在「目录树任务」里选择 115 文件夹添加目录树任务（自动填充树名/前缀/排除层级，可修改）
+3. 点击任务的“生成并同步”，官方服务器生成目录树（网盘根目录，`目录树-路径段…`），sha1 变化时自动更新 `.strm`
 4. 再为常更新目录添加「文件夹监控任务」，用于后续补扫与过期 STRM 清理
 
 ### 方案二：转存完成后自动刷新
@@ -158,7 +158,7 @@ export MH_API_BASE=http://127.0.0.1:18080   # 可选，默认即本机
 
 常用命令：`status` / `version` / `search <关键词>|--cancel` / `channels sync` /
 `subscribe list|add|remove|start` / `jobs list|retry|cancel` / `scrape jobs-create|batch-preferences` /
-`monitor list|start|stop` / `tree run` / `sources search` / `daemon status|logs|restart`。
+`monitor list|start|stop` / `tree list|create|update|delete|defaults|run|full|jobs` / `sources search` / `daemon status|logs|restart`。
 
 - 完整命令列表见 `CLI-API-AUDIT.md`；每个子命令都支持 `--help` 查看参数
 - 会话 Cookie 默认保存到 `/tmp/.115_cookies.txt`（权限 0600），可用 `MH_COOKIE_FILE` 覆盖
