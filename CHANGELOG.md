@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.0] - 2026-08-17
+
+### 目录树任务化改造（官方导出生成目录树 + sha1 跳过 + 任务化 UI + CLI）
+
+- 废弃旧 `trees` 静态树源 / 定时 / MD5 全量模式，改为“目录树任务”模型：每个任务绑定一个 115 文件夹，调用官方 `files/export_dir` 生成树文件（网盘根目录，命名 `目录树-路径段…`），固定执行“导出 → 删旧（回收站）→ 原地重命名”，随后用远端文件 sha1 与上次比对，未变化则跳过下载 / 解析 / 写 STRM；默认增量，任务卡片提供“全量重写”，清理残留按任务 scope（folder_path 子树）。
+- 真实账号校准完成（根级 + 二级两次导出）：响应字段、UTF-16 首行 `|——根目录/|——父级`、根目录落盘、sha1 可用均确认，自动填充公式锁定为“排除层级=1 + 前缀=父级链（根级为空）”；完整链路实测 982 个媒体文件正确生成 STRM。
+- 设置页移除目录树配置，配置项迁移到同步页（sha1 跳过 / 清理残留全局开关），设置页章节序号重新编号；启动时若 `settings.json` 仍含旧 `trees/sync_mode/check_hash/cron_hour/last_hash` 字段，用归一化配置一次性重写并在任务日志提示。
+- 目录树任务页改为订阅任务风格：头部“+ 新增目录树任务 / 全部同步”按钮 + 任务列表卡片，新增 / 编辑统一走弹窗（复用订阅目录浏览，父文件夹路径前缀与排除层级自动推导、只读），进度条内嵌进任务卡片并按阶段实时推进、结束后复位，日志改为分割线风格并加入分步计时，修复日间主题下 `#page-task` 白字不可见问题。
+- 关键修复：移除 tree 定时调度时遗漏的 `startup.py` `asyncio.create_task(scheduler())` 引用导致的容器启动 NameError 重启循环；115 重命名接口对无扩展名目标自动补 `.txt`，统一用远程实际名 `树名 + .txt` 做删除 / 重命名 / 校验 / 按名读取，重命名后改用 `files/get_info` 按 file_id 直查并等待文件就绪。
+- CLI 新增 `tree list|create|update|delete|defaults|run|full|jobs`（`create` 移除 `--prefix/--exclude`，参数由所选文件夹自动推导），README CLI 段落与 CLI-API-AUDIT 同步。
+- 新增 `tests/test_115_export_dir.py`、`test_tree_tasks.py`、`test_tree_page_frontend.py`，完整 unittest 514 项、`compileall`、改动 JS `node --check`、`git diff --check` 均通过；Docker daemon 权限不足未重建，页面按钮 / 任务流转与 CLI 命令实测待补。
+
 ## [0.7.2] - 2026-08-17
 
 ### CLI：批量整理与监控任务选项支持

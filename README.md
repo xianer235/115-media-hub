@@ -108,8 +108,8 @@ docker compose up -d
 ### 方案一：先建库，再持续增量
 
 1. 在「参数配置」中填好 115 Cookie 与 STRM 对外访问地址（网盘前缀映射已内置：`115 -> /115`、`Quark -> /quark`、`天翼 -> /tianyi`、`123 -> /pan123`、`阿里 -> /aliyun`）
-2. 在「目录树任务」里选择 115 文件夹添加目录树任务（自动填充树名/前缀/排除层级，可修改）
-3. 点击任务的“生成并同步”，官方服务器生成目录树（网盘根目录，`目录树-路径段…`），sha1 变化时自动更新 `.strm`
+2. 在「目录树任务」里点击「+ 新增目录树任务」，选择 115 文件夹后保存（树文件名可编辑；父文件夹路径前缀与排除层级由所选文件夹自动推导、只读）
+3. 点击任务卡片的“生成并同步”，官方服务器生成目录树（网盘根目录，`目录树-路径段…`），sha1 未变化时跳过下载/解析，变化时自动更新 `.strm`；需要重建树用“全量重写”，一次同步所有任务用顶部“全部同步”，“同步策略”里可关闭 sha1 跳过或开启清理任务范围内的残留 STRM
 4. 再为常更新目录添加「文件夹监控任务」，用于后续补扫与过期 STRM 清理
 
 ### 方案二：转存完成后自动刷新
@@ -180,6 +180,19 @@ export MH_API_BASE=http://127.0.0.1:18080   # 可选，默认即本机
 ```
 
 `scrape rename-plan` 支持 `--file-name-mode keep|clean|standard`、`--no-rename-folders`、`--no-season-subfolder`、`--include-tmdb-id`、`--delete-ad-files`、`--title-language auto|zh|en`、`--season`、`--episode-mode auto|seasonal|absolute`、`--preserve-file-info`，或直接用 `--options-json` 传完整选项对象；`monitor add` 还支持 `--auto-scrape-options-json` 传该任务的自动整理选项（未配置时保持默认行为）。
+
+目录树任务相关命令（0.8.0 起）：
+
+```bash
+# 查看自动填充参数 / 创建任务（--folder 指定 115 文件夹路径，--name 可选）
+.cli-venv/bin/python cli.py tree defaults --folder "影视库/电视剧"
+.cli-venv/bin/python cli.py tree create --folder "影视库/电视剧" --name "目录树-电视剧"
+
+# 列表 / 增量同步（run 不带 --id 时对所有任务仅做 sha1 对比更新）/ 全量重写
+.cli-venv/bin/python cli.py tree list
+.cli-venv/bin/python cli.py tree run --id <任务ID>
+.cli-venv/bin/python cli.py tree full --id <任务ID>
+```
 
 ## Webhook 说明
 
@@ -300,7 +313,8 @@ CLI 专属环境变量（见「命令行工具」）：`MH_USERNAME` / `MH_PASSW
 
 ## 近期更新（以 `version.json` 为准）
 
-- 当前版本：`0.7.2`
+- 当前版本：`0.8.0`
+- 目录树任务化改造：废弃旧 `trees` 静态树源/定时模式，改为“目录树任务”模型——每个任务绑定一个 115 文件夹，调用官方 `files/export_dir` 生成树文件（导出 → 删旧 → 原地重命名），远端 sha1 未变化则跳过下载/解析/写 STRM；默认增量，支持“全量重写”，清理残留按任务范围。设置页目录树配置迁移到同步页并自动清理旧字段；任务页改为订阅任务风格（弹窗新增/编辑、进度条、分步计时日志）。CLI 新增 `tree list|create|update|delete|defaults|run|full|jobs`。
 - CLI 补齐：`scrape batch-preferences get|set|clear` 读写/清除批量整理偏好；`scrape rename-plan` 支持文件命名方式等命名选项；`monitor add` 支持 `--auto-scrape-on-new` 与自动整理选项。
 - 批量整理体验优化：入口按钮统一为“批量整理”，命名选项按「文件夹 → 文件命名 → 文件清理」三段重排；新增“文件命名方式”三档——标准重命名 / 仅清理广告信息（保留原始命名）/ 保持原名（不重命名），保持原名与仅清理档位下文件不移动，Season 子文件夹作为独立结构操作仍可生效。
 - 批量整理选项按网盘记忆：服务端保存每个网盘上次的整理选项，页面加载或切换网盘自动恢复，变更自动保存，支持一键“恢复默认”。

@@ -1,9 +1,9 @@
 {
-  "version": "0.7.2",
+  "version": "0.8.0",
   "buildDate": "2026-08-17T00:00:00+08:00",
   "notes": [
-    "CLI 补齐批量整理与监控任务选项支持：新增 scrape batch-preferences 读写/清除某网盘整理偏好，scrape rename-plan 支持文件命名方式等命名选项，monitor add 支持配置新增资源自动刮削整理",
-    "同步更新 README CLI 文档，并在交接记录规则中要求涉及 CLI 能力的改动必须补齐命令支持与文档"
+    "目录树任务化改造：废弃旧 trees 静态树源/定时/MD5 全量模式，改为文件夹任务模型，调用官方 files/export_dir 生成树文件并用远端 sha1 跳过未变化同步",
+    "设置页目录树配置迁移到同步页并自动清理旧字段；目录树任务页改为订阅任务风格（弹窗新增/编辑、进度条、分步计时日志）；CLI 补齐 tree list/create/update/delete/defaults/run/full/jobs"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

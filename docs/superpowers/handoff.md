@@ -6,12 +6,12 @@
 
 ## 当前状态
 
-- **日期**: 2026-08-12
+- **日期**: 2026-08-17
 - **分支**: `main`
-- **当前提交**: `0.5.17` 发布提交
-- **版本**: `0.5.17`，已同步 `version.json`、`CHANGELOG.md`、README 与本交接记录
-- **最近完成**: 刮削自动集数识别改为文件或父路径带明确季号时优先使用该季号，无明确季号时才用页面默认季号兜底，修复绑定后标准剧集文件“无法识别集数”
-- **已有验证**: 完整 268 项 unittest、项目 `compileall`、`version.json` JSON 解析和 `git diff --check` 均通过；未执行 Docker 重建或真实 115 页面验证
+- **当前提交**: `b2a27d2` 目录树任务化改造提交（0.8.0 发布元数据更新未提交）
+- **版本**: `0.8.0`，已同步 `version.json`、`CHANGELOG.md`、README 与本交接记录
+- **最近完成**: 目录树任务化改造——废弃旧 `trees` 静态树源/定时/MD5 全量模式，改为“目录树任务”模型（每个任务绑定一个 115 文件夹，官方 `files/export_dir` 生成树文件，远端 sha1 未变则跳过下载/解析/写 STRM）；设置页配置迁移到同步页并自动清理旧字段；任务页改为订阅任务风格；修复容器启动重启循环与 115 重命名自动补 `.txt` 根因；CLI 补齐 `tree` 全命令
+- **已有验证**: 完整 514 项 unittest、项目 `compileall`、改动 JS `node --check`、`git diff --check` 与 `version.json` JSON 解析均通过；真实账号导出校准与 982 文件链路实测完成；未执行 Docker 重建或任务页浏览器复核
 
 
 ## 最近重要交接
@@ -118,3 +118,4 @@
 - 2026-08-17 | `main` 未提交 | 目录树日志改为订阅任务同款分割线风格并加入分步计时：`task-divider` 起止行（任务开始/执行成功/未变化跳过/执行失败 + 总用时），主体按【生成目录数】（提交导出/等待官方生成/替换网盘树文件/小计）与【解析目录树】（sha1 对比/下载并解析/小计）两大部分排版，末尾输出“步骤耗时：…”与“总用时：…”；全部同步同样补起止分割线与逐任务耗时。新增计时汇总单测，完整 unittest 508 项、compileall、node --check、git diff --check 均通过。
 - 2026-08-17 | `main` 未提交 | 旧目录树配置字段一次性清理：启动时若 settings.json 仍含 `trees/sync_mode/check_hash/cron_hour/last_hash`，用归一化配置重写一次并在任务日志提示，用户无需手动处理（内存中早已忽略，本次是落盘清理）。设置页章节序号重新编号：移除 3/4 目录树区块后，TG 订阅源=3、PanSou=4、网络代理=5、TMDB=6、通知推送=7、后台安全=8（标题与 order 同步）。新增清理单测与模板断言，完整 unittest 510 项、compileall、git diff --check 均通过。
 - 2026-08-17 | `main` 已提交 | 本轮目录树任务化改造全部改动提交（CLI 同步补齐 `tree update/defaults` 并更新 README/CLI-API-AUDIT；完整 unittest 514 项、compileall、node --check、git diff --check 均通过；Docker 重建与真实页面复核留待下一步）。
+- 2026-08-17 | `main` 未提交（功能代码已提交 `b2a27d2`） | 发布元数据更新至 `0.8.0`，同步 version.json、CHANGELOG、README 与当前交接状态，收录目录树任务化改造（官方 `files/export_dir` 生成树文件 + 远端 sha1 跳过 + 任务化 UI + CLI `tree` 命令、设置页配置迁移与旧字段自动清理、容器启动重启循环与 115 重命名自动补 `.txt` 根因修复）。完整 unittest 514 项、compileall、node --check、git diff --check 与 version.json JSON 解析均通过；Docker 未重建。下一步：Docker 重建后实测目录树任务页按钮/任务流转与 CLI `tree` 命令，确认后提交推送。
