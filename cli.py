@@ -12,6 +12,7 @@
                                        管理订阅
   115 jobs list|clear|retry|create|refresh|cancel
                                        管理资源任务
+  115 offline list [--page N]          查看 115 官方离线任务（只读诊断）
   115 settings [key=value...]           查看/修改配置
   115 logs [--tail N]                   查看系统日志
   115 cookies check|status|test         检查 Cookie 状态
@@ -612,6 +613,29 @@ def _get_default_savepath(cfg: dict, media_type: str = "movie") -> str:
     if all_dirs:
         return all_dirs[0].get("path", "")
     return "/电影" if media_type == "movie" else "/剧集"
+
+
+def cmd_offline(args, c: Client):
+    """115 官方离线任务只读诊断"""
+    if args.action == "list":
+        page = max(1, int(getattr(args, "page", 1) or 1))
+        data = c.json("GET", f"/resource/offline/tasks?page={page}")
+        if not isinstance(data, dict) or not data.get("ok"):
+            print(f"❌ 读取离线任务失败: {data.get('msg', '未知错误') if isinstance(data, dict) else data}")
+            return
+        tasks = data.get("tasks", []) if isinstance(data, dict) else []
+        if not tasks:
+            print("无离线任务（或 115 Cookie 未配置）")
+            return
+        status_labels = {0: "等待", 1: "下载中", 2: "已完成", -1: "失败"}
+        for task in tasks:
+            status = int(task.get("status", 0) or 0)
+            percent = int(float(task.get("percent", 0) or 0))
+            name = str(task.get("name", "") or "").strip() or str(task.get("url", "") or "").strip()
+            print(
+                f"  • [{status_labels.get(status, '未知')}] {percent}%  "
+                f"{name[:72]}  hash={task.get('info_hash', '')}  dir={task.get('wp_path_id', '')}"
+            )
 
 
 def cmd_settings(args, c: Client):
@@ -2171,6 +2195,11 @@ def _build_parser() -> argparse.ArgumentParser:
     sp_tree.add_argument("--folder", help="115 文件夹路径（create/update/defaults 使用，如 影视库/电视剧）")
     sp_tree.add_argument("--name", help="树文件名（create/update 可选，默认 目录树-路径段…）")
 
+    # offline
+    sp_offline = sp.add_parser("offline", help="115 离线任务诊断")
+    sp_offline.add_argument("action", choices=["list"], help="列出 115 官方离线任务")
+    sp_offline.add_argument("--page", type=int, default=1, help="任务列表页码")
+
     # api
     sp_api = sp.add_parser("api", help="通用 API 调用")
     sp_api.add_argument("method", help="HTTP 方法 (GET/POST)")
@@ -2307,6 +2336,7 @@ def main():
         "sources": cmd_sources,
         "monitor": cmd_monitor,
         "tree": cmd_tree,
+        "offline": cmd_offline,
         "api": cmd_api,
         "providers": cmd_providers,
         "browse": cmd_browse,

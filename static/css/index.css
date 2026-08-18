@@ -5262,6 +5262,27 @@
             color: #cbd5e1;
             word-break: break-word;
         }
+        .resource-job-offline-progress {
+            margin-top: 0.55rem;
+        }
+        .resource-job-offline-progress-track {
+            height: 6px;
+            border-radius: 9999px;
+            background: rgba(30, 41, 59, 0.9);
+            border: 1px solid rgba(71, 85, 105, 0.7);
+            overflow: hidden;
+        }
+        .resource-job-offline-progress-bar {
+            height: 100%;
+            border-radius: 9999px;
+            background: linear-gradient(90deg, #0ea5e9, #22d3ee);
+        }
+        .resource-job-offline-progress-text {
+            margin-top: 0.28rem;
+            font-size: 0.68rem;
+            line-height: 1.5;
+            color: #94a3b8;
+        }
         .resource-job-card-meta {
             margin-top: 0.68rem;
             display: flex;
@@ -7825,6 +7846,13 @@
         html.theme-day .resource-source-card-link,
         html.theme-day .resource-source-modal-eyebrow {
             color: #0369a1 !important;
+        }
+        html.theme-day .resource-job-offline-progress-track {
+            background: #e2e8f0 !important;
+            border-color: #cbd5e1 !important;
+        }
+        html.theme-day .resource-job-offline-progress-text {
+            color: #64748b !important;
         }
         html.theme-day .resource-source-summary-value-enabled {
             color: #15803d !important;

@@ -56,6 +56,20 @@ class CliPayloadTest(unittest.TestCase):
         cli.cmd_jobs(_parse(["jobs", "retry", "--job-id", "7"]), c)
         self.assertIn(("POST", "/resource/jobs/retry", {"job_id": 7}), c.requests)
 
+    def test_offline_list_requests_read_only_tasks(self):
+        c = _RecordingClient(
+            responses={
+                ("GET", "/resource/offline/tasks?page=2"): {
+                    "ok": True,
+                    "tasks": [
+                        {"name": "示例", "status": 2, "percent": 100, "info_hash": "hash", "wp_path_id": "0"}
+                    ],
+                }
+            }
+        )
+        cli.cmd_offline(_parse(["offline", "list", "--page", "2"]), c)
+        self.assertIn(("GET", "/resource/offline/tasks?page=2", None), c.requests)
+
     def test_jobs_retry_invalid_id_fails_cleanly(self):
         c = _RecordingClient()
         with self.assertRaises(SystemExit) as ctx:

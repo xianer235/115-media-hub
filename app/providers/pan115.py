@@ -121,6 +121,74 @@ def submit_115_offline_task(cookie: str, resource_url: str, folder_id: str) -> D
         raise
 
 
+def _normalize_115_offline_task(item: Any) -> Dict[str, Any]:
+    source = item if isinstance(item, dict) else {}
+    status = parse_int(source.get("status", 0), default=0)
+    percent = 0.0
+    try:
+        percent = float(source.get("percentDone", 0) or 0)
+    except (TypeError, ValueError):
+        percent = 0.0
+    return {
+        "info_hash": str(source.get("info_hash", "") or "").strip(),
+        "url": str(source.get("url", "") or "").strip(),
+        "name": str(source.get("name", "") or "").strip(),
+        "size": parse_int(source.get("size", 0), default=0),
+        "status": status,
+        "percent": max(0.0, min(100.0, percent)),
+        "file_id": str(source.get("file_id", "") or "").strip(),
+        "delete_file_id": str(source.get("delete_file_id", "") or "").strip(),
+        "wp_path_id": str(source.get("wp_path_id", "") or "").strip(),
+        "add_time": parse_int(source.get("add_time", 0), default=0),
+    }
+
+
+def list_115_offline_tasks(cookie: str, page: int = 1) -> Dict[str, Any]:
+    """读取 115 官方离线任务列表；返回 {tasks, page, page_count, count, total}。"""
+    cookie = str(cookie or "").strip()
+    if not cookie:
+        raise RuntimeError("115 Cookie 未配置")
+    normalized_page = max(1, int(page or 1))
+    headers = {
+        "Cookie": cookie,
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://115.com/",
+        "User-Agent": "Mozilla/5.0 115-media-hub",
+    }
+    url = f"https://lixian.115.com/lixian/?ct=lixian&ac=task_lists&page={normalized_page}"
+    try:
+        throttle_115_api_requests()
+        response = http_request_json(url, extra_headers=headers, timeout=45)
+        if not bool((response or {}).get("state", False)):
+            detail = (
+                str((response or {}).get("error", "")).strip()
+                or str((response or {}).get("msg", "")).strip()
+                or str((response or {}).get("message", "")).strip()
+                or "115 离线任务列表读取失败"
+            )
+            raise RuntimeError(detail)
+        raw_tasks = (response or {}).get("tasks") or []
+        tasks = [
+            normalized
+            for normalized in (
+                _normalize_115_offline_task(item) for item in raw_tasks if isinstance(item, dict)
+            )
+            if normalized.get("info_hash") or normalized.get("url")
+        ]
+        page_count = max(1, parse_int((response or {}).get("page_count", 1), default=1))
+        mark_cookie_health_success("115", trigger="runtime:list_115_offline_tasks")
+        return {
+            "tasks": tasks,
+            "page": parse_int((response or {}).get("page", normalized_page), default=normalized_page),
+            "page_count": page_count,
+            "count": parse_int((response or {}).get("count", len(tasks)), default=len(tasks)),
+            "total": parse_int((response or {}).get("total", len(tasks)), default=len(tasks)),
+        }
+    except Exception as exc:
+        mark_cookie_health_failure("115", exc, trigger="runtime:list_115_offline_tasks")
+        raise
+
+
 def submit_115_export_dir(
     cookie: str,
     file_ids: Any,
@@ -1701,6 +1769,9 @@ class Pan115Provider(CloudProvider):
 
     def submit_offline_task(self, cookie, resource_url, folder_id="0"):
         return submit_115_offline_task(cookie, resource_url, folder_id)
+
+    def query_offline_tasks(self, cookie, page=1):
+        return list_115_offline_tasks(cookie, page)
 
     def probe_connectivity(self, cookie):
         try:

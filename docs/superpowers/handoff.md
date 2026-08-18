@@ -6,12 +6,13 @@
 
 ## 当前状态
 
-- **日期**: 2026-08-17
+- **日期**: 2026-08-18
 - **分支**: `main`
-- **当前提交**: `b2a27d2` 目录树任务化改造提交（0.8.0 发布元数据更新未提交）
+- **当前提交**: 基于 `d0db381`（0.8.0 发布提交）的本次 115 云下载任务完成检测提交，尚未推送
 - **版本**: `0.8.0`，已同步 `version.json`、`CHANGELOG.md`、README 与本交接记录
-- **最近完成**: 目录树任务化改造——废弃旧 `trees` 静态树源/定时/MD5 全量模式，改为“目录树任务”模型（每个任务绑定一个 115 文件夹，官方 `files/export_dir` 生成树文件，远端 sha1 未变则跳过下载/解析/写 STRM）；设置页配置迁移到同步页并自动清理旧字段；任务页改为订阅任务风格；修复容器启动重启循环与 115 重命名自动补 `.txt` 根因；CLI 补齐 `tree` 全命令
-- **已有验证**: 完整 514 项 unittest、项目 `compileall`、改动 JS `node --check`、`git diff --check` 与 `version.json` JSON 解析均通过；真实账号导出校准与 982 文件链路实测完成；未执行 Docker 重建或任务页浏览器复核
+- **最近完成**: 磁力/电驴离线任务改为官方云下载任务完成检测驱动——新增 115 `task_lists` 查询，提交后记录磁力 `btih`/电驴哈希与目标目录，后台轮询等待官方任务完成再触发监控扫描；失败/超时置 failed 不自动扫描，errcode 10008 重复任务不等待并保留手动刷新；定时监控扫描在离线任务未完成时自动顺延；任务中心磁力/电驴卡片展示 115 下载进度条；CLI 新增只读 `offline list` 诊断命令
+- **已有验证**: 完整 538 项 unittest、项目 `compileall`、改动 JS `node --check` 与 `git diff --check` 均通过；用户实测可正确获取离线任务进度并触发刷新
+- **下一步**: Docker daemon 启动后按项目代理配置 `docker compose up -d --build`，用真实 115 账号实测磁力/电驴哈希匹配（重点核实电驴任务 `info_hash` 与 ed2k 哈希关系）、慢速任务进度展示与 cron 顺延、秒存立即扫描、死种超时置失败
 
 
 ## 最近重要交接
@@ -119,3 +120,4 @@
 - 2026-08-17 | `main` 未提交 | 旧目录树配置字段一次性清理：启动时若 settings.json 仍含 `trees/sync_mode/check_hash/cron_hour/last_hash`，用归一化配置重写一次并在任务日志提示，用户无需手动处理（内存中早已忽略，本次是落盘清理）。设置页章节序号重新编号：移除 3/4 目录树区块后，TG 订阅源=3、PanSou=4、网络代理=5、TMDB=6、通知推送=7、后台安全=8（标题与 order 同步）。新增清理单测与模板断言，完整 unittest 510 项、compileall、git diff --check 均通过。
 - 2026-08-17 | `main` 已提交 | 本轮目录树任务化改造全部改动提交（CLI 同步补齐 `tree update/defaults` 并更新 README/CLI-API-AUDIT；完整 unittest 514 项、compileall、node --check、git diff --check 均通过；Docker 重建与真实页面复核留待下一步）。
 - 2026-08-17 | `main` 未提交（功能代码已提交 `b2a27d2`） | 发布元数据更新至 `0.8.0`，同步 version.json、CHANGELOG、README 与当前交接状态，收录目录树任务化改造（官方 `files/export_dir` 生成树文件 + 远端 sha1 跳过 + 任务化 UI + CLI `tree` 命令、设置页配置迁移与旧字段自动清理、容器启动重启循环与 115 重命名自动补 `.txt` 根因修复）。完整 unittest 514 项、compileall、node --check、git diff --check 与 version.json JSON 解析均通过；Docker 未重建。下一步：Docker 重建后实测目录树任务页按钮/任务流转与 CLI `tree` 命令，确认后提交推送。
+- 2026-08-18 | `main` 未提交 | 磁力/电驴离线任务改为官方云下载任务完成检测驱动：新增 115 `lixian.115.com` 的 `task_lists` 查询（`list_115_offline_tasks`，复用 115 限速锁与 Cookie 健康上报），提交后记录磁力 `btih`/电驴哈希与目标目录，后台轮询器按“哈希或 URL 匹配 + `wp_path_id` 一致”等待任务完成（status=2）再触发监控扫描；失败/超时（默认 12 小时，可配置）置 failed 不自动扫描，errcode 10008 重复任务不等待并保留手动刷新；“监控触发延时”保留为首次轮询前最小等待；定时监控扫描在存在未完成离线任务时自动顺延，完成后由轮询器补发；任务中心磁力/电驴任务卡片新增 115 下载进度条（百分比 + 已下载/总大小，日/夜主题适配）。新增只读诊断接口 `GET /resource/offline/tasks` 与 CLI `offline list [--page N]`，README/CLI-API-AUDIT 同步。新增 tests/test_resource_offline_completion.py、test_resource_offline_progress_frontend.py 与 CLI 回归，完整 unittest 538 项、compileall、改动 JS `node --check`、git diff --check 均通过。下一步：Docker 重建后用真实 115 账号实测磁力/电驴哈希匹配（重点核实电驴任务 `info_hash` 与 ed2k 哈希关系）、慢速任务进度展示与 cron 顺延、秒存立即扫描、死种超时置失败。

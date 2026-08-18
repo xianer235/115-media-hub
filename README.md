@@ -158,7 +158,8 @@ export MH_API_BASE=http://127.0.0.1:18080   # 可选，默认即本机
 
 常用命令：`status` / `version` / `search <关键词>|--cancel` / `channels sync` /
 `subscribe list|add|remove|start` / `jobs list|retry|cancel` / `scrape jobs-create|batch-preferences` /
-`monitor list|start|stop` / `tree list|create|update|delete|defaults|run|full|jobs` / `sources search` / `daemon status|logs|restart`。
+`monitor list|start|stop` / `tree list|create|update|delete|defaults|run|full|jobs` /
+`offline list [--page N]` / `sources search` / `daemon status|logs|restart`。
 
 - 完整命令列表见 `CLI-API-AUDIT.md`；每个子命令都支持 `--help` 查看参数
 - 会话 Cookie 默认保存到 `/tmp/.115_cookies.txt`（权限 0600），可用 `MH_COOKIE_FILE` 覆盖

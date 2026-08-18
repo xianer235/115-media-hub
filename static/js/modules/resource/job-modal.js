@@ -351,6 +351,43 @@
             }).join('');
         }
 
+        function formatOfflineSize(bytes) {
+            const size = Number(bytes || 0) || 0;
+            if (size <= 0) return '0B';
+            if (size >= 1073741824) return `${(size / 1073741824).toFixed(1)}GB`;
+            if (size >= 1048576) return `${(size / 1048576).toFixed(1)}MB`;
+            if (size >= 1024) return `${(size / 1024).toFixed(1)}KB`;
+            return `${size}B`;
+        }
+
+        function getOfflineJobProgress(job = {}) {
+            const linkType = String(job.link_type || '').trim().toLowerCase();
+            if (!['magnet', 'ed2k'].includes(linkType)) return null;
+            if (String(job.status || '').trim().toLowerCase() !== 'submitted') return null;
+            const extra = job.extra && typeof job.extra === 'object' ? job.extra : {};
+            const percent = Number(extra.offline_percent || 0) || 0;
+            const offlineStatus = Number(extra.offline_status || 0) || 0;
+            if (percent <= 0 && offlineStatus !== 1) return null;
+            const total = Number(extra.offline_total || 0) || 0;
+            const downloaded = Number(extra.offline_downloaded || 0) || 0;
+            const clamped = Math.max(0, Math.min(100, Math.round(percent)));
+            const sizeText = total > 0 ? `${formatOfflineSize(downloaded)} / ${formatOfflineSize(total)}` : '';
+            return { percent: clamped, sizeText };
+        }
+
+        function renderOfflineJobProgressRow(job) {
+            const progress = getOfflineJobProgress(job);
+            if (!progress) return '';
+            return `
+                    <div class="resource-job-offline-progress">
+                        <div class="resource-job-offline-progress-track">
+                            <div class="resource-job-offline-progress-bar" style="width:${progress.percent}%"></div>
+                        </div>
+                        <div class="resource-job-offline-progress-text">115 离线下载 ${progress.percent}%${progress.sizeText ? ` · ${progress.sizeText}` : ''}</div>
+                    </div>
+                `;
+        }
+
         function renderResourceJobs() {
             const container = document.getElementById('resource-job-list');
             const jobs = Array.isArray(resourceState.jobs) ? resourceState.jobs : [];
@@ -428,6 +465,7 @@
                                     </div>
                                 </div>
                                 <div class="resource-job-status-note">${escapeHtml(job.status_detail || '--')}</div>
+                                ${renderOfflineJobProgressRow(job)}
                                 <div class="resource-job-card-meta">
                                     <span class="resource-job-meta-chip">创建于 ${escapeHtml(job.created_at || '--')}</span>
                                     <span class="resource-job-meta-chip">${autoRefreshText}</span>

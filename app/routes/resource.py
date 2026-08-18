@@ -7,7 +7,7 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from requests import RequestException
 
@@ -629,6 +629,33 @@ async def get_resource_jobs_state(request: Request) -> Dict[str, Any]:
     offset = max(0, parse_int(request.query_params.get("offset", 0), default=0))
     status_filter = normalize_resource_job_status_filter(request.query_params.get("status", "all"))
     return await asyncio.to_thread(_build_resource_jobs_state_snapshot, limit, offset, status_filter)
+
+
+@router.get("/resource/offline/tasks", dependencies=[Depends(require_auth)])
+async def get_resource_offline_tasks(request: Request) -> Dict[str, Any]:
+    """只读诊断：读取 115 官方离线任务列表（供 CLI offline list 使用）。"""
+    page = max(1, parse_int(request.query_params.get("page", 1), default=1))
+    try:
+        cfg = get_config()
+        provider = get_provider_or_none("115")
+        if not provider or not provider.supports_offline:
+            return JSONResponse(status_code=400, content={"ok": False, "msg": "115 暂不支持离线下载"})
+        cookie = provider.get_cookie(cfg)
+        if not cookie:
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "msg": "请先在参数配置中填写 115 认证信息"},
+            )
+        query = getattr(provider, "query_offline_tasks", None)
+        if not query:
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "msg": "当前 115 离线任务查询不可用"},
+            )
+        result = await asyncio.wait_for(asyncio.to_thread(query, cookie, page), timeout=60)
+    except Exception as exc:
+        return JSONResponse(status_code=502, content={"ok": False, "msg": str(exc)[:200]})
+    return {"ok": True, **result}
 
 
 def _save_resource_sources_payload(incoming: Any) -> List[Dict[str, Any]]:

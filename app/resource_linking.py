@@ -14,6 +14,10 @@ RESOURCE_ED2K_REGEX = re.compile(
     r"(?:[^/|\r\n<>'\"][^|\r\n<>'\"]*\|)*/",
     re.IGNORECASE,
 )
+RESOURCE_ED2K_HASH_REGEX = re.compile(
+    r"ed2k://\|file\|[^\r\n|<>'\"]+\|\d+\|([a-f0-9]{32})\|",
+    re.IGNORECASE,
+)
 RESOURCE_URL_REGEX = re.compile(r"https?://[^\s<>'\"]+", re.IGNORECASE)
 RESOURCE_115_SHARE_URL_REGEX = re.compile(
     r"(?:https?://)?(?:115cdn|115|anxia)\.com/s/[A-Za-z0-9]+(?:\?[^\s<>'\"#]*)?(?:#[A-Za-z0-9]{1,16})?",
@@ -236,6 +240,16 @@ def extract_magnet_hash(link_url: str) -> str:
     if not token:
         return ""
     match = RESOURCE_MAGNET_HASH_REGEX.search(token)
+    if not match:
+        return ""
+    return str(match.group(1) or "").upper()
+
+
+def extract_ed2k_hash(link_url: str) -> str:
+    token = trim_resource_link_token(link_url)
+    if not token:
+        return ""
+    match = RESOURCE_ED2K_HASH_REGEX.search(token)
     if not match:
         return ""
     return str(match.group(1) or "").upper()
@@ -536,6 +550,7 @@ __all__ = [
     "RESOURCE_MAGNET_REGEX",
     "RESOURCE_MAGNET_HASH_REGEX",
     "RESOURCE_ED2K_REGEX",
+    "RESOURCE_ED2K_HASH_REGEX",
     "RESOURCE_URL_REGEX",
     "RESOURCE_115_SHARE_URL_REGEX",
     "RESOURCE_115_SHARE_BARE_URL_REGEX",
@@ -559,6 +574,7 @@ __all__ = [
     "pick_resource_title",
     "is_resource_title_link_like",
     "extract_magnet_hash",
+    "extract_ed2k_hash",
     "pick_magnet_title",
     "pick_link_fallback_title",
     "parse_115_share_payload",

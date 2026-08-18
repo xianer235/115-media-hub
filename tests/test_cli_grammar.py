@@ -63,6 +63,11 @@ class CliGrammarTest(unittest.TestCase):
         self.assertEqual(args.resource_id, "123")
         self.assertTrue(args.yes)
 
+    def test_offline_list_accepts_page(self):
+        args = self._parse(["offline", "list", "--page", "2"])
+        self.assertEqual(args.action, "list")
+        self.assertEqual(args.page, 2)
+
     def test_unknown_command_rejected(self):
         with self.assertRaises(SystemExit):
             self._parse(["not-a-command"])

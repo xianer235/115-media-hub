@@ -114,6 +114,7 @@
 | 87 | `stats` | GET /resource/state | `compact` | (同 search) | ✅ 无问题 |
 | 88 | `daemon status/logs/restart` | docker CLI 而非 HTTP | (N/A) | (N/A) | ✅ 无问题 |
 | 89 | `api <method> <path> [body]` | 通用 HTTP 代理 | (直接透传) | (直接透传) | ✅ 无问题 |
+| 90 | `offline list [--page N]` | GET /resource/offline/tasks | `page` (query) | `page` (query) | ✅ 无问题（只读诊断，无写操作） |
 
 ---
 
