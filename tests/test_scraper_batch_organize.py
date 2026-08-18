@@ -1201,7 +1201,8 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         html_path = ROOT / "templates/partials/pages/scraper.html"
         html = html_path.read_text(encoding="utf-8")
         self.assertEqual(html.count('data-scraper-action="open-batch"'), 1)
-        self.assertIn(">批量整理</button>", html)
+        self.assertIn('scraper-action-label-full">批量整理</span>', html)
+        self.assertIn('scraper-action-label-short">整理</span>', html)
         self.assertNotIn('data-scraper-action="identify"', html)
         # 工具栏只保留“退出预览”，不再有“退出识别”；旧面板头部的关闭图标保留。
         self.assertEqual(html.count('data-scraper-action="clear-identify"'), 1)

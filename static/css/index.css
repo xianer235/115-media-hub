@@ -86,6 +86,21 @@
         #monitor-log-box { height: min(46vh, 390px) !important; }
         #subscription-log-box { height: min(42vh, 340px) !important; overflow-anchor: none; }
         #log-box, #monitor-log-box, #subscription-log-box { color: #cbd5e1; }
+        .log-header-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0.25rem 0.75rem;
+            border-radius: 0.5rem;
+            border: 1px solid transparent;
+            background: #1e293b;
+            color: #cbd5e1;
+            font-size: 0.75rem;
+            line-height: 1rem;
+        }
+        .log-header-btn:hover {
+            background: #334155;
+        }
         .btn-disabled { opacity: 0.5; cursor: not-allowed; pointer-events: none; filter: grayscale(1); }
         .group-card { background: linear-gradient(180deg, rgba(30,41,59,0.96), rgba(15,23,42,0.96)); border: 1px solid #334155; border-radius: 1.5rem; padding: 1.5rem; box-shadow: 0 10px 28px rgba(2, 6, 23, 0.35); }
         .group-title { color: #38bdf8; font-weight: 800; font-size: 0.875rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 1.25rem; border-left: 4px solid #38bdf8; padding-left: 0.75rem; }
@@ -9168,6 +9183,16 @@
         html.theme-day #log-box,
         html.theme-day #monitor-log-box,
         html.theme-day #subscription-log-box { color: #1f2937 !important; }
+        html.theme-day .log-header-btn {
+            background: #e2e8f0 !important;
+            border-color: #cbd5e1 !important;
+            color: #334155 !important;
+            box-shadow: none !important;
+        }
+        html.theme-day .log-header-btn:hover {
+            background: #cbd5e1 !important;
+            color: #1e293b !important;
+        }
         html.theme-day .log-success { color: var(--success) !important; }
         html.theme-day .log-warn { color: var(--warn) !important; }
         html.theme-day .log-error { color: var(--danger) !important; }
@@ -9808,6 +9833,23 @@
             cursor: not-allowed;
             transform: none;
             box-shadow: none;
+        }
+        .tree-task-icon-btn {
+            width: 38px;
+            height: 38px;
+            min-width: 38px;
+            min-height: 38px;
+            flex: 0 0 38px;
+            padding: 0;
+        }
+        .tree-task-icon-btn svg {
+            width: 18px;
+            height: 18px;
+            pointer-events: none;
+        }
+        .tree-task-icon-btn:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.28);
         }
         .tree-task-action-btn-run {
             background: rgba(5, 150, 105, 0.22);
@@ -13328,6 +13370,14 @@
             white-space: nowrap;
         }
 
+        .scraper-action-label-full {
+            display: inline;
+        }
+
+        .scraper-action-label-short {
+            display: none;
+        }
+
         .scraper-main-btn {
             min-height: 42px;
             padding: 0.65rem 0.95rem;
@@ -14716,10 +14766,18 @@
 
             .scraper-selection-actions {
                 display: grid;
-                grid-template-columns: repeat(6, minmax(0, 1fr));
+                grid-template-columns: repeat(7, minmax(0, 1fr));
                 gap: 0.4rem;
                 overflow-x: visible;
                 padding-bottom: 0;
+            }
+
+            .scraper-action-label-full {
+                display: none;
+            }
+
+            .scraper-action-label-short {
+                display: inline;
             }
 
             .scraper-batch-search-row {
@@ -14730,8 +14788,8 @@
                 width: 100%;
                 min-width: 0;
                 min-height: 34px;
-                padding: 0.36rem 0.24rem;
-                font-size: 0.7rem;
+                padding: 0.36rem 0.12rem;
+                font-size: 0.66rem;
                 line-height: 1.15;
                 white-space: normal;
                 overflow-wrap: anywhere;

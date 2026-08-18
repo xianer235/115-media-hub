@@ -348,10 +348,20 @@ function resetPagination() {
     updatePagination();
 }
 
+function scrollRecommendationToTop() {
+    if (typeof window === 'undefined' || typeof window.scrollTo !== 'function') return;
+    try {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (e) {
+        window.scrollTo(0, 0);
+    }
+}
+
 async function goToRecommendationPage(page) {
     if (recommendationBusy) return;
     var p = Math.max(1, Math.min(page, recommendationPagination.totalPages));
     if (p === recommendationPagination.currentPage) return;
+    scrollRecommendationToTop();
     var ctx = recommendationPagination.currentContext;
     if (!ctx) return;
     if (ctx.type === 'trending') {

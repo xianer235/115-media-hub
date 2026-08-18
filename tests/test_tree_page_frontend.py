@@ -67,10 +67,50 @@ class TreePageTemplateTest(unittest.TestCase):
         source = TASK_JS_PATH.read_text(encoding="utf-8")
         self.assertNotIn("点击“生成并同步”：", source)
 
+    def test_tree_task_card_stacks_info_and_actions_on_mobile(self):
+        source = TASK_JS_PATH.read_text(encoding="utf-8")
+        self.assertIn(
+            '<div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">',
+            source,
+        )
+        # 旧布局在手机端会把信息区压缩成窄条，导致卡片被顶得很高。
+        self.assertNotIn(
+            '<div class="flex flex-wrap items-start justify-between gap-3">',
+            source,
+        )
+
+    def test_tree_task_actions_are_icon_buttons_with_tooltips(self):
+        source = TASK_JS_PATH.read_text(encoding="utf-8")
+        self.assertIn('class="tree-task-action-btn tree-task-icon-btn tree-task-action-btn-${item.tone}"', source)
+        self.assertIn('title="${item.label}"', source)
+        self.assertIn('aria-label="${item.label}"', source)
+        for action, label in (
+            ("run", "生成并同步"),
+            ("full", "全量重写"),
+            ("edit", "编辑"),
+            ("delete", "删除"),
+        ):
+            self.assertIn(f"{{ action: '{action}', label: '{label}'", source)
+        self.assertIn("function buildTreeTaskActionIcon", source)
+        self.assertEqual(source.count('viewBox="0 0 24 24"'), 4)
+        # 旧的纯文字按钮结构不再存在。
+        self.assertNotIn('>生成并同步</button>', source)
+        self.assertNotIn('>全量重写</button>', source)
+
+    def test_tree_task_icon_buttons_have_fixed_size_css(self):
+        css = INDEX_CSS_PATH.read_text(encoding="utf-8")
+        self.assertIn(".tree-task-icon-btn {", css)
+        self.assertIn("width: 38px;", css)
+        self.assertIn("height: 38px;", css)
+        self.assertIn(".tree-task-icon-btn svg {", css)
+        self.assertIn("width: 18px;", css)
+        self.assertIn(".tree-task-icon-btn:focus-visible {", css)
+
     def test_tree_action_buttons_use_theme_safe_classes(self):
         source = TASK_JS_PATH.read_text(encoding="utf-8")
-        self.assertIn("tree-task-action-btn-edit", source)
-        self.assertIn("tree-task-action-btn-delete", source)
+        self.assertIn("{ action: 'edit', label: '编辑', tone: 'edit' }", source)
+        self.assertIn("{ action: 'delete', label: '删除', tone: 'delete' }", source)
+        self.assertIn("tree-task-action-btn-${item.tone}", source)
         self.assertNotIn("bg-slate-800 hover:bg-slate-700 text-slate-300", source)
 
     def test_tree_action_buttons_have_visible_css_body(self):

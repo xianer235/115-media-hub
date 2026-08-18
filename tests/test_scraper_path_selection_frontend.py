@@ -146,15 +146,41 @@ class ScraperPathSelectionIntegrationTest(unittest.TestCase):
         self.assertIn("html.theme-day .scraper-path-token", source)
         self.assertIn("overflow-wrap: anywhere", source)
 
-    def test_scraper_selection_actions_keep_six_main_buttons_on_one_row(self):
+    def test_scraper_selection_actions_keep_seven_main_buttons_on_one_row(self):
         stylesheet = STYLESHEET_PATH.read_text(encoding="utf-8")
         start = stylesheet.index("@media (max-width: 760px) {")
         end = stylesheet.index("html.theme-day .scraper-page", start)
         mobile_block = stylesheet[start:end]
 
-        self.assertIn("repeat(6, minmax(0, 1fr))", mobile_block)
+        self.assertIn("repeat(7, minmax(0, 1fr))", mobile_block)
+        self.assertNotIn("repeat(6, minmax(0, 1fr))", mobile_block)
         self.assertNotIn("repeat(5", mobile_block)
         self.assertNotIn("repeat(4", mobile_block)
+        # 360px 下每列约 39px：0.66rem 字号 + 0.12rem 内边距才能让 3 字“重命名”不折行。
+        self.assertIn("padding: 0.36rem 0.12rem;", mobile_block)
+        self.assertIn("font-size: 0.66rem;", mobile_block)
+
+    def test_scraper_selection_actions_swap_to_short_labels_on_mobile(self):
+        template = SCRAPER_TEMPLATE_PATH.read_text(encoding="utf-8")
+        for full_label, short_label in (
+            ("区间选择", "区间"),
+            ("扫描监控", "扫描"),
+            ("批量整理", "整理"),
+        ):
+            self.assertIn(
+                f'<span class="scraper-action-label-full">{full_label}</span><span class="scraper-action-label-short">{short_label}</span>',
+                template,
+            )
+
+        stylesheet = STYLESHEET_PATH.read_text(encoding="utf-8")
+        mobile_block_start = stylesheet.index("@media (max-width: 760px) {")
+        base_block = stylesheet[:mobile_block_start]
+        mobile_block_end = stylesheet.index("html.theme-day .scraper-page", mobile_block_start)
+        mobile_block = stylesheet[mobile_block_start:mobile_block_end]
+        self.assertIn(".scraper-action-label-full {\n            display: inline;\n        }", base_block)
+        self.assertIn(".scraper-action-label-short {\n            display: none;\n        }", base_block)
+        self.assertIn(".scraper-action-label-full {\n                display: none;\n            }", mobile_block)
+        self.assertIn(".scraper-action-label-short {\n                display: inline;\n            }", mobile_block)
 
     def test_scraper_options_expose_language_and_subtitle_preserve_tags(self):
         template = SCRAPER_TEMPLATE_PATH.read_text(encoding="utf-8")

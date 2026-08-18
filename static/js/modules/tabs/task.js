@@ -19,6 +19,16 @@ function normalizeRelativeFolderPath(value = '') {
         .join('/');
 }
 
+function buildTreeTaskActionIcon(action) {
+    const icons = {
+        run: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M18.6 11.75A6.6 6.6 0 1 1 16.65 7.05" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M19.25 5.25V9.35H15.15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+        full: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M18.6 11.75A6.6 6.6 0 1 1 16.65 7.05" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M19.25 5.25V9.35H15.15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><g transform="translate(12 12) scale(0.64) rotate(180) translate(-12 -12)"><path d="M18.6 11.75A6.6 6.6 0 1 1 16.65 7.05" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M19.25 5.25V9.35H15.15" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g></svg>',
+        edit: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5.25 18.75L9.1 17.9L18.45 8.55A2.05 2.05 0 0 0 15.55 5.65L6.2 15L5.25 18.75Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M14.35 6.85L17.15 9.65" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+        delete: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 7.5H19" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M9.25 7.5V5.75H14.75V7.5" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8 10V18.25H16V10" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M10.5 11.5V16.5M13.5 11.5V16.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
+    };
+    return icons[action] || icons.run;
+}
+
 function showToast(message, options = {}) {
     if (typeof window.showToast === 'function') {
         window.showToast(message, { tone: 'warn', duration: 2600, ...options });
@@ -37,7 +47,7 @@ async function loadTreeTasks() {
     }
     container.innerHTML = tasks.map((task, index) => `
         <div class="tree-task-card bg-slate-900/50 p-4 rounded-2xl border border-slate-800" data-tree-task-id="${escapeHtml(task.id || '')}">
-            <div class="flex flex-wrap items-start justify-between gap-3">
+            <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
                 <div class="min-w-0 flex-1">
                     <div class="text-sm font-bold text-white break-all">${escapeHtml(task.folder_path || '--')}</div>
                     <div class="text-xs text-sky-400 mt-1 break-all">${escapeHtml(task.tree_name || '--')}</div>
@@ -47,10 +57,21 @@ async function loadTreeTasks() {
                     </div>
                 </div>
                 <div class="flex flex-wrap gap-2 shrink-0">
-                    <button type="button" data-tree-task-action="run" data-tree-task-id="${escapeHtml(task.id || '')}" class="tree-task-action-btn tree-task-action-btn-run px-3 py-2 text-xs font-bold">生成并同步</button>
-                    <button type="button" data-tree-task-action="full" data-tree-task-id="${escapeHtml(task.id || '')}" class="tree-task-action-btn tree-task-action-btn-full px-3 py-2 text-xs font-bold">全量重写</button>
-                    <button type="button" data-tree-task-action="edit" data-tree-task-id="${escapeHtml(task.id || '')}" class="tree-task-action-btn tree-task-action-btn-edit px-3 py-2 text-xs font-bold">编辑</button>
-                    <button type="button" data-tree-task-action="delete" data-tree-task-id="${escapeHtml(task.id || '')}" class="tree-task-action-btn tree-task-action-btn-delete px-3 py-2 text-xs font-bold">删除</button>
+                    ${[
+                        { action: 'run', label: '生成并同步', tone: 'run' },
+                        { action: 'full', label: '全量重写', tone: 'full' },
+                        { action: 'edit', label: '编辑', tone: 'edit' },
+                        { action: 'delete', label: '删除', tone: 'delete' },
+                    ].map((item) => `
+                        <button
+                            type="button"
+                            data-tree-task-action="${item.action}"
+                            data-tree-task-id="${escapeHtml(task.id || '')}"
+                            class="tree-task-action-btn tree-task-icon-btn tree-task-action-btn-${item.tone}"
+                            title="${item.label}"
+                            aria-label="${item.label}"
+                        >${buildTreeTaskActionIcon(item.action)}</button>
+                    `).join('')}
                 </div>
             </div>
         </div>
