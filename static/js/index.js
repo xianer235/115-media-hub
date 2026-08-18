@@ -36,6 +36,9 @@
         let resourceFolderShowAllFiles = false;
         let resourceFolderCreateBusy = false;
         let resourceFolderRequestToken = 0;
+        let resourceFolderNextOffset = 0;
+        let resourceFolderHasMore = false;
+        let resourceFolderLoadingMore = false;
         let resourceFolderBranchCache = {};
         let resourceFolderFetchInFlight = {};
         let subscriptionFolderTrail = [{ id: '0', name: '根目录' }];
@@ -43,6 +46,9 @@
         let subscriptionFolderSummary = { folder_count: 0, file_count: 0 };
         let subscriptionFolderLoading = false;
         let subscriptionFolderCreateBusy = false;
+        let subscriptionFolderNextOffset = 0;
+        let subscriptionFolderHasMore = false;
+        let subscriptionFolderLoadingMore = false;
         let subscriptionShareFolderTrail = [{ cid: '0', name: '分享根目录' }];
         let subscriptionShareFolderEntriesByParent = { '0': [] };
         let subscriptionShareFolderCurrentCid = '0';
@@ -77,6 +83,9 @@
         let monitorFolderSummary = { folder_count: 0, file_count: 0 };
         let monitorFolderLoading = false;
         let monitorFolderRequestToken = 0;
+        let monitorFolderNextOffset = 0;
+        let monitorFolderHasMore = false;
+        let monitorFolderLoadingMore = false;
         let resourceModalLinkType = '';
         let resourceShareEntriesByParent = { '0': [] };
         let resourceShareEntryIndex = {};
@@ -316,6 +325,7 @@
         const SUBSCRIPTION_INTRO_EPISODE_RETRY_MS = 1000 * 60;
         const RESOURCE_FOLDER_BRANCH_CACHE_TTL_MS = 1000 * 60 * 5;
         const RESOURCE_FOLDER_FILE_PREVIEW_LIMIT = 120;
+        const RESOURCE_FOLDER_PAGE_LIMIT = 300;
         const RESOURCE_SHARE_BRANCH_CACHE_TTL_MS = 1000 * 60 * 10;
         const RESOURCE_SHARE_BROWSE_PAGE_LIMIT = 40;
         const RESOURCE_JOB_PAGE_SIZE = 20;
@@ -3721,7 +3731,9 @@
             if (summaryEl) {
                 const folderCount = Number(monitorFolderSummary.folder_count || 0);
                 const fileCount = Number(monitorFolderSummary.file_count || 0);
-                summaryEl.textContent = `当前目录下共有 ${folderCount} 个文件夹 / ${fileCount} 个文件，这里只展示文件夹，方便精确选择监控范围。`;
+                summaryEl.textContent = monitorFolderHasMore
+                    ? `已加载 ${folderCount} 个文件夹，可点击“加载更多文件夹”继续浏览。`
+                    : `当前目录下共有 ${folderCount} 个文件夹 / ${fileCount} 个文件，这里只展示文件夹，方便精确选择监控范围。`;
             }
             if (monitorFolderLoading && !monitorFolderEntries.length) {
                 container.innerHTML = renderEmpty('正在读取 115 目录...');
@@ -3732,9 +3744,13 @@
                 return;
             }
             if (!manager?.renderTable) {
-                container.innerHTML = monitorFolderEntries.map((entry) => (
+                let html = monitorFolderEntries.map((entry) => (
                     buildResourceEntryRow(entry, { showOpenButton: true, openActionPrefix: 'monitor-folder' })
                 )).join('');
+                if (monitorFolderHasMore) {
+                    html += buildMonitorFolderLoadMoreRow();
+                }
+                container.innerHTML = html;
                 return;
             }
             const entries = monitorFolderEntries.filter(entry => !!entry?.is_dir).map(entry => ({
@@ -3772,7 +3788,7 @@
                     render: (entry) => escapeHtml(manager.formatModified(entry.modified_at)),
                 },
             ];
-            container.innerHTML = manager.renderTable({
+            let html = manager.renderTable({
                 entries,
                 columns,
                 sort: { key: 'name', direction: 'asc' },
@@ -3784,12 +3800,19 @@
                 gridTemplate: 'minmax(220px, 1fr) 142px',
                 minWidth: '560px',
             });
+            if (monitorFolderHasMore) {
+                html += buildMonitorFolderLoadMoreRow();
+            }
+            container.innerHTML = html;
         }
 
         async function loadMonitorFolders(cid = '0', { forceRefresh = false } = {}) {
             const requestToken = ++monitorFolderRequestToken;
             const targetCid = String(cid || '0').trim() || '0';
             monitorFolderLoading = true;
+            monitorFolderNextOffset = 0;
+            monitorFolderHasMore = false;
+            monitorFolderLoadingMore = false;
             renderMonitorFolderBreadcrumbs();
             renderMonitorFolderList();
             try {
@@ -3797,15 +3820,21 @@
                     provider: '115',
                     foldersOnly: true,
                     forceRefresh,
+                    offset: 0,
+                    limit: RESOURCE_FOLDER_PAGE_LIMIT
                 });
                 if (requestToken !== monitorFolderRequestToken) return false;
                 monitorFolderEntries = Array.isArray(result.entries) ? result.entries.filter(entry => !!entry?.is_dir) : [];
                 monitorFolderSummary = result.summary || { folder_count: 0, file_count: 0 };
+                monitorFolderNextOffset = Number(result.next_offset || 0) || 0;
+                monitorFolderHasMore = !!result.has_more;
                 return true;
             } catch (e) {
                 if (requestToken !== monitorFolderRequestToken) return false;
                 monitorFolderEntries = [];
                 monitorFolderSummary = { folder_count: 0, file_count: 0 };
+                monitorFolderNextOffset = 0;
+                monitorFolderHasMore = false;
                 showToast(`目录读取失败：${e?.message || '请稍后重试'}`, {
                     tone: 'error',
                     duration: 3200,
@@ -3816,6 +3845,43 @@
                 if (requestToken !== monitorFolderRequestToken) return false;
                 monitorFolderLoading = false;
                 renderMonitorFolderBreadcrumbs();
+                renderMonitorFolderList();
+            }
+        }
+
+        function buildMonitorFolderLoadMoreRow() {
+            return `<div class="resource-browser-load-more-row"><button type="button" data-monitor-folder-action="load-more" class="resource-browser-load-more-btn ${monitorFolderLoadingMore ? 'btn-disabled' : ''}" ${monitorFolderLoadingMore ? 'disabled' : ''}>${monitorFolderLoadingMore ? '加载中...' : '加载更多文件夹'}</button></div>`;
+        }
+
+        async function loadMoreMonitorFolders() {
+            if (monitorFolderLoading || monitorFolderLoadingMore) return;
+            const requestToken = monitorFolderRequestToken;
+            const currentCid = monitorFolderTrail[monitorFolderTrail.length - 1]?.id || '0';
+            monitorFolderLoadingMore = true;
+            renderMonitorFolderList();
+            try {
+                const result = await fetchResourceFolderData(currentCid, {
+                    provider: '115',
+                    foldersOnly: true,
+                    offset: monitorFolderNextOffset || 0,
+                    limit: RESOURCE_FOLDER_PAGE_LIMIT
+                });
+                if (requestToken !== monitorFolderRequestToken) return;
+                const incoming = Array.isArray(result.entries) ? result.entries.filter(entry => !!entry?.is_dir) : [];
+                monitorFolderEntries = monitorFolderEntries.concat(incoming);
+                monitorFolderSummary = buildResourceFolderSummaryFromEntries(monitorFolderEntries);
+                monitorFolderNextOffset = Number(result.next_offset || 0) || 0;
+                monitorFolderHasMore = !!result.has_more;
+            } catch (e) {
+                if (requestToken !== monitorFolderRequestToken) return;
+                showToast(`加载更多文件夹失败：${e?.message || '请稍后重试'}`, {
+                    tone: 'warn',
+                    duration: 3200,
+                    placement: 'top-center'
+                });
+            } finally {
+                if (requestToken !== monitorFolderRequestToken) return;
+                monitorFolderLoadingMore = false;
                 renderMonitorFolderList();
             }
         }

@@ -21,6 +21,7 @@ from .services.resource import (
 )
 from .services.sign115 import refresh_sign115_status, run_sign115_job
 from .services.subscription import queue_subscription_job
+from .services.scraper import requeue_scraper_jobs_on_startup
 
 
 MEMORY_HOUSEKEEPING_INTERVAL_SECONDS = max(
@@ -74,6 +75,10 @@ async def startup() -> None:
     # Reconcile mutations left between the remote operation and local STRM
     # processing before normal schedulers start issuing scans.
     recover_monitor_change_events(cfg=get_config())
+    try:
+        requeue_scraper_jobs_on_startup()
+    except Exception:
+        logging.exception("Failed to requeue scraper jobs on startup")
     os.makedirs(LOG_DIR, exist_ok=True)
     restore_runtime_logs_from_files()
 

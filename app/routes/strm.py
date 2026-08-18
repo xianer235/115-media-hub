@@ -38,6 +38,22 @@ _RELAY_TOKEN_CACHE_MAX_ENTRIES = max(
     100,
     min(10000, int(os.environ.get("STRM_RELAY_TOKEN_CACHE_MAX_ENTRIES", 2000) or 2000)),
 )
+
+
+def _http_request_115_with_retry(url: str, headers: Dict[str, str], timeout: int = 45) -> Dict[str, Any]:
+    """115 目录读取带断连/超时重试（IncompleteRead 等），避免大响应被掐断时直接报错。"""
+    from ..providers.pan115 import _is_retryable_115_list_error
+
+    last_error: Optional[Exception] = None
+    for attempt in range(3):
+        try:
+            return http_request_json(url, extra_headers=headers, timeout=timeout)
+        except Exception as exc:
+            last_error = exc
+            if (not _is_retryable_115_list_error(exc)) or attempt >= 2:
+                raise
+            time.sleep(0.6 * (attempt + 1))
+    raise RuntimeError(str(last_error or "读取 115 目录失败").strip() or "读取 115 目录失败") from last_error
 _STRM_PATH_CACHE_MAX_ENTRIES = max(
     100,
     min(50000, int(os.environ.get("STRM_PATH_CACHE_MAX_ENTRIES", 10000) or 10000)),
@@ -678,7 +694,7 @@ def _find_115_file_entry_by_name(cookie: str, parent_cid: str, file_name: str) -
             f"?aid=1&cid={urllib.parse.quote(normalized_cid)}"
             f"&offset={max(0, int(offset))}&limit={page_size}&show_dir=1&natsort=1&format=json"
         )
-        result = http_request_json(url, extra_headers=headers, timeout=45)
+        result = _http_request_115_with_retry(url, headers, timeout=45)
         if not bool(result.get("state", False)):
             break
         raw_items = result.get("data") or []
@@ -729,7 +745,7 @@ def _find_115_folder_entry_by_name(cookie: str, parent_cid: str, folder_name: st
             f"?aid=1&cid={urllib.parse.quote(normalized_cid)}"
             f"&offset={max(0, int(offset))}&limit={page_size}&show_dir=1&natsort=1&format=json"
         )
-        result = http_request_json(url, extra_headers=headers, timeout=45)
+        result = _http_request_115_with_retry(url, headers, timeout=45)
         if not bool(result.get("state", False)):
             break
         raw_items = result.get("data") or []

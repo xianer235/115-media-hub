@@ -48,7 +48,10 @@
             return {
                 entries: cloneJsonValue(cached.entries, []),
                 summary: cloneJsonValue(cached.summary, { folder_count: 0, file_count: 0 }),
-                entries_complete: cached.entries_complete !== false
+                entries_complete: cached.entries_complete !== false,
+                count: Number(cached.count || 0) || 0,
+                next_offset: Number(cached.next_offset || 0) || 0,
+                has_more: !!cached.has_more
             };
         }
 
@@ -60,6 +63,9 @@
                 entries: cloneJsonValue(entries, []),
                 summary: cloneJsonValue(summary, { folder_count: 0, file_count: 0 }),
                 entries_complete: payload?.entries_complete !== false,
+                count: Number(payload?.count || 0) || 0,
+                next_offset: Number(payload?.next_offset || 0) || 0,
+                has_more: !!payload?.has_more,
                 cached_at: Date.now()
             };
             pruneResourceFolderBranchCache();
@@ -89,7 +95,8 @@
                     folder_count: Number(sourceSummary.folder_count || folderEntries.length),
                     file_count: Number(sourceSummary.file_count || 0)
                 },
-                entries_complete: false
+                entries_complete: false,
+                has_more: false
             };
         }
 
@@ -97,7 +104,10 @@
             const fullPayload = {
                 entries: Array.isArray(payload?.entries) ? payload.entries : [],
                 summary: payload?.summary || buildResourceFolderSummaryFromEntries(payload?.entries || []),
-                entries_complete: payload?.entries_complete !== false
+                entries_complete: payload?.entries_complete !== false,
+                count: Number(payload?.count || 0) || 0,
+                next_offset: Number(payload?.next_offset || 0) || 0,
+                has_more: !!payload?.has_more
             };
             setResourceFolderBranchCache(cid, fullPayload, { provider, foldersOnly: false });
             setResourceFolderBranchCache(cid, buildResourceFoldersOnlyPayload(fullPayload), { provider, foldersOnly: true });
@@ -122,36 +132,44 @@
 
         async function fetchResourceFolderData(
             cid = '0',
-            { provider = '115', foldersOnly = false, forceRefresh = false } = {}
+            { provider = '115', foldersOnly = false, forceRefresh = false, offset = 0, limit = 0 } = {}
         ) {
             const normalizedProvider = normalizeResourceProviderCacheKey(provider);
             const normalizedCid = String(cid || '0').trim() || '0';
             const normalizedFoldersOnly = !!foldersOnly;
+            const normalizedOffset = Math.max(0, Number(offset || 0) || 0);
+            const normalizedLimit = Number(limit || 0) > 0 ? Math.max(20, Number(limit) || 0) : 0;
             const cacheOptions = {
                 provider: normalizedProvider,
                 foldersOnly: normalizedFoldersOnly
             };
-            if (!forceRefresh) {
+            if (!forceRefresh && normalizedOffset === 0) {
                 const cached = getResourceFolderBranchCache(normalizedCid, cacheOptions);
                 if (cached) {
                     return {
                         entries: Array.isArray(cached.entries) ? cached.entries : [],
                         summary: cached.summary || { folder_count: 0, file_count: 0 },
-                        entries_complete: cached.entries_complete !== false
+                        entries_complete: cached.entries_complete !== false,
+                        count: cached.count,
+                        next_offset: cached.next_offset,
+                        has_more: cached.has_more
                     };
                 }
             }
             const cacheKey = buildResourceFolderBranchCacheKey(normalizedCid, {
                 provider: normalizedProvider,
                 foldersOnly: normalizedFoldersOnly
-            });
+            }) + `|${normalizedOffset}|${normalizedLimit}`;
             const inFlight = resourceFolderFetchInFlight[cacheKey];
             if (inFlight) {
                 const sharedPayload = await inFlight;
                 return {
                     entries: cloneJsonValue(sharedPayload.entries, []),
                     summary: cloneJsonValue(sharedPayload.summary, { folder_count: 0, file_count: 0 }),
-                    entries_complete: sharedPayload.entries_complete !== false
+                    entries_complete: sharedPayload.entries_complete !== false,
+                    count: Number(sharedPayload.count || 0) || 0,
+                    next_offset: Number(sharedPayload.next_offset || 0) || 0,
+                    has_more: !!sharedPayload.has_more
                 };
             }
             const requestPromise = (async () => {
@@ -160,11 +178,14 @@
                 params.set('compact', '1');
                 if (normalizedFoldersOnly) params.set('folders_only', '1');
                 if (forceRefresh) params.set('force_refresh', '1');
+                if (normalizedOffset > 0) params.set('offset', String(normalizedOffset));
+                if (normalizedLimit > 0) params.set('limit', String(normalizedLimit));
                 const data = await fetchResourceBrowserJson(`${apiPrefix}/folders?${params.toString()}`);
                 const entries = Array.isArray(data.entries) ? data.entries : [];
                 const summary = data.summary && typeof data.summary === 'object'
                     ? data.summary
                     : buildResourceFolderSummaryFromEntries(entries);
+                const hasMore = !!data.has_more;
                 const payload = {
                     entries,
                     summary: {
@@ -173,11 +194,17 @@
                     },
                     entries_complete: typeof data.entries_complete === 'boolean'
                         ? data.entries_complete
-                        : !normalizedFoldersOnly
+                        : (!normalizedFoldersOnly && !hasMore),
+                    count: Number(data.count || 0) || 0,
+                    next_offset: Math.max(
+                        normalizedOffset + entries.length,
+                        Number(data.next_offset || 0) || 0
+                    ),
+                    has_more: hasMore
                 };
-                if (normalizedFoldersOnly) {
+                if (normalizedOffset === 0 && !hasMore && normalizedFoldersOnly) {
                     setResourceFolderBranchCache(normalizedCid, payload, cacheOptions);
-                } else {
+                } else if (normalizedOffset === 0 && !hasMore && !normalizedFoldersOnly) {
                     setResourceFolderBranchCaches(normalizedCid, payload, { provider: normalizedProvider });
                 }
                 return payload;
@@ -188,7 +215,10 @@
                 return {
                     entries: cloneJsonValue(payload.entries, []),
                     summary: cloneJsonValue(payload.summary, { folder_count: 0, file_count: 0 }),
-                    entries_complete: payload.entries_complete !== false
+                    entries_complete: payload.entries_complete !== false,
+                    count: Number(payload.count || 0) || 0,
+                    next_offset: Number(payload.next_offset || 0) || 0,
+                    has_more: !!payload.has_more
                 };
             } finally {
                 if (resourceFolderFetchInFlight[cacheKey] === requestPromise) {

@@ -4,7 +4,6 @@ from typing import Any, Dict
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from ..background import submit_background
 from ..core import normalize_relative_path, parse_int
 from ..services.scraper import (
     build_scraper_batch_plan,
@@ -23,10 +22,10 @@ from ..services.scraper import (
     list_scraper_entries,
     move_scraper_entries,
     rename_scraper_entry,
-    rollback_scraper_job,
-    run_scraper_job,
     save_scraper_batch_preferences,
     scan_scraper_batch_items,
+    submit_scraper_job,
+    submit_scraper_rollback,
     resolve_scraper_dest_folder_id,
     resolve_scraper_path_entry,
 )
@@ -51,8 +50,10 @@ async def get_scraper_entries_endpoint(provider: str, request: Request) -> Dict[
     cid = str(request.query_params.get("cid", "0") or "0").strip() or "0"
     force_refresh = request.query_params.get("force_refresh") == "1"
     keyword = str(request.query_params.get("q", "") or "").strip()
+    offset = max(0, parse_int(request.query_params.get("offset", 0), default=0))
+    limit = max(20, min(parse_int(request.query_params.get("limit", 0), default=0), 1000))
     try:
-        return await asyncio.to_thread(list_scraper_entries, provider, cid, force_refresh, keyword)
+        return await asyncio.to_thread(list_scraper_entries, provider, cid, force_refresh, keyword, offset, limit)
     except Exception as exc:
         return _error_response(exc)
 
@@ -324,7 +325,7 @@ async def create_scraper_job_endpoint(request: Request) -> Dict[str, Any]:
     try:
         result = await asyncio.to_thread(create_scraper_job_from_plan, payload)
         job_id = int(result.get("job_id", 0) or 0)
-        submit_background(run_scraper_job, job_id, label="scraper-job")
+        submit_scraper_job(job_id)
         return result
     except Exception as exc:
         return _error_response(exc)
@@ -359,7 +360,7 @@ async def rollback_scraper_job_endpoint(job_id: int) -> Dict[str, Any]:
     if normalized_job_id <= 0:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "任务 ID 无效"})
     try:
-        submit_background(rollback_scraper_job, normalized_job_id, label="scraper-rollback")
+        submit_scraper_rollback(normalized_job_id)
         return {"ok": True, "job_id": normalized_job_id}
     except Exception as exc:
         return _error_response(exc)

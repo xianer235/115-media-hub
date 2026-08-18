@@ -1,4 +1,5 @@
 const SCRAPER_JOB_ACTIVE_STATUSES = new Set(['pending', 'running', 'rollback_running']);
+const SCRAPER_ENTRY_PAGE_LIMIT = 300;
 
 function getScraperProviderOptions() {
     const meta = window.providerMeta || [];
@@ -23,6 +24,9 @@ const state = {
     entries: [],
     entryError: '',
     summary: { folder_count: 0, file_count: 0 },
+    nextOffset: 0,
+    hasMore: false,
+    loadingMore: false,
     selected: new Map(),
     entrySort: { key: 'name', direction: 'asc' },
     search: '',
@@ -597,6 +601,15 @@ function toggleToolPopover(tool) {
     requestAnimationFrame(syncScraperBrowserHeight);
 }
 
+function openSearchPopover({ focus = false } = {}) {
+    state.activeTool = 'search';
+    $('scraper-search-popover')?.classList.remove('hidden');
+    if (focus) {
+        setTimeout(() => $('scraper-search-input')?.focus(), 20);
+    }
+    requestAnimationFrame(syncScraperBrowserHeight);
+}
+
 async function promptText({ title = '输入名称', message = '', defaultValue = '', confirmText = '确认' } = {}) {
     return new Promise((resolve) => {
         const modal = document.createElement('div');
@@ -1029,7 +1042,9 @@ function renderEntries() {
         return;
     }
     if (!state.entries.length) {
-        list.innerHTML = '<div class="scraper-empty-row">当前目录没有可显示条目。</div>';
+        list.innerHTML = state.search
+            ? `<div class="scraper-empty-row">没有找到匹配“${escapeHtml(state.search)}”的条目。</div>`
+            : '<div class="scraper-empty-row">当前目录没有可显示条目。</div>';
         return;
     }
     const columns = [
@@ -1060,11 +1075,24 @@ function renderEntries() {
             render: (entry) => entry.is_dir ? '--' : escapeHtml(formatFileSize(entry.size)),
         },
     ];
-    list.innerHTML = manager.renderRows(getDisplayEntries(), columns, {
+    let listHtml = manager.renderRows(getDisplayEntries(), columns, {
         emptyText: '当前目录没有可显示条目。',
         isSelected: (entry) => state.selected.has(entry.id),
         rowAttrs: (entry) => `data-scraper-entry-id="${escapeHtml(entry.id)}"`,
     });
+    if (state.hasMore) {
+        listHtml += `
+            <div class="scraper-empty-row">
+                <button
+                    type="button"
+                    class="scraper-compact-btn scraper-primary-soft"
+                    data-scraper-action="load-more-entries"
+                    ${state.loadingMore ? 'disabled' : ''}
+                >${state.loadingMore ? '加载中...' : `加载更多条目（已加载 ${state.entries.length}）`}</button>
+            </div>
+        `;
+    }
+    list.innerHTML = listHtml;
 }
 
 function getTmdbDisplayTitle(binding = state.tmdb) {
@@ -1712,27 +1740,60 @@ async function loadProviders() {
     renderProviderStatus();
 }
 
-async function loadEntries({ force = false, keepSearch = true } = {}) {
-    state.loading = true;
+async function loadEntries({ force = false, keepSearch = true, more = false } = {}) {
+    if (more) {
+        state.loadingMore = true;
+    } else {
+        state.loading = true;
+    }
     state.entryError = '';
     renderEntries();
     try {
         const params = new URLSearchParams({ cid: state.cid });
         if (force) params.set('force_refresh', '1');
         if (keepSearch && state.search) params.set('q', state.search);
+        params.set('offset', String(more ? (state.nextOffset || 0) : 0));
+        params.set('limit', String(SCRAPER_ENTRY_PAGE_LIMIT));
         const data = await window.MediaHubApi.getJson(`/scraper/${encodeURIComponent(state.provider)}/entries?${params.toString()}`);
-        state.entries = (Array.isArray(data.entries) ? data.entries : []).map(enrichEntry);
-        state.summary = data.summary || { folder_count: 0, file_count: 0 };
+        const incoming = (Array.isArray(data.entries) ? data.entries : []).map(enrichEntry);
+        if (more) {
+            state.entries = state.entries.concat(incoming);
+        } else {
+            state.entries = incoming;
+            clearSelection();
+            resetIdentifyContext({ resetInputs: true });
+        }
+        const incomingFolders = incoming.filter(entry => entry.is_dir).length;
+        const incomingFiles = incoming.length - incomingFolders;
+        if (more) {
+            state.summary = {
+                folder_count: Number(state.summary.folder_count || 0) + incomingFolders,
+                file_count: Number(state.summary.file_count || 0) + incomingFiles,
+            };
+        } else {
+            const pageSummary = data.summary || { folder_count: 0, file_count: 0 };
+            state.summary = {
+                folder_count: Math.max(incomingFolders, Number(pageSummary.folder_count || 0)),
+                file_count: Math.max(incomingFiles, Number(pageSummary.file_count || 0)),
+            };
+        }
+        state.nextOffset = Number(data.next_offset ?? (more ? state.nextOffset : incoming.length)) || 0;
+        state.hasMore = !!data.has_more;
         state.entryError = '';
-        clearSelection();
-        resetIdentifyContext({ resetInputs: true });
     } catch (error) {
-        state.entries = [];
-        state.summary = { folder_count: 0, file_count: 0 };
-        state.entryError = error.message || '未知错误';
-        showToast(`读取目录失败：${state.entryError}`, { tone: 'error', duration: 3200, placement: 'top-center' });
+        if (more) {
+            showToast(`加载更多条目失败：${error.message || '请稍后重试'}`, { tone: 'warn', duration: 3200, placement: 'top-center' });
+        } else {
+            state.entries = [];
+            state.summary = { folder_count: 0, file_count: 0 };
+            state.nextOffset = 0;
+            state.hasMore = false;
+            state.entryError = error.message || '未知错误';
+            showToast(`读取目录失败：${state.entryError}`, { tone: 'error', duration: 3200, placement: 'top-center' });
+        }
     } finally {
         state.loading = false;
+        state.loadingMore = false;
         renderEntries();
         requestAnimationFrame(syncScraperBrowserHeight);
     }
@@ -2373,9 +2434,6 @@ async function identifyBatch() {
             })),
         });
         state.batchIdentify = Array.isArray(data.results) ? data.results : [];
-        state.batchBindings = {};
-        state.batchIncluded = new Set();
-        state.batchSearchState = {};
         for (const result of state.batchIdentify) {
             if (result?.ok && result.auto_pick) {
                 const index = Number(result.item_index || 0);
@@ -2931,11 +2989,20 @@ function showPlanReadyToast(data) {
         .map(text => (text.length > 60 ? `${text.slice(0, 60)}…` : text))
         .join('；');
     const warningNote = warningText ? `：${warningText}${warningCount > 2 ? ' 等' : ''}` : '';
+    const issues = Array.isArray(data.issues) ? data.issues : [];
+    const issueText = issues
+        .map(text => String(text || '').trim())
+        .filter(Boolean)
+        .slice(0, 2)
+        .map(text => (text.length > 60 ? `${text.slice(0, 60)}…` : text))
+        .join('；');
     const noChangeOnly = readyCount <= 0 && totalCount === 0 && unchangedCount > 0;
     showToast(
         readyCount > 0
             ? (warningCount > 0 ? `预览已生成，含 ${warningCount} 个提醒${warningNote}${unchangedNote}` : `预览已生成，请勾选确认后执行${unchangedNote}`)
-            : (noChangeOnly ? '识别完成，没有需要改名的文件' : `预览没有可执行项，请处理冲突后再试${unchangedNote}`),
+            : (noChangeOnly
+                ? '识别完成，没有需要改名的文件'
+                : `预览没有可执行项：${issueText || '请处理冲突后再试'}${unchangedNote}`),
         {
             tone: readyCount > 0 ? (warningCount > 0 ? 'warn' : 'success') : (noChangeOnly ? 'info' : 'warn'),
             duration: 2800,
@@ -3361,21 +3428,22 @@ function handleClick(event) {
     if (!actionButton) return;
     const action = String(actionButton.dataset.scraperAction || '').trim();
     if (action === 'refresh') void loadEntries({ force: true });
+    if (action === 'load-more-entries') void loadEntries({ more: true });
     if (action === 'back-top') scrollScraperToTop();
     if (action === 'toggle-search') toggleToolPopover('search');
     if (action === 'toggle-create-folder') toggleToolPopover('create');
     if (action === 'close-tools') closeToolPopovers();
     if (action === 'search') {
         state.search = String($('scraper-search-input')?.value || '').trim();
-        closeToolPopovers();
-        renderEntries();
+        openSearchPopover({ focus: true });
+        void loadEntries();
     }
     if (action === 'clear-search') {
         state.search = '';
         const input = $('scraper-search-input');
         if (input) input.value = '';
-        closeToolPopovers();
-        renderEntries();
+        openSearchPopover({ focus: true });
+        void loadEntries();
     }
     if (action === 'create-folder') void createFolder();
     if (action === 'select-range') selectRangeBetweenChecked();
@@ -3521,8 +3589,8 @@ function bindEvents() {
     $('scraper-search-input')?.addEventListener('keydown', (event) => {
         if (event.key !== 'Enter' || event.isComposing) return;
         state.search = String(event.target.value || '').trim();
-        closeToolPopovers();
-        renderEntries();
+        openSearchPopover({ focus: false });
+        void loadEntries();
     });
     $('scraper-new-folder-name')?.addEventListener('keydown', (event) => {
         if (event.key !== 'Enter' || event.isComposing) return;

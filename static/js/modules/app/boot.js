@@ -692,6 +692,10 @@
                 await loadResourceFolderFiles(resourceFolderTrail[resourceFolderTrail.length - 1]?.id || '0');
                 return;
             }
+            if (action === 'load-more-folders') {
+                await loadMoreResourceFolders();
+                return;
+            }
             if (action === 'toggle-files') {
                 resourceFolderShowAllFiles = !resourceFolderShowAllFiles;
                 renderResourceFolderList();
@@ -703,6 +707,10 @@
             const action = btn.dataset.monitorFolderAction || '';
             if (action === 'open') {
                 await openMonitorFolderChild(btn.dataset.monitorFolderId || '0', btn.dataset.monitorFolderName || '--');
+                return;
+            }
+            if (action === 'load-more') {
+                await loadMoreMonitorFolders();
             }
         });
         document.getElementById('subscription-folder-list')?.addEventListener('click', async (e) => {
@@ -711,6 +719,10 @@
             const action = btn.dataset.subscriptionFolderAction || '';
             if (action === 'open') {
                 await openSubscriptionFolderChild(btn.dataset.subscriptionFolderId || '0', btn.dataset.subscriptionFolderName || '--');
+                return;
+            }
+            if (action === 'load-more') {
+                await loadMoreSubscriptionFolders();
             }
         });
         document.getElementById('subscription-share-folder-list')?.addEventListener('click', async (e) => {

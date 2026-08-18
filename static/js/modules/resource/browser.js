@@ -423,6 +423,8 @@
             const fileCount = Number(ctx.resourceFolderSummary?.file_count || 0);
             if (ctx.resourceFolderEntriesComplete) {
                 summary.innerText = `当前目录下共有 ${folderCount} 个文件夹 / ${fileCount} 个文件。`;
+            } else if (ctx.resourceFolderHasMore) {
+                summary.innerText = `已加载 ${folderCount} 个文件夹，可点击“加载更多文件夹”继续浏览。`;
             } else if (fileCount > 0) {
                 summary.innerText = `当前目录下共有 ${folderCount} 个文件夹 / ${fileCount} 个文件，默认优先加载文件夹以提升打开速度。`;
             } else {
@@ -457,6 +459,13 @@
                     minWidth: '560px',
                     emptyText: '当前目录没有子文件夹。',
                 }));
+            }
+            if (ctx.resourceFolderHasMore) {
+                lines.push(
+                    `<div class="resource-browser-load-more-row">` +
+                    `<button type="button" data-resource-folder-action="load-more-folders" class="resource-browser-load-more-btn ${ctx.resourceFolderLoadingMore ? 'btn-disabled' : ''}" ${ctx.resourceFolderLoadingMore ? 'disabled' : ''}>${ctx.resourceFolderLoadingMore ? '加载中...' : '加载更多文件夹'}</button>` +
+                    `</div>`
+                );
             }
             const fileCount = Number(ctx.resourceFolderSummary?.file_count || 0);
             if (ctx.resourceFolderFilesLoading) {

@@ -240,7 +240,7 @@ class ScraperPathSelectionIntegrationTest(unittest.TestCase):
         self.assertIn("apply-manual-episode", source)
         self.assertIn("clear-manual-episode", source)
 
-    def test_scraper_search_filters_loaded_entries_without_remote_reload(self):
+    def test_scraper_search_triggers_official_server_search(self):
         source = SCRAPER_CORE_PATH.read_text(encoding="utf-8")
         template = SCRAPER_TEMPLATE_PATH.read_text(encoding="utf-8")
 
@@ -252,14 +252,22 @@ class ScraperPathSelectionIntegrationTest(unittest.TestCase):
 
         search_start = source.index("if (action === 'search')")
         search_end = source.index("if (action === 'clear-search')", search_start)
-        clear_end = source.index("closeToolPopovers();", search_end) + len("closeToolPopovers();")
-        search_body = source[search_start:clear_end]
-        self.assertNotIn("loadEntries(", search_body)
+        search_body = source[search_start:search_end]
+        self.assertIn("loadEntries(", search_body)
+        self.assertIn("openSearchPopover(", search_body)
+        self.assertNotIn("closeToolPopovers()", search_body)
+
+        clear_end = source.index("if (action === 'create-folder')", search_end)
+        clear_body = source[search_end:clear_end]
+        self.assertIn("openSearchPopover({ focus: true })", clear_body)
+        self.assertNotIn("closeToolPopovers()", clear_body)
 
         keydown_start = source.index("$('scraper-search-input')?.addEventListener('keydown'")
-        keydown_end = source.index("});", keydown_start) + len("});")
-        self.assertNotIn("loadEntries(", source[keydown_start:keydown_end])
-        self.assertIn('placeholder="筛选已加载条目"', template)
+        keydown_load = source.index("void loadEntries();", keydown_start) + len("void loadEntries();")
+        keydown_end = source.index("});", keydown_load) + len("});")
+        self.assertIn("loadEntries(", source[keydown_start:keydown_end])
+        self.assertNotIn("closeToolPopovers()", source[keydown_start:keydown_end])
+        self.assertIn('placeholder="搜索当前目录（服务端搜索）"', template)
 
 
 if __name__ == "__main__":

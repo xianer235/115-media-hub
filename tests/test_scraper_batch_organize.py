@@ -104,7 +104,7 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
             "d1c": [{"id": "f1b", "name": "流浪地球.S01E02.mkv", "is_dir": False}],
         }
 
-        def fake_list(provider, cookie, cid, folders_only=False):
+        def fake_list(provider, cookie, cid, folders_only=False, offset=0, limit=0):
             return {"entries": folder_children.get(cid, root_entries)}
 
         with (
@@ -174,7 +174,7 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         ]
         folder_children = {"d1": [{"id": "f1a", "name": "流浪地球.S01E01.mkv", "is_dir": False}]}
 
-        def fake_list(provider, cookie, cid, folders_only=False):
+        def fake_list(provider, cookie, cid, folders_only=False, offset=0, limit=0):
             return {"entries": folder_children.get(cid, [])}
 
         with (
@@ -591,7 +591,7 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
             ],
         }
 
-        def fake_item_plan(payload):
+        def fake_item_plan(payload, **kwargs):
             entry = payload["entries"][0]
             is_dir = bool(entry.get("is_dir"))
             return {
@@ -692,7 +692,7 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
                 "tmdb_episode_mode": "seasonal",
             }
 
-        def fake_item_plan(payload):
+        def fake_item_plan(payload, **kwargs):
             entry = payload["entries"][0]
             return {
                 "actions": [
@@ -758,7 +758,7 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
             patch.object(scraper, "_require_scraper_operation"),
             patch.object(scraper, "_require_provider_cookie", return_value="cookie"),
             patch.object(scraper, "_target_name_exists", return_value=False),
-            patch.object(scraper, "_rename_provider_entry", return_value={"state": True}),
+            patch.object(scraper, "_rename_provider_entries", return_value={"state": True}),
             patch.object(scraper, "_move_provider_entries", return_value={"state": True}),
             patch.object(scraper, "_invalidate_provider_parent"),
             patch.object(monitor_changes, "_enqueue_task_names"),
@@ -1033,7 +1033,7 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
                 }
             )
 
-        def fake_list(provider, cookie, cid, folders_only=False):
+        def fake_list(provider, cookie, cid, folders_only=False, offset=0, limit=0):
             if cid == "d1":
                 return {"entries": entries}
             return {"entries": []}
@@ -1169,7 +1169,7 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
                 "tmdb_episode_mode": "seasonal",
             }
 
-        def fake_item_plan(payload):
+        def fake_item_plan(payload, **kwargs):
             return {
                 "actions": [],
                 "issues": [],
@@ -1403,8 +1403,24 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
     def test_is_scraper_ad_file_classifies_ad_png_txt_and_keeps_poster(self):
         self.assertTrue(scraper._is_scraper_ad_file("更多电视剧集下载请访问高清剧集网官网(www.BPHDTV.com) .png"))
         self.assertTrue(scraper._is_scraper_ad_file("YTSYifyUP (TOR).txt"))
-        self.assertTrue(scraper._is_scraper_ad_file("movie.nfo"))
+        self.assertFalse(scraper._is_scraper_ad_file("movie.nfo"))
+        self.assertEqual(scraper._scraper_file_category("movie.nfo"), "info")
         self.assertFalse(scraper._is_scraper_ad_file("poster.jpg"))
+
+    def test_build_rename_plan_keeps_nfo_info_file_even_when_deleting_ads(self):
+        tmdb = self._tmdb_binding(title="Show", year="2024", media_type="tv")
+        plan = self._rename_plan_with_files(
+            ["Show.S01E01.1080p.mkv", "movie.nfo"],
+            tmdb,
+            folder_name="旧剧集名",
+            options={
+                "rename_selected_folders": True,
+                "use_season_subfolder": False,
+                "delete_ad_files": True,
+            },
+        )
+        self.assertEqual([action for action in plan["actions"] if action.get("delete")], [])
+        self.assertEqual(plan.get("ignored_count"), 1)
 
     def test_build_rename_plan_creates_ad_delete_actions_when_enabled(self):
         tmdb = self._tmdb_binding(title="Show", year="2024", media_type="tv")
@@ -1508,7 +1524,7 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
                 "tmdb_episode_mode": "seasonal",
             }
 
-        def fake_item_plan(payload):
+        def fake_item_plan(payload, **kwargs):
             captured_options.append(dict(payload.get("options", {})))
             return {
                 "actions": [
@@ -1584,7 +1600,7 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
                 "tmdb_episode_mode": "seasonal",
             }
 
-        def fake_item_plan(payload):
+        def fake_item_plan(payload, **kwargs):
             captured_options.append(dict(payload.get("options", {})))
             return {
                 "actions": [
@@ -1667,7 +1683,7 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
             "dE2": [],
         }
 
-        def fake_list(provider, cookie, cid, folders_only=False):
+        def fake_list(provider, cookie, cid, folders_only=False, offset=0, limit=0):
             return {"entries": tree.get(cid, [])}
 
         root_entry = self._library_entry("root", "影视库", True, "影视")
@@ -1694,7 +1710,7 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
             "root": [self._library_entry("fA", "movie.mkv", False, "影视/电影A")],
         }
 
-        def fake_list(provider, cookie, cid, folders_only=False):
+        def fake_list(provider, cookie, cid, folders_only=False, offset=0, limit=0):
             return {"entries": tree.get(cid, [])}
 
         with (
@@ -1723,7 +1739,7 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
             "dB": [self._library_entry("fB", "剧集B.S01E01.mkv", False, "影视/我的收藏/剧集B")],
         }
 
-        def fake_list(provider, cookie, cid, folders_only=False):
+        def fake_list(provider, cookie, cid, folders_only=False, offset=0, limit=0):
             return {"entries": tree.get(cid, [])}
 
         with (
@@ -1746,7 +1762,7 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
             "dS02": [self._library_entry("f2", "剧集B.S02E01.mkv", False, "影视/剧集B/Season 02")],
         }
 
-        def fake_list(provider, cookie, cid, folders_only=False):
+        def fake_list(provider, cookie, cid, folders_only=False, offset=0, limit=0):
             return {"entries": tree.get(cid, [])}
 
         with (
@@ -1776,7 +1792,7 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
             "dB": [self._library_entry("fB", "剧集B.S01E01.mkv", False, "影视/影视库/剧集B")],
         }
 
-        def fake_list(provider, cookie, cid, folders_only=False):
+        def fake_list(provider, cookie, cid, folders_only=False, offset=0, limit=0):
             return {"entries": tree.get(cid, [])}
 
         with (
@@ -1800,7 +1816,7 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
             "root": [self._library_entry("fA", "movie.mkv", False, "影视/电影A")],
         }
 
-        def fake_list(provider, cookie, cid, folders_only=False):
+        def fake_list(provider, cookie, cid, folders_only=False, offset=0, limit=0):
             return {"entries": tree.get(cid, [])}
 
         with (
@@ -1886,7 +1902,7 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
                 "tmdb_episode_mode": "seasonal",
             }
 
-        def fake_item_plan(payload):
+        def fake_item_plan(payload, **kwargs):
             return {
                 "actions": [],
                 "issues": [],
@@ -2010,7 +2026,7 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
                 "tmdb_episode_mode": "seasonal",
             }
 
-        def fake_item_plan(plan_payload):
+        def fake_item_plan(plan_payload, **kwargs):
             captured_entries.extend(list(plan_payload.get("entries", [])))
             return {
                 "actions": [
@@ -2467,7 +2483,7 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         file_actions = [action for action in plan["actions"] if not action["is_dir"]]
         self.assertEqual(len(file_actions), 1)
         self.assertEqual(file_actions[0]["new_name"], "Movie.2024.1080p.mkv")
-        self.assertEqual(file_actions[0]["target_parent_path"], "旧剧集名")
+        self.assertEqual(file_actions[0]["target_parent_path"], "影视/旧剧集名")
 
     def test_file_name_mode_clean_without_ad_is_unchanged(self):
         tmdb = self._tmdb_binding(title="逐玉", year="2026", media_type="tv")

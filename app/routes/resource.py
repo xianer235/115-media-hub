@@ -350,6 +350,9 @@ def _build_resource_folder_response(
     folders_only: bool,
     compact: bool,
     entries_complete: bool,
+    count: Optional[int] = None,
+    next_offset: Optional[int] = None,
+    has_more: Optional[bool] = None,
 ) -> Dict[str, Any]:
     entries_all = entries if isinstance(entries, list) else []
     folder_entries = [entry for entry in entries_all if entry.get("is_dir")]
@@ -360,6 +363,13 @@ def _build_resource_folder_response(
         "file_count": max(0, parse_int(normalized_summary.get("file_count", 0), default=0)),
     }
     response_entries = folder_entries if folders_only else entries_all
+    paging_payload: Dict[str, Any] = {}
+    if count is not None:
+        paging_payload["count"] = max(0, int(count or 0))
+    if next_offset is not None:
+        paging_payload["next_offset"] = max(0, int(next_offset or 0))
+    if has_more is not None:
+        paging_payload["has_more"] = bool(has_more)
     if compact:
         return {
             "ok": True,
@@ -367,6 +377,7 @@ def _build_resource_folder_response(
             "entries": _compact_resource_browser_entries(response_entries),
             "summary": summary_payload,
             "entries_complete": bool(entries_complete),
+            **paging_payload,
         }
     files = [] if folders_only else [entry for entry in entries_all if not entry.get("is_dir")]
     folders = [
@@ -381,6 +392,7 @@ def _build_resource_folder_response(
         "entries": response_entries,
         "summary": summary_payload,
         "entries_complete": bool(entries_complete),
+        **paging_payload,
     }
 
 
@@ -391,6 +403,8 @@ async def _list_resource_folder_entries_with_provider(
     *,
     folders_only: bool = False,
     force_refresh: bool = False,
+    offset: int = 0,
+    limit: int = 0,
 ) -> Dict[str, Any]:
     provider_name = str(getattr(provider, "name", "") or "").strip()
     if provider_name == "115":
@@ -400,6 +414,8 @@ async def _list_resource_folder_entries_with_provider(
             cid,
             force_refresh,
             folders_only,
+            offset,
+            limit,
         )
     return await run_resource_browse_io(provider.list_entries_payload, cookie, cid, folders_only)
 
@@ -1401,6 +1417,8 @@ async def get_provider_folders_endpoint(provider_name: str, request: Request) ->
     folders_only = request.query_params.get("folders_only") == "1"
     compact = request.query_params.get("compact") == "1"
     force_refresh = request.query_params.get("force_refresh") == "1"
+    offset = max(0, parse_int(request.query_params.get("offset", 0), default=0))
+    limit = max(20, min(parse_int(request.query_params.get("limit", 0), default=0), 1000))
     try:
         payload = await _list_resource_folder_entries_with_provider(
             p,
@@ -1408,6 +1426,8 @@ async def get_provider_folders_endpoint(provider_name: str, request: Request) ->
             cid,
             folders_only=folders_only,
             force_refresh=force_refresh,
+            offset=offset,
+            limit=limit,
         )
         entries_all = payload.get("entries", []) if isinstance(payload.get("entries"), list) else []
         summary = payload.get("summary", {}) if isinstance(payload.get("summary"), dict) else {}
@@ -1423,7 +1443,10 @@ async def get_provider_folders_endpoint(provider_name: str, request: Request) ->
             summary,
             folders_only=folders_only,
             compact=compact,
-            entries_complete=not folders_only,
+            entries_complete=bool((payload if isinstance(payload, dict) else {}).get("entries_complete", not folders_only)),
+            count=payload.get("count") if isinstance(payload, dict) else None,
+            next_offset=payload.get("next_offset") if isinstance(payload, dict) else None,
+            has_more=payload.get("has_more") if isinstance(payload, dict) else None,
         )
     except Exception as exc:
         return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
@@ -1571,6 +1594,8 @@ async def get_115_folders_endpoint(request: Request) -> Dict[str, Any]:
     folders_only = request.query_params.get("folders_only") == "1"
     compact = request.query_params.get("compact") == "1"
     force_refresh = request.query_params.get("force_refresh") == "1"
+    offset = max(0, parse_int(request.query_params.get("offset", 0), default=0))
+    limit = max(20, min(parse_int(request.query_params.get("limit", 0), default=0), 1000))
     try:
         payload = await run_resource_browse_io(
             list_115_entries_payload,
@@ -1578,6 +1603,8 @@ async def get_115_folders_endpoint(request: Request) -> Dict[str, Any]:
             cid,
             force_refresh,
             folders_only,
+            offset,
+            limit,
         )
         return _build_resource_folder_response(
             cid,
@@ -1586,6 +1613,9 @@ async def get_115_folders_endpoint(request: Request) -> Dict[str, Any]:
             folders_only=folders_only,
             compact=compact,
             entries_complete=bool((payload if isinstance(payload, dict) else {}).get("entries_complete", not folders_only)),
+            count=(payload if isinstance(payload, dict) else {}).get("count"),
+            next_offset=(payload if isinstance(payload, dict) else {}).get("next_offset"),
+            has_more=(payload if isinstance(payload, dict) else {}).get("has_more"),
         )
     except Exception as exc:
         return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})

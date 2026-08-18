@@ -2,14 +2,18 @@ import os
 import re
 import unicodedata
 import uuid
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..core import *  # noqa: F401,F403
 from ..db import db_connection
 from ..providers.pan115 import (
     invalidate_115_entries_cache,
+    list_115_entries_payload,
+    rename_115_entries,
     resolve_115_entry_by_name,
     resolve_115_folder_id_by_path,
+    search_115_entries,
 )
 from ..providers.registry import get_or_none as get_provider_or_none, list_enabled as list_enabled_providers
 from ..media_tags import media_tag_labels, parse_media_tags, remove_media_tags
@@ -357,6 +361,10 @@ def _extract_copy_destination_cids(
 SCRAPER_JOB_LIMIT_DEFAULT = 20
 SCRAPER_SCAN_MAX_DIRS = 80
 SCRAPER_SCAN_MAX_ENTRIES = 1200
+SCRAPER_BATCH_RENAME_CHUNK_SIZE = 100
+SCRAPER_BATCH_MOVE_CHUNK_SIZE = 100
+SCRAPER_NAME_LOOKUP_PAGE_SIZE = 1000
+SCRAPER_NAME_LOOKUP_MAX_PAGES = 80
 SCRAPER_JOB_ACTIVE_STATUSES = ("pending", "running", "rollback_running")
 SCRAPER_GENERIC_CATEGORY_KEYS = {
     "movie",
@@ -568,11 +576,21 @@ def _list_provider_entries_payload(
     cid: str = "0",
     *,
     folders_only: bool = False,
+    offset: int = 0,
+    limit: int = 0,
 ) -> Dict[str, Any]:
     target_id = str(cid or "0").strip() or "0"
     p = get_provider_or_none(provider)
     if not p:
         raise RuntimeError("网盘类型无效")
+    if provider == "115":
+        return list_115_entries_payload(
+            cookie,
+            target_id,
+            folders_only=folders_only,
+            offset=offset,
+            limit=limit,
+        )
     return p.list_entries_payload(cookie, target_id, folders_only=folders_only)
 
 
@@ -587,6 +605,26 @@ def _rename_provider_entry(provider: str, cookie: str, entry_id: str, new_name: 
     _require_scraper_operation(provider, "rename", "重命名")
     p = get_provider_or_none(provider)
     return p.rename_entry(cookie, entry_id, new_name, parent_id)
+
+
+def _rename_provider_entries(provider: str, cookie: str, renames: Dict[str, str], parent_id: str = "") -> Dict[str, Any]:
+    """批量重命名（115 官方 batch_rename 一次传多个；其他网盘逐条回退）。"""
+    _require_scraper_operation(provider, "rename", "重命名")
+    normalized = normalize_scraper_provider(provider)
+    normalized_renames: Dict[str, str] = {}
+    for raw_id, raw_name in (renames or {}).items():
+        entry_id = str(raw_id or "").strip()
+        name = str(raw_name or "").strip()
+        if entry_id and name:
+            normalized_renames[entry_id] = name
+    if not normalized_renames:
+        raise RuntimeError("重命名条目不能为空")
+    if normalized == "115":
+        return rename_115_entries(cookie, normalized_renames, parent_cid=parent_id)
+    responses = []
+    for entry_id, name in normalized_renames.items():
+        responses.append(_rename_provider_entry(provider, cookie, entry_id, name, parent_id))
+    return {"renames": normalized_renames, "responses": responses}
 
 
 def _move_provider_entries(provider: str, cookie: str, entry_ids: List[str], target_id: str, source_id: str = "") -> Dict[str, Any]:
@@ -705,27 +743,72 @@ def _normalize_scraper_selected_entries(selected: List[Dict[str, Any]]) -> List[
     return normalized
 
 
-def list_scraper_entries(provider: str, cid: str = "0", force_refresh: bool = False, search: str = "") -> Dict[str, Any]:
+def list_scraper_entries(
+    provider: str,
+    cid: str = "0",
+    force_refresh: bool = False,
+    search: str = "",
+    offset: int = 0,
+    limit: int = 0,
+) -> Dict[str, Any]:
     normalized = normalize_scraper_provider(provider)
     cookie = _require_provider_cookie(normalized)
     target_id = str(cid or "0").strip() or "0"
     if force_refresh:
         _invalidate_provider_parent(normalized, target_id)
-    payload = _list_provider_entries_payload(normalized, cookie, target_id, folders_only=False)
+    keyword = str(search or "").strip()
+    search_source = "local"
+    if normalized == "115" and keyword:
+        try:
+            payload = search_115_entries(
+                cookie,
+                target_id,
+                keyword,
+                offset=max(0, int(offset or 0)),
+                limit=max(20, min(int(limit or 300), 1000)),
+            )
+            search_source = "official"
+        except Exception:
+            # 官方搜索不可用时退回分页列表 + 本地过滤，保证搜索功能仍可用。
+            payload = _list_provider_entries_payload(
+                normalized,
+                cookie,
+                target_id,
+                folders_only=False,
+                offset=max(0, int(offset or 0)),
+                limit=max(20, min(int(limit or 300), 1000)),
+            )
+            search_source = "local"
+    else:
+        payload = _list_provider_entries_payload(
+            normalized,
+            cookie,
+            target_id,
+            folders_only=False,
+            offset=max(0, int(offset or 0)),
+            limit=max(20, min(int(limit or 300), 1000)),
+        )
     entries = [
         compact
         for compact in (_compact_scraper_entry(item, target_id) for item in (payload.get("entries", []) if isinstance(payload, dict) else []))
         if compact
     ]
-    keyword = str(search or "").strip().lower()
-    if keyword:
-        entries = [item for item in entries if keyword in str(item.get("name", "")).lower()]
+    if keyword and search_source == "local":
+        lower_keyword = keyword.lower()
+        entries = [item for item in entries if lower_keyword in str(item.get("name", "")).lower()]
     summary = payload.get("summary", {}) if isinstance(payload, dict) and isinstance(payload.get("summary"), dict) else {}
     return {
         "ok": True,
         "provider": normalized,
         "cid": target_id,
         "entries": entries,
+        "count": parse_int(payload.get("count", len(entries)), default=len(entries)),
+        "offset": max(0, parse_int(payload.get("offset", offset), default=0)),
+        "next_offset": parse_int(payload.get("next_offset", offset + len(entries)), default=offset + len(entries)),
+        "has_more": bool(payload.get("has_more", False)),
+        "entries_complete": bool(payload.get("entries_complete", False)),
+        "search": bool(keyword),
+        "search_source": search_source,
         "summary": {
             "folder_count": max(0, parse_int(summary.get("folder_count", 0), 0)),
             "file_count": max(0, parse_int(summary.get("file_count", 0), 0)),
@@ -2005,6 +2088,7 @@ def _build_scraper_target_path(
     episode_widths_by_season: Optional[Dict[int, int]] = None,
     subtitle_suffix: str = "",
     subtitle_index: int = 0,
+    folder_parent_path: str = "",
 ) -> Tuple[str, str]:
     media_type = normalize_tmdb_media_type(tmdb.get("tmdb_media_type") or tmdb.get("media_type"), "movie")
     organize_into_media_folder = bool(options.get("organize_into_media_folder", True))
@@ -2079,7 +2163,11 @@ def _build_scraper_target_path(
             # 保持/清理模式下文件不移动：文件夹重命名由文件夹动作覆盖，文件留在原目录。
             organize_root = source_relative_parent_path
         else:
-            organize_root = source_relative_parent_path if organize_inside_source_folder else folder_title
+            organize_root = (
+                source_relative_parent_path
+                if organize_inside_source_folder
+                else _scraper_folder_organize_root(folder_parent_path, options, folder_title)
+            )
         if not season_folder_allowed:
             return normalize_relative_path(join_relative_path(organize_root, file_name)), ""
         return normalize_relative_path(join_relative_path(organize_root, f"Season {season_no:02d}", file_name)), ""
@@ -2095,25 +2183,85 @@ def _build_scraper_target_path(
         return normalize_relative_path(join_relative_path(source_relative_parent_path, file_name)), ""
     if not organize_into_media_folder:
         return file_name, ""
-    organize_root = source_relative_parent_path if (keep_original_name or organize_inside_source_folder) else folder_title
+    organize_root = (
+        source_relative_parent_path
+        if (keep_original_name or organize_inside_source_folder)
+        else _scraper_folder_organize_root(folder_parent_path, options, folder_title)
+    )
     return normalize_relative_path(join_relative_path(organize_root, file_name)), ""
 
 
-def _get_scraper_cached_entries_payload(
+def _scraper_folder_organize_root(folder_parent_path: str, options: Dict[str, Any], folder_title: str) -> str:
+    """文件夹模式下，文件目标文件夹锚定在“所选文件夹的父目录”，而不是当前浏览目录。
+
+    例如在根目录选中库文件夹拆分为“一级/二级”条目时，文件应整理到
+    “一级/新片名”，而不是被放到根目录下与一级同级。
+    """
+    normalized_parent = normalize_relative_path(str(folder_parent_path or "").strip())
+    if not normalized_parent:
+        return folder_title
+    parent_rel = _relative_parent_path_from_base(
+        normalized_parent,
+        str((options or {}).get("base_path", "") or ""),
+    )
+    return normalize_relative_path(join_relative_path(parent_rel, folder_title))
+
+
+def _scraper_file_folder_anchor(file_entry: Dict[str, Any], folder_anchors: Dict[str, str]) -> str:
+    """根据文件所在目录，找到它所属的“所选文件夹”的父目录作为整理锚点。"""
+    if not folder_anchors:
+        return ""
+    file_parent = normalize_relative_path(str((file_entry or {}).get("parent_path", "") or ""))
+    best_parent = ""
+    best_len = -1
+    for folder_path, parent_path in folder_anchors.items():
+        normalized_folder = normalize_relative_path(str(folder_path or ""))
+        if not normalized_folder:
+            continue
+        if file_parent == normalized_folder or file_parent.startswith(f"{normalized_folder}/"):
+            if len(normalized_folder) > best_len:
+                best_len = len(normalized_folder)
+                best_parent = str(parent_path or "")
+    return best_parent
+
+def _get_scraper_entries_page(
     provider: str,
     cookie: str,
     cid: str,
     folders_only: bool,
-    cache: Optional[Dict[Tuple[str, bool], Dict[str, Any]]] = None,
+    offset: int,
+    limit: int,
+    cache: Optional[Dict[Tuple[str, bool, int, int], Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
+    """按 offset/limit 拉取一页目录条目（名称查找用，避免完整模式全量扫描）。"""
     target_id = str(cid or "0").strip() or "0"
-    cache_key = (target_id, bool(folders_only))
+    safe_offset = max(0, int(offset or 0))
+    safe_limit = max(20, int(limit or SCRAPER_NAME_LOOKUP_PAGE_SIZE))
+    cache_key = (target_id, bool(folders_only), safe_offset, safe_limit)
     if cache is not None and cache_key in cache:
         return cache[cache_key]
-    payload = _list_provider_entries_payload(provider, cookie, target_id, folders_only=folders_only)
+    payload = _list_provider_entries_payload(
+        provider,
+        cookie,
+        target_id,
+        folders_only=folders_only,
+        offset=safe_offset,
+        limit=safe_limit,
+    )
     if cache is not None:
         cache[cache_key] = payload
     return payload
+
+
+def _scraper_page_has_more(payload: Dict[str, Any], offset: int, page_size: int) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if "has_more" in payload:
+        return bool(payload.get("has_more", False))
+    entries = payload.get("entries", []) if isinstance(payload.get("entries"), list) else []
+    total = parse_int(payload.get("count"), default=len(entries))
+    next_offset = max(0, parse_int(payload.get("next_offset"), default=offset + len(entries)))
+    return bool(entries) and (len(entries) >= page_size or (total and next_offset < total))
 
 
 def _walk_existing_folder(
@@ -2132,9 +2280,35 @@ def _walk_existing_folder(
         return path_cache[path_cache_key]
     parts = [part for part in normalize_relative_path(folder_path).split("/") if part]
     for part in parts:
-        payload = _get_scraper_cached_entries_payload(provider, cookie, current, True, entries_cache)
-        entries = payload.get("entries", []) if isinstance(payload, dict) and isinstance(payload.get("entries"), list) else []
-        matched = next((item for item in entries if item.get("is_dir") and str(item.get("name", "") or "").strip() == part), None)
+        matched = None
+        page_offset = 0
+        for _page_index in range(SCRAPER_NAME_LOOKUP_MAX_PAGES):
+            payload = _get_scraper_entries_page(
+                provider,
+                cookie,
+                current,
+                True,
+                page_offset,
+                SCRAPER_NAME_LOOKUP_PAGE_SIZE,
+                entries_cache,
+            )
+            entries = payload.get("entries", []) if isinstance(payload, dict) and isinstance(payload.get("entries"), list) else []
+            matched = next(
+                (
+                    item
+                    for item in entries
+                    if item.get("is_dir") and str(item.get("name", "") or "").strip() == part
+                ),
+                None,
+            )
+            if matched:
+                break
+            if not _scraper_page_has_more(payload, page_offset, SCRAPER_NAME_LOOKUP_PAGE_SIZE):
+                break
+            next_offset = max(0, parse_int(payload.get("next_offset"), default=page_offset + len(entries)))
+            if next_offset <= page_offset:
+                break
+            page_offset = next_offset
         if not matched:
             if path_cache is not None:
                 path_cache[path_cache_key] = ("", False)
@@ -2149,9 +2323,35 @@ def _walk_existing_folder(
 def _ensure_folder_from_base(provider: str, cookie: str, base_cid: str, folder_path: str) -> str:
     current = str(base_cid or "0").strip() or "0"
     for part in [part for part in normalize_relative_path(folder_path).split("/") if part]:
-        payload = _list_provider_entries_payload(provider, cookie, current, folders_only=True)
-        entries = payload.get("entries", []) if isinstance(payload, dict) and isinstance(payload.get("entries"), list) else []
-        matched = next((item for item in entries if item.get("is_dir") and str(item.get("name", "") or "").strip() == part), None)
+        matched = None
+        page_offset = 0
+        for _page_index in range(SCRAPER_NAME_LOOKUP_MAX_PAGES):
+            payload = _get_scraper_entries_page(
+                provider,
+                cookie,
+                current,
+                True,
+                page_offset,
+                SCRAPER_NAME_LOOKUP_PAGE_SIZE,
+                None,
+            )
+            entries = payload.get("entries", []) if isinstance(payload, dict) and isinstance(payload.get("entries"), list) else []
+            matched = next(
+                (
+                    item
+                    for item in entries
+                    if item.get("is_dir") and str(item.get("name", "") or "").strip() == part
+                ),
+                None,
+            )
+            if matched:
+                break
+            if not _scraper_page_has_more(payload, page_offset, SCRAPER_NAME_LOOKUP_PAGE_SIZE):
+                break
+            next_offset = max(0, parse_int(payload.get("next_offset"), default=page_offset + len(entries)))
+            if next_offset <= page_offset:
+                break
+            page_offset = next_offset
         if matched:
             current = str(matched.get("id") or matched.get("cid") or "").strip() or current
             continue
@@ -2171,14 +2371,30 @@ def _target_name_exists(
 ) -> bool:
     if not parent_id:
         return False
-    payload = _get_scraper_cached_entries_payload(provider, cookie, parent_id, False, entries_cache)
-    entries = payload.get("entries", []) if isinstance(payload, dict) and isinstance(payload.get("entries"), list) else []
-    for item in entries:
-        if str(item.get("name", "") or "").strip() != target_name:
-            continue
-        if same_entry_id and str(item.get("id", "") or "").strip() == same_entry_id:
-            continue
-        return True
+    page_offset = 0
+    for _page_index in range(SCRAPER_NAME_LOOKUP_MAX_PAGES):
+        payload = _get_scraper_entries_page(
+            provider,
+            cookie,
+            parent_id,
+            False,
+            page_offset,
+            SCRAPER_NAME_LOOKUP_PAGE_SIZE,
+            entries_cache,
+        )
+        entries = payload.get("entries", []) if isinstance(payload, dict) and isinstance(payload.get("entries"), list) else []
+        for item in entries:
+            if str(item.get("name", "") or "").strip() != target_name:
+                continue
+            if same_entry_id and str(item.get("id", "") or "").strip() == same_entry_id:
+                continue
+            return True
+        if not _scraper_page_has_more(payload, page_offset, SCRAPER_NAME_LOOKUP_PAGE_SIZE):
+            break
+        next_offset = max(0, parse_int(payload.get("next_offset"), default=page_offset + len(entries)))
+        if next_offset <= page_offset:
+            break
+        page_offset = next_offset
     return False
 
 
@@ -2286,7 +2502,12 @@ def _expand_selected_scraper_entries(provider: str, cookie: str, selected: List[
     return files, issues
 
 
-def build_scraper_rename_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
+def build_scraper_rename_plan(
+    payload: Dict[str, Any],
+    *,
+    entries_cache: Optional[Dict[Tuple[str, bool, int, int], Dict[str, Any]]] = None,
+    path_cache: Optional[Dict[Tuple[str, str], Tuple[str, bool]]] = None,
+) -> Dict[str, Any]:
     provider = normalize_scraper_provider(payload.get("provider", "115")) or "115"
     _require_scraper_operation(provider, "scrape", "执行")
     cookie = _require_provider_cookie(provider)
@@ -2319,6 +2540,15 @@ def build_scraper_rename_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
     plan_options["organize_inside_source_folder"] = bool(
         folder_mode and not bool(plan_options.get("rename_selected_folders", True))
     )
+    folder_anchors: Dict[str, str] = {}
+    if folder_mode:
+        for raw in selected:
+            item = raw if isinstance(raw, dict) else {}
+            if not item.get("is_dir"):
+                continue
+            folder_path = normalize_relative_path(str(item.get("path", "") or ""))
+            if folder_path:
+                folder_anchors[folder_path] = normalize_relative_path(str(item.get("parent_path", "") or ""))
     if not folder_mode:
         plan_options["include_tmdb_id"] = False
         plan_options["use_season_subfolder"] = False
@@ -2334,7 +2564,7 @@ def build_scraper_rename_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
         manual_episode_values = _normalize_scraper_manual_episode_overrides(payload.get("episode_overrides"))
         for entry in expanded_files:
             entry_id = str(entry.get("id", "") or "").strip()
-            if _scraper_file_category(str(entry.get("name", "") or "")) in ("ad", "other"):
+            if _scraper_file_category(str(entry.get("name", "") or "")) in ("ad", "info", "other"):
                 file_episode_infos.append(None)
                 continue
             manual_episode = manual_episode_values.get(entry_id, 0)
@@ -2358,8 +2588,8 @@ def build_scraper_rename_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
     warnings: List[str] = []
     target_paths: Set[str] = set()
     target_folder_names: Set[str] = set()
-    preview_entries_cache: Dict[Tuple[str, bool], Dict[str, Any]] = {}
-    preview_folder_path_cache: Dict[Tuple[str, str], Tuple[str, bool]] = {}
+    preview_entries_cache = entries_cache if isinstance(entries_cache, dict) else {}
+    preview_folder_path_cache = path_cache if isinstance(path_cache, dict) else {}
     action_index = 1
     unchanged_count = 0
     ignored_names: List[str] = []
@@ -2441,6 +2671,10 @@ def build_scraper_rename_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
         entry_name = str(entry.get("name", "") or "")
         category = _scraper_file_category(entry_name)
         file_size = max(0, parse_int(entry.get("size", 0), 0))
+        if category == "info":
+            # NFO 等媒体信息文件：保留原名、不删除、不参与整理。
+            ignored_names.append(entry_name)
+            continue
         if _is_scraper_ad_file(entry_name, file_size):
             if bool(plan_options.get("delete_ad_files", False)):
                 delete_actions.append(entry)
@@ -2472,6 +2706,7 @@ def build_scraper_rename_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
             episode_info=episode_info,
             episode_widths_by_season=episode_widths_by_season,
             subtitle_suffix=subtitle_suffix,
+            folder_parent_path=_scraper_file_folder_anchor(entry, folder_anchors),
         )
         if category == "subtitle" and not issue:
             subtitle_dir = (
@@ -2491,6 +2726,7 @@ def build_scraper_rename_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
                     episode_widths_by_season=episode_widths_by_season,
                     subtitle_suffix=subtitle_suffix,
                     subtitle_index=subtitle_index,
+                    folder_parent_path=_scraper_file_folder_anchor(entry, folder_anchors),
                 )
         target_path = _canonical_scraper_mount_path(execution_target_path, base_path)
         old_parent_id = str(entry.get("parent_id", "") or base_cid).strip() or "0"
@@ -2511,9 +2747,11 @@ def build_scraper_rename_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
                 }
             )
             continue
+        # 目标父目录使用完整挂载路径（dirname(target_path)），并统一从挂载根解析，
+        # 避免 base_cid（当前浏览目录）与 base_path 兜底改写不一致时把文件建到错误层级。
         target_parent_path = (
-            normalize_relative_path(os.path.dirname(execution_target_path).replace("\\", "/"))
-            if execution_target_path
+            normalize_relative_path(os.path.dirname(target_path).replace("\\", "/"))
+            if target_path
             else ""
         )
         new_name = os.path.basename(execution_target_path) if execution_target_path else ""
@@ -2525,7 +2763,7 @@ def build_scraper_rename_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
             existing_parent_id, exists = _walk_existing_folder(
                 provider,
                 cookie,
-                base_cid,
+                "0",
                 target_parent_path,
                 entries_cache=preview_entries_cache,
                 path_cache=preview_folder_path_cache,
@@ -2601,7 +2839,7 @@ def build_scraper_rename_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
     if ignored_names:
         ignored_preview = "、".join(ignored_names[:5])
         warnings.append(
-            f"已保留 {len(ignored_names)} 个非影视文件不改名（广告/说明/标准封面等）：{ignored_preview}"
+            f"已保留 {len(ignored_names)} 个非影视文件不改名（媒体信息 NFO/广告/说明/标准封面等）：{ignored_preview}"
             + (" 等" if len(ignored_names) > 5 else "")
         )
     ready_count = sum(1 for item in actions if item.get("ready"))
@@ -3167,6 +3405,442 @@ def _prepare_scraper_job_action_monitor_sync(
     )
 
 
+def _chunk_scraper_items(items: List[Any], size: int):
+    normalized_size = max(1, int(size or 1))
+    for index in range(0, len(items), normalized_size):
+        yield items[index : index + normalized_size]
+
+
+def _restore_scraper_move_rename_actions(
+    provider: str,
+    cookie: str,
+    actions: List[Dict[str, Any]],
+) -> None:
+    """批量“移动+改名”失败后尽力恢复：先移回源目录，再改回旧名（可能停在临时名）。"""
+    move_back: Dict[str, List[str]] = {}
+    rename_back: Dict[str, Dict[str, str]] = {}
+    for action in actions or []:
+        entry_id = str(action.get("entry_id", "") or "").strip()
+        old_parent_id = str(action.get("old_parent_id", "") or "0").strip() or "0"
+        old_name = str(action.get("old_name", "") or "")
+        if not entry_id or not old_name:
+            continue
+        move_back.setdefault(old_parent_id, []).append(entry_id)
+        rename_back.setdefault(old_parent_id, {})[entry_id] = old_name
+    for parent_id, ids in move_back.items():
+        try:
+            _move_provider_entries(provider, cookie, ids, parent_id)
+        except Exception:
+            pass
+    for parent_id, renames in rename_back.items():
+        try:
+            _rename_provider_entries(provider, cookie, renames, parent_id=parent_id)
+        except Exception:
+            pass
+
+
+def _execute_scraper_job_batch_forward(
+    provider: str,
+    cookie: str,
+    job_id: int,
+    actions: List[Dict[str, Any]],
+    *,
+    base_path: str,
+    conn: Any,
+) -> Tuple[int, int]:
+    """批量执行刮削改名/移动（forward）：
+
+    - 原地改名（文件夹/文件只改名不移动）按父目录分组合并成 batch_rename，
+      每 100 条一次请求，避免一个动作一次请求触发风控；
+    - 移动动作先按完整挂载路径解析目标目录（去重），再按目标目录合并 files/move；
+    - 移动+改名保持“临时改名→移动→改最终名”三步安全模式，但每步按阶段批量提交；
+    - 每个动作仍独立记录状态、监控事件与回滚所需字段。
+
+    返回 (succeeded, failed)。
+    """
+    succeeded = 0
+    failed = 0
+    path_rewrites: List[Tuple[str, str]] = []
+
+    def _progress(detail: str = "正在执行刮削改名") -> None:
+        _update_scraper_job(
+            job_id,
+            _conn=conn,
+            status_detail=f"{detail}：成功 {succeeded}，失败 {failed}",
+            succeeded_actions=succeeded,
+            failed_actions=failed,
+        )
+
+    def _mark_completed(action: Dict[str, Any], detail: str, response_json: Any = None) -> None:
+        nonlocal succeeded
+        _update_scraper_action(
+            int(action.get("id", 0) or 0),
+            _conn=conn,
+            status="completed",
+            status_detail=detail,
+            response_json=safe_json_dumps(response_json) if response_json else "",
+        )
+        succeeded += 1
+        _progress()
+
+    def _mark_failed(action: Dict[str, Any], error: Exception) -> None:
+        nonlocal failed
+        failed += 1
+        _update_scraper_action(
+            int(action.get("id", 0) or 0),
+            _conn=conn,
+            status="failed",
+            status_detail=str(error),
+        )
+        _progress()
+
+    rename_conflict_cache: Dict[Tuple[str, bool], Dict[str, Any]] = {}
+
+    def _run_rename_batch(chunk: List[Dict[str, Any]], parent_id: str) -> None:
+        processable = [
+            action
+            for action in chunk
+            if str(action.get("old_name", "") or "") != str(action.get("new_name", "") or "")
+        ]
+        ready: List[Dict[str, Any]] = []
+        for action in processable:
+            entry_id = str(action.get("entry_id", "") or "").strip()
+            new_name = str(action.get("new_name", "") or "").strip()
+            if new_name and _target_name_exists(
+                provider,
+                cookie,
+                parent_id,
+                new_name,
+                same_entry_id=entry_id,
+                entries_cache=rename_conflict_cache,
+            ):
+                _mark_failed(action, RuntimeError("当前目录中已有同名文件"))
+                continue
+            ready.append(action)
+        if not ready:
+            conn.commit()
+            return
+        for action in ready:
+            _update_scraper_action(
+                int(action.get("id", 0) or 0),
+                _conn=conn,
+                status="running",
+                status_detail="正在批量重命名",
+            )
+        conn.commit()
+        prepared_syncs: List[Dict[str, Any]] = []
+        event_actions: List[Dict[str, Any]] = []
+        renames: Dict[str, str] = {}
+        try:
+            for action in ready:
+                event_action = _rebase_scraper_job_action_paths(action, path_rewrites)
+                event_actions.append(event_action)
+                prepared_syncs.append(
+                    _prepare_scraper_job_action_monitor_sync(
+                        provider,
+                        job_id,
+                        event_action,
+                        base_path=base_path,
+                    )
+                )
+                renames[str(action.get("entry_id", "") or "").strip()] = str(action.get("new_name", "") or "")
+            result = _rename_provider_entries(provider, cookie, renames, parent_id=parent_id)
+            _invalidate_provider_parent(provider, parent_id)
+            for prepared_sync in prepared_syncs:
+                _finish_scraper_monitor_sync(prepared_sync, succeeded=True)
+            for action, event_action in zip(ready, event_actions):
+                if bool(action.get("is_dir")):
+                    path_rewrites.append(
+                        (
+                            str(event_action.get("old_path", "") or ""),
+                            str(event_action.get("new_path", "") or ""),
+                        )
+                    )
+                _mark_completed(action, "已重命名", {"renamed": True, "response": result.get("response", {})})
+        except Exception as exc:
+            for prepared_sync in prepared_syncs:
+                _finish_scraper_monitor_sync(prepared_sync, succeeded=False, error=str(exc))
+            for action in ready:
+                _mark_failed(action, exc)
+        conn.commit()
+
+    # ---- 第一遍：删除与“无变化”动作保持逐条处理；其余进入批量波次。 ----
+    pending: List[Dict[str, Any]] = []
+    for action in actions:
+        action_id = int(action.get("id", 0) or 0)
+        if bool(action.get("delete")):
+            _update_scraper_action(action_id, _conn=conn, status="running", status_detail="正在处理")
+            conn.commit()
+            prepared_sync: Optional[Dict[str, Any]] = None
+            try:
+                entry_id = str(action.get("entry_id", "") or "").strip()
+                old_parent_id = str(action.get("old_parent_id", "") or "0").strip() or "0"
+                event_action = _rebase_scraper_job_action_paths(action, path_rewrites)
+                prepared_sync = _prepare_scraper_job_action_monitor_sync(
+                    provider,
+                    job_id,
+                    event_action,
+                    base_path=base_path,
+                )
+                result = _delete_provider_entries(provider, cookie, [entry_id], old_parent_id)
+                _invalidate_provider_parent(provider, old_parent_id)
+                result["monitor_sync"] = _finish_scraper_monitor_sync(prepared_sync, succeeded=True)
+                _update_scraper_action(
+                    action_id,
+                    _conn=conn,
+                    status="completed",
+                    status_detail="广告文件已删除",
+                    response_json=safe_json_dumps(result),
+                )
+                succeeded += 1
+                _progress("正在执行刮削整理")
+            except Exception as exc:
+                if prepared_sync:
+                    _finish_scraper_monitor_sync(prepared_sync, succeeded=False, error=str(exc))
+                failed += 1
+                _update_scraper_action(action_id, _conn=conn, status="failed", status_detail=str(exc))
+                _progress("正在执行刮削整理")
+            conn.commit()
+            continue
+        old_path_norm = normalize_relative_path(str(action.get("old_path", "") or ""))
+        new_path_norm = normalize_relative_path(str(action.get("new_path", "") or ""))
+        if old_path_norm and new_path_norm and old_path_norm == new_path_norm:
+            # 文件名与路径均未变化：直接跳过，不做任何远程调用，避免限速等待。
+            _update_scraper_action(action_id, _conn=conn, status="skipped", status_detail="文件名与路径未变化")
+            succeeded += 1
+            _progress()
+            conn.commit()
+            continue
+        pending.append(action)
+
+    # ---- 波次一：原地改名，按父目录分组批量提交。 ----
+    rename_only = [
+        action
+        for action in pending
+        if str(action.get("new_parent_id", "") or "").strip()
+        and str(action.get("new_parent_id", "") or "").strip()
+        == str(action.get("old_parent_id", "") or "").strip()
+    ]
+    rename_groups: Dict[str, List[Dict[str, Any]]] = {}
+    for action in rename_only:
+        parent_id = str(action.get("old_parent_id", "") or "0").strip() or "0"
+        rename_groups.setdefault(parent_id, []).append(action)
+    for parent_id, group in rename_groups.items():
+        for chunk in _chunk_scraper_items(group, SCRAPER_BATCH_RENAME_CHUNK_SIZE):
+            _run_rename_batch(chunk, parent_id)
+
+    # ---- 波次二：移动 / 移动+改名。 ----
+    move_pending = [action for action in pending if action not in rename_only]
+    if move_pending:
+        # 1) 目标目录解析（完整挂载路径，从挂载根解析；按路径去重避免重复建目录/请求）。
+        ensure_cache: Dict[str, str] = {}
+        for action in move_pending:
+            action_id = int(action.get("id", 0) or 0)
+            target_parent_path = str(action.get("target_parent_path", "") or "")
+            target_parent_id = str(action.get("new_parent_id", "") or "").strip()
+            if not target_parent_id:
+                if target_parent_path not in ensure_cache:
+                    ensure_cache[target_parent_path] = _ensure_folder_from_base(provider, cookie, "0", target_parent_path)
+                target_parent_id = ensure_cache[target_parent_path]
+                action["new_parent_id"] = target_parent_id
+                _update_scraper_action(action_id, _conn=conn, new_parent_id=target_parent_id)
+        conn.commit()
+
+        # 2) 目标解析后父目录不变的动作退化为原地改名。
+        late_rename = [
+            action
+            for action in move_pending
+            if str(action.get("new_parent_id", "") or "").strip()
+            == str(action.get("old_parent_id", "") or "").strip()
+        ]
+        actual_moves = [action for action in move_pending if action not in late_rename]
+        if late_rename:
+            late_groups: Dict[str, List[Dict[str, Any]]] = {}
+            for action in late_rename:
+                parent_id = str(action.get("old_parent_id", "") or "0").strip() or "0"
+                late_groups.setdefault(parent_id, []).append(action)
+            for parent_id, group in late_groups.items():
+                for chunk in _chunk_scraper_items(group, SCRAPER_BATCH_RENAME_CHUNK_SIZE):
+                    for action in chunk:
+                        if str(action.get("old_name", "") or "") == str(action.get("new_name", "") or ""):
+                            _update_scraper_action(
+                                int(action.get("id", 0) or 0),
+                                _conn=conn,
+                                status="skipped",
+                                status_detail="文件名与路径未变化",
+                            )
+                            succeeded += 1
+                            _progress()
+                    conn.commit()
+                    processable = [
+                        action
+                        for action in chunk
+                        if str(action.get("old_name", "") or "") != str(action.get("new_name", "") or "")
+                    ]
+                    if processable:
+                        _run_rename_batch(processable, parent_id)
+
+        # 3) 冲突预检（按目标目录一次列表去重）与移动执行。
+        if actual_moves:
+            move_ready: List[Dict[str, Any]] = []
+            conflict_cache: Dict[Tuple[str, bool], Dict[str, Any]] = {}
+            by_target: Dict[str, List[Dict[str, Any]]] = {}
+            for action in actual_moves:
+                target_parent_id = str(action.get("new_parent_id", "") or "0").strip() or "0"
+                by_target.setdefault(target_parent_id, []).append(action)
+            for target_parent_id, group in by_target.items():
+                for action in group:
+                    new_name = str(action.get("new_name", "") or "").strip()
+                    entry_id = str(action.get("entry_id", "") or "").strip()
+                    if new_name and _target_name_exists(
+                        provider,
+                        cookie,
+                        target_parent_id,
+                        new_name,
+                        same_entry_id=entry_id,
+                        entries_cache=conflict_cache,
+                    ):
+                        _mark_failed(action, RuntimeError("目标目录中已有同名文件"))
+                        continue
+                    move_ready.append(action)
+            conn.commit()
+
+            move_only = [
+                action
+                for action in move_ready
+                if str(action.get("old_name", "") or "") == str(action.get("new_name", "") or "")
+            ]
+            move_rename = [action for action in move_ready if action not in move_only]
+
+            if move_only:
+                move_only_groups: Dict[str, List[Dict[str, Any]]] = {}
+                for action in move_only:
+                    target_parent_id = str(action.get("new_parent_id", "") or "0").strip() or "0"
+                    move_only_groups.setdefault(target_parent_id, []).append(action)
+                for target_parent_id, group in move_only_groups.items():
+                    for chunk in _chunk_scraper_items(group, SCRAPER_BATCH_MOVE_CHUNK_SIZE):
+                        for action in chunk:
+                            _update_scraper_action(
+                                int(action.get("id", 0) or 0),
+                                _conn=conn,
+                                status="running",
+                                status_detail="正在批量移动",
+                            )
+                        conn.commit()
+                        prepared_syncs: List[Dict[str, Any]] = []
+                        event_actions: List[Dict[str, Any]] = []
+                        try:
+                            for action in chunk:
+                                event_action = _rebase_scraper_job_action_paths(action, path_rewrites)
+                                event_actions.append(event_action)
+                                prepared_syncs.append(
+                                    _prepare_scraper_job_action_monitor_sync(
+                                        provider,
+                                        job_id,
+                                        event_action,
+                                        base_path=base_path,
+                                    )
+                                )
+                            ids = [str(action.get("entry_id", "") or "").strip() for action in chunk]
+                            result = _move_provider_entries(provider, cookie, ids, target_parent_id)
+                            for action in chunk:
+                                _invalidate_provider_parent(provider, str(action.get("old_parent_id", "") or "").strip())
+                            _invalidate_provider_parent(provider, target_parent_id)
+                            for prepared_sync in prepared_syncs:
+                                _finish_scraper_monitor_sync(prepared_sync, succeeded=True)
+                            for action in chunk:
+                                _mark_completed(action, "已移动", {"moved": True, "response": result.get("response", {})})
+                        except Exception as exc:
+                            for prepared_sync in prepared_syncs:
+                                _finish_scraper_monitor_sync(prepared_sync, succeeded=False, error=str(exc))
+                            for action in chunk:
+                                _mark_failed(action, exc)
+                        conn.commit()
+
+            if move_rename:
+                for action in move_rename:
+                    _update_scraper_action(
+                        int(action.get("id", 0) or 0),
+                        _conn=conn,
+                        status="running",
+                        status_detail="正在批量整理",
+                    )
+                conn.commit()
+                prepared_syncs = []
+                event_actions = []
+                temp_by_action: Dict[int, str] = {}
+                try:
+                    for action in move_rename:
+                        event_action = _rebase_scraper_job_action_paths(action, path_rewrites)
+                        event_actions.append(event_action)
+                        prepared_syncs.append(
+                            _prepare_scraper_job_action_monitor_sync(
+                                provider,
+                                job_id,
+                                event_action,
+                                base_path=base_path,
+                            )
+                        )
+
+                    # 阶段 1：全部改成唯一临时名（按源父目录分组批量）。
+                    temp_renames: Dict[str, Dict[str, str]] = {}
+                    for action in move_rename:
+                        action_id = int(action.get("id", 0) or 0)
+                        source_parent = str(action.get("old_parent_id", "") or "0").strip() or "0"
+                        temp_name = _build_temp_name(
+                            action_id,
+                            str(action.get("entry_id", "") or ""),
+                            str(action.get("old_name", "") or ""),
+                        )
+                        temp_by_action[action_id] = temp_name
+                        temp_renames.setdefault(source_parent, {})[
+                            str(action.get("entry_id", "") or "").strip()
+                        ] = temp_name
+                    for source_parent, renames_map in temp_renames.items():
+                        _rename_provider_entries(provider, cookie, renames_map, parent_id=source_parent)
+                        _invalidate_provider_parent(provider, source_parent)
+
+                    # 阶段 2：按目标目录分组批量移动临时名条目。
+                    move_groups: Dict[str, List[Dict[str, Any]]] = {}
+                    for action in move_rename:
+                        target_parent_id = str(action.get("new_parent_id", "") or "0").strip() or "0"
+                        move_groups.setdefault(target_parent_id, []).append(action)
+                    for target_parent_id, group in move_groups.items():
+                        ids = [str(action.get("entry_id", "") or "").strip() for action in group]
+                        _move_provider_entries(provider, cookie, ids, target_parent_id)
+                        for action in group:
+                            _invalidate_provider_parent(provider, str(action.get("old_parent_id", "") or "").strip())
+                        _invalidate_provider_parent(provider, target_parent_id)
+
+                    # 阶段 3：按目标目录分组批量改回最终名。
+                    final_renames: Dict[str, Dict[str, str]] = {}
+                    for action in move_rename:
+                        target_parent_id = str(action.get("new_parent_id", "") or "0").strip() or "0"
+                        final_renames.setdefault(target_parent_id, {})[
+                            str(action.get("entry_id", "") or "").strip()
+                        ] = str(action.get("new_name", "") or "")
+                    for target_parent_id, renames_map in final_renames.items():
+                        _rename_provider_entries(provider, cookie, renames_map, parent_id=target_parent_id)
+                        _invalidate_provider_parent(provider, target_parent_id)
+
+                    for prepared_sync in prepared_syncs:
+                        _finish_scraper_monitor_sync(prepared_sync, succeeded=True)
+                    for action in move_rename:
+                        _mark_completed(action, "已整理", {"renamed": True, "moved": True})
+                except Exception as exc:
+                    # 批量失败时尽力恢复，避免条目停在临时名。
+                    try:
+                        _restore_scraper_move_rename_actions(provider, cookie, move_rename)
+                    except Exception:
+                        pass
+                    for prepared_sync in prepared_syncs:
+                        _finish_scraper_monitor_sync(prepared_sync, succeeded=False, error=str(exc))
+                    for action in move_rename:
+                        _mark_failed(action, exc)
+                conn.commit()
+    return succeeded, failed
+
+
 def run_scraper_job(job_id: int) -> None:
     try:
         job, actions = _load_scraper_job(job_id)
@@ -3184,112 +3858,14 @@ def run_scraper_job(job_id: int) -> None:
     with db_connection() as conn:
         _update_scraper_job(job_id, _conn=conn, status="running", status_detail="正在执行刮削改名", started_at=now_text(), finished_at="")
         conn.commit()
-        succeeded = 0
-        failed = 0
-        path_rewrites: List[Tuple[str, str]] = []
-        for action in actions:
-            action_id = int(action.get("id", 0) or 0)
-            _update_scraper_action(action_id, _conn=conn, status="running", status_detail="正在处理")
-            conn.commit()
-            prepared_sync: Optional[Dict[str, Any]] = None
-            try:
-                if bool(action.get("delete")):
-                    entry_id = str(action.get("entry_id", "") or "").strip()
-                    old_parent_id = str(action.get("old_parent_id", "") or "0").strip() or "0"
-                    event_action = _rebase_scraper_job_action_paths(action, path_rewrites)
-                    prepared_sync = _prepare_scraper_job_action_monitor_sync(
-                        provider,
-                        job_id,
-                        event_action,
-                        base_path=base_path,
-                    )
-                    result = _delete_provider_entries(provider, cookie, [entry_id], old_parent_id)
-                    _invalidate_provider_parent(provider, old_parent_id)
-                    result["monitor_sync"] = _finish_scraper_monitor_sync(prepared_sync, succeeded=True)
-                    _update_scraper_action(
-                        action_id,
-                        _conn=conn,
-                        status="completed",
-                        status_detail="广告文件已删除",
-                        response_json=safe_json_dumps(result),
-                    )
-                    succeeded += 1
-                    _update_scraper_job(
-                        job_id,
-                        _conn=conn,
-                        status_detail=f"正在执行刮削整理：成功 {succeeded}，失败 {failed}",
-                        succeeded_actions=succeeded,
-                        failed_actions=failed,
-                    )
-                    conn.commit()
-                    continue
-                old_path_norm = normalize_relative_path(str(action.get("old_path", "") or ""))
-                new_path_norm = normalize_relative_path(str(action.get("new_path", "") or ""))
-                if old_path_norm and new_path_norm and old_path_norm == new_path_norm:
-                    # 文件名与路径均未变化：直接跳过，不做任何远程调用，避免限速等待。
-                    _update_scraper_action(
-                        action_id,
-                        _conn=conn,
-                        status="skipped",
-                        status_detail="文件名与路径未变化",
-                    )
-                    succeeded += 1
-                    _update_scraper_job(
-                        job_id,
-                        _conn=conn,
-                        status_detail=f"正在执行刮削整理：成功 {succeeded}，失败 {failed}",
-                        succeeded_actions=succeeded,
-                        failed_actions=failed,
-                    )
-                    conn.commit()
-                    continue
-                target_parent_path = str(action.get("target_parent_path", "") or "")
-                target_parent_id = str(action.get("new_parent_id", "") or "").strip()
-                if not target_parent_id:
-                    target_parent_id = _ensure_folder_from_base(provider, cookie, base_cid, target_parent_path)
-                    _update_scraper_action(action_id, _conn=conn, new_parent_id=target_parent_id)
-                    action["new_parent_id"] = target_parent_id
-                    conn.commit()
-                event_action = _rebase_scraper_job_action_paths(action, path_rewrites)
-                prepared_sync = _prepare_scraper_job_action_monitor_sync(
-                    provider,
-                    job_id,
-                    event_action,
-                    base_path=base_path,
-                )
-                result = _execute_move_rename(provider, cookie, action, target_parent_id)
-                if bool(action.get("is_dir")) and not result.get("skipped"):
-                    path_rewrites.append(
-                        (
-                            str(event_action.get("old_path", "") or ""),
-                            str(event_action.get("new_path", "") or ""),
-                        )
-                    )
-                result["monitor_sync"] = _finish_scraper_monitor_sync(prepared_sync, succeeded=True)
-                action_status = "skipped" if result.get("skipped") else "completed"
-                detail = str(result.get("detail") or "已完成")
-                _update_scraper_action(action_id, _conn=conn, status=action_status, status_detail=detail, response_json=safe_json_dumps(result))
-                succeeded += 1
-                _update_scraper_job(
-                    job_id,
-                    _conn=conn,
-                    status_detail=f"正在执行刮削改名：成功 {succeeded}，失败 {failed}",
-                    succeeded_actions=succeeded,
-                    failed_actions=failed,
-                )
-            except Exception as exc:
-                if prepared_sync:
-                    _finish_scraper_monitor_sync(prepared_sync, succeeded=False, error=str(exc))
-                failed += 1
-                _update_scraper_action(action_id, _conn=conn, status="failed", status_detail=str(exc))
-                _update_scraper_job(
-                    job_id,
-                    _conn=conn,
-                    status_detail=f"正在执行刮削改名：成功 {succeeded}，失败 {failed}",
-                    succeeded_actions=succeeded,
-                    failed_actions=failed,
-                )
-            conn.commit()
+        succeeded, failed = _execute_scraper_job_batch_forward(
+            provider,
+            cookie,
+            job_id,
+            actions,
+            base_path=base_path,
+            conn=conn,
+        )
         if failed > 0 and succeeded > 0:
             status = "partial"
             detail = f"部分完成：成功 {succeeded}，失败 {failed}"
@@ -3309,6 +3885,84 @@ def run_scraper_job(job_id: int) -> None:
             finished_at=now_text(),
         )
         conn.commit()
+
+
+_scraper_job_executor = ThreadPoolExecutor(
+    max_workers=1,
+    thread_name_prefix="scraper-jobs",
+)
+
+
+def _run_scraper_job_guarded(job_id: int) -> None:
+    """独立线程里执行刮削任务；意外异常时把任务标记失败，避免卡在“执行中”。"""
+    try:
+        run_scraper_job(job_id)
+    except Exception as exc:
+        try:
+            _update_scraper_job(
+                job_id,
+                status="failed",
+                status_detail=f"执行异常：{str(exc)[:200]}",
+                failed_actions=1,
+                finished_at=now_text(),
+            )
+        except Exception:
+            logging.exception("Failed to mark scraper job %s as failed", job_id)
+
+
+def _run_scraper_rollback_guarded(job_id: int) -> None:
+    try:
+        rollback_scraper_job(job_id)
+    except Exception as exc:
+        try:
+            _update_scraper_job(
+                job_id,
+                status="rollback_failed",
+                status_detail=f"回退异常：{str(exc)[:200]}",
+                rollback_failed_actions=1,
+                finished_at=now_text(),
+            )
+        except Exception:
+            logging.exception("Failed to mark scraper job %s rollback failed", job_id)
+
+
+def submit_scraper_job(job_id: int) -> Future:
+    """刮削任务走独立单线程执行器，避免占用/被占用共享后台事件循环导致排队“等待”。"""
+    return _scraper_job_executor.submit(_run_scraper_job_guarded, job_id)
+
+
+def submit_scraper_rollback(job_id: int) -> Future:
+    return _scraper_job_executor.submit(_run_scraper_rollback_guarded, job_id)
+
+
+def requeue_scraper_jobs_on_startup() -> Dict[str, int]:
+    """服务重启后恢复刮削任务：pending 重新入队执行；running 标记为中断失败。"""
+    ensure_db()
+    pending_ids: List[int] = []
+    interrupted_ids: List[int] = []
+    with db_connection() as conn:
+        cursor = conn.execute(
+            "SELECT id, status FROM scraper_jobs WHERE status IN ('pending', 'running') ORDER BY id ASC"
+        )
+        for row in cursor.fetchall():
+            job_id = int(row["id"] or 0)
+            if str(row["status"] or "") == "pending":
+                pending_ids.append(job_id)
+            else:
+                interrupted_ids.append(job_id)
+        for job_id in interrupted_ids:
+            _update_scraper_job(
+                job_id,
+                _conn=conn,
+                status="failed",
+                status_detail="服务重启，任务中断，请重新执行",
+                failed_actions=1,
+                finished_at=now_text(),
+            )
+        conn.commit()
+    for job_id in pending_ids:
+        submit_scraper_job(job_id)
+    return {"pending_requeued": len(pending_ids), "running_interrupted": len(interrupted_ids)}
 
 
 def rollback_scraper_job(job_id: int) -> None:
@@ -3576,7 +4230,8 @@ SCRAPER_BATCH_MEDIA_EXTENSIONS = {
 }
 SCRAPER_BATCH_SUBTITLE_EXTENSIONS = {".srt", ".ass", ".ssa", ".sub", ".vtt", ".idx", ".smi", ".sup"}
 SCRAPER_BATCH_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
-SCRAPER_BATCH_AD_EXTENSIONS = {".txt", ".url", ".html", ".htm", ".nfo", ".lnk", ".torrent", ".torrent!"}
+SCRAPER_BATCH_INFO_EXTENSIONS = {".nfo"}
+SCRAPER_BATCH_AD_EXTENSIONS = {".txt", ".url", ".html", ".htm", ".lnk", ".torrent", ".torrent!"}
 SCRAPER_STANDARD_IMAGE_STEMS = {
     "poster", "folder", "cover", "backdrop", "fanart", "banner", "clearart",
     "logo", "landscape", "thumb",
@@ -3631,7 +4286,7 @@ _SCRAPER_SUBTITLE_MARKER_VALUES = {"forced", "sdh", "hi", "cc", "default", "utf8
 
 
 def _scraper_file_category(name: str) -> str:
-    """按扩展名分类：video / subtitle / image / ad / other。"""
+    """按扩展名分类：video / subtitle / image / info（NFO 等媒体信息）/ ad / other。"""
     ext = os.path.splitext(str(name or "").strip())[1].lower()
     if not ext:
         return "other"
@@ -3641,6 +4296,8 @@ def _scraper_file_category(name: str) -> str:
         return "subtitle"
     if ext in SCRAPER_BATCH_IMAGE_EXTENSIONS:
         return "image"
+    if ext in SCRAPER_BATCH_INFO_EXTENSIONS:
+        return "info"
     if ext in SCRAPER_BATCH_AD_EXTENSIONS:
         return "ad"
     return "other"
@@ -3683,7 +4340,7 @@ def _is_scraper_ad_image(name: str, size: int = 0) -> bool:
 
 
 def _is_scraper_ad_file(name: str, size: int = 0) -> bool:
-    """判断是否广告类文件：广告扩展名（txt/url/html/nfo 等）或广告图片。"""
+    """判断是否广告类文件：广告扩展名（txt/url/html 等）或广告图片。NFO 是媒体信息，不算广告。"""
     category = _scraper_file_category(name)
     if category == "ad":
         return True
@@ -4337,6 +4994,9 @@ def build_scraper_batch_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
     issues: List[str] = []
     warnings: List[str] = []
     item_summaries: List[Dict[str, Any]] = []
+    # 批量条目共享目录/路径缓存：同一父目录（尤其大目录）只扫一次，避免每个条目重复扫描。
+    shared_entries_cache: Dict[Tuple[str, bool, int, int], Dict[str, Any]] = {}
+    shared_path_cache: Dict[Tuple[str, str], Tuple[str, bool]] = {}
     action_index = 1
     unchanged_count = 0
     ignored_count = 0
@@ -4375,7 +5035,11 @@ def build_scraper_batch_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(episode_overrides, dict) and episode_overrides:
             item_payload["episode_overrides"] = episode_overrides
         try:
-            plan = build_scraper_rename_plan(item_payload)
+            plan = build_scraper_rename_plan(
+                item_payload,
+                entries_cache=shared_entries_cache,
+                path_cache=shared_path_cache,
+            )
         except Exception as exc:
             issues.append(f"条目 #{item_index} {item_name or '--'}：{exc}")
             continue

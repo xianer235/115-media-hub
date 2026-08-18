@@ -956,6 +956,9 @@
                 resourceFolderEntries = Array.isArray(cachedBranch.entries) ? cachedBranch.entries : [];
                 resourceFolderSummary = cachedBranch.summary || { folder_count: 0, file_count: 0 };
                 resourceFolderEntriesComplete = cachedBranch.entries_complete !== false;
+                resourceFolderNextOffset = Number(cachedBranch.next_offset || 0) || 0;
+                resourceFolderHasMore = !!cachedBranch.has_more;
+                resourceFolderLoadingMore = false;
                 resourceFolderLoading = false;
                 resourceFolderFilesLoading = false;
                 renderResourceFolderBreadcrumbs();
@@ -967,12 +970,18 @@
                 resourceFolderEntries = Array.isArray(cachedFoldersOnlyBranch.entries) ? cachedFoldersOnlyBranch.entries : [];
                 resourceFolderSummary = cachedFoldersOnlyBranch.summary || { folder_count: 0, file_count: 0 };
                 resourceFolderEntriesComplete = cachedFoldersOnlyBranch.entries_complete !== false;
+                resourceFolderNextOffset = Number(cachedFoldersOnlyBranch.next_offset || 0) || 0;
+                resourceFolderHasMore = !!cachedFoldersOnlyBranch.has_more;
+                resourceFolderLoadingMore = false;
                 resourceFolderLoading = false;
                 resourceFolderFilesLoading = !resourceFolderEntriesComplete;
             } else {
                 resourceFolderEntries = [];
                 resourceFolderSummary = { folder_count: 0, file_count: 0 };
                 resourceFolderEntriesComplete = false;
+                resourceFolderNextOffset = 0;
+                resourceFolderHasMore = false;
+                resourceFolderLoadingMore = false;
                 resourceFolderLoading = true;
                 resourceFolderFilesLoading = false;
             }
@@ -982,17 +991,26 @@
             try {
                 const result = cachedFoldersOnlyBranch
                     ? cachedFoldersOnlyBranch
-                    : await fetchResourceFolderData(targetCid, { ...foldersOnlyCacheOptions, forceRefresh });
+                    : await fetchResourceFolderData(targetCid, {
+                        ...foldersOnlyCacheOptions,
+                        forceRefresh,
+                        offset: 0,
+                        limit: RESOURCE_FOLDER_PAGE_LIMIT
+                    });
                 if (requestToken !== resourceFolderRequestToken) return;
                 resourceFolderEntries = Array.isArray(result.entries) ? result.entries : [];
                 resourceFolderSummary = result.summary || { folder_count: 0, file_count: 0 };
                 resourceFolderEntriesComplete = result.entries_complete !== false;
+                resourceFolderNextOffset = Number(result.next_offset || 0) || 0;
+                resourceFolderHasMore = !!result.has_more;
                 return true;
             } catch (e) {
                 if (requestToken !== resourceFolderRequestToken) return;
                 resourceFolderEntries = [];
                 resourceFolderSummary = { folder_count: 0, file_count: 0 };
                 resourceFolderEntriesComplete = false;
+                resourceFolderNextOffset = 0;
+                resourceFolderHasMore = false;
                 showToast(`目录读取失败：${e.message || '请稍后重试'}`, { tone: 'error', duration: 3200 });
                 return false;
             } finally {
@@ -1000,6 +1018,36 @@
                 resourceFolderLoading = false;
                 resourceFolderFilesLoading = false;
                 renderResourceFolderBreadcrumbs();
+                renderResourceFolderList();
+            }
+        }
+
+        async function loadMoreResourceFolders() {
+            if (resourceFolderLoading || resourceFolderLoadingMore) return;
+            const currentCid = resourceFolderTrail[resourceFolderTrail.length - 1]?.id || '0';
+            const provider = getCurrentResourceProvider();
+            const requestToken = resourceFolderRequestToken;
+            resourceFolderLoadingMore = true;
+            renderResourceFolderList();
+            try {
+                const result = await fetchResourceFolderData(currentCid, {
+                    provider,
+                    foldersOnly: true,
+                    offset: resourceFolderNextOffset || 0,
+                    limit: RESOURCE_FOLDER_PAGE_LIMIT
+                });
+                if (requestToken !== resourceFolderRequestToken) return;
+                const incoming = Array.isArray(result.entries) ? result.entries : [];
+                resourceFolderEntries = resourceFolderEntries.concat(incoming);
+                resourceFolderSummary = buildResourceFolderSummaryFromEntries(resourceFolderEntries);
+                resourceFolderNextOffset = Number(result.next_offset || 0) || 0;
+                resourceFolderHasMore = !!result.has_more;
+            } catch (e) {
+                if (requestToken !== resourceFolderRequestToken) return;
+                showToast(`加载更多文件夹失败：${e.message || '请稍后重试'}`, { tone: 'warn', duration: 3200 });
+            } finally {
+                if (requestToken !== resourceFolderRequestToken) return;
+                resourceFolderLoadingMore = false;
                 renderResourceFolderList();
             }
         }
@@ -1128,6 +1176,7 @@
             copyResourceRecord,
             renderResourceFolderList,
             loadResourceFolderFiles,
+            loadMoreResourceFolders,
             refreshCurrentResourceFolder,
             openResourceFolderModal,
             closeResourceFolderModal,

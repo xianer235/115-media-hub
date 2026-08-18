@@ -1,5 +1,7 @@
-import threading
+import http.client
 import logging
+import socket
+import threading
 
 import requests
 
@@ -25,6 +27,11 @@ _CLOUD115_WEBAPI_USER_AGENT = (
     "MicroMessenger/6.8.0(0x16080000) NetType/WIFI MiniProgramEnv/Mac "
     "MacWechat/WMPF MacWechat/3.8.9(0x13080910) XWEB/1227"
 )
+_115_LIST_PAGE_LIMIT_DEFAULT = 500
+_115_LIST_PAGE_LIMIT_MIN = 100
+_115_LIST_MAX_PAGES = 80
+_115_LIST_RETRY_TOTAL = 2
+_115_LIST_RETRY_BASE_SECONDS = 0.6
 
 
 def _build_115_timing_mark(last_mono: float) -> Tuple[int, float]:
@@ -381,6 +388,11 @@ def _clone_115_entries_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "entries": _clone_115_entries(source.get("entries", [])),
         "summary": dict(source.get("summary", {}) if isinstance(source.get("summary"), dict) else {}),
         "entries_complete": bool(source.get("entries_complete", True)),
+        "count": parse_int(source.get("count"), default=len(source.get("entries", []) or [])),
+        "offset": max(0, parse_int(source.get("offset"), default=0)),
+        "next_offset": max(0, parse_int(source.get("next_offset"), default=len(source.get("entries", []) or []))),
+        "has_more": bool(source.get("has_more", False)),
+        "pages_scanned": max(0, parse_int(source.get("pages_scanned"), default=1)),
     }
 
 
@@ -452,100 +464,131 @@ def _normalize_115_file_entry(item: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _request_115_entries_payload_fast(
+def _is_retryable_115_list_error(exc: Exception) -> bool:
+    """115 目录读取的断连/超时类错误可以重试；HTTP 状态错误（如 405 风控）不重试。"""
+    if exc is None:
+        return False
+    if isinstance(exc, urllib.error.HTTPError):
+        return False
+    if isinstance(
+        exc,
+        (
+            http.client.IncompleteRead,
+            http.client.RemoteDisconnected,
+            socket.timeout,
+            TimeoutError,
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+            requests.exceptions.ChunkedEncodingError,
+            urllib.error.URLError,
+        ),
+    ):
+        return True
+    return type(exc).__name__ in {
+        "ProtocolError",
+        "BrokenPipeError",
+        "ConnectionResetError",
+        "ConnectionAbortedError",
+        "JSONDecodeError",
+    }
+
+
+def _request_115_entries_page(
     cookie: str,
     target_cid: str,
-    folders_only: bool,
+    offset: int,
+    limit: int,
+    *,
+    fast: bool,
     timeout: int = 30,
 ) -> Dict[str, Any]:
-    page_limit = 300
-    params = {
-        "aid": 1,
-        "cid": target_cid,
-        "o": "user_ptime",
-        "asc": 1,
-        "offset": 0,
-        "show_dir": 1,
-        "limit": page_limit,
-        "type": 0,
-        "format": "json",
-        "star": 0,
-        "suffix": "",
-        "natsort": 0,
-        "snap": 0,
-        "record_open_time": 1,
-        "fc_mix": 0,
-    }
-    url = f"https://webapi.115.com/files?{urllib.parse.urlencode(params)}"
-    result = _request_115_webapi_json(
-        url,
-        headers=_build_115_webapi_headers(cookie),
-        timeout=timeout,
-    )
-    if not result.get("state", False):
-        detail = str(result.get("error", "") or result.get("msg", "") or "读取 115 文件夹失败").strip()
-        raise RuntimeError(detail)
-    raw_entries = result.get("data") or []
-    entries = [
-        entry
-        for entry in (_normalize_115_file_entry(item) for item in raw_entries)
-        if entry.get("id") and entry.get("name") and ((not folders_only) or entry.get("is_dir"))
-    ]
-    entries.sort(key=lambda item: (0 if item["is_dir"] else 1, str(item["name"]).lower()))
-    folder_count = sum(1 for item in entries if item.get("is_dir"))
-    total_count = max(0, parse_int(result.get("count") or result.get("total") or 0))
-    if folders_only:
-        file_count = max(0, total_count - folder_count) if total_count > folder_count else 0
+    """按服务端 offset/limit 拉取一页 115 目录条目，返回 {items, raw_count, count}。
+
+    ``items`` 保持服务端顺序，不做本地排序；排序由完整模式合并后或前端显示层负责。
+    """
+    safe_offset = max(0, int(offset or 0))
+    safe_limit = max(1, min(int(limit or _115_LIST_PAGE_LIMIT_DEFAULT), 1000))
+    if fast:
+        params = {
+            "aid": 1,
+            "cid": target_cid,
+            "o": "user_ptime",
+            "asc": 1,
+            "offset": safe_offset,
+            "show_dir": 1,
+            "limit": safe_limit,
+            "type": 0,
+            "format": "json",
+            "star": 0,
+            "suffix": "",
+            "natsort": 0,
+            "snap": 0,
+            "record_open_time": 1,
+            "fc_mix": 0,
+        }
+        url = f"https://webapi.115.com/files?{urllib.parse.urlencode(params)}"
+        result = _request_115_webapi_json(
+            url,
+            headers=_build_115_webapi_headers(cookie),
+            timeout=timeout,
+        )
     else:
-        file_count = sum(1 for item in entries if not item.get("is_dir"))
-    return {
-        "entries": entries,
-        "summary": {
-            "folder_count": folder_count,
-            "file_count": file_count,
-        },
-        "entries_complete": not folders_only,
-    }
-
-
-def _request_115_entries_payload_legacy(
-    cookie: str,
-    target_cid: str,
-    folders_only: bool,
-    timeout: int = 45,
-) -> Dict[str, Any]:
-    headers = {
-        "Cookie": cookie,
-        "Accept": "application/json, text/plain, */*",
-        "Referer": "https://115.com/",
-        "User-Agent": "Mozilla/5.0 115-media-hub",
-    }
-    url = (
-        "https://aps.115.com/natsort/files.php"
-        f"?aid=1&cid={urllib.parse.quote(target_cid)}&offset=0&limit=300&show_dir=1&natsort=1&format=json"
-    )
-    result = http_request_json(url, extra_headers=headers, timeout=timeout)
-    if not result.get("state", False):
+        headers = {
+            "Cookie": cookie,
+            "Accept": "application/json, text/plain, */*",
+            "Referer": "https://115.com/",
+            "User-Agent": "Mozilla/5.0 115-media-hub",
+        }
+        url = (
+            "https://aps.115.com/natsort/files.php"
+            f"?aid=1&cid={urllib.parse.quote(target_cid)}&offset={safe_offset}"
+            f"&limit={safe_limit}&show_dir=1&natsort=1&format=json"
+        )
+        result = http_request_json(url, extra_headers=headers, timeout=timeout)
+    if not bool(result.get("state", False)):
         detail = str(result.get("error", "") or result.get("msg", "") or "读取 115 文件夹失败").strip()
         raise RuntimeError(detail)
-
-    all_entries = [
+    raw_items = result.get("data") or []
+    raw_count = len(raw_items) if isinstance(raw_items, list) else 0
+    items = [
         entry
-        for entry in (_normalize_115_file_entry(item) for item in (result.get("data") or []))
+        for entry in (_normalize_115_file_entry(item) for item in raw_items)
         if entry.get("id") and entry.get("name")
     ]
-    entries = [entry for entry in all_entries if (not folders_only) or entry.get("is_dir")]
-    entries.sort(key=lambda item: (0 if item["is_dir"] else 1, str(item["name"]).lower()))
-    folder_count = sum(1 for item in entries if item.get("is_dir"))
-    file_count = max(0, len(all_entries) - sum(1 for item in all_entries if item.get("is_dir")))
     return {
-        "entries": entries,
-        "summary": {
-            "folder_count": folder_count,
-            "file_count": file_count,
-        },
-        "entries_complete": not folders_only,
+        "items": items,
+        "raw_count": raw_count,
+        "count": max(0, parse_int(result.get("count") or result.get("total") or 0)),
     }
+
+
+def _request_115_entries_page_with_retry(
+    cookie: str,
+    target_cid: str,
+    offset: int,
+    limit: int,
+    *,
+    fast: bool,
+    timeout: int = 30,
+) -> Dict[str, Any]:
+    """拉取一页并对 IncompleteRead/断连/超时做指数退避重试。"""
+    last_error: Optional[Exception] = None
+    for attempt in range(0, _115_LIST_RETRY_TOTAL + 1):
+        try:
+            return _request_115_entries_page(
+                cookie,
+                target_cid,
+                offset,
+                limit,
+                fast=fast,
+                timeout=timeout,
+            )
+        except Exception as exc:
+            last_error = exc
+            if (not _is_retryable_115_list_error(exc)) or attempt >= _115_LIST_RETRY_TOTAL:
+                raise
+            time.sleep(_115_LIST_RETRY_BASE_SECONDS * (attempt + 1))
+    raise RuntimeError(str(last_error or "读取 115 文件夹失败").strip() or "读取 115 文件夹失败") from last_error
 
 
 def list_115_entries_payload(
@@ -553,17 +596,38 @@ def list_115_entries_payload(
     cid: str = "0",
     force_refresh: bool = False,
     folders_only: bool = False,
+    offset: int = 0,
+    limit: int = 0,
+    max_pages: int = 0,
 ) -> Dict[str, Any]:
+    """读取 115 目录条目，支持两种模式：
+
+    - 完整模式（默认，``limit<=0``）：按 offset 逐页拉取直到读完（最多 80 页），
+      合并后按“文件夹在前、名称排序”返回，适合内部按名/按 id 查找；
+    - 分页模式（``limit>0``）：只返回从 ``offset`` 开始的单页窗口，并给出
+      ``count/next_offset/has_more`` 元数据，适合前端“加载更多”。
+
+    分页模式下 ``folders_only`` 会连续扫描服务端页面直到集齐 ``limit`` 个文件夹，
+    避免文件夹被文件穿插时漏页。每页请求都会对断连/超时做重试。
+    """
     cookie = str(cookie or "").strip()
     if not cookie:
         raise RuntimeError("115 Cookie 未配置")
     target_cid = str(cid or "0").strip() or "0"
     folder_only_mode = bool(folders_only)
+    start_offset = max(0, int(offset or 0))
+    paged = int(limit or 0) > 0
+    page_limit = (
+        max(20, min(int(limit or _115_LIST_PAGE_LIMIT_DEFAULT), 1000))
+        if paged
+        else _115_LIST_PAGE_LIMIT_DEFAULT
+    )
+    max_pages_limit = max(0, int(max_pages or 0))
     runtime_tuning = get_api_115_runtime_tuning()
     cache_ttl_seconds = max(0, int(runtime_tuning.get("list_cache_ttl_seconds", API_115_LIST_CACHE_TTL_SECONDS) or 0))
     cache_key = _build_115_list_cache_key(target_cid, folder_only_mode)
 
-    if (not force_refresh) and cache_ttl_seconds > 0:
+    if (not force_refresh) and (not paged) and cache_ttl_seconds > 0:
         now_ts = time.time()
         with _api_115_list_cache_lock:
             cached = _api_115_list_cache.get(cache_key)
@@ -574,26 +638,131 @@ def list_115_entries_payload(
 
     try:
         throttle_115_api_requests()
-        if folder_only_mode:
+        entries: List[Dict[str, Any]] = []
+        cursor = start_offset
+        server_count = 0
+        pages_scanned = 0
+        reached_end = False
+        hit_page_cap = False
+        # 每个调用固定使用一条路径，避免中途切换端点导致服务端分页顺序不一致。
+        use_fast = folder_only_mode
+        current_page_limit = page_limit
+
+        while True:
             try:
-                payload = _request_115_entries_payload_fast(cookie, target_cid, folder_only_mode, timeout=30)
-            except Exception:
-                payload = _request_115_entries_payload_legacy(cookie, target_cid, folder_only_mode, timeout=45)
+                page = _request_115_entries_page_with_retry(
+                    cookie,
+                    target_cid,
+                    cursor,
+                    current_page_limit,
+                    fast=use_fast,
+                    timeout=30 if use_fast else 45,
+                )
+            except Exception as exc:
+                if folder_only_mode and use_fast and pages_scanned == 0:
+                    use_fast = False
+                    try:
+                        page = _request_115_entries_page_with_retry(
+                            cookie,
+                            target_cid,
+                            cursor,
+                            current_page_limit,
+                            fast=False,
+                            timeout=45,
+                        )
+                    except Exception as legacy_exc:
+                        if _is_retryable_115_list_error(legacy_exc) and current_page_limit > _115_LIST_PAGE_LIMIT_MIN:
+                            current_page_limit = max(_115_LIST_PAGE_LIMIT_MIN, current_page_limit // 2)
+                            continue
+                        raise
+                elif _is_retryable_115_list_error(exc) and current_page_limit > _115_LIST_PAGE_LIMIT_MIN:
+                    # 大响应被服务端掐断时，自动缩小单页大小重试（更小的响应更不容易被截断）。
+                    current_page_limit = max(_115_LIST_PAGE_LIMIT_MIN, current_page_limit // 2)
+                    continue
+                else:
+                    raise
+            raw_count = max(0, int(page.get("raw_count", 0) or 0))
+            server_count = max(0, int(page.get("count", 0) or 0))
+            raw_items = page.get("items") or []
+            entries.extend(
+                item
+                for item in raw_items
+                if (not folder_only_mode) or item.get("is_dir")
+            )
+            pages_scanned += 1
+            cursor += raw_count
+
+            if paged and not folder_only_mode:
+                # 普通目录：请求窗口本身就是一页，直接返回。
+                reached_end = (
+                    (not raw_items)
+                    or raw_count < current_page_limit
+                    or (server_count and cursor >= server_count)
+                )
+                break
+            reached_end = (
+                (not raw_items)
+                or raw_count < current_page_limit
+                or (server_count and cursor >= server_count)
+            )
+            if folder_only_mode and paged and len(entries) >= current_page_limit:
+                # 仅文件夹：集齐一页文件夹即返回，避免被文件条目撑大响应。
+                reached_end = False
+                break
+            if reached_end:
+                break
+            effective_cap = max_pages_limit if max_pages_limit > 0 else _115_LIST_MAX_PAGES
+            if pages_scanned >= effective_cap:
+                hit_page_cap = True
+                break
+
+        if paged:
+            entries_complete = False
+            has_more = not reached_end
+            next_offset = cursor
         else:
-            payload = _request_115_entries_payload_legacy(cookie, target_cid, folder_only_mode, timeout=45)
-        if cache_ttl_seconds > 0:
+            entries_complete = (not hit_page_cap) and reached_end
+            has_more = not entries_complete
+            next_offset = cursor
+            if not folder_only_mode:
+                entries.sort(key=lambda item: (0 if item["is_dir"] else 1, str(item["name"]).lower()))
+
+        folder_count = sum(1 for item in entries if item.get("is_dir"))
+        if folder_only_mode:
+            file_count = max(0, server_count - folder_count) if server_count else 0
+        else:
+            file_count = len(entries) - folder_count
+        payload = {
+            "entries": entries,
+            "summary": {
+                "folder_count": folder_count,
+                "file_count": file_count,
+            },
+            "entries_complete": entries_complete,
+            "count": server_count or len(entries),
+            "offset": start_offset,
+            "next_offset": next_offset,
+            "has_more": has_more,
+            "pages_scanned": pages_scanned,
+        }
+        if (not paged) and cache_ttl_seconds > 0:
             now_ts = time.time()
             with _api_115_list_cache_lock:
                 _api_115_list_cache[cache_key] = {
-                    "entries": _clone_115_entries(payload.get("entries", [])),
-                    "summary": dict(payload.get("summary", {}) if isinstance(payload.get("summary"), dict) else {}),
-                    "entries_complete": bool(payload.get("entries_complete", True)),
+                    "entries": _clone_115_entries(entries),
+                    "summary": dict(payload["summary"]),
+                    "entries_complete": entries_complete,
+                    "count": payload["count"],
+                    "offset": payload["offset"],
+                    "next_offset": payload["next_offset"],
+                    "has_more": has_more,
+                    "pages_scanned": pages_scanned,
                     "updated_at": now_ts,
                     "expires_at": now_ts + cache_ttl_seconds,
                 }
                 _prune_115_list_cache_locked(now_ts)
         mark_cookie_health_success("115", trigger="runtime:list_115_entries")
-        return _clone_115_entries_payload(payload)
+        return payload
     except Exception as exc:
         mark_cookie_health_failure("115", exc, trigger="runtime:list_115_entries")
         raise
@@ -607,6 +776,92 @@ def list_115_entries(
 ) -> List[Dict[str, Any]]:
     payload = list_115_entries_payload(cookie, cid, force_refresh=force_refresh, folders_only=folders_only)
     return _clone_115_entries(payload.get("entries", []))
+
+
+def search_115_entries(
+    cookie: str,
+    cid: str = "0",
+    keyword: str = "",
+    offset: int = 0,
+    limit: int = 300,
+    timeout: int = 45,
+) -> Dict[str, Any]:
+    """使用 115 官方搜索接口（webapi.115.com/files/search）在服务端搜索目录内容。
+
+    返回结构与 ``list_115_entries_payload`` 的分页模式一致，避免“拉全量再本地过滤”。
+    """
+    cookie = str(cookie or "").strip()
+    if not cookie:
+        raise RuntimeError("115 Cookie 未配置")
+    normalized_keyword = str(keyword or "").strip()
+    if not normalized_keyword:
+        raise RuntimeError("115 搜索关键词不能为空")
+    target_cid = str(cid or "0").strip() or "0"
+    safe_offset = max(0, int(offset or 0))
+    safe_limit = max(20, min(int(limit or 300), 1000))
+    try:
+        result: Dict[str, Any] = {}
+        last_error: Optional[Exception] = None
+        for attempt in range(0, _115_LIST_RETRY_TOTAL + 1):
+            try:
+                throttle_115_api_requests()
+                params = {
+                    "aid": 1,
+                    "cid": target_cid,
+                    "search_value": normalized_keyword,
+                    "offset": safe_offset,
+                    "limit": safe_limit,
+                    "format": "json",
+                }
+                url = f"https://webapi.115.com/files/search?{urllib.parse.urlencode(params)}"
+                result = _request_115_webapi_json(
+                    url,
+                    headers=_build_115_webapi_headers(cookie),
+                    timeout=timeout,
+                )
+                last_error = None
+                break
+            except Exception as exc:
+                last_error = exc
+                if (not _is_retryable_115_list_error(exc)) or attempt >= _115_LIST_RETRY_TOTAL:
+                    raise
+                time.sleep(_115_LIST_RETRY_BASE_SECONDS * (attempt + 1))
+        if not bool(result.get("state", False)):
+            detail = (
+                str(result.get("error", "")).strip()
+                or str(result.get("msg", "")).strip()
+                or str(result.get("message", "")).strip()
+                or "115 搜索失败"
+            )
+            raise RuntimeError(detail)
+        raw_items = result.get("data") or []
+        raw_count = len(raw_items) if isinstance(raw_items, list) else 0
+        entries = [
+            entry
+            for entry in (_normalize_115_file_entry(item) for item in raw_items)
+            if entry.get("id") and entry.get("name")
+        ]
+        total_count = max(0, parse_int(result.get("count") or result.get("total") or 0))
+        next_offset = safe_offset + raw_count
+        has_more = raw_count >= safe_limit or (total_count and next_offset < total_count)
+        mark_cookie_health_success("115", trigger="runtime:search_115_entries")
+        return {
+            "entries": entries,
+            "summary": {
+                "folder_count": sum(1 for item in entries if item.get("is_dir")),
+                "file_count": sum(1 for item in entries if not item.get("is_dir")),
+            },
+            "entries_complete": not has_more,
+            "count": total_count or len(entries),
+            "offset": safe_offset,
+            "next_offset": next_offset,
+            "has_more": has_more,
+            "pages_scanned": 1,
+            "search": True,
+        }
+    except Exception as exc:
+        mark_cookie_health_failure("115", exc, trigger="runtime:search_115_entries")
+        raise
 
 def create_115_folder(cookie: str, cid: str = "0", folder_name: str = "") -> Dict[str, Any]:
     cookie = str(cookie or "").strip()
@@ -714,14 +969,19 @@ def _build_115_indexed_fid_payload(ids: List[str]) -> Dict[str, str]:
     }
 
 
-def rename_115_entry(cookie: str, entry_id: str, new_name: str, parent_cid: str = "") -> Dict[str, Any]:
+def rename_115_entries(cookie: str, renames: Dict[str, str], parent_cid: str = "") -> Dict[str, Any]:
+    """一次请求批量重命名多个条目（官方 batch_rename 支持多个 files_new_name[id]=名字）。"""
     normalized_cookie = str(cookie or "").strip()
     if not normalized_cookie:
         raise RuntimeError("115 Cookie 未配置")
-    normalized_id = str(entry_id or "").strip()
-    if not normalized_id:
-        raise RuntimeError("文件 ID 不能为空")
-    normalized_name = _validate_115_entry_name(new_name)
+    normalized_renames: Dict[str, str] = {}
+    for raw_id, raw_name in (renames or {}).items():
+        normalized_id = str(raw_id or "").strip()
+        if not normalized_id:
+            continue
+        normalized_renames[normalized_id] = _validate_115_entry_name(raw_name)
+    if not normalized_renames:
+        raise RuntimeError("重命名条目不能为空")
     try:
         headers = {
             "Cookie": normalized_cookie,
@@ -732,8 +992,11 @@ def rename_115_entry(cookie: str, entry_id: str, new_name: str, parent_cid: str 
         }
         response = http_request_form_json(
             "https://webapi.115.com/files/batch_rename",
-            {f"files_new_name[{normalized_id}]": normalized_name},
-            timeout=45,
+            {
+                f"files_new_name[{entry_id}]": name
+                for entry_id, name in normalized_renames.items()
+            },
+            timeout=60,
             extra_headers=headers,
         )
         success = bool((response or {}).get("state")) or int((response or {}).get("errno", 0) or 0) == 0
@@ -746,11 +1009,24 @@ def rename_115_entry(cookie: str, entry_id: str, new_name: str, parent_cid: str 
             )
             raise RuntimeError(detail)
         invalidate_115_entries_cache(parent_cid)
-        mark_cookie_health_success("115", trigger="runtime:rename_115_entry")
-        return {"id": normalized_id, "name": normalized_name, "response": response}
+        mark_cookie_health_success("115", trigger="runtime:rename_115_entries")
+        return {"renames": normalized_renames, "response": response}
     except Exception as exc:
-        mark_cookie_health_failure("115", exc, trigger="runtime:rename_115_entry")
+        mark_cookie_health_failure("115", exc, trigger="runtime:rename_115_entries")
         raise
+
+
+def rename_115_entry(cookie: str, entry_id: str, new_name: str, parent_cid: str = "") -> Dict[str, Any]:
+    """单个条目重命名（复用官方批量重命名接口）。"""
+    normalized_id = str(entry_id or "").strip()
+    if not normalized_id:
+        raise RuntimeError("文件 ID 不能为空")
+    result = rename_115_entries(cookie, {normalized_id: new_name}, parent_cid=parent_cid)
+    return {
+        "id": normalized_id,
+        "name": str(new_name or "").strip(),
+        "response": result.get("response", {}),
+    }
 
 
 def move_115_entries(cookie: str, entry_ids: List[str], target_cid: str, source_cid: str = "") -> Dict[str, Any]:
@@ -1001,53 +1277,34 @@ def resolve_115_entry_by_name(cookie: str, parent_cid: str, entry_name: str) -> 
     if not target_name:
         return {}
     normalized_cid = str(parent_cid or "0").strip() or "0"
-    page_size = 300
     max_pages = 80
     offset = 0
-    headers = {
-        "Cookie": str(cookie or "").strip(),
-        "Accept": "application/json, text/plain, */*",
-        "Referer": "https://115.com/",
-        "User-Agent": "Mozilla/5.0 115-media-hub",
-    }
 
     def matches(entry: Dict[str, Any]) -> bool:
         return bool(entry) and str(entry.get("name", "") or "").strip() == target_name
-
-    first_page_loaded = False
-    try:
-        first_page = list_115_entries(cookie, normalized_cid)
-        first_page_loaded = True
-    except Exception:
-        first_page = []
-    for entry in first_page:
-        if matches(entry):
-            return dict(entry)
-    offset = max(len(first_page), page_size) if first_page_loaded else 0
 
     pages_scanned = 0
     while pages_scanned < max_pages:
         pages_scanned += 1
         throttle_115_api_requests()
-        url = (
-            "https://aps.115.com/natsort/files.php"
-            f"?aid=1&cid={urllib.parse.quote(normalized_cid)}"
-            f"&offset={max(0, int(offset))}&limit={page_size}&show_dir=1&natsort=1&format=json"
+        page = _request_115_entries_page_with_retry(
+            cookie,
+            normalized_cid,
+            offset,
+            _115_LIST_PAGE_LIMIT_DEFAULT,
+            fast=False,
+            timeout=45,
         )
-        result = http_request_json(url, extra_headers=headers, timeout=45)
-        if not bool(result.get("state", False)):
-            break
-        raw_items = result.get("data") or []
+        raw_items = page.get("items") or []
         if not raw_items:
             break
-        for raw_item in raw_items:
-            raw = raw_item if isinstance(raw_item, dict) else {}
-            entry = _normalize_115_file_entry(raw)
+        for entry in raw_items:
             if matches(entry):
                 return entry
-        if len(raw_items) < page_size:
+        raw_count = max(0, int(page.get("raw_count", 0) or 0))
+        if raw_count < _115_LIST_PAGE_LIMIT_DEFAULT:
             break
-        offset += len(raw_items)
+        offset += raw_count
     return {}
 
 def list_115_folders(cookie: str, cid: str = "0") -> List[Dict[str, str]]:
@@ -1775,7 +2032,7 @@ class Pan115Provider(CloudProvider):
 
     def probe_connectivity(self, cookie):
         try:
-            list_115_entries_payload(cookie, "0", folders_only=True)
+            list_115_entries_payload(cookie, "0", folders_only=True, max_pages=1)
             return True
         except Exception:
             return False

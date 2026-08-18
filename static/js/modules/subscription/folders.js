@@ -160,7 +160,12 @@
                 refreshBtn.innerText = subscriptionFolderLoading ? '刷新中...' : '刷新当前目录';
             }
             if (summary) {
-                summary.innerText = `当前目录下共有 ${Number(subscriptionFolderSummary?.folder_count || 0)} 个文件夹 / ${Number(subscriptionFolderSummary?.file_count || 0)} 个文件。`;
+                const folderCount = Number(subscriptionFolderSummary?.folder_count || 0);
+                if (subscriptionFolderHasMore) {
+                    summary.innerText = `已加载 ${folderCount} 个文件夹，可点击“加载更多文件夹”继续浏览。`;
+                } else {
+                    summary.innerText = `当前目录下共有 ${folderCount} 个文件夹 / ${Number(subscriptionFolderSummary?.file_count || 0)} 个文件。`;
+                }
             }
             if (subscriptionFolderLoading) {
                 container.innerHTML = renderSubscriptionManagerEmpty(`正在读取${providerLabel}目录...`);
@@ -171,7 +176,7 @@
                 container.innerHTML = renderSubscriptionManagerEmpty('当前目录没有子文件夹，可以直接选择这里作为保存位置。');
                 return;
             }
-            container.innerHTML = renderSubscriptionManagerTable(folders, {
+            let html = renderSubscriptionManagerTable(folders, {
                 openActionPrefix: 'subscription-folder',
                 entryFilter: 'folders',
                 linkFolders: true,
@@ -181,20 +186,31 @@
                 minWidth: '560px',
                 emptyText: '当前目录没有子文件夹，可以直接选择这里作为保存位置。',
             });
+            if (subscriptionFolderHasMore) {
+                html += `<div class="resource-browser-load-more-row"><button type="button" data-subscription-folder-action="load-more" class="resource-browser-load-more-btn ${subscriptionFolderLoadingMore ? 'btn-disabled' : ''}" ${subscriptionFolderLoadingMore ? 'disabled' : ''}>${subscriptionFolderLoadingMore ? '加载中...' : '加载更多文件夹'}</button></div>`;
+            }
+            container.innerHTML = html;
         }
 
         async function loadSubscriptionFolders(cid = '0', { forceRefresh = false } = {}) {
             subscriptionFolderLoading = true;
+            subscriptionFolderNextOffset = 0;
+            subscriptionFolderHasMore = false;
+            subscriptionFolderLoadingMore = false;
             renderSubscriptionFolderBreadcrumbs();
             renderSubscriptionFolderList();
             try {
                 const result = await fetchResourceFolderData(cid, {
                     provider: getCurrentSubscriptionProvider(),
                     foldersOnly: true,
-                    forceRefresh: !!forceRefresh
+                    forceRefresh: !!forceRefresh,
+                    offset: 0,
+                    limit: RESOURCE_FOLDER_PAGE_LIMIT
                 });
                 subscriptionFolderEntries = result.entries;
                 subscriptionFolderSummary = result.summary;
+                subscriptionFolderNextOffset = Number(result.next_offset || 0) || 0;
+                subscriptionFolderHasMore = !!result.has_more;
             } catch (e) {
                 subscriptionFolderEntries = [];
                 subscriptionFolderSummary = { folder_count: 0, file_count: 0 };
@@ -202,6 +218,31 @@
             } finally {
                 subscriptionFolderLoading = false;
                 renderSubscriptionFolderBreadcrumbs();
+                renderSubscriptionFolderList();
+            }
+        }
+
+        async function loadMoreSubscriptionFolders() {
+            if (subscriptionFolderLoading || subscriptionFolderLoadingMore) return;
+            const currentCid = subscriptionFolderTrail[subscriptionFolderTrail.length - 1]?.id || '0';
+            subscriptionFolderLoadingMore = true;
+            renderSubscriptionFolderList();
+            try {
+                const result = await fetchResourceFolderData(currentCid, {
+                    provider: getCurrentSubscriptionProvider(),
+                    foldersOnly: true,
+                    offset: subscriptionFolderNextOffset || 0,
+                    limit: RESOURCE_FOLDER_PAGE_LIMIT
+                });
+                const incoming = Array.isArray(result.entries) ? result.entries : [];
+                subscriptionFolderEntries = subscriptionFolderEntries.concat(incoming);
+                subscriptionFolderSummary = buildResourceFolderSummaryFromEntries(subscriptionFolderEntries);
+                subscriptionFolderNextOffset = Number(result.next_offset || 0) || 0;
+                subscriptionFolderHasMore = !!result.has_more;
+            } catch (e) {
+                showToast(`加载更多文件夹失败：${e.message || '请稍后重试'}`, { tone: 'warn', duration: 3200 });
+            } finally {
+                subscriptionFolderLoadingMore = false;
                 renderSubscriptionFolderList();
             }
         }
