@@ -179,6 +179,9 @@
                 const directSelected = !!ctx.resourceShareSelected[normalized.id];
                 const coveredByAncestor = !directSelected ? ctx.getResourceShareCoveredAncestor(normalized) : null;
                 const effectiveSelected = directSelected || !!coveredByAncestor;
+                const modifiedText = manager?.formatModified
+                    ? manager.formatModified(getEntryModified(entry))
+                    : String(getEntryModified(entry) || '--');
                 return `
                     <div class="resource-browser-row">
                         <div class="resource-browser-name-cell">
@@ -200,6 +203,7 @@
                                 </div>
                             </div>
                         </div>
+                        <div class="file-manager-cell--modified">${ctx.escapeHtml(modifiedText)}</div>
                         <div class="resource-browser-col-size">${normalized.is_dir ? '--' : ctx.escapeHtml(ctx.formatFileSizeText(entry?.size || 0))}</div>
                     </div>
                 `;
@@ -218,7 +222,7 @@
             });
         });
         const columns = buildManagerColumns(ctx, {
-            showModified: false,
+            showModified: true,
             showSize: true,
             linkFolders: true,
             openActionPrefix: 'resource-share',
@@ -237,7 +241,7 @@
         return manager.renderRows(normalizedEntries, columns, {
             emptyText: '这个目录下暂时没有可转存的内容。',
             rowClass: 'resource-browser-row',
-            rowAttrs: 'style="--file-manager-columns:minmax(0, 1fr) 96px;--file-manager-min-width:520px"',
+            rowAttrs: 'style="--file-manager-columns:minmax(0, 1fr) 142px 96px;--file-manager-min-width:640px"',
         });
     }
 

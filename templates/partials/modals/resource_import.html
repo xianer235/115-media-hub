@@ -94,12 +94,13 @@
                                     <input id="resource-share-search-input" class="resource-share-search-input" placeholder="搜索当前目录文件名 / 集数，例如 135 或 4K" oninput="setResourceShareSearchKeyword(this.value)">
                                     <button type="button" onclick="clearResourceShareSearch()" class="resource-share-search-clear">清空</button>
                                 </div>
-                                <div class="resource-browser-table mt-3" style="--file-manager-columns:minmax(0, 1fr) 96px;--file-manager-min-width:520px">
-                                    <div class="resource-browser-header file-manager-header" style="--file-manager-columns:minmax(0, 1fr) 96px;--file-manager-min-width:520px">
+                                <div class="resource-browser-table mt-3" style="--file-manager-columns:minmax(0, 1fr) 142px 96px;--file-manager-min-width:640px">
+                                    <div class="resource-browser-header file-manager-header" style="--file-manager-columns:minmax(0, 1fr) 142px 96px;--file-manager-min-width:640px">
                                         <label class="resource-browser-name-cell file-manager-header-cell">
                                             <input id="resource-share-current-check-all" type="checkbox" class="ui-checkbox ui-checkbox-sm">
                                             <span>文件名</span>
                                         </label>
+                                        <div class="file-manager-cell--modified file-manager-header-cell">修改时间</div>
                                         <div class="resource-browser-col-size file-manager-header-cell">大小</div>
                                     </div>
                                     <div id="resource-share-tree" class="resource-browser-body"></div>

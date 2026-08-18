@@ -1883,6 +1883,31 @@
             errorEl.classList.toggle('hidden', !text);
         }
 
+        async function pasteSubscriptionLinkScan() {
+            const textEl = document.getElementById('subscription-link-scan-text');
+            if (!textEl) return;
+            if (!navigator.clipboard?.readText) {
+                showToast('当前环境不支持一键粘贴，请直接使用 Ctrl/Cmd + V', { tone: 'warn', duration: 2800, placement: 'top-center' });
+                return;
+            }
+            let text = '';
+            try {
+                text = String(await navigator.clipboard.readText() || '').trim();
+            } catch (e) {
+                showToast(`读取剪贴板失败：${e?.message || '请检查浏览器权限'}`, { tone: 'warn', duration: 3200, placement: 'top-center' });
+                return;
+            }
+            if (!text) {
+                showToast('剪贴板里暂无可粘贴内容', { tone: 'warn', duration: 2400, placement: 'top-center' });
+                return;
+            }
+            textEl.value = text;
+            setSubscriptionLinkScanError('');
+            textEl.focus();
+            textEl.setSelectionRange?.(text.length, text.length);
+            showToast('已粘贴剪贴板内容，可直接开始扫描', { tone: 'info', duration: 2200, placement: 'top-center' });
+        }
+
         function openSubscriptionLinkScanModal(name) {
             const task = getSubscriptionTaskByName(name);
             if (!task) {

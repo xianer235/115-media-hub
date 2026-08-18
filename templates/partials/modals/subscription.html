@@ -299,7 +299,10 @@
                 <div class="subscription-link-scan-body">
                     <input id="subscription-link-scan-task-name" type="hidden" value="">
                     <label class="block">
-                        <span id="subscription-link-scan-input-label" class="subscription-link-scan-label">分享链接或完整分享文本</span>
+                        <span class="flex items-center justify-between gap-2">
+                            <span id="subscription-link-scan-input-label" class="subscription-link-scan-label">分享链接或完整分享文本</span>
+                            <button id="subscription-link-scan-paste-btn" type="button" onclick="pasteSubscriptionLinkScan()" class="resource-search-input-action resource-search-paste-btn subscription-link-scan-paste-btn" aria-label="粘贴剪贴板内容">粘贴</button>
+                        </span>
                         <textarea id="subscription-link-scan-text" class="subscription-link-scan-input" rows="6" placeholder="粘贴分享链接，或包含链接与提取码的整段分享文本"></textarea>
                     </label>
                     <div id="subscription-link-scan-error" class="subscription-link-scan-error hidden"></div>

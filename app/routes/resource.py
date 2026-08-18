@@ -221,6 +221,14 @@ def submit_resource_channel_sync(force: bool, limit_per_channel: Optional[int] =
     return True
 
 
+def _compact_resource_browser_modified_at(item: Dict[str, Any]) -> str:
+    for key in ("modified_at", "last_modified", "updated_at", "create_time", "file_time", "time"):
+        value = str(item.get(key, "") or "").strip()
+        if value:
+            return value
+    return ""
+
+
 def _compact_resource_browser_entry(entry: Dict[str, Any], *, include_share_fields: bool = False) -> Dict[str, Any]:
     item = entry if isinstance(entry, dict) else {}
     is_dir = bool(item.get("is_dir"))
@@ -235,6 +243,9 @@ def _compact_resource_browser_entry(entry: Dict[str, Any], *, include_share_fiel
             payload["cid"] = cid
     else:
         payload["size"] = parse_int(item.get("size") or 0)
+    modified_at = _compact_resource_browser_modified_at(item)
+    if modified_at:
+        payload["modified_at"] = modified_at
     if include_share_fields:
         payload["parent_id"] = str(item.get("parent_id", "") or "0").strip() or "0"
         cid = str(item.get("cid", "") or "").strip()

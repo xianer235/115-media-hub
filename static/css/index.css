@@ -3937,6 +3937,15 @@
             min-width: 3.2rem;
             letter-spacing: 0.02em;
         }
+        .subscription-link-scan-paste-btn {
+            position: static;
+            transform: none;
+            flex-shrink: 0;
+            margin-left: 0.6rem;
+        }
+        .subscription-link-scan-paste-btn:hover {
+            transform: none;
+        }
         .resource-search-btn {
             display: inline-flex;
             align-items: center;

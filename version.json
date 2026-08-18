@@ -1,9 +1,10 @@
 {
-  "version": "0.8.0",
-  "buildDate": "2026-08-17T00:00:00+08:00",
+  "version": "0.8.1",
+  "buildDate": "2026-08-18T00:00:00+08:00",
   "notes": [
-    "目录树任务化改造：废弃旧 trees 静态树源/定时/MD5 全量模式，改为文件夹任务模型，调用官方 files/export_dir 生成树文件并用远端 sha1 跳过未变化同步",
-    "设置页目录树配置迁移到同步页并自动清理旧字段；目录树任务页改为订阅任务风格（弹窗新增/编辑、进度条、分步计时日志）；CLI 补齐 tree list/create/update/delete/defaults/run/full/jobs"
+    "磁力/电驴离线任务改为官方云下载任务完成检测驱动：后台轮询等待 115 任务完成再触发监控扫描，任务中心展示下载进度，CLI 新增 offline list",
+    "文件浏览器统一组件补齐修改时间：资源导入分享目录选择器新增时间列，后端透传分享/目录条目的时间字段",
+    "订阅任务扫描链接弹窗新增一键粘贴按钮（与搜索框同款样式）；修复推荐页翻页回顶、刮削页手机端操作栏、日志按钮日间配色与目录树任务卡片移动端布局"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"
