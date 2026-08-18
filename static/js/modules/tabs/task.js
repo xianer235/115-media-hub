@@ -233,7 +233,7 @@ function bindTreePageEvents() {
     document.getElementById('tree-sync-all-btn')?.addEventListener('click', async () => {
         try {
             await window.MediaHubApi.postJson('/tree/sync-all', {});
-            showToast('全部同步已触发', { tone: 'success' });
+            showToast('下载并生成已触发', { tone: 'success' });
         } catch (error) {
             showToast(`触发失败：${error?.message || error}`);
         }

@@ -3,11 +3,11 @@
                 <div class="flex flex-wrap justify-between gap-3 items-center">
                     <div>
                         <h3 class="group-title mb-2">目录树任务</h3>
-                        <div class="text-xs text-slate-400 leading-6">选择 115 文件夹后点击「生成并同步」：官方服务器导出目录树（存放在网盘根目录，命名为「目录树-路径段…」），自动删除根目录同名旧树并原地重命名；随后对比 sha1，内容未变化则跳过下载与解析，避免重复扫描。无需再去 115 生活 App 手动导出。</div>
+                        <div class="text-xs text-slate-400 leading-6">选择 115 文件夹后点击「生成并同步」：官方服务器导出目录树（存放在网盘根目录，命名为「目录树-路径段…」），自动删除根目录同名旧树并原地重命名；随后对比 sha1，内容未变化则跳过下载与解析，避免重复扫描。顶部「下载并生成」直接下载已存在的树文件并生成；官方导出超时后，把新文件手动改名为标准名，再点「下载并生成」即可收尾。无需再去 115 生活 App 手动导出。</div>
                     </div>
                     <div class="flex items-center gap-3 flex-wrap">
                         <button id="tree-task-add-btn" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold min-h-[42px]">+ 新增目录树任务</button>
-                        <button id="tree-sync-all-btn" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-sm font-bold min-h-[42px]">全部同步</button>
+                        <button id="tree-sync-all-btn" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-sm font-bold min-h-[42px]">下载并生成</button>
                     </div>
                 </div>
                 <div class="mt-5 rounded-2xl border border-slate-700 bg-slate-900/60 p-4">

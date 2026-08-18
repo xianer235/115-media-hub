@@ -78,7 +78,7 @@ class TreeTaskEngineTest(unittest.TestCase):
         tree.task_status["running"] = False
         tree._set_tree_task_running(False)
 
-    def _patch_engine(self, cfg, task, raw_bytes=None, remote_sha1="", fake_download=True):
+    def _patch_engine(self, cfg, task, raw_bytes=None, remote_sha1="", fake_download=True, wait_error=None):
         replace_state = {"renamed": False}
         server_name = "server-name.txt"
         remote_name = tree._tree_file_remote_name(str(task.get("tree_name", "")))
@@ -109,10 +109,14 @@ class TreeTaskEngineTest(unittest.TestCase):
             patch.object(tree, "validate_tree_runtime_config", return_value=""),
             patch.object(tree, "resolve_115_folder_id_by_path", return_value="123"),
             patch.object(tree, "submit_115_export_dir", return_value="export-1"),
-            patch.object(
-                tree,
-                "wait_115_export_dir",
-                return_value={"file_id": "f1", "file_name": "server-name.txt", "pick_code": "pc1"},
+            (
+                patch.object(tree, "wait_115_export_dir", side_effect=wait_error)
+                if wait_error is not None
+                else patch.object(
+                    tree,
+                    "wait_115_export_dir",
+                    return_value={"file_id": "f1", "file_name": "server-name.txt", "pick_code": "pc1"},
+                )
             ),
             patch.object(tree, "get_115_file_sha1_by_id", return_value=remote_sha1),
             patch.object(tree, "list_115_entries", side_effect=fake_list_entries),
@@ -367,6 +371,76 @@ class TreeTaskEngineTest(unittest.TestCase):
         tree.task_status["running"] = True
         with self.assertRaisesRegex(RuntimeError, "已有目录树任务"):
             asyncio.run(tree.run_tree_task("missing"))
+
+    def test_wait_timeout_fails_with_manual_rename_guide(self):
+        cfg = {"cookie_115": "cookie", "sha1_skip": True, "sync_clean": True}
+        task = _make_task(last_sha1="old-sha1")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "data.db")
+            original_db_path, original_db_ensured = db.DB_PATH, db._DB_ENSURED
+            db.DB_PATH, db._DB_ENSURED = db_path, False
+            try:
+                db.ensure_db()
+                timeout_error = RuntimeError(
+                    "115 导出目录树超时（1800 秒，export_id=export-1），任务可能仍在服务端执行"
+                )
+                with self.assertRaisesRegex(RuntimeError, "手动到 115 网盘根目录"):
+                    self._run_engine(cfg, task, wait_error=timeout_error)
+                conn = sqlite3.connect(db_path)
+                try:
+                    row = conn.execute("SELECT export_id, status, error FROM tree_export_jobs").fetchone()
+                finally:
+                    conn.close()
+                self.assertEqual(row[0], "export-1")
+                self.assertEqual(row[1], "failed")
+                self.assertIn("目录树-影视库-电视剧.txt", row[2])
+                self.assertIn("下载并生成", row[2])
+                self.assertIn("生成并同步", row[2])
+            finally:
+                db.DB_PATH, db._DB_ENSURED = original_db_path, original_db_ensured
+
+    def test_sync_existing_force_fetch_downloads_even_when_sha1_same(self):
+        cfg = {"cookie_115": "cookie", "sha1_skip": True, "sync_clean": True}
+        task = _make_task(last_sha1="same-sha1")
+        entry = {
+            "id": "f1",
+            "name": tree._tree_file_remote_name(task["tree_name"]),
+            "sha1": "same-sha1",
+            "pick_code": "pc1",
+        }
+        fetch_calls = {"count": 0}
+
+        def fake_fetch(_cookie, _source_rel):
+            fetch_calls["count"] += 1
+            return "|——影视库\n".encode("utf-8")
+
+        with patch.object(tree, "_resolve_115_file_entry_by_relative_path", return_value=entry), patch.object(
+            tree, "_fetch_115_tree_file_bytes", side_effect=fake_fetch
+        ), patch.object(
+            tree,
+            "_sync_task_tree_bytes",
+            AsyncMock(return_value={"matched_count": 1, "parsed_count": 1, "generated_count": 1}),
+        ), patch.object(tree, "_upsert_tree_task", Mock()), patch.object(tree, "write_log", AsyncMock()):
+            asyncio.run(tree._sync_existing_tree_task(cfg, task, force_fetch=True))
+        self.assertEqual(fetch_calls["count"], 1)
+
+    def test_sync_existing_skips_when_sha1_same_without_force_fetch(self):
+        cfg = {"cookie_115": "cookie", "sha1_skip": True, "sync_clean": True}
+        task = _make_task(last_sha1="same-sha1")
+        entry = {
+            "id": "f1",
+            "name": tree._tree_file_remote_name(task["tree_name"]),
+            "sha1": "same-sha1",
+            "pick_code": "pc1",
+        }
+        with patch.object(tree, "_resolve_115_file_entry_by_relative_path", return_value=entry), patch.object(
+            tree, "_fetch_115_tree_file_bytes", side_effect=AssertionError("sha1 相同且未强制下载时不应下载")
+        ), patch.object(
+            tree, "_sync_task_tree_bytes", AsyncMock(side_effect=AssertionError("不应解析"))
+        ), patch.object(tree, "_upsert_tree_task", Mock(side_effect=AssertionError("不应更新任务"))), patch.object(
+            tree, "write_log", AsyncMock()
+        ):
+            asyncio.run(tree._sync_existing_tree_task(cfg, task, force_fetch=False))
 
 
 class TreeStartupIntegrityTest(unittest.TestCase):

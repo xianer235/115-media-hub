@@ -53,6 +53,15 @@ class TreePageTemplateTest(unittest.TestCase):
         self.assertIn("hover:bg-slate-700", line)
         self.assertNotIn(" bg-slate-700 ", line)
 
+    def test_sync_all_button_renamed_to_download_and_generate(self):
+        html = TASK_TEMPLATE_PATH.read_text(encoding="utf-8")
+        line = next((line for line in html.splitlines() if 'id="tree-sync-all-btn"' in line), "")
+        self.assertIn(">下载并生成</button>", line)
+        self.assertNotIn(">全部同步</button>", line)
+        js = TASK_JS_PATH.read_text(encoding="utf-8")
+        self.assertIn("'下载并生成已触发'", js)
+        self.assertNotIn("'全部同步已触发'", js)
+
     def test_strm_cleanup_is_separate_group(self):
         html = TASK_TEMPLATE_PATH.read_text(encoding="utf-8")
         self.assertIn('id="tree-strm-cleanup"', html)

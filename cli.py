@@ -940,7 +940,7 @@ def cmd_tree(args, c: Client):
             print(f"✅ 目录树任务已触发: {json.dumps(data, ensure_ascii=False)}")
         else:
             data = c.json("POST", "/tree/sync-all", {})
-            print(f"✅ 目录树全部同步已触发: {json.dumps(data, ensure_ascii=False)}")
+            print(f"✅ 目录树下载并生成已触发: {json.dumps(data, ensure_ascii=False)}")
     elif args.action == "full":
         if not getattr(args, "id", None):
             print("❌ 全量重写需要 --id 指定目录树任务")

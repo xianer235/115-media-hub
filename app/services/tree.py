@@ -471,7 +471,10 @@ def _mark_local_files_seen_batch(
 
 
 TREE_EXPORT_TARGET_ROOT = "U_1_0"
-TREE_EXPORT_DEFAULT_TIMEOUT_SECONDS = 600
+TREE_EXPORT_DEFAULT_TIMEOUT_SECONDS = max(
+    60,
+    int(os.environ.get("TREE_EXPORT_TIMEOUT_SECONDS", 1800) or 1800),
+)
 TREE_EXPORT_POLL_INTERVAL_SECONDS = 2
 TREE_EXPORT_FILE_READY_ATTEMPTS = 8
 TREE_EXPORT_FILE_READY_INTERVAL_SECONDS = 1.0
@@ -540,6 +543,18 @@ def _tree_file_remote_name(tree_name: str) -> str:
     if not name:
         return ""
     return name if name.lower().endswith(".txt") else name + ".txt"
+
+
+def _tree_export_timeout_guide(task: Dict[str, Any], export_id: str, exc: BaseException) -> str:
+    """生成导出超时后的手动处理指引：找到 115 服务端命名的新文件并改名为任务标准名。"""
+    remote_name = _tree_file_remote_name(str(task.get("tree_name", "") or "").strip())
+    return (
+        f"{exc}；官方导出可能仍在服务端执行（export_id={str(export_id or '').strip() or '-'}）。"
+        f"请手动到 115 网盘根目录找到新导出的目录树文件（服务端命名，形如「根目录<时间戳>_目录树.txt」），"
+        f"删除旧的「{remote_name}」并把新文件改名为「{remote_name}」，"
+        f"然后点击「下载并生成」按钮直接下载并生成。"
+        f"在完成改名前请勿重复点击「生成并同步」，115 同一时刻只允许一个导出任务。"
+    )
 
 
 def _upsert_tree_task(cfg: Dict[str, Any], updated_task: Dict[str, Any]) -> None:
@@ -947,7 +962,7 @@ async def _run_tree_task_flow(cfg: Dict[str, Any], task: Dict[str, Any], job_id:
         f"━━━━━━━━━━【目录树任务开始 | {folder_path} → {tree_name} | {mode_label}】━━━━━━━━━━",
         "task-divider",
     )
-    await write_log("【生成目录数】")
+    await write_log("【生成目录树】")
 
     await update_progress("校验文件夹", 5, folder_path)
     folder_id = await asyncio.to_thread(resolve_115_folder_id_by_path, cookie, folder_path)
@@ -961,13 +976,18 @@ async def _run_tree_task_flow(cfg: Dict[str, Any], task: Dict[str, Any], job_id:
 
     stage_started = time.perf_counter()
     await update_progress("等待官方生成", 35, folder_path)
-    result = await asyncio.to_thread(
-        wait_115_export_dir,
-        cookie,
-        export_id,
-        TREE_EXPORT_DEFAULT_TIMEOUT_SECONDS,
-        TREE_EXPORT_POLL_INTERVAL_SECONDS,
-    )
+    try:
+        result = await asyncio.to_thread(
+            wait_115_export_dir,
+            cookie,
+            export_id,
+            TREE_EXPORT_DEFAULT_TIMEOUT_SECONDS,
+            TREE_EXPORT_POLL_INTERVAL_SECONDS,
+        )
+    except RuntimeError as exc:
+        if str(exc).startswith("115 导出目录树超时"):
+            raise RuntimeError(_tree_export_timeout_guide(task, export_id, exc)) from exc
+        raise
     durations["等待官方生成"] = max(0.0, time.perf_counter() - stage_started)
     await write_log(f"等待官方生成：{_format_tree_elapsed_seconds(durations['等待官方生成'])}")
     file_id = str(result.get("file_id", "") or "").strip()
@@ -984,7 +1004,7 @@ async def _run_tree_task_flow(cfg: Dict[str, Any], task: Dict[str, Any], job_id:
     durations["替换网盘树文件"] = max(0.0, time.perf_counter() - stage_started)
     await write_log(f"替换网盘树文件：{_format_tree_elapsed_seconds(durations['替换网盘树文件'])}")
     gen_subtotal = durations.get("提交导出", 0.0) + durations.get("等待官方生成", 0.0) + durations.get("替换网盘树文件", 0.0)
-    await write_log(f"生成目录数小计：{_format_tree_elapsed_seconds(gen_subtotal)}")
+    await write_log(f"生成目录树小计：{_format_tree_elapsed_seconds(gen_subtotal)}")
 
     await write_log("【解析目录树】")
     stage_started = time.perf_counter()
@@ -1048,7 +1068,7 @@ async def _run_tree_task_flow(cfg: Dict[str, Any], task: Dict[str, Any], job_id:
 
 
 async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
-    """目录树全部同步：遍历任务读取现有树文件，sha1 未变化则跳过，不触发官方导出。"""
+    """目录树全部同步：遍历任务，直接下载已存在的树文件并生成（不做 sha1 跳过），不触发官方导出。"""
     if task_status["running"] or _tree_task_busy():
         return
     cfg = get_config()
@@ -1070,7 +1090,7 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
     started_at = time.perf_counter()
     try:
         await write_log(
-            f"━━━━━━━━━━【目录树任务开始 | 全部同步 | {len(tasks)} 个任务（不触发导出，仅对比更新）】━━━━━━━━━━",
+            f"━━━━━━━━━━【目录树任务开始 | 全部同步 | {len(tasks)} 个任务（不触发导出，直接下载已存在文件并生成）】━━━━━━━━━━",
             "task-divider",
         )
         for idx, task in enumerate(tasks):
@@ -1081,7 +1101,7 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
             )
             task_started = time.perf_counter()
             try:
-                await _sync_existing_tree_task(cfg, task, force_full=force_full)
+                await _sync_existing_tree_task(cfg, task, force_full=force_full, force_fetch=True)
                 await write_log(
                     f"任务 {task.get('folder_path', '')}：{_tree_stage_seconds(task_started)}"
                 )
@@ -1104,7 +1124,12 @@ async def run_sync(use_local: bool = False, force_full: bool = False) -> None:
         await asyncio.to_thread(release_process_memory, "tree-sync", True)
 
 
-async def _sync_existing_tree_task(cfg: Dict[str, Any], task: Dict[str, Any], force_full: bool = False) -> None:
+async def _sync_existing_tree_task(
+    cfg: Dict[str, Any],
+    task: Dict[str, Any],
+    force_full: bool = False,
+    force_fetch: bool = False,
+) -> None:
     cookie = str(cfg.get("cookie_115", "") or "").strip()
     tree_name = str(task.get("tree_name", "") or "").strip()
     remote_name = _tree_file_remote_name(tree_name)
@@ -1116,6 +1141,7 @@ async def _sync_existing_tree_task(cfg: Dict[str, Any], task: Dict[str, Any], fo
         and last_sha1
         and sha1 == last_sha1
         and (not force_full)
+        and (not force_fetch)
         and bool(cfg.get("sha1_skip", True))
     ):
         await write_log(f"跳过：{remote_name} sha1 未变化（{sha1[:12]}…）")

@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.1] - 2026-08-19
+
+### 目录树导出超时与「下载并生成」
+
+- 「生成并同步」的官方导出等待时长从固定 600 秒提高到默认 1800 秒，可用环境变量 `TREE_EXPORT_TIMEOUT_SECONDS` 调整；超过时长后任务明确置 failed，错误信息给出手动处理指引：到 115 网盘根目录找到服务端命名的新树文件（形如 `根目录<时间戳>_目录树.txt`），删除旧的标准名文件并改名为任务标准名，再点「下载并生成」收尾，避免“超时 → 拿旧文件生成 → 反复重新导出”的死循环。
+- 原「全部同步」按钮改名为「下载并生成」：不再按 sha1 跳过，直接下载已存在的标准名树文件并进入生成，覆盖手动改名后一键下载生成的场景；CLI `tree run` 不带 `--id` 行为同步（提示文案更新），页面说明与 README 同步。
+- 顺带统一日志术语：`【生成目录数】` → `【生成目录树】`，同步纠正交接记录中的历史错别字。
+
+### 验证
+
+- 新增 4 项回归（超时指引落库并含手动步骤、force_fetch 强制下载、未强制时仍 sha1 跳过、按钮与 JS 提示文案改名），完整 unittest 584 项、`compileall`、改动 JS `node --check`、`git diff --check` 均通过；Docker 未重建，真实 115 超时与「下载并生成」流程实测待补。
+
 ## [0.9.0] - 2026-08-19
 
 ### 115 大目录读取分页重构与官方搜索
