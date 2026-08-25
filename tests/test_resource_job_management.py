@@ -189,6 +189,18 @@ class ResourceJobManagementTest(unittest.IsolatedAsyncioTestCase):
             "total_pages": 2, "has_prev": False, "has_next": True,
         })
 
+    async def test_resource_state_route_accepts_page_parameters(self):
+        endpoint = next(
+            route.endpoint
+            for route in resource_routes.router.routes
+            if getattr(route, "path", "") == "/resource/state" and "GET" in getattr(route, "methods", set())
+        )
+        request = mock.Mock(query_params={"job_page": "3", "job_page_size": "10", "job_status": "all"})
+        with mock.patch.object(resource_routes, "build_resource_state_payload", new=mock.AsyncMock(return_value={"ok": True})) as build:
+            self.assertEqual(await endpoint(request), {"ok": True})
+        self.assertEqual(build.call_args.kwargs["job_limit"], 10)
+        self.assertEqual(build.call_args.kwargs["job_offset"], 20)
+
     def test_prune_resource_jobs_if_due_throttles_by_interval(self):
         core.resource_job_prune_last_ts = 0.0
         with mock.patch.object(

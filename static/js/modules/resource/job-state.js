@@ -26,7 +26,10 @@
         let activeJobs = [];
         let pagination = {};
         let requestRevision = 0;
-        let activeRequestRevision = 0;
+        let pageIntentRevision = 0;
+        let activePageRequestRevision = 0;
+        let activePollRequestRevision = 0;
+        let activePageRequestPending = false;
         let loading = false;
         let error = '';
 
@@ -50,13 +53,20 @@
 
         function begin({ status = filter, page: requestedPage = page, reset = false, mode = 'page' } = {}) {
             const nextFilter = normalizeFilter(status);
+            const requestMode = mode === 'poll' ? 'poll' : 'page';
             if (reset || nextFilter !== filter) {
                 filter = nextFilter;
                 page = 1;
             }
             page = reset ? 1 : Math.max(1, Math.floor(Number(requestedPage) || 1));
             requestRevision += 1;
-            activeRequestRevision = requestRevision;
+            if (requestMode === 'page') {
+                pageIntentRevision += 1;
+                activePageRequestRevision = requestRevision;
+                activePageRequestPending = true;
+            } else {
+                activePollRequestRevision = requestRevision;
+            }
             loading = true;
             error = '';
             return {
@@ -64,12 +74,26 @@
                 page,
                 page_size: pageSize,
                 revision: requestRevision,
-                mode: mode === 'poll' ? 'poll' : 'page',
+                mode: requestMode,
+                page_intent_revision: pageIntentRevision,
             };
         }
 
         function accept(request, data = {}) {
-            if (request && Number(request.revision || 0) !== activeRequestRevision) {
+            const requestRevisionValue = Number(request?.revision || 0);
+            const isPoll = request?.mode === 'poll';
+            const isStale = request && (
+                (isPoll && (
+                    requestRevisionValue !== activePollRequestRevision
+                    || Number(request.page_intent_revision || 0) !== pageIntentRevision
+                    || activePageRequestPending
+                ))
+                || (!isPoll && (
+                    requestRevisionValue !== activePageRequestRevision
+                    || Number(request.page_intent_revision || 0) !== pageIntentRevision
+                ))
+            );
+            if (isStale) {
                 return { accepted: false, stale: true, needsCalibration: false, ...snapshot() };
             }
             const payload = data && typeof data === 'object' ? data : {};
@@ -77,10 +101,12 @@
             const incomingActiveJobs = Array.isArray(payload.active_jobs) ? payload.active_jobs : activeJobs;
             const priorActiveSignature = buildActiveSignature(activeJobs);
             const nextActiveSignature = buildActiveSignature(incomingActiveJobs);
-            const isPoll = request?.mode === 'poll';
-            jobs = incomingJobs;
+            jobs = incomingJobs.slice(0, pageSize);
             activeJobs = incomingActiveJobs;
             pagination = payload.pagination && typeof payload.pagination === 'object' ? payload.pagination : pagination;
+            if (!isPoll && requestRevisionValue === activePageRequestRevision) {
+                activePageRequestPending = false;
+            }
             loading = false;
             error = '';
             return {
@@ -92,8 +118,24 @@
         }
 
         function reject(request, reason) {
-            if (request && Number(request.revision || 0) !== activeRequestRevision) {
+            const requestRevisionValue = Number(request?.revision || 0);
+            const isPoll = request?.mode === 'poll';
+            const isStale = request && (
+                (isPoll && (
+                    requestRevisionValue !== activePollRequestRevision
+                    || Number(request.page_intent_revision || 0) !== pageIntentRevision
+                    || activePageRequestPending
+                ))
+                || (!isPoll && (
+                    requestRevisionValue !== activePageRequestRevision
+                    || Number(request.page_intent_revision || 0) !== pageIntentRevision
+                ))
+            );
+            if (isStale) {
                 return { accepted: false, stale: true, ...snapshot() };
+            }
+            if (!isPoll && requestRevisionValue === activePageRequestRevision) {
+                activePageRequestPending = false;
             }
             loading = false;
             error = String(reason?.message || reason || '任务列表加载失败，请稍后重试');

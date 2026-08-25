@@ -37,11 +37,11 @@ export async function refreshResourceState({
             ? (getResourceJobsStateRequest() || {})
             : {};
         const jobStatus = String(jobRequest.status || 'all').trim() || 'all';
-        const jobOffset = Math.max(0, Number(jobRequest.offset || 0) || 0);
-        const jobLimit = Math.max(1, Number(jobRequest.limit || 20) || 20);
+        const jobPage = Math.max(1, Number(jobRequest.page || 1) || 1);
+        const jobPageSize = Math.max(1, Number(jobRequest.page_size || 10) || 10);
         params.set('job_status', jobStatus);
-        params.set('job_offset', String(jobOffset));
-        params.set('job_limit', String(jobLimit));
+        params.set('job_page', String(jobPage));
+        params.set('job_page_size', String(jobPageSize));
         if (compact && !shouldSearchChannels) params.set('compact', '1');
         const endpoint = params.toString() ? `/resource/state?${params.toString()}` : '/resource/state';
         const data = window.MediaHubApi?.getJson

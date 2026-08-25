@@ -252,6 +252,20 @@
             return { total, succeeded, failed, done, percent, rollbackSucceeded, rollbackFailed, rollbackMode };
         }
 
+        function renderTaskPageButtons({ page, totalPages, action, pageAttribute, maxVisible = 5 }) {
+            const currentPage = Math.max(1, Number(page || 1) || 1);
+            const lastPage = Math.max(1, Number(totalPages || 1) || 1);
+            const visibleCount = Math.max(1, Math.min(lastPage, Number(maxVisible || 5) || 5));
+            const halfWindow = Math.floor(visibleCount / 2);
+            const firstPage = Math.max(1, Math.min(lastPage, currentPage - halfWindow));
+            const endPage = Math.min(lastPage, firstPage + visibleCount - 1);
+            const startPage = Math.max(1, endPage - visibleCount + 1);
+            return Array.from({ length: endPage - startPage + 1 }, (_, index) => {
+                const pageNumber = startPage + index;
+                return `<button type="button" data-${action}="page-number" data-${pageAttribute}="${pageNumber}" class="resource-job-page-button ${pageNumber === currentPage ? 'resource-job-page-button-active' : ''}" ${pageNumber === currentPage ? 'aria-current="page"' : ''}>${pageNumber}</button>`;
+            }).join('');
+        }
+
         function renderScraperJobActions(job = {}) {
             const actions = Array.isArray(job.actions) ? job.actions : [];
             if (!actions.length) return '<div class="scraper-job-action-empty">暂无文件明细。</div>';
@@ -358,9 +372,13 @@
             const paginationHtml = totalCount > 0
                 ? `
                     <div class="resource-browser-load-more-row">
+                        <div class="resource-job-pagination-controls">
                         <button type="button" data-scraper-job-action="page-prev" class="resource-browser-load-more-btn" ${pageNumber <= 1 ? 'disabled' : ''}>上一页</button>
-                        <span class="resource-job-status-note">第 ${escapeHtml(String(pageNumber))} / ${escapeHtml(String(totalPages))} 页，共 ${escapeHtml(String(totalCount))} 条</span>
+                        <div class="resource-job-pagination-pages resource-job-pagination-pages-desktop" aria-label="刮削任务页码">${renderTaskPageButtons({ page: pageNumber, totalPages, maxVisible: 5, action: 'scraper-job-action', pageAttribute: 'scraper-job-page' })}</div>
+                        <div class="resource-job-pagination-pages resource-job-pagination-pages-mobile" aria-label="刮削任务页码">${renderTaskPageButtons({ page: pageNumber, totalPages, maxVisible: 3, action: 'scraper-job-action', pageAttribute: 'scraper-job-page' })}</div>
                         <button type="button" data-scraper-job-action="page-next" class="resource-browser-load-more-btn" ${pageNumber >= totalPages ? 'disabled' : ''}>下一页</button>
+                        </div>
+                        <span class="resource-job-pagination-label">共 ${escapeHtml(String(totalCount))} 条</span>
                     </div>
                 `
                 : '';
@@ -508,9 +526,13 @@
             const paginationHtml = totalCount > 0 && pageStatus === normalizedFilter
                 ? `
                     <div class="resource-browser-load-more-row">
+                        <div class="resource-job-pagination-controls">
                         <button type="button" data-resource-job-action="page-prev" class="resource-browser-load-more-btn" ${pageNumber <= 1 ? 'disabled' : ''}>上一页</button>
-                        <span class="resource-job-status-note">第 ${escapeHtml(String(pageNumber))} / ${escapeHtml(String(totalPages))} 页，共 ${escapeHtml(String(totalCount))} 条</span>
+                        <div class="resource-job-pagination-pages resource-job-pagination-pages-desktop" aria-label="导入任务页码">${renderTaskPageButtons({ page: pageNumber, totalPages, maxVisible: 5, action: 'resource-job-action', pageAttribute: 'resource-job-page' })}</div>
+                        <div class="resource-job-pagination-pages resource-job-pagination-pages-mobile" aria-label="导入任务页码">${renderTaskPageButtons({ page: pageNumber, totalPages, maxVisible: 3, action: 'resource-job-action', pageAttribute: 'resource-job-page' })}</div>
                         <button type="button" data-resource-job-action="page-next" class="resource-browser-load-more-btn" ${pageNumber >= totalPages ? 'disabled' : ''}>下一页</button>
+                        </div>
+                        <span class="resource-job-pagination-label">共 ${escapeHtml(String(totalCount))} 条</span>
                     </div>
                 `
                 : '';

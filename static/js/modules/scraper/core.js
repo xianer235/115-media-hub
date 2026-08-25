@@ -1,6 +1,20 @@
 const SCRAPER_JOB_ACTIVE_STATUSES = new Set(['pending', 'running', 'rollback_running']);
 const SCRAPER_ENTRY_PAGE_LIMIT = 300;
 
+function renderJobPageButtons(page, totalPages, maxVisible = 5) {
+    const currentPage = Math.max(1, Number(page || 1) || 1);
+    const lastPage = Math.max(1, Number(totalPages || 1) || 1);
+    const visibleCount = Math.max(1, Math.min(lastPage, Number(maxVisible || 5) || 5));
+    const halfWindow = Math.floor(visibleCount / 2);
+    const firstPage = Math.max(1, Math.min(lastPage, currentPage - halfWindow));
+    const endPage = Math.min(lastPage, firstPage + visibleCount - 1);
+    const startPage = Math.max(1, endPage - visibleCount + 1);
+    return Array.from({ length: endPage - startPage + 1 }, (_, index) => {
+        const pageNumber = startPage + index;
+        return `<button type="button" data-scraper-action="jobs-page-number" data-scraper-job-page="${pageNumber}" class="resource-job-page-button ${pageNumber === currentPage ? 'resource-job-page-button-active' : ''}" ${pageNumber === currentPage ? 'aria-current="page"' : ''}>${pageNumber}</button>`;
+    }).join('');
+}
+
 function getScraperProviderOptions() {
     const meta = window.providerMeta || [];
     return meta
@@ -1713,9 +1727,13 @@ function renderJobs() {
     const page = Math.max(1, Number(pagination.page || state.jobsPage || 1) || 1);
     const paginationHtml = total > 0 ? `
         <div class="resource-browser-load-more-row">
+            <div class="resource-job-pagination-controls">
             <button type="button" data-scraper-action="jobs-page-prev" class="resource-browser-load-more-btn" ${page <= 1 ? 'disabled' : ''}>上一页</button>
-            <span class="scraper-empty-row">第 ${escapeHtml(String(page))} / ${escapeHtml(String(totalPages))} 页，共 ${escapeHtml(String(total))} 条</span>
+            <div class="resource-job-pagination-pages resource-job-pagination-pages-desktop" aria-label="刮削任务页码">${renderJobPageButtons(page, totalPages, 5)}</div>
+            <div class="resource-job-pagination-pages resource-job-pagination-pages-mobile" aria-label="刮削任务页码">${renderJobPageButtons(page, totalPages, 3)}</div>
             <button type="button" data-scraper-action="jobs-page-next" class="resource-browser-load-more-btn" ${page >= totalPages ? 'disabled' : ''}>下一页</button>
+            </div>
+            <span class="resource-job-pagination-label">共 ${escapeHtml(String(total))} 条</span>
         </div>
     ` : '';
     list.innerHTML = `${rowsHtml}${paginationHtml}`;
@@ -3401,11 +3419,14 @@ function handleClick(event) {
         void rollbackJob(rollbackButton.dataset.scraperRollbackJob);
         return;
     }
-    const jobsPageButton = event.target.closest('[data-scraper-action="jobs-page-prev"], [data-scraper-action="jobs-page-next"]');
+    const jobsPageButton = event.target.closest('[data-scraper-action="jobs-page-prev"], [data-scraper-action="jobs-page-next"], [data-scraper-action="jobs-page-number"]');
     if (jobsPageButton) {
         const currentPage = Number(state.jobsPagination?.page || state.jobsPage || 1) || 1;
-        const delta = jobsPageButton.dataset.scraperAction === 'jobs-page-next' ? 1 : -1;
-        void refreshJobs({ page: currentPage + delta });
+        const action = jobsPageButton.dataset.scraperAction;
+        const targetPage = action === 'jobs-page-number'
+            ? Number(jobsPageButton.dataset.scraperJobPage || currentPage)
+            : currentPage + (action === 'jobs-page-next' ? 1 : -1);
+        void refreshJobs({ page: targetPage });
         return;
     }
     const batchAcceptBtn = event.target.closest('[data-batch-accept]');

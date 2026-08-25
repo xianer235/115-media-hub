@@ -613,11 +613,10 @@ async def get_resource_state(request: Request) -> Dict[str, Any]:
     search_source = normalize_resource_search_source(request.query_params.get("search_source", "tg"))
     provider_filter = normalize_resource_provider_filter(request.query_params.get("provider_filter", "all"))
     search_id = normalize_resource_search_id(request.query_params.get("search_id", ""))
-    job_limit = max(
-        1,
-        min(parse_int(request.query_params.get("job_limit", 20), default=20), RESOURCE_JOB_PAGE_MAX_LIMIT),
-    )
-    job_offset = max(0, parse_int(request.query_params.get("job_offset", 0), default=0))
+    job_page_size = 10
+    job_page = max(1, parse_int(request.query_params.get("job_page", 1), default=1))
+    job_limit = job_page_size
+    job_offset = (job_page - 1) * job_page_size
     job_status_filter = normalize_resource_job_status_filter(request.query_params.get("job_status", "all"))
     compact = request.query_params.get("compact") == "1"
     sync_channels = request.query_params.get("sync") == "1"

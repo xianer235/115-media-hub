@@ -209,7 +209,7 @@
         .rec-card-title:hover { color: #7dd3fc; }
         .rec-card-meta {
             display: flex;
-            flex-wrap: nowrap;
+            flex-wrap: wrap;
             align-items: center;
             gap: 0.35rem;
             font-size: 0.625rem;
@@ -6254,9 +6254,90 @@
         .resource-browser-load-more-row {
             display: flex;
             justify-content: center;
+            align-items: center;
+            flex-wrap: nowrap;
+            gap: 0.75rem;
+            min-height: 3.25rem;
             padding: 0.72rem 0.85rem 0.82rem;
             border-top: 1px solid rgba(51, 65, 85, 0.68);
             background: rgba(2, 6, 23, 0.3);
+        }
+        .resource-job-pagination-label {
+            display: inline-flex;
+            align-items: center;
+            min-height: 2rem;
+            color: #cbd5e1;
+            font-size: 0.78rem;
+            line-height: 1.25;
+            white-space: nowrap;
+        }
+        .resource-job-pagination-pages {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.28rem;
+        }
+        .resource-job-pagination-controls {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.75rem;
+            min-width: 0;
+        }
+        .resource-job-pagination-pages-mobile {
+            display: none;
+        }
+        .resource-job-page-button {
+            width: 2rem;
+            height: 2rem;
+            border: 1px solid rgba(100, 116, 139, 0.82);
+            border-radius: 0.45rem;
+            background: rgba(15, 23, 42, 0.62);
+            color: #e2e8f0;
+            font-size: 0.78rem;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .resource-job-page-button:hover {
+            border-color: rgba(56, 189, 248, 0.7);
+            background: rgba(30, 41, 59, 0.92);
+            color: #f8fafc;
+        }
+        .resource-job-page-button-active {
+            border-color: #38bdf8;
+            background: #0369a1;
+            color: #ffffff;
+        }
+        .resource-job-page-button-active:hover {
+            border-color: #7dd3fc;
+            background: #075985;
+            color: #ffffff;
+        }
+        .resource-job-page-button:focus-visible {
+            outline: 2px solid #38bdf8;
+            outline-offset: 2px;
+        }
+        html.theme-day .resource-job-pagination-label {
+            color: #64748b;
+        }
+        html.theme-day .resource-job-page-button {
+            border-color: #cbd5e1;
+            background: #ffffff;
+            color: #334155;
+        }
+        html.theme-day .resource-job-page-button:hover {
+            border-color: #38bdf8;
+            background: #f0f9ff;
+            color: #075985;
+        }
+        html.theme-day .resource-job-page-button-active {
+            border-color: #0369a1;
+            background: #0369a1;
+            color: #ffffff;
+        }
+        html.theme-day .resource-job-page-button-active:hover {
+            border-color: #075985;
+            background: #075985;
+            color: #ffffff;
         }
         .resource-browser-load-more-btn {
             border: 1px solid rgba(56, 189, 248, 0.35);
@@ -6274,6 +6355,36 @@
             background: rgba(56, 189, 248, 0.2);
             border-color: rgba(56, 189, 248, 0.5);
             color: #f0f9ff;
+        }
+        @media (max-width: 640px) {
+            .resource-browser-load-more-row {
+                flex-direction: column;
+                gap: 0.42rem;
+                min-height: 0;
+                padding: 0.68rem 0.55rem 0.72rem;
+            }
+            .resource-job-pagination-controls {
+                width: 100%;
+                flex-wrap: nowrap;
+                gap: 0.42rem;
+            }
+            .resource-job-pagination-pages-desktop {
+                display: none;
+            }
+            .resource-job-pagination-pages-mobile {
+                display: inline-flex;
+                flex: 0 1 auto;
+                min-width: 0;
+            }
+            .resource-job-pagination-label {
+                min-height: 1.4rem;
+                font-size: 0.74rem;
+            }
+            .resource-browser-load-more-btn {
+                flex: 0 0 auto;
+                min-height: 2rem;
+                padding: 0.32rem 0.62rem;
+            }
         }
         .resource-folder-pathbar {
             border-radius: 1rem;

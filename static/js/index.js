@@ -1896,17 +1896,20 @@
                 addWhenMatched: isResourceJobActiveStatus(job?.status || ''),
             });
             const selectedChanged = selectedResourceItem && Number(selectedResourceItem?.id || 0) === resourceId;
+            const pageSize = Math.max(1, Number(resourceState?.job_pagination?.page_size || 10) || 10);
+            const nextPageJobs = nextJobsResult.jobs.slice(0, pageSize);
             const changed = nextItems !== currentItems
                 || nextChannelSections !== currentChannelSections
                 || nextSearchSections !== currentSearchSections
                 || nextJobsResult.changed
+                || nextPageJobs.length !== nextJobsResult.jobs.length
                 || nextActiveJobsResult.changed
                 || selectedChanged;
             if (!changed) return false;
             resourceState = {
                 ...resourceState,
                 items: nextItems,
-                jobs: nextJobsResult.jobs,
+                jobs: nextPageJobs,
                 active_jobs: nextActiveJobsResult.jobs,
                 channel_sections: nextChannelSections,
                 search_sections: nextSearchSections,

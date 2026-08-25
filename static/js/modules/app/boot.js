@@ -493,10 +493,13 @@
             const scraperBtn = e.target.closest('[data-scraper-job-action]');
             if (scraperBtn) {
                 const action = scraperBtn.dataset.scraperJobAction || '';
-                if (action === 'page-prev' || action === 'page-next') {
+                if (action === 'page-prev' || action === 'page-next' || action === 'page-number') {
                     const pagination = scraperJobState?.pagination || {};
                     const currentPage = Number(pagination.page || 1) || 1;
-                    await fetchScraperJobsState({ page: currentPage + (action === 'page-next' ? 1 : -1) });
+                    const targetPage = action === 'page-number'
+                        ? Number(scraperBtn.dataset.scraperJobPage || currentPage)
+                        : currentPage + (action === 'page-next' ? 1 : -1);
+                    await fetchScraperJobsState({ page: targetPage });
                     return;
                 }
                 const jobId = parseInt(scraperBtn.dataset.scraperJobId || '0', 10);
@@ -508,10 +511,13 @@
             const btn = e.target.closest('[data-resource-job-action]');
             if (!btn) return;
             const action = btn.dataset.resourceJobAction || '';
-            if (action === 'page-prev' || action === 'page-next') {
+            if (action === 'page-prev' || action === 'page-next' || action === 'page-number') {
                 const pagination = resourceState?.job_pagination || {};
                 const currentPage = Number(pagination.page || 1) || 1;
-                await loadResourceJobsPage(currentPage + (action === 'page-next' ? 1 : -1));
+                const targetPage = action === 'page-number'
+                    ? Number(btn.dataset.resourceJobPage || currentPage)
+                    : currentPage + (action === 'page-next' ? 1 : -1);
+                await loadResourceJobsPage(targetPage);
                 return;
             }
             if (action === 'retry-load') {

@@ -3040,8 +3040,8 @@
                 if (searchId) params.set('search_id', String(searchId || '').trim());
                 jobRequest = getResourceJobsStateRequest({ mode: jobMode });
                 params.set('job_status', jobRequest.status);
-                params.set('job_offset', String(jobRequest.offset));
-                params.set('job_limit', String(jobRequest.limit));
+                params.set('job_page', String(jobRequest.page));
+                params.set('job_page_size', String(jobRequest.page_size));
                 if (compact && !shouldSearchChannels) params.set('compact', '1');
                 const endpoint = params.toString() ? `/resource/state?${params.toString()}` : '/resource/state';
                 const data = await window.MediaHubApi.getJson(endpoint, signal ? { signal } : undefined);
