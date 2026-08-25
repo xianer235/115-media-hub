@@ -1,3 +1,5 @@
+import logging
+
 from . import subscription as _subscription
 from ..memory import release_process_memory
 
@@ -12,6 +14,22 @@ globals().update(
 )
 
 from ..providers.registry import get_or_none as _get_provider_or_none
+from .resource import (
+    RESOURCE_OFFLINE_POLL_MAX_PAGES,
+    _match_115_offline_task,
+    _pick_submit_offline_hash,
+    build_offline_job_identity,
+)
+from .subscription_episode import _extract_subscription_season_from_name
+
+
+SUBSCRIPTION_OFFLINE_LINK_TYPES = frozenset(("magnet", "ed2k"))
+SUBSCRIPTION_OFFLINE_STAGING_ROOT = "云下载/磁力中转"
+SUBSCRIPTION_OFFLINE_POLL_INTERVAL_SECONDS = 30
+SUBSCRIPTION_OFFLINE_POLL_MAX_SECONDS = 43200
+SUBSCRIPTION_OFFLINE_RETENTION_DAYS = 7
+SUBSCRIPTION_OFFLINE_SCAN_MAX_DIRS = 300
+SUBSCRIPTION_OFFLINE_SCAN_MAX_ENTRIES = 3000
 
 
 def _format_subscription_matched_episode_summary(episodes: Any) -> str:
@@ -579,7 +597,10 @@ def _build_manual_subscription_search_result(
 ) -> Dict[str, Any]:
     normalized_provider = normalize_subscription_provider(provider, fallback="115")
     provider_meta = _get_provider_or_none(normalized_provider)
-    link_type = str(getattr(provider_meta, "link_type", "") or "").strip() or ("quark" if normalized_provider == "quark" else "115share")
+    manual_link_type = str(manual_candidate.get("link_type", "") or "").strip().lower()
+    link_type = manual_link_type or str(getattr(provider_meta, "link_type", "") or "").strip() or (
+        "quark" if normalized_provider == "quark" else "115share"
+    )
     provider_label = str(getattr(provider_meta, "label", "") or normalized_provider).strip()
     keyword_label = f"manual-{normalized_provider}-link"
     link_url = str(manual_candidate.get("link_url", "") or "").strip()
@@ -605,6 +626,7 @@ def _build_manual_subscription_search_result(
             "subscription_task_name": task_name,
             "manual_subscription_link": True,
             "manual_link_provider": normalized_provider,
+            "manual_link_type": link_type,
         },
     }
     blocked_keyword = match_subscription_exclude_keyword(task, resource_item)
@@ -685,6 +707,745 @@ def _build_manual_subscription_search_result(
             "provider": normalized_provider,
         },
     }
+
+
+def _subscription_offline_candidate(candidate: Dict[str, Any]) -> Dict[str, Any]:
+    """仅放行手动扫描链接里的 magnet/ed2k 候选；搜索自动发现的磁力继续不路由。"""
+    if not isinstance(candidate, dict):
+        return {}
+    item = candidate.get("item") if isinstance(candidate.get("item"), dict) else {}
+    extra = item.get("extra") if isinstance(item.get("extra"), dict) else {}
+    if not bool(extra.get("manual_subscription_link", False)):
+        return {}
+    link_type = resolve_resource_link_type(
+        item.get("link_type", ""),
+        str(item.get("link_url", "") or "").strip(),
+    )
+    if link_type not in SUBSCRIPTION_OFFLINE_LINK_TYPES:
+        return {}
+    return {
+        "candidate": candidate,
+        "item": item,
+        "link_type": link_type,
+    }
+
+
+def _get_subscription_offline_staging_root(cfg: Dict[str, Any]) -> str:
+    raw = str((cfg or {}).get("magnet_staging_root", "") or "").strip()
+    return normalize_relative_path(raw or SUBSCRIPTION_OFFLINE_STAGING_ROOT)
+
+
+_SUBSCRIPTION_OFFLINE_JUNK_EXTENSIONS = frozenset(
+    (
+        "nfo",
+        "jpg",
+        "jpeg",
+        "png",
+        "gif",
+        "bmp",
+        "webp",
+        "txt",
+        "htm",
+        "html",
+        "url",
+        "lnk",
+        "torrent",
+        "db",
+    )
+)
+_SUBSCRIPTION_OFFLINE_JUNK_NAME_TOKENS = (
+    "sample",
+    "样板",
+    "trailer",
+    "预告",
+    "advert",
+    "广告",
+    "cover",
+    "poster",
+    "海报",
+)
+
+
+def _is_subscription_offline_junk_file(name: str) -> bool:
+    normalized = normalize_relative_path(str(name or "").strip())
+    if not normalized:
+        return True
+    leaf = normalized.replace("\\", "/").split("/")[-1].strip()
+    if not leaf:
+        return True
+    ext = os.path.splitext(leaf)[1].lstrip(".").lower()
+    if ext in _SUBSCRIPTION_OFFLINE_JUNK_EXTENSIONS:
+        return True
+    stem = os.path.splitext(leaf)[0].lower()
+    for token in _SUBSCRIPTION_OFFLINE_JUNK_NAME_TOKENS:
+        if token in stem:
+            return True
+    return False
+
+
+def _subscription_offline_title_tokens(task: Dict[str, Any]) -> Set[str]:
+    title = str(task.get("title", "") or "").strip().lower()
+    tokens = set(re.findall(r"[a-z0-9\u4e00-\u9fff]+", title))
+    aliases = task.get("aliases", []) if isinstance(task.get("aliases"), list) else []
+    for alias in aliases:
+        tokens.update(re.findall(r"[a-z0-9\u4e00-\u9fff]+", str(alias or "").lower()))
+    return tokens
+
+
+def _subscription_offline_file_matches_title(task: Dict[str, Any], name: str) -> bool:
+    tokens = _subscription_offline_title_tokens(task)
+    if not tokens:
+        return True
+    name_tokens = set(re.findall(r"[a-z0-9\u4e00-\u9fff]+", str(name or "").lower()))
+    return bool(tokens.issubset(name_tokens))
+
+
+def _subscription_offline_file_older_than(entry: Dict[str, Any], days: int) -> bool:
+    raw_ts = str((entry or {}).get("modified_at", "") or "").strip()
+    if not raw_ts:
+        return False
+    try:
+        timestamp = parse_resource_datetime_to_timestamp(raw_ts)
+    except Exception:
+        return False
+    if not timestamp:
+        return False
+    return (time.time() - timestamp) >= max(1, int(days or 0)) * 86400
+
+
+def _list_subscription_offline_staging_entries(
+    provider: Any,
+    cookie: str,
+    root_cid: str,
+    task: Dict[str, Any],
+    min_size_bytes: int = 0,
+) -> Dict[str, Any]:
+    """递归列出中转目录媒体文件；垃圾文件直接标记删除，不参与挑选。"""
+    files: List[Dict[str, Any]] = []
+    junk_ids: List[str] = []
+    scanned_dirs = 0
+    scanned_entries = 0
+    truncated = False
+    pending: List[Tuple[str, str]] = [("", str(root_cid or "0").strip() or "0")]
+    while pending and scanned_dirs < SUBSCRIPTION_OFFLINE_SCAN_MAX_DIRS:
+        parent_rel, cid = pending.pop(0)
+        try:
+            entries = provider.list_entries(cookie, cid)
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                "订阅中转目录读取失败（%s）：%s",
+                parent_rel or "/",
+                exc,
+            )
+            continue
+        scanned_dirs += 1
+        for entry in entries if isinstance(entries, list) else []:
+            scanned_entries += 1
+            if scanned_entries > SUBSCRIPTION_OFFLINE_SCAN_MAX_ENTRIES:
+                truncated = True
+                break
+            if not isinstance(entry, dict):
+                continue
+            entry_id = str(entry.get("id", "") or "").strip()
+            name = str(entry.get("name", "") or "").strip()
+            if not entry_id or not name:
+                continue
+            rel_path = join_relative_path(parent_rel, name)
+            if bool(entry.get("is_dir", False)):
+                pending.append((rel_path, entry_id))
+                continue
+            if _is_subscription_offline_junk_file(rel_path):
+                junk_ids.append(entry_id)
+                continue
+            if min_size_bytes > 0 and max(0, int(entry.get("size", 0) or 0)) < min_size_bytes:
+                continue
+            if _is_subscription_excluded_file_type(task, rel_path):
+                continue
+            episodes: Set[int] = set()
+            if str((task or {}).get("media_type", "movie") or "movie").strip().lower() == "tv":
+                episodes = _extract_task_episodes_from_file_entry(task, rel_path)
+                episodes = _clamp_episode_values(episodes)
+            files.append(
+                {
+                    "id": entry_id,
+                    "fid": str(entry.get("fid", "") or entry_id).strip(),
+                    "name": name,
+                    "rel_path": rel_path,
+                    "size": max(0, int(entry.get("size", 0) or 0)),
+                    "is_dir": False,
+                    "parent_id": cid,
+                    "episodes": sorted(episodes),
+                    "modified_at": str(entry.get("modified_at", "") or "").strip(),
+                }
+            )
+        if truncated:
+            break
+    return {
+        "files": files,
+        "junk_ids": junk_ids,
+        "scanned_dirs": scanned_dirs,
+        "scanned_entries": scanned_entries,
+        "truncated": truncated,
+    }
+
+
+def _select_subscription_offline_entries(
+    task: Dict[str, Any],
+    files: List[Dict[str, Any]],
+    existing_folder_episodes: Set[int],
+    single_season_episode_upper_bound: int = 0,
+) -> Dict[str, Any]:
+    """按订阅条件从中转文件里挑选入库条目，返回 selected_entries/ids/recorded_episodes。"""
+    if not files:
+        return {
+            "selected_entries": [],
+            "selected_ids": [],
+            "recorded_episodes": set(),
+            "selected_file_samples": [],
+            "detail": "中转目录没有可入库媒体文件",
+        }
+    if str((task or {}).get("media_type", "movie") or "movie").strip().lower() == "tv":
+        with_episodes = [entry for entry in files if entry.get("episodes")]
+        if with_episodes:
+            all_episodes = _clamp_episode_values(
+                set().union(*[set(entry.get("episodes", set())) for entry in with_episodes]),
+                episode_upper_bound=single_season_episode_upper_bound,
+            )
+            missing_episodes = {
+                episode_no
+                for episode_no in all_episodes
+                if episode_no not in existing_folder_episodes
+            }
+            picked = _pick_best_tv_share_files_by_episode_bucket(
+                task,
+                with_episodes,
+                missing_episodes,
+            )
+            picked_ids = {
+                str(entry_id or "").strip()
+                for entry_id in (picked.get("selected_ids", []) if isinstance(picked.get("selected_ids"), list) else [])
+                if str(entry_id or "").strip()
+            }
+            if picked_ids:
+                selected_entries = [entry for entry in files if str(entry.get("id", "") or "").strip() in picked_ids]
+                recorded_episodes = _clamp_episode_values(
+                    set().union(
+                        *[
+                            set(entry.get("episodes", set()))
+                            for entry in selected_entries
+                            if entry.get("episodes")
+                        ]
+                    ),
+                    episode_upper_bound=single_season_episode_upper_bound,
+                )
+                return {
+                    "selected_entries": selected_entries,
+                    "selected_ids": [str(entry.get("id", "") or "").strip() for entry in selected_entries],
+                    "recorded_episodes": recorded_episodes,
+                    "selected_file_samples": [
+                        str(entry.get("rel_path", "") or entry.get("name", "") or "").strip()
+                        for entry in selected_entries[:8]
+                    ],
+                    "detail": f"按缺失集命中 {len(recorded_episodes)} 集",
+                }
+    best = None
+    best_rank: Tuple[int, int, int, str] = (-1, -1, -1, "")
+    for entry in files:
+        if not _subscription_offline_file_matches_title(task, entry.get("rel_path", "") or entry.get("name", "")):
+            continue
+        rank = _build_subscription_share_file_quality_rank(task, entry)
+        if rank > best_rank:
+            best_rank = rank
+            best = entry
+    if best is None and len(files) == 1:
+        best = files[0]
+    if best is None:
+        return {
+            "selected_entries": [],
+            "selected_ids": [],
+            "recorded_episodes": set(),
+            "selected_file_samples": [],
+            "detail": "中转文件未命中订阅标题/剧集条件",
+        }
+    recorded = _clamp_episode_values(
+        set(best.get("episodes", set())),
+        episode_upper_bound=single_season_episode_upper_bound,
+    )
+    return {
+        "selected_entries": [best],
+        "selected_ids": [str(best.get("id", "") or "").strip()],
+        "recorded_episodes": recorded,
+        "selected_file_samples": [str(best.get("rel_path", "") or best.get("name", "") or "").strip()],
+        "detail": "按标题与质量挑选最佳文件",
+    }
+
+
+async def _run_subscription_manual_offline_import(
+    *,
+    task: Dict[str, Any],
+    task_name: str,
+    cfg: Dict[str, Any],
+    provider_meta: Any,
+    cookie: str,
+    candidate: Dict[str, Any],
+    item: Dict[str, Any],
+    link_type: str,
+    staging_root: str,
+    effective_savepath: str,
+    base_savepath: str,
+    folder_id: str,
+    monitor_task_name: str,
+    last_episode: int,
+    known_total: int,
+    single_season_episode_upper_bound: int,
+    existing_folder_episodes: Set[int],
+    existing_episode_scan_ready: bool,
+    subscription_run_id: str,
+    batch_refresh_enabled: bool,
+    import_timeout_seconds: int = 90,
+) -> Dict[str, Any]:
+    """单次磁力/电驴离线入库：提交 115 离线 → 轮询完成 → 挑选 → 移动 → 刷新 → 清理。"""
+    result_base: Dict[str, Any] = {
+        "handled": True,
+        "ok": False,
+        "job_id": 0,
+        "selected_savepath": effective_savepath,
+        "successful_count": 0,
+        "imported_episodes": [],
+        "max_total_detected": 0,
+        "auto_refresh": False,
+        "reused_existing": False,
+        "last_failed_detail": "",
+        "failed_attempts": 0,
+        "timed_out_attempts": 0,
+    }
+    if not provider_meta or not cookie:
+        result_base["last_failed_detail"] = "115 认证信息未配置，无法离线下载"
+        return result_base
+    link_url = str(item.get("link_url", "") or "").strip()
+    if not link_url:
+        result_base["last_failed_detail"] = "磁力/电驴链接为空"
+        return result_base
+    media_type = str(task.get("media_type", "movie") or "movie").strip().lower()
+    title = str(item.get("title", "") or task.get("title", "") or task_name or "磁力资源").strip()
+    staging_rel = join_relative_path(staging_root, sanitize_115_folder_name(task_name, fallback="订阅任务"))
+    job_id = 0
+    submitted_hash = ""
+    try:
+        await write_subscription_log(
+            f"磁力/电驴扫描链接已提交：{link_url[:120]}",
+            "info",
+        )
+        staging_cid = await asyncio.wait_for(
+            asyncio.to_thread(provider_meta.ensure_folder_id_by_path, cookie, staging_rel),
+            timeout=min(import_timeout_seconds, 60),
+        )
+        staging_cid = str(staging_cid or "").strip() or "0"
+        await write_subscription_log(f"中转目录已就绪：{staging_rel}", "info")
+        upsert_subscription_task_state(
+            task_name,
+            media_type=media_type,
+            status="running",
+            progress=50,
+            detail="正在提交 115 离线下载",
+        )
+
+        job_id = create_resource_job(
+            item,
+            {
+                "folder_id": staging_cid,
+                "savepath": staging_rel,
+                "sharetitle": "",
+                "monitor_task_name": "",
+                "refresh_delay_seconds": 0,
+                "auto_refresh": False,
+                "extra": {
+                    "job_source": "subscription_manual_link",
+                    "subscription_run_id": subscription_run_id,
+                    "subscription_task_name": task_name,
+                    "offline_provider": "115",
+                    "offline_provider_label": provider_meta.label,
+                    "magnet_provider": "115",
+                    "final_savepath": effective_savepath,
+                    "staging_path": staging_rel,
+                },
+            },
+        )
+        update_resource_job(
+            job_id,
+            status="running",
+            status_detail="正在提交 115 离线下载",
+            started_at=now_text(),
+            folder_id=staging_cid,
+        )
+
+        response = await asyncio.wait_for(
+            asyncio.to_thread(
+                provider_meta.submit_offline_task,
+                cookie,
+                link_url,
+                staging_cid,
+            ),
+            timeout=import_timeout_seconds,
+        )
+        duplicate_submit = int((response or {}).get("errcode", 0) or 0) == 10008
+        submitted_hash = _pick_submit_offline_hash(response)
+        offline_extra = {
+            "offline_task_hash": submitted_hash,
+            "offline_url": link_url,
+            "offline_poll_started_at": now_text(),
+            "offline_poll_started_ts": time.time(),
+            "offline_skip_wait": 1 if duplicate_submit else 0,
+        }
+        update_resource_job(job_id, extra_json=safe_json_dumps(offline_extra))
+        await write_subscription_log(
+            "115 已接收离线任务" + ("（该磁力此前已提交，等待已有任务完成）" if duplicate_submit else ""),
+            "info",
+        )
+
+        pseudo_job = {
+            "link_type": link_type,
+            "link_url": link_url,
+            "folder_id": staging_cid,
+            "extra": dict(offline_extra),
+        }
+        identity = build_offline_job_identity(pseudo_job)
+        if not submitted_hash:
+            submitted_hash = str(identity.get("hash", "") or "").strip()
+        pseudo_job["extra"]["offline_task_hash"] = submitted_hash
+
+        deadline = time.time() + SUBSCRIPTION_OFFLINE_POLL_MAX_SECONDS
+        last_percent = -1.0
+        last_progress_log_ts = 0.0
+        matched_task: Dict[str, Any] = {}
+        while True:
+            check_subscription_cancelled()
+            if time.time() >= deadline:
+                result_base["last_failed_detail"] = f"等待 115 离线下载超时（>{SUBSCRIPTION_OFFLINE_POLL_MAX_SECONDS} 秒）"
+                result_base["timed_out_attempts"] = 1
+                break
+            found_task: Dict[str, Any] = {}
+            folder_mismatch = False
+            page_count = 1
+            page = 1
+            while page <= page_count and page <= RESOURCE_OFFLINE_POLL_MAX_PAGES:
+                try:
+                    query_result = await asyncio.wait_for(
+                        asyncio.to_thread(provider_meta.query_offline_tasks, cookie, page),
+                        timeout=60,
+                    )
+                except Exception:
+                    break
+                query_result = query_result if isinstance(query_result, dict) else {}
+                tasks = query_result.get("tasks") or []
+                page_count = max(1, min(20, int(query_result.get("page_count", page_count) or 1)))
+                for raw_task in tasks:
+                    if not isinstance(raw_task, dict):
+                        continue
+                    match = _match_115_offline_task(raw_task, pseudo_job)
+                    if match == "folder_mismatch":
+                        folder_mismatch = True
+                        continue
+                    if match == "exact":
+                        found_task = raw_task
+                        break
+                if found_task:
+                    break
+                page += 1
+            if found_task:
+                status = int(found_task.get("status", 0) or 0)
+                percent = max(0.0, min(100.0, float(found_task.get("percent", 0) or 0)))
+                if status == 2:
+                    matched_task = found_task
+                    break
+                if status == -1:
+                    result_base["last_failed_detail"] = f"115 离线任务失败（{str(found_task.get('name', '未知任务')).strip()}）"
+                    break
+                now_ts = time.time()
+                percent_changed = abs(percent - last_percent) >= 5.0
+                interval_elapsed = now_ts - last_progress_log_ts >= 60
+                if percent_changed or interval_elapsed:
+                    last_percent = percent
+                    last_progress_log_ts = now_ts
+                    upsert_subscription_task_state(
+                        task_name,
+                        media_type=media_type,
+                        status="running",
+                        progress=min(88, 50 + int(percent / 3)),
+                        detail=f"115 离线下载中 {percent:.0f}%",
+                    )
+                    await write_subscription_log(
+                        f"115 离线下载中 {percent:.0f}%（{str(found_task.get('name', '')).strip()[:80]}）",
+                        "info",
+                    )
+            else:
+                if folder_mismatch:
+                    result_base["last_failed_detail"] = "在 115 找到同链接任务，但目标目录与中转目录不一致"
+                    break
+                if last_percent < 0:
+                    last_percent = 0
+            check_subscription_cancelled()
+            await asyncio.sleep(SUBSCRIPTION_OFFLINE_POLL_INTERVAL_SECONDS)
+
+        if not matched_task:
+            if not result_base.get("last_failed_detail"):
+                result_base["last_failed_detail"] = "未在 115 离线任务列表中找到对应任务"
+            raise RuntimeError(str(result_base.get("last_failed_detail", "") or "115 离线导入失败"))
+
+        await write_subscription_log("115 离线下载完成，正在识别中转目录文件", "success")
+        upsert_subscription_task_state(
+            task_name,
+            media_type=media_type,
+            status="running",
+            progress=88,
+            detail="正在识别并挑选中转文件",
+        )
+        min_size_bytes = max(0, int(float(task.get("min_file_size_mb", 0) or 0) * 1024 * 1024))
+        staging_meta = await asyncio.to_thread(
+            _list_subscription_offline_staging_entries,
+            provider_meta,
+            cookie,
+            staging_cid,
+            task,
+            min_size_bytes,
+        )
+        files = staging_meta.get("files") if isinstance(staging_meta.get("files"), list) else []
+        junk_ids = staging_meta.get("junk_ids") if isinstance(staging_meta.get("junk_ids"), list) else []
+        if junk_ids:
+            await asyncio.to_thread(
+                provider_meta.delete_entries,
+                cookie,
+                junk_ids,
+                staging_cid,
+            )
+            await write_subscription_log(f"已清理中转目录垃圾文件 {len(junk_ids)} 个", "info")
+        if bool(staging_meta.get("truncated", False)):
+            await write_subscription_log("中转目录文件较多，本次扫描已截断，可能遗漏部分文件", "warn")
+        if not files:
+            result_base["last_failed_detail"] = "115 离线下载完成，但中转目录未发现可入库媒体文件"
+            raise RuntimeError(str(result_base.get("last_failed_detail", "")))
+
+        selection = _select_subscription_offline_entries(
+            task,
+            files,
+            existing_folder_episodes,
+            single_season_episode_upper_bound=single_season_episode_upper_bound,
+        )
+        selected_entries = selection.get("selected_entries") if isinstance(selection.get("selected_entries"), list) else []
+        selected_ids = {
+            str(entry_id or "").strip()
+            for entry_id in (selection.get("selected_ids", []) if isinstance(selection.get("selected_ids"), list) else [])
+            if str(entry_id or "").strip()
+        }
+        if not selected_ids:
+            detail = str(selection.get("detail", "") or "中转文件未命中订阅条件") or "中转文件未命中订阅条件"
+            await write_subscription_log(f"未命中订阅条件：{detail}；文件保留在中转目录", "warn")
+            result_base["last_failed_detail"] = f"115 离线下载完成但未命中订阅条件（{detail}），文件保留在中转目录"
+            update_resource_job(
+                job_id,
+                status="completed",
+                status_detail=result_base["last_failed_detail"],
+                finished_at=now_text(),
+            )
+            return result_base
+
+        moved_savepaths: List[str] = []
+        moved_count = 0
+        skipped_duplicates = 0
+        selected_savepath = effective_savepath
+        for entry in selected_entries:
+            entry_episodes = _clamp_episode_values(
+                set(entry.get("episodes", set())),
+                episode_upper_bound=single_season_episode_upper_bound,
+            )
+            target_savepath = effective_savepath
+            if media_type == "tv":
+                entry_season = 0
+                if entry_episodes:
+                    entry_season = _extract_subscription_season_from_name(
+                        str(entry.get("rel_path", "") or entry.get("name", "") or "").strip()
+                    )
+                target_savepath = (
+                    build_subscription_tv_savepath(
+                        task,
+                        base_savepath,
+                        season=entry_season,
+                        episode=min(entry_episodes) if entry_episodes else 0,
+                    )
+                    or effective_savepath
+                )
+            target_cid = await asyncio.wait_for(
+                asyncio.to_thread(provider_meta.ensure_folder_id_by_path, cookie, target_savepath),
+                timeout=min(import_timeout_seconds, 60),
+            )
+            target_cid = str(target_cid or "").strip() or "0"
+            target_entries = await asyncio.to_thread(provider_meta.list_entries, cookie, target_cid)
+            entry_size = max(0, int(entry.get("size", 0) or 0))
+            duplicate = any(
+                isinstance(target, dict)
+                and not bool(target.get("is_dir", False))
+                and str(target.get("name", "") or "").strip() == str(entry.get("name", "") or "").strip()
+                and max(0, int(target.get("size", 0) or 0)) == entry_size
+                for target in (target_entries if isinstance(target_entries, list) else [])
+            )
+            if duplicate:
+                await asyncio.to_thread(
+                    provider_meta.delete_entries,
+                    cookie,
+                    [str(entry.get("id", "") or "").strip()],
+                    str(entry.get("parent_id", "") or staging_cid).strip() or staging_cid,
+                )
+                skipped_duplicates += 1
+                continue
+            await asyncio.wait_for(
+                asyncio.to_thread(
+                    provider_meta.move_entries,
+                    cookie,
+                    [str(entry.get("id", "") or "").strip()],
+                    target_cid,
+                    str(entry.get("parent_id", "") or staging_cid).strip() or staging_cid,
+                ),
+                timeout=min(import_timeout_seconds, 90),
+            )
+            moved_count += 1
+            if target_savepath not in moved_savepaths:
+                moved_savepaths.append(target_savepath)
+            selected_savepath = target_savepath
+            await write_subscription_log(
+                f"已移动命中文件：{str(entry.get('rel_path', '') or entry.get('name', '') or '').strip()} → {target_savepath}",
+                "success",
+            )
+        if skipped_duplicates > 0:
+            await write_subscription_log(f"目标目录已有同名同大小文件，已跳过并清理中转副本 {skipped_duplicates} 个", "info")
+        if moved_count <= 0:
+            result_base["last_failed_detail"] = "选中文件均已在目标目录存在（同名同大小），无需移动"
+            await write_subscription_log(str(result_base["last_failed_detail"]), "info")
+            update_resource_job(
+                job_id,
+                status="completed",
+                status_detail=result_base["last_failed_detail"],
+                finished_at=now_text(),
+            )
+            return result_base
+
+        auto_refresh = False
+        for savepath in moved_savepaths:
+            matched_monitor = match_monitor_task_for_savepath(cfg, savepath, provider="115")
+            matched_name = str(matched_monitor.get("task_name", "") or "").strip()
+            if matched_name:
+                queue_monitor_job(
+                    matched_name,
+                    "resource",
+                    {
+                        "savepath": savepath,
+                        "sharetitle": "",
+                        "title": title,
+                    },
+                )
+                auto_refresh = True
+                await write_subscription_log(f"已触发监控精准刷新：{savepath}", "info")
+        if not auto_refresh:
+            await write_subscription_log("命中目录未纳入文件夹监控，入库后不会自动生成 STRM", "warn")
+
+        selected_ids_list = sorted(selected_ids)
+        retained = [entry for entry in files if str(entry.get("id", "") or "").strip() not in selected_ids]
+        removed_old = 0
+        for entry in retained:
+            if _subscription_offline_file_older_than(entry, SUBSCRIPTION_OFFLINE_RETENTION_DAYS):
+                await asyncio.to_thread(
+                    provider_meta.delete_entries,
+                    cookie,
+                    [str(entry.get("id", "") or "").strip()],
+                    str(entry.get("parent_id", "") or staging_cid).strip() or staging_cid,
+                )
+                removed_old += 1
+        if removed_old > 0:
+            await write_subscription_log(
+                f"已清理中转目录过期未命中文件 {removed_old} 个（保留 {SUBSCRIPTION_OFFLINE_RETENTION_DAYS} 天）",
+                "info",
+            )
+        if retained:
+            await write_subscription_log(
+                f"未命中文件保留在中转目录：{len(retained)} 个（{SUBSCRIPTION_OFFLINE_RETENTION_DAYS} 天后自动清理）",
+                "info",
+            )
+
+        recorded_episodes = _clamp_episode_values(
+            set(selection.get("recorded_episodes", set())),
+            episode_upper_bound=single_season_episode_upper_bound,
+        )
+        candidate_episode = min(recorded_episodes) if recorded_episodes else max(0, int(candidate.get("episode", 0) or 0))
+        candidate_season = max(0, int(candidate.get("season", 0) or 0))
+        if media_type == "tv" and candidate_season <= 0:
+            candidate_season = max(1, int(task.get("season", 1) or 1))
+        resource_id = max(0, int(item.get("id", 0) or 0))
+        create_subscription_match(
+            task_name=task_name,
+            resource_id=resource_id,
+            job_id=job_id,
+            media_type=media_type,
+            season=candidate_season,
+            episode=candidate_episode,
+            total_episodes=known_total,
+            score=100,
+        )
+        if media_type == "tv" and recorded_episodes:
+            source_fp, content_fp = _build_subscription_episode_ledger_fingerprints(
+                item,
+                candidate,
+                recorded_episodes,
+                selected_ids_list,
+            )
+            upsert_subscription_episode_ledger(
+                task_name=task_name,
+                episodes=recorded_episodes,
+                media_type="tv",
+                season=candidate_season,
+                score=100,
+                resolution=0,
+                source_fp=source_fp,
+                content_fp=content_fp,
+                link_type=link_type,
+                link_url=link_url,
+                resource_id=resource_id,
+                job_id=job_id,
+            )
+
+        update_resource_job(
+            job_id,
+            status="completed",
+            status_detail=f"115 离线入库完成：移动 {moved_count} 个文件到 {selected_savepath}",
+            finished_at=now_text(),
+        )
+        result_base.update(
+            {
+                "ok": True,
+                "job_id": job_id,
+                "selected_savepath": selected_savepath,
+                "successful_count": 1,
+                "imported_episodes": sorted(recorded_episodes),
+                "max_total_detected": known_total or len(recorded_episodes),
+                "auto_refresh": auto_refresh,
+                "reused_existing": False,
+            }
+        )
+        return result_base
+    except Exception as exc:
+        last_detail = str(exc) or "115 离线导入失败"
+        result_base["last_failed_detail"] = last_detail
+        result_base["failed_attempts"] = 1
+        await write_subscription_log(f"磁力/电驴离线入库失败：{last_detail}", "error")
+        if job_id > 0:
+            try:
+                update_resource_job(
+                    job_id,
+                    status="failed",
+                    status_detail=last_detail,
+                    finished_at=now_text(),
+                )
+            except Exception:
+                pass
+        return result_base
 
 
 def _build_fixed_115_subscription_search_result(
@@ -3192,7 +3953,79 @@ async def run_subscription_task(
                 logging.getLogger(__name__).warning("后台任务异常: %s", exc, exc_info=True)
 
         _subscription_stage_timer_enter(stage_timer, "import")
-        if task["media_type"] == "tv" and attempt_candidates:
+        offline_import_handled = False
+        if manual_link_enabled and attempt_candidates:
+            offline_meta = _subscription_offline_candidate(attempt_candidates[0])
+            if offline_meta:
+                offline_import_result = await _run_subscription_manual_offline_import(
+                    task=task,
+                    task_name=task_name,
+                    cfg=cfg,
+                    provider_meta=provider_meta,
+                    cookie=cookie_115,
+                    candidate=offline_meta["candidate"],
+                    item=offline_meta["item"],
+                    link_type=offline_meta["link_type"],
+                    staging_root=_get_subscription_offline_staging_root(cfg),
+                    effective_savepath=effective_savepath,
+                    base_savepath=base_savepath,
+                    folder_id=folder_id,
+                    monitor_task_name=monitor_task_name,
+                    last_episode=last_episode,
+                    known_total=known_total,
+                    single_season_episode_upper_bound=single_season_episode_upper_bound,
+                    existing_folder_episodes=existing_folder_episodes,
+                    existing_episode_scan_ready=existing_episode_scan_ready,
+                    subscription_run_id=subscription_run_id,
+                    batch_refresh_enabled=batch_refresh_enabled,
+                    import_timeout_seconds=import_timeout_seconds,
+                )
+                offline_import_handled = True
+                attempted_candidates = 1
+                scanned_candidates = 1
+                if offline_import_result.get("ok"):
+                    selected_candidate = attempt_candidates[0]
+                    selected_item = offline_meta["item"]
+                    selected_job_id = max(0, int(offline_import_result.get("job_id", 0) or 0))
+                    selected_auto_refresh = bool(offline_import_result.get("auto_refresh", False))
+                    selected_reused_existing = False
+                    selected_job_savepath = str(
+                        offline_import_result.get("selected_savepath", "") or effective_savepath
+                    )
+                    successful_count = 1
+                    if selected_job_id > 0:
+                        successful_job_ids.append(selected_job_id)
+                    offline_imported = {
+                        max(0, int(ep or 0))
+                        for ep in (
+                            offline_import_result.get("imported_episodes", [])
+                            if isinstance(offline_import_result.get("imported_episodes"), list)
+                            else []
+                        )
+                        if max(0, int(ep or 0)) > 0
+                    }
+                    imported_episodes.update(offline_imported)
+                    if existing_episode_scan_ready:
+                        existing_folder_episodes.update(offline_imported)
+                        existing_episode_count = len(existing_folder_episodes)
+                    max_total_detected = max(0, int(offline_import_result.get("max_total_detected", 0) or 0))
+                    attempt_candidates[0]["episode"] = (
+                        min(offline_imported) if offline_imported else max(0, int(attempt_candidates[0].get("episode", 0) or 0))
+                    )
+                    attempt_candidates[0]["season"] = (
+                        max(1, int(task.get("season", 1) or 1))
+                        if task["media_type"] == "tv"
+                        else 0
+                    )
+                    attempt_candidates[0]["total"] = max_total_detected or known_total
+                else:
+                    failed_attempts = 1
+                    last_failed_detail = str(
+                        offline_import_result.get("last_failed_detail", "") or "115 离线导入失败"
+                    )
+                    if int(offline_import_result.get("timed_out_attempts", 0) or 0) > 0:
+                        timed_out_attempts = 1
+        if task["media_type"] == "tv" and attempt_candidates and not offline_import_handled:
             candidate_scan_prewarm_stats = await _prewarm_subscription_candidate_share_manifests(
                 cookie=cookie_115,
                 task=task,
@@ -3206,7 +4039,7 @@ async def run_subscription_task(
                 subdir_selection_stats_cache=share_subdir_selection_stats_cache,
                 max_candidates=min(len(attempt_candidates), max_scan_candidates),
             )
-        for index, candidate in enumerate(attempt_candidates, start=1):
+        for index, candidate in enumerate(attempt_candidates, start=1) if not offline_import_handled else ():
             if attempted_candidates >= max_attempts:
                 break
             if scanned_candidates >= max_scan_candidates:

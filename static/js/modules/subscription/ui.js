@@ -1866,11 +1866,16 @@
             const normalizedProvider = normalizeSubscriptionProvider(provider, '115');
             const providerMeta = (window.providerMeta || []).find(m => m.name === normalizedProvider);
             const providerLinkType = String(providerMeta?.link_type || '').trim().toLowerCase();
+            const allowedTypes = new Set([providerLinkType]);
+            if (normalizedProvider === '115') {
+                allowedTypes.add('magnet');
+                allowedTypes.add('ed2k');
+            }
             const links = raw.match(/(?:https?:\/\/)?[^\s<>'"]+/gi) || [];
             for (const link of links) {
                 const candidate = String(link || '').replace(/[，。；、]+$/g, '');
                 if (!candidate) continue;
-                if (detectResourceLinkTypeByUrl(candidate) === providerLinkType) return candidate;
+                if (allowedTypes.has(detectResourceLinkTypeByUrl(candidate))) return candidate;
             }
             return extractFirstHttpUrl(raw);
         }
@@ -1944,9 +1949,19 @@
             if (inputLabelEl) inputLabelEl.textContent = `${providerLabel} 分享链接或完整分享文本`;
             if (textEl) {
                 textEl.value = '';
-                textEl.placeholder = `粘贴 ${example}，或包含链接与提取码的整段分享文本`;
+                if (provider === '115') {
+                    textEl.placeholder = '粘贴 115 分享链接、磁力或电驴链接；磁力/电驴会离线下载到 115 中转目录后自动挑选入库';
+                } else {
+                    textEl.placeholder = `粘贴 ${example}，或包含链接与提取码的整段分享文本`;
+                }
             }
-            if (noteEl) noteEl.textContent = '提交后会跳过资源搜索，把这个链接当作已命中标题的候选资源，继续走订阅的集数识别、缺失判断和导入流程。';
+            if (noteEl) {
+                if (provider === '115') {
+                    noteEl.textContent = '提交后会跳过资源搜索；磁力/电驴链接会先离线下载到 115 中转目录（云下载/磁力中转/任务名），下载完成后自动挑选命中文件入库并触发监控。';
+                } else {
+                    noteEl.textContent = '提交后会跳过资源搜索，把这个链接当作已命中标题的候选资源，继续走订阅的集数识别、缺失判断和导入流程。';
+                }
+            }
             if (submitBtn) submitBtn.disabled = false;
             setSubscriptionLinkScanError('');
             showLockedModal('subscription-link-scan-modal');
@@ -1971,8 +1986,13 @@
             const provider = normalizeSubscriptionProvider(task?.provider || '115', '115');
             const providerMeta = (window.providerMeta || []).find(m => m.name === provider);
             const providerLinkType = String(providerMeta?.link_type || '').trim().toLowerCase();
+            const allowedTypes = new Set([providerLinkType]);
+            if (provider === '115') {
+                allowedTypes.add('magnet');
+                allowedTypes.add('ed2k');
+            }
             const linkUrl = extractFirstSubscriptionShareUrl(normalizedRaw, provider);
-            const validLink = !!providerLinkType && detectResourceLinkTypeByUrl(linkUrl) === providerLinkType;
+            const validLink = !!providerLinkType && allowedTypes.has(detectResourceLinkTypeByUrl(linkUrl));
             if (!linkUrl || !validLink) {
                 const exampleMap = {
                     '115': 'https://115.com/s/xxxxxxx?password=abcd',
@@ -1982,8 +2002,12 @@
                     tianyi: 'https://cloud.189.cn/t/xxxxxx',
                 };
                 const example = exampleMap[provider] || 'https://example.com/s/xxxxxx';
-                const providerText = `${getSubscriptionProviderLabel(provider)} 分享链接`;
-                setSubscriptionLinkScanError(`请粘贴有效的${providerText}，例如 ${example}`);
+                const providerText =
+                    provider === '115'
+                        ? `${getSubscriptionProviderLabel(provider)} 分享/磁力/电驴链接`
+                        : `${getSubscriptionProviderLabel(provider)} 分享链接`;
+                const exampleText = provider === '115' ? '分享链接、磁力或电驴链接' : example;
+                setSubscriptionLinkScanError(`请粘贴有效的${providerText}，例如 ${exampleText}`);
                 return;
             }
             let data = {};

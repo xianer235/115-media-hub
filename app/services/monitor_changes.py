@@ -1480,6 +1480,54 @@ def _build_committed_change_detail(
     return {"kind": "file", "changes": changes} if changes else {}
 
 
+def _event_added_media_items(
+    cfg: Dict[str, Any],
+    task: Dict[str, Any],
+    plan: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """收集变更同步实际新增的媒体文件，供自动刮削复用（不要求真实 fid，路径占位即可）。"""
+    if not plan.get("add_new"):
+        return []
+    if not bool(task.get("auto_scrape_on_new", False)):
+        return []
+    if bool(plan.get("is_dir", False)):
+        sources = plan.get("indexed_files", [])
+    else:
+        provider_path = str(plan.get("new_path", "") or "")
+        sources = (
+            [
+                {
+                    "target_path": provider_path,
+                    "size": _nonnegative_int(plan.get("size", 0)),
+                }
+            ]
+            if provider_path
+            else []
+        )
+    items: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for source in sources if isinstance(sources, list) else []:
+        provider_path = str(source.get("target_path", "") or "")
+        if not provider_path:
+            continue
+        context = _task_path_context(cfg, task, provider_path)
+        if not context:
+            continue
+        remote_rel = str(context.get("remote_rel_path", "") or "")
+        if not remote_rel or remote_rel in seen:
+            continue
+        seen.add(remote_rel)
+        items.append(
+            {
+                "fid": provider_path,
+                "name": os.path.basename(provider_path.replace("\\", "/")),
+                "size": _nonnegative_int(source.get("size", 0)),
+                "remote_rel": remote_rel,
+            }
+        )
+    return items
+
+
 async def _apply_precise_event(
     conn: Any,
     cfg: Dict[str, Any],
@@ -1535,6 +1583,16 @@ async def _apply_precise_event(
 
     _sync_event_baselines(conn, cfg, task, plan)
     stats["change_detail"] = _build_committed_change_detail(plan, stats)
+    stats["new_media_items"] = (
+        _event_added_media_items(cfg, task, plan)
+        if int(stats.get("generated", 0) or 0) > 0
+        else []
+    )
+    stats["manual_required_path"] = (
+        str(plan.get("new_path", "") or "")
+        if int(stats.get("manual_required", 0) or 0) > 0
+        else ""
+    )
     return stats
 
 
@@ -1718,6 +1776,16 @@ async def _reconcile_event(
         stats,
         effective_new_context=add_context,
     )
+    stats["new_media_items"] = (
+        _event_added_media_items(cfg, task, effective_plan)
+        if int(stats.get("generated", 0) or 0) > 0
+        else []
+    )
+    stats["manual_required_path"] = (
+        str(effective_plan.get("new_path", "") or plan.get("new_path", "") or "")
+        if int(stats.get("manual_required", 0) or 0) > 0
+        else ""
+    )
     return stats
 
 
@@ -1777,6 +1845,8 @@ async def process_monitor_change_events(
         "discarded": 0,
         "errors": [],
         "change_details": [],
+        "new_media_items": [],
+        "manual_required_paths": [],
     }
     with db_connection() as conn:
         events = _load_ready_events(conn, task_name=task_name, event_ids=event_ids)
@@ -1839,6 +1909,12 @@ async def process_monitor_change_events(
                     result["change_details"].append(change_detail)
                 for key in ("generated", "skipped", "deleted", "directory_count", "file_count", "manual_required"):
                     result[key] += int(stats.get(key, 0) or 0)
+                event_new = stats.get("new_media_items", [])
+                if isinstance(event_new, list):
+                    result["new_media_items"].extend(event_new)
+                manual_path = str(stats.get("manual_required_path", "") or "").strip()
+                if manual_path and manual_path not in result["manual_required_paths"]:
+                    result["manual_required_paths"].append(manual_path)
             except Exception as exc:
                 conn.rollback()
                 restore_errors = _restore_strm_file_states(file_journal)

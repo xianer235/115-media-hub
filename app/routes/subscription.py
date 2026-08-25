@@ -134,13 +134,17 @@ async def start_subscription_task_with_link(request: Request) -> Dict[str, Any]:
         candidate_links.append(link_url)
     candidate_links.extend(extract_resource_links(source_text))
     normalized_link = ""
+    offline_supported = bool(provider_meta.supports_offline)
+    offline_link_types = {"magnet", "ed2k"} if offline_supported else set()
     for candidate_link in candidate_links:
         candidate = str(candidate_link or "").strip()
         if not candidate:
             continue
-        if resolve_resource_link_type("", candidate) == provider_meta.link_type:
+        candidate_link_type = resolve_resource_link_type("", candidate)
+        if candidate_link_type == provider_meta.link_type or candidate_link_type in offline_link_types:
             normalized_link = candidate
             break
+    normalized_link_type = resolve_resource_link_type("", normalized_link)
     if provider == "quark":
         link_match = RESOURCE_QUARK_SHARE_URL_REGEX.search(source_text)
         normalized_link = str(link_match.group(0) if link_match else normalized_link).strip()
@@ -155,13 +159,19 @@ async def start_subscription_task_with_link(request: Request) -> Dict[str, Any]:
         payload_link = str(payload.get("url", "") or normalized_link).strip()
         payload_receive_code = normalize_receive_code(payload.get("receive_code", ""))
     elif provider == "115":
-        link_match = RESOURCE_115_SHARE_URL_REGEX.search(source_text)
-        normalized_link = str(link_match.group(0) if link_match else normalized_link).strip()
-        payload = parse_115_share_payload(normalized_link, raw_text, receive_code)
-        if not str(payload.get("share_code", "") or "").strip():
-            return JSONResponse(status_code=400, content={"ok": False, "msg": "请填写 115 分享链接"})
-        payload_link = str(payload.get("url", "") or normalized_link).strip()
-        payload_receive_code = normalize_receive_code(payload.get("receive_code", ""))
+        if normalized_link_type in offline_link_types:
+            payload_link = str(normalized_link or "").strip()
+            payload_receive_code = ""
+            if not payload_link:
+                return JSONResponse(status_code=400, content={"ok": False, "msg": "请填写 115 磁力/电驴链接"})
+        else:
+            link_match = RESOURCE_115_SHARE_URL_REGEX.search(source_text)
+            normalized_link = str(link_match.group(0) if link_match else normalized_link).strip()
+            payload = parse_115_share_payload(normalized_link, raw_text, receive_code)
+            if not str(payload.get("share_code", "") or "").strip():
+                return JSONResponse(status_code=400, content={"ok": False, "msg": "请填写 115 分享链接"})
+            payload_link = str(payload.get("url", "") or normalized_link).strip()
+            payload_receive_code = normalize_receive_code(payload.get("receive_code", ""))
     else:
         if not normalized_link or resolve_resource_link_type("", normalized_link) != provider_meta.link_type:
             return JSONResponse(status_code=400, content={"ok": False, "msg": f"请填写 {provider_meta.label} 分享链接"})
@@ -176,6 +186,7 @@ async def start_subscription_task_with_link(request: Request) -> Dict[str, Any]:
             "link_url": payload_link,
             "raw_text": raw_text or payload_link,
             "receive_code": payload_receive_code,
+            "link_type": normalized_link_type,
         },
     )
     return {"ok": True, "status": status}

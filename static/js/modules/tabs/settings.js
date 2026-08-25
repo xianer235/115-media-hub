@@ -179,6 +179,7 @@ function collectSettingsPayload({
     });
     cfg.provider_enabled = providerEnabled;
     cfg.default_magnet_provider = '115';
+    cfg.magnet_staging_root = String(document.getElementById('magnet_staging_root')?.value || '').trim() || '云下载/磁力中转';
 
     const rawTmdbCacheTtl = parseInt(document.getElementById('tmdb_cache_ttl_hours')?.value || '', 10);
     cfg.tmdb_cache_ttl_hours = Math.min(720, Math.max(1, Number.isFinite(rawTmdbCacheTtl) ? rawTmdbCacheTtl : 24));
@@ -730,6 +731,7 @@ export function renderMagnetProviderSetting(cfg) {
     const meta = window.providerMeta || [];
     const pan115 = meta.find(p => p.name === '115');
     const label = pan115?.label || '115网盘';
+    const stagingRoot = String(cfg?.magnet_staging_root || '').trim() || '云下载/磁力中转';
 
     container.innerHTML = `
         <div class="provider-auth-block mb-3 bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">
@@ -741,6 +743,10 @@ export function renderMagnetProviderSetting(cfg) {
                 <input id="default_magnet_provider" type="hidden" value="115">
                 <span class="px-3 py-1.5 rounded-lg bg-slate-700 border border-slate-600 text-sm text-slate-200">${label}</span>
             </div>
+            <label class="block p-3 pt-0">
+                <span class="text-xs text-slate-500">磁力中转目录（115 离线下载先落到这里，命中文件再移动入库）</span>
+                <input id="magnet_staging_root" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="${escapeHtml(stagingRoot)}" placeholder="云下载/磁力中转">
+            </label>
         </div>
     `;
 }

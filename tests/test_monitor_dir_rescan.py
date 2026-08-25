@@ -14,6 +14,31 @@ from app.services import monitor, monitor_changes, strm_files
 TASK_NAME = "Monitor"
 
 
+class AutoRescanQueueTest(unittest.TestCase):
+    def test_auto_rescan_helper_dedupes_and_counts(self):
+        with patch.object(
+            monitor,
+            "queue_monitor_dir_scan",
+            return_value={"ok": True, "tasks": [{"task_name": TASK_NAME}]},
+        ) as queue_scan:
+            count = monitor._queue_auto_rescan_for_manual_required({}, ["Media/Copied", "Media/Copied"])
+        self.assertEqual(count, 1)
+        queue_scan.assert_called_once_with({}, "115", ["Media/Copied"])
+
+    def test_auto_rescan_helper_returns_zero_on_failure(self):
+        with patch.object(
+            monitor,
+            "queue_monitor_dir_scan",
+            side_effect=ValueError("所选目录未匹配到任何监控任务"),
+        ):
+            self.assertEqual(monitor._queue_auto_rescan_for_manual_required({}, ["Media/Copied"]), 0)
+
+    def test_auto_rescan_helper_ignores_empty_paths(self):
+        with patch.object(monitor, "queue_monitor_dir_scan") as queue_scan:
+            self.assertEqual(monitor._queue_auto_rescan_for_manual_required({}, []), 0)
+        queue_scan.assert_not_called()
+
+
 def _dir_item(name: str, modified: str) -> dict:
     return {
         "name": name,

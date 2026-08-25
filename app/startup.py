@@ -22,6 +22,10 @@ from .services.resource import (
 from .services.sign115 import refresh_sign115_status, run_sign115_job
 from .services.subscription import queue_subscription_job
 from .services.scraper import requeue_scraper_jobs_on_startup
+from .services.subscription_offline_cleanup import (
+    run_subscription_offline_staging_cleanup_once,
+    subscription_offline_staging_cleanup_watcher,
+)
 
 
 MEMORY_HOUSEKEEPING_INTERVAL_SECONDS = max(
@@ -249,6 +253,7 @@ async def startup() -> None:
 
     asyncio.create_task(monitor_scheduler())
     asyncio.create_task(offline_completion_watcher())
+    asyncio.create_task(subscription_offline_staging_cleanup_watcher())
     asyncio.create_task(subscription_scheduler())
     asyncio.create_task(sign115_scheduler())
     asyncio.create_task(memory_housekeeper())

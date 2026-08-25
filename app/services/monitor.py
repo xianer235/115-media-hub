@@ -1259,6 +1259,27 @@ async def run_monitor_change_task(
             and int(result.get("manual_required", 0) or 0) == 0
             else "warn",
         )
+        new_media_items = result.get("new_media_items", [])
+        if bool(task.get("auto_scrape_on_new")) and isinstance(new_media_items, list) and new_media_items:
+            try:
+                auto_message = await asyncio.to_thread(
+                    _auto_scrape_new_media_items,
+                    cfg,
+                    task,
+                    list(new_media_items),
+                )
+                await write_monitor_log(f"自动整理: {auto_message}", "success")
+            except Exception as exc:
+                await write_monitor_log(f"自动整理失败: {exc}", "error")
+        auto_rescan_queued = 0
+        manual_paths = result.get("manual_required_paths", [])
+        if int(result.get("manual_required", 0) or 0) > 0 and isinstance(manual_paths, list) and manual_paths:
+            auto_rescan_queued = _queue_auto_rescan_for_manual_required(cfg, manual_paths)
+            if auto_rescan_queued > 0:
+                path_preview = "、".join([str(path) for path in manual_paths[:5]])
+                await write_monitor_log(f"已自动安排补扫目录：{path_preview}（无需手动操作）", "info")
+            else:
+                await write_monitor_log("自动补扫排队失败，请手动触发扫描确认", "warn")
         for error_item in (result.get("errors", []) if isinstance(result.get("errors"), list) else [])[:10]:
             if not isinstance(error_item, dict):
                 continue
@@ -1277,7 +1298,7 @@ async def run_monitor_change_task(
         if int(result.get("failed", 0) or 0) > 0:
             status_text = "变更同步部分失败"
         elif int(result.get("manual_required", 0) or 0) > 0:
-            status_text = "变更同步待手动监控"
+            status_text = "变更同步待自动补扫" if auto_rescan_queued > 0 else "变更同步待手动监控"
         else:
             status_text = "变更同步完成"
         await write_monitor_task_footer(task_name, status_text)
@@ -1600,3 +1621,20 @@ def queue_monitor_dir_scan(cfg: Dict[str, Any], provider: str, paths: List[str])
             {"task_name": task_name, "status": status, "matched": len(entry["savepaths"])}
         )
     return {"ok": True, "tasks": result_tasks, "unmatched": unmatched}
+
+
+def _queue_auto_rescan_for_manual_required(cfg: Dict[str, Any], paths: Any) -> int:
+    """为变更同步未知清单的文件夹自动排队补扫；返回成功排队的任务数。"""
+    normalized_paths: List[str] = []
+    for raw_path in paths if isinstance(paths, list) else []:
+        path = normalize_relative_path(str(raw_path or "").strip())
+        if path and path not in normalized_paths:
+            normalized_paths.append(path)
+    if not normalized_paths:
+        return 0
+    try:
+        result = queue_monitor_dir_scan(cfg, "115", normalized_paths)
+    except Exception:
+        return 0
+    tasks = result.get("tasks") if isinstance(result, dict) and isinstance(result.get("tasks"), list) else []
+    return len(tasks)

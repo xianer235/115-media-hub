@@ -662,6 +662,87 @@ class ScraperMonitorSyncTest(unittest.TestCase):
             status = conn.execute("SELECT status FROM monitor_change_events").fetchone()[0]
         self.assertEqual(status, "manual_required")
 
+    def test_folder_move_collects_new_media_items_for_auto_scrape(self):
+        cfg = self._cfg(self._task(auto_scrape_on_new=True))
+        old_local = "媒体库/Media/Source/Episode.mkv"
+        self._insert_monitor_file("影视监控", old_local, "Source/Episode.mkv", size=4096)
+        self._write_strm(old_local, "source")
+
+        _, _, result = self._run_confirmed(
+            cfg,
+            "move",
+            [
+                {
+                    "id": "auto-scrape-dir",
+                    "name": "Source",
+                    "path": "Media/Source",
+                    "new_path": "Media/Moved",
+                    "new_cid": "moved-cid",
+                    "is_dir": True,
+                }
+            ],
+            dedupe_key="auto-scrape-folder-move",
+        )
+
+        self.assertEqual(result["completed"], 1)
+        new_items = result.get("new_media_items", [])
+        self.assertEqual(len(new_items), 1)
+        self.assertEqual(new_items[0]["remote_rel"], "Moved/Episode.mkv")
+        self.assertIn("Episode.mkv", new_items[0]["name"])
+        self.assertEqual(new_items[0]["size"], 4096)
+
+    def test_change_sync_respects_auto_scrape_setting(self):
+        cfg = self._cfg()
+        old_local = "媒体库/Media/Source/Episode.mkv"
+        self._insert_monitor_file("影视监控", old_local, "Source/Episode.mkv", size=4096)
+        self._write_strm(old_local, "source")
+
+        _, _, result = self._run_confirmed(
+            cfg,
+            "move",
+            [
+                {
+                    "id": "no-scrape-dir",
+                    "name": "Source",
+                    "path": "Media/Source",
+                    "new_path": "Media/Moved",
+                    "new_cid": "moved-cid",
+                    "is_dir": True,
+                }
+            ],
+            dedupe_key="no-auto-scrape-folder-move",
+        )
+
+        self.assertEqual(result["completed"], 1)
+        self.assertEqual(result.get("new_media_items", []), [])
+
+    def test_unknown_folder_move_collects_manual_required_path(self):
+        cfg = self._cfg()
+        with patch.object(
+            monitor_changes,
+            "list_remote_dir",
+            AsyncMock(side_effect=AssertionError("unknown folders must not list the target subtree")),
+        ):
+            _, _, result = self._run_confirmed(
+                cfg,
+                "move",
+                [
+                    {
+                        "id": "unknown-dir",
+                        "name": "Source",
+                        "path": "Outside/Source",
+                        "new_path": "Media/Copied",
+                        "new_cid": "copied-cid",
+                        "is_dir": True,
+                    }
+                ],
+                dedupe_key="unknown-folder-move",
+            )
+
+        self.assertEqual(result["completed"], 1)
+        self.assertEqual(result["manual_required"], 1)
+        self.assertEqual(result["manual_required_paths"], ["Media/Copied"])
+
     def test_unknown_folder_copy_requires_manual_monitor_without_remote_listing(self):
         cfg = self._cfg()
         with patch.object(
