@@ -340,6 +340,17 @@ class ResourceJobStateFrontendTest(unittest.TestCase):
             r"@media\s*\(max-width:\s*640px\)[^{}]*\{[\s\S]*?\.resource-job-pagination-controls\s*\{[\s\S]*?flex-wrap:\s*nowrap;",
         )
 
+    def test_pagination_footer_does_not_shrink_inside_scroll_list(self):
+        source = CSS_PATH.read_text(encoding="utf-8")
+        self.assertRegex(
+            source,
+            r"\.resource-browser-load-more-row\s*\{[^}]*flex:\s*0\s+0\s+auto;",
+        )
+        self.assertNotRegex(
+            source,
+            r"\.resource-browser-load-more-row\s*\{[^}]*flex-shrink:\s*1;",
+        )
+
     def test_task_page_buttons_use_neutral_inactive_and_solid_active_colors_in_both_themes(self):
         source = CSS_PATH.read_text(encoding="utf-8")
         self.assertRegex(

@@ -6253,6 +6253,7 @@
         }
         .resource-browser-load-more-row {
             display: flex;
+            flex: 0 0 auto;
             justify-content: center;
             align-items: center;
             flex-wrap: nowrap;
