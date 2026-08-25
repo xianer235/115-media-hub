@@ -2924,6 +2924,7 @@ async function buildBatchPlan() {
         })),
     };
     state.batchPlanContext = requestPayload;
+    state.planOptionsSnapshot = JSON.stringify(requestPayload.options || {});
     try {
         const data = await window.MediaHubApi.postJson('/scraper/batch/plan', requestPayload);
         applyPlanResponse(data);
@@ -3052,6 +3053,7 @@ async function buildPlan() {
         showToast(error.message || '无法生成预览', { tone: 'warn', duration: 2400, placement: 'top-center' });
         return;
     }
+    state.planOptionsSnapshot = JSON.stringify(payload.options || {});
     showToast('正在识别文件并生成预览...', { tone: 'info', duration: 1800, placement: 'top-center' });
     try {
         const data = await requestPlan(payload, { resetPlan: true });
@@ -3131,6 +3133,12 @@ async function updateManualEpisode(actionIndex, { clear = false } = {}) {
 
 async function executePlan() {
     if (!state.plan) return;
+    const currentOptions = JSON.stringify(state.plan?.tmdb?.batch ? collectBatchOptions() : collectOptions());
+    if (state.planOptionsSnapshot && currentOptions !== state.planOptionsSnapshot) {
+        showToast('批量整理选项已变更，已按新选项重新生成预览，请确认后再次执行', { tone: 'warn', duration: 3200, placement: 'top-center' });
+        void buildPlan();
+        return;
+    }
     const selectedActions = (Array.isArray(state.plan.actions) ? state.plan.actions : [])
         .filter(action => action.ready && state.planSelections.has(Number(action.action_index || 0)));
     if (!selectedActions.length) {

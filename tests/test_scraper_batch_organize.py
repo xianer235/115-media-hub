@@ -1354,6 +1354,11 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         self.assertIn(".scraper-plan-warning-bar", css)
         self.assertIn("html.theme-day .scraper-plan-warning-bar", css)
 
+    def test_batch_execute_rebuilds_plan_when_options_changed(self):
+        source = SCRAPER_CORE_PATH.read_text(encoding="utf-8")
+        self.assertIn("state.planOptionsSnapshot", source)
+        self.assertIn("批量整理选项已变更", source)
+
     def test_common_noise_phrases_stripped_and_real_titles_kept(self):
         self.assertEqual(scraper._extract_scraper_title_candidates("监狱星级餐厅 无字片源"), ["监狱星级餐厅"])
         self.assertEqual(
@@ -2413,6 +2418,127 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         file_actions = [action for action in plan["actions"] if not action["is_dir"]]
         self.assertTrue(all(action["new_path"].startswith("影视/旧剧集名/Season 01/") for action in file_actions))
         self.assertTrue(all("逐玉 (2026) - S01E" in action["new_path"] for action in file_actions))
+
+    def _rename_plan_nested_season_files(self, files, tmdb, folder, options=None):
+        season_folder = {
+            "id": "s1",
+            "name": "Season 01",
+            "is_dir": True,
+            "parent_id": "d1",
+            "parent_path": folder["name"],
+            "path": f"{folder['name']}/Season 01",
+        }
+        entries = []
+        for index, name in enumerate(files, start=1):
+            entries.append(
+                {
+                    "id": f"f{index}",
+                    "name": name,
+                    "is_dir": False,
+                    "parent_id": "s1",
+                    "parent_path": f"{folder['name']}/Season 01",
+                    "path": f"{folder['name']}/Season 01/{name}",
+                }
+            )
+
+        def fake_list(provider, cookie, cid, folders_only=False, offset=0, limit=0):
+            if cid == "d1":
+                return {"entries": [season_folder]}
+            if cid == "s1":
+                return {"entries": entries}
+            return {"entries": []}
+
+        with (
+            patch.object(scraper, "_require_scraper_operation"),
+            patch.object(scraper, "_require_provider_cookie", return_value="cookie"),
+            patch.object(scraper, "_list_provider_entries_payload", side_effect=fake_list),
+            patch.object(scraper, "_target_name_exists", return_value=False),
+            patch.object(
+                scraper,
+                "get_config",
+                return_value={"tmdb_enabled": True, "tmdb_api_key": "key", "tmdb_language": "zh-CN", "tmdb_region": "CN"},
+            ),
+        ):
+            return scraper.build_scraper_rename_plan(
+                {
+                    "provider": "115",
+                    "base_cid": "root",
+                    "base_path": "影视",
+                    "entries": [folder],
+                    "tmdb": tmdb,
+                    "options": {"title_language": "zh", **(options or {})},
+                }
+            )
+
+    def test_folder_rename_off_keeps_files_inside_existing_season_folder(self):
+        tmdb = self._tmdb_binding(title="百花杀", year="2026", media_type="tv")
+        folder = {
+            "id": "d1",
+            "name": "百花杀",
+            "is_dir": True,
+            "parent_id": "root",
+            "parent_path": "影视",
+            "path": "影视/百花杀",
+        }
+        plan = self._rename_plan_nested_season_files(
+            ["Blossoms.S01E01.mkv"],
+            tmdb,
+            folder,
+            options={"rename_selected_folders": False, "include_tmdb_id": True},
+        )
+        self.assertEqual([action for action in plan["actions"] if action["is_dir"]], [])
+        file_actions = [action for action in plan["actions"] if not action["is_dir"]]
+        self.assertEqual(
+            file_actions[0]["new_path"],
+            "影视/百花杀/Season 01/百花杀 (2026) - S01E01.mkv",
+        )
+
+    def test_season_folder_selection_keeps_files_in_place_without_folder_rename(self):
+        tmdb = self._tmdb_binding(title="百花杀", year="2026", media_type="tv")
+        season_folder = {
+            "id": "s1",
+            "name": "Season 01",
+            "is_dir": True,
+            "parent_id": "d1",
+            "parent_path": "百花杀",
+            "path": "百花杀/Season 01",
+        }
+        plan = self._rename_plan_nested_season_files(
+            ["Blossoms.S01E01.mkv"],
+            tmdb,
+            season_folder,
+            options={},
+        )
+        self.assertEqual([action for action in plan["actions"] if action["is_dir"]], [])
+        file_actions = [action for action in plan["actions"] if not action["is_dir"]]
+        self.assertEqual(
+            file_actions[0]["new_path"],
+            "影视/百花杀/Season 01/百花杀 (2026) - S01E01.mkv",
+        )
+
+    def test_folder_rename_on_with_tmdb_id_targets_renamed_folder_season(self):
+        tmdb = self._tmdb_binding(title="百花杀", year="2026", media_type="tv")
+        folder = {
+            "id": "d1",
+            "name": "百花杀",
+            "is_dir": True,
+            "parent_id": "root",
+            "parent_path": "影视",
+            "path": "影视/百花杀",
+        }
+        plan = self._rename_plan_nested_season_files(
+            ["Blossoms.S01E01.mkv"],
+            tmdb,
+            folder,
+            options={"rename_selected_folders": True, "include_tmdb_id": True},
+        )
+        folder_actions = [action for action in plan["actions"] if action["is_dir"]]
+        self.assertEqual(folder_actions[0]["new_name"], "百花杀 (2026) [tmdbid-100]")
+        file_actions = [action for action in plan["actions"] if not action["is_dir"]]
+        self.assertEqual(
+            file_actions[0]["new_path"],
+            "影视/百花杀 (2026) [tmdbid-100]/Season 01/百花杀 (2026) - S01E01.mkv",
+        )
 
     def test_batch_folder_rename_with_tmdb_id_applies_to_multiple_folders(self):
         tmdb = self._tmdb_binding(title="逐玉", year="2026", media_type="tv")

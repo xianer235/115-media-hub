@@ -2170,6 +2170,12 @@ def _build_scraper_target_path(
             )
         if not season_folder_allowed:
             return normalize_relative_path(join_relative_path(organize_root, file_name)), ""
+        source_parent_is_season = bool(source_relative_parent_path) and is_subscription_season_folder_name(
+            os.path.basename(source_relative_parent_path.replace("\\", "/"))
+        )
+        if organize_inside_source_folder and source_parent_is_season:
+            # 文件已在源目录的 Season 子目录内：原地重命名，不再嵌套一层 Season。
+            return normalize_relative_path(join_relative_path(organize_root, file_name)), ""
         return normalize_relative_path(join_relative_path(organize_root, f"Season {season_no:02d}", file_name)), ""
     if keep_original_name:
         file_name = (
@@ -2536,6 +2542,19 @@ def build_scraper_rename_plan(
     plan_options["base_path"] = base_path
     plan_options["organize_into_media_folder"] = folder_mode
     plan_options["preserve_source_parent_path"] = not folder_mode
+    # 选中的本身就是 Season 子目录时，不重命名目录（避免把 Season 01 改成片名），文件原地整理。
+    selected_folder_names = [
+        str(item.get("name", "") or "")
+        for item in selected
+        if isinstance(item, dict) and bool(item.get("is_dir", False))
+    ]
+    selected_season_folder = bool(
+        folder_mode
+        and len(selected_folder_names) == 1
+        and is_subscription_season_folder_name(selected_folder_names[0])
+    )
+    if selected_season_folder:
+        plan_options["rename_selected_folders"] = False
     # 文件夹条目不重命名文件夹时，文件仍整理在源文件夹内部，避免留下空的旧文件夹。
     plan_options["organize_inside_source_folder"] = bool(
         folder_mode and not bool(plan_options.get("rename_selected_folders", True))
