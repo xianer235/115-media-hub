@@ -59,7 +59,7 @@
         }
 
         function hasActiveScraperJobs() {
-            return getScraperJobCounts(scraperJobState.jobs || []).active > 0;
+            return Number(scraperJobState?.job_counts?.active ?? getScraperJobCounts(scraperJobState.jobs || []).active ?? 0) > 0;
         }
 
         function getResourceJobDisplayCounts(jobs = []) {
@@ -117,7 +117,7 @@
             if (note) {
                 note.textContent = taskCenterTab === 'scraper'
                     ? '刮削任务会记录每次执行的重命名进度；文件列表默认折叠，可展开查看每个文件状态。'
-                    : '默认加载最近任务，处理中任务置顶；筛选和加载更多会从后端分页读取。';
+                    : '任务列表按创建时间倒序显示，每页 10 条；筛选后可使用页码翻阅记录。';
             }
         }
 
@@ -288,7 +288,7 @@
                 container.innerHTML = `<div class="resource-job-card-empty">${escapeHtml(getScraperJobEmptyText(scraperJobFilter))}</div>`;
                 return;
             }
-            container.innerHTML = visibleJobs.map(job => {
+            const rowsHtml = visibleJobs.map(job => {
                 const jobId = Number(job.id || 0) || 0;
                 const progress = getScraperJobProgress(job);
                 const expanded = scraperJobExpanded.has(jobId);
@@ -349,6 +349,22 @@
                     </div>
                 `;
             }).join('');
+            const pagination = scraperJobState?.pagination && typeof scraperJobState.pagination === 'object'
+                ? scraperJobState.pagination
+                : {};
+            const pageNumber = Math.max(1, Number(pagination.page || 1) || 1);
+            const totalPages = Math.max(1, Number(pagination.total_pages || 1) || 1);
+            const totalCount = Number(pagination.total ?? counts.total) || 0;
+            const paginationHtml = totalCount > 0
+                ? `
+                    <div class="resource-browser-load-more-row">
+                        <button type="button" data-scraper-job-action="page-prev" class="resource-browser-load-more-btn" ${pageNumber <= 1 ? 'disabled' : ''}>上一页</button>
+                        <span class="resource-job-status-note">第 ${escapeHtml(String(pageNumber))} / ${escapeHtml(String(totalPages))} 页，共 ${escapeHtml(String(totalCount))} 条</span>
+                        <button type="button" data-scraper-job-action="page-next" class="resource-browser-load-more-btn" ${pageNumber >= totalPages ? 'disabled' : ''}>下一页</button>
+                    </div>
+                `
+                : '';
+            container.innerHTML = `${rowsHtml}${paginationHtml}`;
         }
 
         function formatOfflineSize(bytes) {
@@ -487,23 +503,18 @@
                 ? resourceState.job_pagination
                 : {};
             const totalCount = Number(pagination.total ?? counts.total) || 0;
-            const paginationLoadedCount = Number(pagination.loaded_count ?? pagination.next_offset ?? 0) || 0;
-            const loadedCount = totalCount > 0
-                ? Math.min(totalCount, Math.max(visibleJobs.length, paginationLoadedCount))
-                : visibleJobs.length;
-            const loadMoreHtml = pagination.has_more && pageStatus === normalizedFilter
+            const pageNumber = Math.max(1, Number(pagination.page || 1) || 1);
+            const totalPages = Math.max(1, Number(pagination.total_pages || 1) || 1);
+            const paginationHtml = totalCount > 0 && pageStatus === normalizedFilter
                 ? `
                     <div class="resource-browser-load-more-row">
-                        <button
-                            type="button"
-                            data-resource-job-action="load-more"
-                            class="resource-browser-load-more-btn ${resourceJobLoadingMore ? 'btn-disabled' : ''}"
-                            ${resourceJobLoadingMore ? 'disabled' : ''}
-                        >${resourceJobLoadingMore ? '加载中...' : `加载更多任务（${escapeHtml(String(loadedCount))}/${escapeHtml(String(totalCount))}）`}</button>
+                        <button type="button" data-resource-job-action="page-prev" class="resource-browser-load-more-btn" ${pageNumber <= 1 ? 'disabled' : ''}>上一页</button>
+                        <span class="resource-job-status-note">第 ${escapeHtml(String(pageNumber))} / ${escapeHtml(String(totalPages))} 页，共 ${escapeHtml(String(totalCount))} 条</span>
+                        <button type="button" data-resource-job-action="page-next" class="resource-browser-load-more-btn" ${pageNumber >= totalPages ? 'disabled' : ''}>下一页</button>
                     </div>
                 `
                 : '';
-            container.innerHTML = `${rowsHtml}${loadErrorHtml}${loadMoreHtml}`;
+            container.innerHTML = `${rowsHtml}${loadErrorHtml}${paginationHtml}`;
         }
 
         function syncResourceJobModalTrigger() {
@@ -630,7 +641,7 @@
             if (!(await showAppConfirm(meta.confirmText))) return;
             try {
                 const data = await window.MediaHubApi.postJson('/scraper/jobs/clear', { scope: meta.scope });
-                await fetchScraperJobsState({ silent: true, limit: Math.max(20, scraperJobState.jobs.length || 20) });
+                await fetchScraperJobsState({ silent: true });
                 if (taskCenterTab === 'scraper') renderResourceJobs();
                 const deleted = Number(data.deleted || 0);
                 if (deleted > 0) {
@@ -664,6 +675,7 @@
                 jobs,
                 active_jobs: jobs.filter(isScraperJobActive),
                 job_counts: data.job_counts && typeof data.job_counts === 'object' ? data.job_counts : counts,
+                pagination: data.pagination && typeof data.pagination === 'object' ? data.pagination : (scraperJobState.pagination || {}),
             };
             const validJobIds = new Set(jobs.map(job => Number(job.id || 0) || 0).filter(Boolean));
             scraperJobExpanded = new Set(Array.from(scraperJobExpanded).filter(jobId => validJobIds.has(jobId)));
@@ -671,12 +683,13 @@
             if (taskCenterTab === 'scraper') renderResourceJobs();
         }
 
-        async function fetchScraperJobsState({ silent = false, limit = 20 } = {}) {
+        async function fetchScraperJobsState({ silent = false, page = scraperJobState.pagination?.page || 1 } = {}) {
             scraperJobLoading = true;
             if (!silent && taskCenterTab === 'scraper') renderResourceJobs();
             try {
-                const normalizedLimit = Math.max(1, Math.min(100, Number(limit || 20) || 20));
-                const data = await window.MediaHubApi.getJson(`/scraper/jobs/state?limit=${encodeURIComponent(String(normalizedLimit))}`);
+                const normalizedPage = Math.max(1, Number(page || 1) || 1);
+                const params = new URLSearchParams({ page: String(normalizedPage), page_size: '10', status: normalizeScraperJobFilter(scraperJobFilter) });
+                const data = await window.MediaHubApi.getJson(`/scraper/jobs/state?${params.toString()}`);
                 applyScraperJobsState(data);
                 return data;
             } catch (error) {

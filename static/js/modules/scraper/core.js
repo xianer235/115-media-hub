@@ -66,6 +66,8 @@ const state = {
     planRequestSeq: 0,
     executeBusy: false,
     jobs: [],
+    jobsPage: 1,
+    jobsPagination: {},
     jobsBusy: false,
     jobsPollTimer: 0,
 };
@@ -1676,7 +1678,7 @@ function renderJobs() {
         list.innerHTML = '<div class="scraper-empty-row">暂无刮削任务记录。</div>';
         return;
     }
-    list.innerHTML = state.jobs.map((job) => {
+    const rowsHtml = state.jobs.map((job) => {
         const actions = Array.isArray(job.actions) ? job.actions : [];
         const actionPreview = actions.slice(0, 4).map(action => `
             <div class="scraper-job-action">
@@ -1705,6 +1707,18 @@ function renderJobs() {
             </div>
         `;
     }).join('');
+    const pagination = state.jobsPagination || {};
+    const total = Number(pagination.total || 0) || 0;
+    const totalPages = Math.max(1, Number(pagination.total_pages || 1) || 1);
+    const page = Math.max(1, Number(pagination.page || state.jobsPage || 1) || 1);
+    const paginationHtml = total > 0 ? `
+        <div class="resource-browser-load-more-row">
+            <button type="button" data-scraper-action="jobs-page-prev" class="resource-browser-load-more-btn" ${page <= 1 ? 'disabled' : ''}>上一页</button>
+            <span class="scraper-empty-row">第 ${escapeHtml(String(page))} / ${escapeHtml(String(totalPages))} 页，共 ${escapeHtml(String(total))} 条</span>
+            <button type="button" data-scraper-action="jobs-page-next" class="resource-browser-load-more-btn" ${page >= totalPages ? 'disabled' : ''}>下一页</button>
+        </div>
+    ` : '';
+    list.innerHTML = `${rowsHtml}${paginationHtml}`;
 }
 
 function applyProvidersFromMeta() {
@@ -3161,12 +3175,15 @@ async function executePlan() {
     }
 }
 
-async function refreshJobs() {
+async function refreshJobs({ page = state.jobsPage || 1 } = {}) {
     state.jobsBusy = true;
     renderJobs();
     try {
-        const data = await window.MediaHubApi.getJson('/scraper/jobs/state?limit=5');
+        const normalizedPage = Math.max(1, Number(page || 1) || 1);
+        const data = await window.MediaHubApi.getJson(`/scraper/jobs/state?page=${normalizedPage}&page_size=10&status=all`);
         state.jobs = Array.isArray(data.jobs) ? data.jobs : [];
+        state.jobsPage = normalizedPage;
+        state.jobsPagination = data.pagination && typeof data.pagination === 'object' ? data.pagination : {};
     } catch (error) {
         showToast(`读取任务记录失败：${error.message || '未知错误'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
     } finally {
@@ -3228,7 +3245,7 @@ function hasActiveJobs() {
 function scheduleJobsPoll() {
     if (state.jobsPollTimer) return;
     state.jobsPollTimer = window.setInterval(async () => {
-        await refreshJobs();
+        await refreshJobs({ page: 1 });
         if (!hasActiveJobs()) {
             window.clearInterval(state.jobsPollTimer);
             state.jobsPollTimer = 0;
@@ -3382,6 +3399,13 @@ function handleClick(event) {
     const rollbackButton = event.target.closest('[data-scraper-rollback-job]');
     if (rollbackButton) {
         void rollbackJob(rollbackButton.dataset.scraperRollbackJob);
+        return;
+    }
+    const jobsPageButton = event.target.closest('[data-scraper-action="jobs-page-prev"], [data-scraper-action="jobs-page-next"]');
+    if (jobsPageButton) {
+        const currentPage = Number(state.jobsPagination?.page || state.jobsPage || 1) || 1;
+        const delta = jobsPageButton.dataset.scraperAction === 'jobs-page-next' ? 1 : -1;
+        void refreshJobs({ page: currentPage + delta });
         return;
     }
     const batchAcceptBtn = event.target.closest('[data-batch-accept]');

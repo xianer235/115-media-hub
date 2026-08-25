@@ -76,89 +76,87 @@ class ResourceJobStateFrontendTest(unittest.TestCase):
         self.assertIn("不会删除网盘文件", result[0][1])
         self.assertEqual(result[3][0:2], ["toast", "任务 #42 的记录已删除"])
 
-    def test_load_more_requests_cumulative_windows_from_offset_zero(self):
+    def test_page_change_requests_a_single_ten_item_page(self):
         result = run_job_state(
             """(() => {
                 const controller = window.ResourceJobState.create();
                 const first = controller.begin();
-                controller.accept(first, { jobs: [], pagination: { total: 80, has_more: true } });
-                const second = controller.begin({ extend: true });
-                controller.accept(second, { jobs: [], pagination: { total: 80, has_more: true } });
-                const third = controller.begin({ extend: true });
-                return [first, second, third].map(request => [request.offset, request.limit]);
+                controller.accept(first, { jobs: [], pagination: { total: 80, page: 1, total_pages: 8 } });
+                const second = controller.begin({ page: 2 });
+                return [first, second].map(request => [request.page, request.page_size]);
             })()"""
         )
-        self.assertEqual(result, [[0, 20], [0, 40], [0, 60]])
+        self.assertEqual(result, [[1, 10], [2, 10]])
 
-    def test_stale_response_cannot_overwrite_newer_cumulative_window(self):
+    def test_stale_response_cannot_overwrite_newer_page(self):
         result = run_job_state(
             """(() => {
                 const controller = window.ResourceJobState.create();
                 const first = controller.begin();
-                const second = controller.begin({ extend: true });
+                const second = controller.begin({ page: 2 });
                 const fresh = controller.accept(second, {
                     jobs: [{ id: 40 }, { id: 39 }],
-                    pagination: { total: 40, has_more: false },
+                    pagination: { total: 40, page: 2, total_pages: 4 },
                 });
                 const stale = controller.accept(first, {
                     jobs: [{ id: 20 }],
-                    pagination: { total: 20, has_more: false },
+                    pagination: { total: 20, page: 1, total_pages: 2 },
                 });
                 return {
                     freshAccepted: fresh.accepted,
                     staleAccepted: stale.accepted,
                     ids: controller.snapshot().jobs.map(job => job.id),
-                    limit: controller.snapshot().windowSize,
+                    page: controller.snapshot().page,
                 };
             })()"""
         )
         self.assertEqual(
             result,
-            {"freshAccepted": True, "staleAccepted": False, "ids": [40, 39], "limit": 40},
+            {"freshAccepted": True, "staleAccepted": False, "ids": [40, 39], "page": 2},
         )
 
-    def test_polling_merges_latest_jobs_and_active_jobs_without_shrinking_history(self):
+    def test_polling_refreshes_the_current_page_without_merging_history(self):
         result = run_job_state(
             """(() => {
                 const controller = window.ResourceJobState.create();
-                const initial = controller.begin({ extend: true });
+                const initial = controller.begin({ page: 2 });
                 controller.accept(initial, {
-                    jobs: Array.from({ length: 40 }, (_, index) => ({ id: 40 - index, status: 'completed' })),
+                    jobs: Array.from({ length: 10 }, (_, index) => ({ id: 30 - index, status: 'completed' })),
                     active_jobs: [],
-                    pagination: { total: 40, has_more: false },
+                    pagination: { total: 40, page: 2, total_pages: 4 },
                 });
                 const poll = controller.begin({ mode: 'poll' });
                 const result = controller.accept(poll, {
-                    jobs: Array.from({ length: 20 }, (_, index) => ({ id: 41 - index, status: index === 0 ? 'submitted' : 'completed' })),
-                    active_jobs: [{ id: 41, status: 'submitted' }],
-                    pagination: { total: 41, has_more: true },
+                    jobs: Array.from({ length: 10 }, (_, index) => ({ id: 30 - index, status: index === 0 ? 'submitted' : 'completed' })),
+                    active_jobs: [{ id: 30, status: 'submitted' }],
+                    pagination: { total: 40, page: 2, total_pages: 4 },
                 });
                 const snapshot = controller.snapshot();
                 return {
-                    pollLimit: poll.limit,
+                    pollPage: poll.page,
                     count: snapshot.jobs.length,
-                    includesOldest: snapshot.jobs.some(job => job.id === 1),
-                    includesActive: snapshot.jobs.some(job => job.id === 41),
-                    needsCalibration: result.needsCalibration,
+                    count: snapshot.jobs.length,
+                    includesCurrent: snapshot.jobs.some(job => job.id === 30),
+                    includesPrevious: snapshot.jobs.some(job => job.id === 40),
                 };
             })()"""
         )
         self.assertEqual(
             result,
-            {"pollLimit": 20, "count": 41, "includesOldest": True, "includesActive": True, "needsCalibration": True},
+            {"pollPage": 2, "count": 10, "includesCurrent": True, "includesPrevious": False},
         )
 
     def test_filter_change_resets_window_to_first_page(self):
         result = run_job_state(
             """(() => {
                 const controller = window.ResourceJobState.create();
-                const first = controller.begin({ extend: true });
-                controller.accept(first, { jobs: [], pagination: { total: 60, has_more: true } });
+                const first = controller.begin({ page: 3 });
+                controller.accept(first, { jobs: [], pagination: { total: 60, page: 3, total_pages: 6 } });
                 const filtered = controller.begin({ status: 'failed', reset: true });
-                return [filtered.status, filtered.offset, filtered.limit, controller.snapshot().filter];
+                return [filtered.status, filtered.page, filtered.page_size, controller.snapshot().filter];
             })()"""
         )
-        self.assertEqual(result, ["failed", 0, 20, "failed"])
+        self.assertEqual(result, ["failed", 1, 10, "failed"])
 
     def test_failed_request_keeps_existing_jobs_and_restores_loading_state(self):
         result = run_job_state(

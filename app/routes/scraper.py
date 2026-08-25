@@ -333,10 +333,12 @@ async def create_scraper_job_endpoint(request: Request) -> Dict[str, Any]:
 
 @router.get("/scraper/jobs/state")
 async def get_scraper_jobs_state_endpoint(request: Request) -> Dict[str, Any]:
-    limit = max(1, min(parse_int(request.query_params.get("limit", 20), default=20), 100))
+    limit = 10
+    page = max(1, parse_int(request.query_params.get("page", 1), default=1))
+    status_filter = str(request.query_params.get("status", "all") or "all").strip().lower()
     job_id = max(0, parse_int(request.query_params.get("job_id", 0), default=0))
     try:
-        return await asyncio.to_thread(get_scraper_jobs_state, limit, job_id)
+        return await asyncio.to_thread(get_scraper_jobs_state, limit, job_id, page, status_filter)
     except Exception as exc:
         return _error_response(exc)
 

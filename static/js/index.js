@@ -149,7 +149,7 @@
         let resourceJobLoadError = '';
         let resourceJobCalibrationPending = false;
         let taskCenterTab = 'resource';
-        let scraperJobState = { jobs: [], job_counts: {}, active_jobs: [] };
+        let scraperJobState = { jobs: [], job_counts: {}, active_jobs: [], pagination: {} };
         let scraperJobFilter = 'all';
         let scraperJobExpanded = new Set();
         let scraperJobLoading = false;
@@ -328,8 +328,8 @@
         const RESOURCE_FOLDER_PAGE_LIMIT = 300;
         const RESOURCE_SHARE_BRANCH_CACHE_TTL_MS = 1000 * 60 * 10;
         const RESOURCE_SHARE_BROWSE_PAGE_LIMIT = 40;
-        const RESOURCE_JOB_PAGE_SIZE = 20;
-        const RESOURCE_JOB_PAGE_MAX_SIZE = 25000;
+        const RESOURCE_JOB_PAGE_SIZE = 10;
+        const RESOURCE_JOB_PAGE_MAX_SIZE = 100;
         const SUBSCRIPTION_WEEKDAY_LABELS = {
             1: '周一',
             2: '周二',

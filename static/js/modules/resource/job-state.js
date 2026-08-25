@@ -1,8 +1,5 @@
 (function (global) {
-    const DEFAULT_WINDOW_SIZE = 20;
-    const MAX_WINDOW_SIZE = 25000;
-    const ACTIVE_STATUSES = new Set(['pending', 'running', 'submitted']);
-
+    const DEFAULT_PAGE_SIZE = 10;
     function normalizeFilter(value) {
         const normalized = String(value || 'all').trim().toLowerCase();
         return ['all', 'active', 'submitted', 'completed', 'failed'].includes(normalized) ? normalized : 'all';
@@ -14,35 +11,6 @@
         return Math.min(maximum, normalized);
     }
 
-    function getJobKey(job, index) {
-        const id = Number(job?.id || 0) || 0;
-        return id > 0 ? `id:${id}` : `fallback:${String(job?.title || '')}:${index}`;
-    }
-
-    function isActiveJob(job) {
-        return ACTIVE_STATUSES.has(String(job?.status || '').trim().toLowerCase());
-    }
-
-    function isJobVisibleInFilter(job, filter) {
-        const status = String(job?.status || '').trim().toLowerCase();
-        if (filter === 'all') return true;
-        if (filter === 'active') return isActiveJob(job);
-        return status === filter;
-    }
-
-    function mergeJobs(primaryJobs, secondaryJobs) {
-        const seen = new Set();
-        const merged = [];
-        [...(Array.isArray(primaryJobs) ? primaryJobs : []), ...(Array.isArray(secondaryJobs) ? secondaryJobs : [])]
-            .forEach((job, index) => {
-                const key = getJobKey(job, index);
-                if (seen.has(key)) return;
-                seen.add(key);
-                merged.push(job);
-            });
-        return merged;
-    }
-
     function buildActiveSignature(jobs) {
         return (Array.isArray(jobs) ? jobs : [])
             .map((job) => `${Number(job?.id || 0) || 0}:${String(job?.status || '').trim().toLowerCase()}`)
@@ -51,10 +19,9 @@
     }
 
     function create(options = {}) {
-        const pageSize = normalizePositiveInteger(options.pageSize, DEFAULT_WINDOW_SIZE, MAX_WINDOW_SIZE);
-        const maxWindowSize = normalizePositiveInteger(options.maxWindowSize, MAX_WINDOW_SIZE, MAX_WINDOW_SIZE);
+        const pageSize = normalizePositiveInteger(options.pageSize, DEFAULT_PAGE_SIZE, 100);
         let filter = normalizeFilter(options.filter || 'all');
-        let windowSize = pageSize;
+        let page = 1;
         let jobs = [];
         let activeJobs = [];
         let pagination = {};
@@ -66,42 +33,38 @@
         function snapshot() {
             return {
                 filter,
-                windowSize,
+                page,
+                pageSize,
                 jobs,
                 activeJobs,
                 pagination: {
                     ...pagination,
                     status: filter,
-                    limit: windowSize,
-                    offset: 0,
-                    next_offset: jobs.length,
-                    loaded_count: jobs.length,
+                    page,
+                    page_size: pageSize,
                 },
                 loading,
                 error,
             };
         }
 
-        function begin({ status = filter, reset = false, extend = false, mode = 'window' } = {}) {
+        function begin({ status = filter, page: requestedPage = page, reset = false, mode = 'page' } = {}) {
             const nextFilter = normalizeFilter(status);
             if (reset || nextFilter !== filter) {
                 filter = nextFilter;
-                windowSize = pageSize;
+                page = 1;
             }
-            if (extend) {
-                windowSize = Math.min(maxWindowSize, windowSize + pageSize);
-            }
+            page = reset ? 1 : Math.max(1, Math.floor(Number(requestedPage) || 1));
             requestRevision += 1;
             activeRequestRevision = requestRevision;
             loading = true;
             error = '';
-            const requestMode = mode === 'poll' ? 'poll' : 'window';
             return {
                 status: filter,
-                offset: 0,
-                limit: requestMode === 'poll' ? pageSize : windowSize,
+                page,
+                page_size: pageSize,
                 revision: requestRevision,
-                mode: requestMode,
+                mode: mode === 'poll' ? 'poll' : 'page',
             };
         }
 
@@ -115,12 +78,7 @@
             const priorActiveSignature = buildActiveSignature(activeJobs);
             const nextActiveSignature = buildActiveSignature(incomingActiveJobs);
             const isPoll = request?.mode === 'poll';
-            const activeVisibleJobs = filter === 'all' || filter === 'active'
-                ? incomingActiveJobs.filter(job => isJobVisibleInFilter(job, filter))
-                : [];
-            jobs = isPoll
-                ? mergeJobs(mergeJobs(incomingJobs, activeVisibleJobs), jobs)
-                : incomingJobs;
+            jobs = incomingJobs;
             activeJobs = incomingActiveJobs;
             pagination = payload.pagination && typeof payload.pagination === 'object' ? payload.pagination : pagination;
             loading = false;
@@ -148,13 +106,11 @@
             reject,
             snapshot,
             get pageSize() { return pageSize; },
-            get maxWindowSize() { return maxWindowSize; },
         };
     }
 
     global.ResourceJobState = {
-        DEFAULT_WINDOW_SIZE,
-        MAX_WINDOW_SIZE,
+        DEFAULT_PAGE_SIZE,
         create,
     };
 })(window);

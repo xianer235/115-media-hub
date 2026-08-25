@@ -493,6 +493,12 @@
             const scraperBtn = e.target.closest('[data-scraper-job-action]');
             if (scraperBtn) {
                 const action = scraperBtn.dataset.scraperJobAction || '';
+                if (action === 'page-prev' || action === 'page-next') {
+                    const pagination = scraperJobState?.pagination || {};
+                    const currentPage = Number(pagination.page || 1) || 1;
+                    await fetchScraperJobsState({ page: currentPage + (action === 'page-next' ? 1 : -1) });
+                    return;
+                }
                 const jobId = parseInt(scraperBtn.dataset.scraperJobId || '0', 10);
                 if (!jobId) return;
                 if (action === 'toggle') toggleScraperJobExpanded(jobId);
@@ -502,12 +508,14 @@
             const btn = e.target.closest('[data-resource-job-action]');
             if (!btn) return;
             const action = btn.dataset.resourceJobAction || '';
-            if (action === 'load-more') {
-                await loadMoreResourceJobs();
+            if (action === 'page-prev' || action === 'page-next') {
+                const pagination = resourceState?.job_pagination || {};
+                const currentPage = Number(pagination.page || 1) || 1;
+                await loadResourceJobsPage(currentPage + (action === 'page-next' ? 1 : -1));
                 return;
             }
             if (action === 'retry-load') {
-                await fetchResourceJobsPage({ status: resourceJobFilter });
+                await fetchResourceJobsPage({ status: resourceJobFilter, page: resourceState?.job_pagination?.page || 1 });
                 return;
             }
             const jobId = parseInt(btn.dataset.resourceJobId || '0', 10);
@@ -540,7 +548,7 @@
                 const normalized = normalizeScraperJobFilter(nextFilter);
                 if (scraperJobFilter === normalized) return;
                 scraperJobFilter = normalized;
-                renderResourceJobs();
+                void fetchScraperJobsState({ page: 1 });
                 return;
             }
             const pageFilter = String(resourceState?.job_pagination?.status || 'all').trim() || 'all';

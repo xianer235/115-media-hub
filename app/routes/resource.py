@@ -576,7 +576,7 @@ async def run_resource_browse_io(func, *args, executor=None, include_diagnostics
     return result
 
 
-def _build_resource_jobs_state_snapshot(limit: int = 20, offset: int = 0, status_filter: str = "") -> Dict[str, Any]:
+def _build_resource_jobs_state_snapshot(limit: int = 10, offset: int = 0, status_filter: str = "") -> Dict[str, Any]:
     cfg = get_config()
     return build_resource_jobs_state_payload(
         limit=limit,
@@ -649,13 +649,10 @@ async def cancel_resource_search_endpoint(request: Request) -> JSONResponse:
 
 @router.get("/resource/jobs/state")
 async def get_resource_jobs_state(request: Request) -> Dict[str, Any]:
-    limit = max(
-        1,
-        min(parse_int(request.query_params.get("limit", 20), default=20), RESOURCE_JOB_PAGE_MAX_LIMIT),
-    )
-    offset = max(0, parse_int(request.query_params.get("offset", 0), default=0))
+    page_size = 10
+    page = max(1, parse_int(request.query_params.get("page", 1), default=1))
     status_filter = normalize_resource_job_status_filter(request.query_params.get("status", "all"))
-    return await asyncio.to_thread(_build_resource_jobs_state_snapshot, limit, offset, status_filter)
+    return await asyncio.to_thread(_build_resource_jobs_state_snapshot, page_size, (page - 1) * page_size, status_filter)
 
 
 @router.get("/resource/offline/tasks", dependencies=[Depends(require_auth)])

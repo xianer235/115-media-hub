@@ -5737,14 +5737,14 @@ def check_resource_channel_sync_cancelled(result: Optional[Dict[str, Any]] = Non
 
 
 def build_resource_jobs_state_payload(
-    limit: int = 20,
+    limit: int = 10,
     cfg: Optional[Dict[str, Any]] = None,
     offset: int = 0,
     status_filter: str = "",
     include_monitor_tasks: bool = True,
     active_job_limit: int = 80,
 ) -> Dict[str, Any]:
-    normalized_limit = max(1, min(int(limit or 20), RESOURCE_JOB_PAGE_MAX_LIMIT))
+    normalized_limit = max(1, min(int(limit or 10), 100))
     normalized_offset = max(0, int(offset or 0))
     normalized_filter = normalize_resource_job_status_filter(status_filter)
     normalized_active_job_limit = max(1, min(int(active_job_limit or 80), 200))
@@ -5876,7 +5876,7 @@ def _build_resource_state_payload_snapshot(
     search_meta: Dict[str, Any],
     search_source: str = "tg",
     provider_filter: str = "all",
-    job_limit: int = 20,
+    job_limit: int = 10,
     job_offset: int = 0,
     job_status_filter: str = "",
     compact: bool = False,
@@ -6057,7 +6057,7 @@ async def build_resource_state_payload(
     normalized_search_source = normalize_resource_search_source(search_source)
     normalized_provider_filter = normalize_resource_provider_filter(provider_filter)
     normalized_search_id = normalize_resource_search_id(search_id)
-    normalized_job_limit = max(1, min(int(job_limit or 20), RESOURCE_JOB_PAGE_MAX_LIMIT))
+    normalized_job_limit = max(1, min(int(job_limit or 10), 100))
     normalized_job_offset = max(0, int(job_offset or 0))
     normalized_job_status_filter = normalize_resource_job_status_filter(job_status_filter)
     compact_snapshot_key = (

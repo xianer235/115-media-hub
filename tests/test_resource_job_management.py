@@ -7,6 +7,7 @@ from unittest import mock
 from app import db
 from app import core
 from app import resource_jobs
+from app.services import scraper
 from app.routes import resource as resource_routes
 
 
@@ -146,10 +147,47 @@ class ResourceJobManagementTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(recreated_id, 1)
 
-    def test_page_limit_accepts_the_full_history_window(self):
-        page = resource_jobs.list_resource_jobs_page(limit=999999)
+    def test_resource_jobs_page_sorts_by_created_time_and_returns_ten_records(self):
+        resource_id = self.insert_resource_item()
+        older_job_id = self.insert_job(resource_id, "completed")
+        newer_job_id = self.insert_job(resource_id, "running")
+        with db.db_connection() as conn:
+            conn.execute("UPDATE resource_jobs SET created_at = ? WHERE id = ?", ("2026-01-01 00:00:00", newer_job_id))
+            conn.execute("UPDATE resource_jobs SET created_at = ? WHERE id = ?", ("2026-01-02 00:00:00", older_job_id))
+            for index in range(10):
+                conn.execute(
+                    "INSERT INTO resource_jobs(resource_id, title, status, created_at, updated_at) VALUES (?, ?, 'completed', ?, ?)",
+                    (resource_id, f"任务 {index}", "2025-12-01 00:00:00", "2025-12-01 00:00:00"),
+                )
+            conn.commit()
 
-        self.assertEqual(page["pagination"]["limit"], 25000)
+        page = resource_jobs.list_resource_jobs_page(page=1)
+
+        self.assertEqual(page["pagination"], {
+            "status": "all", "page": 1, "page_size": 10, "total": 12,
+            "total_pages": 2, "has_prev": False, "has_next": True,
+        })
+        self.assertEqual([job["id"] for job in page["jobs"][:2]], [older_job_id, newer_job_id])
+        self.assertEqual(len(page["jobs"]), 10)
+
+    def test_scraper_jobs_page_sorts_by_created_time_and_returns_pagination(self):
+        with db.db_connection() as conn:
+            for index in range(12):
+                created_at = "2026-01-02 00:00:00" if index == 0 else "2026-01-01 00:00:00"
+                conn.execute(
+                    "INSERT INTO scraper_jobs(provider, status, created_at, updated_at) VALUES ('115', 'completed', ?, ?)",
+                    (created_at, created_at),
+                )
+            conn.commit()
+
+        page = scraper.get_scraper_jobs_state(page=1)
+
+        self.assertEqual(len(page["jobs"]), 10)
+        self.assertEqual(page["jobs"][0]["created_at"], "2026-01-02 00:00:00")
+        self.assertEqual(page["pagination"], {
+            "status": "all", "page": 1, "page_size": 10, "total": 12,
+            "total_pages": 2, "has_prev": False, "has_next": True,
+        })
 
     def test_prune_resource_jobs_if_due_throttles_by_interval(self):
         core.resource_job_prune_last_ts = 0.0
@@ -179,7 +217,7 @@ class ResourceJobManagementTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("history_pruned", result)
         prune_fn.assert_not_called()
 
-    async def test_resource_state_payload_keeps_the_full_history_window(self):
+    async def test_resource_state_payload_uses_the_ten_item_page_size(self):
         with mock.patch.object(core, "get_config", return_value={}), mock.patch.object(
             core, "recover_resource_jobs_if_due", return_value={}
         ), mock.patch.object(
@@ -188,7 +226,7 @@ class ResourceJobManagementTest(unittest.IsolatedAsyncioTestCase):
             result = await core.build_resource_state_payload(job_limit=999999)
 
         self.assertEqual(result, {"ok": True})
-        self.assertEqual(build_snapshot.call_args.args[5], 25000)
+        self.assertEqual(build_snapshot.call_args.args[5], 100)
 
     async def test_delete_route_returns_contract_and_status_codes(self):
         endpoint = self.delete_endpoint()

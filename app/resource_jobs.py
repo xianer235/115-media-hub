@@ -28,9 +28,17 @@ def _build_resource_job_filter_where(status_filter: str) -> Tuple[str, Tuple[Any
     return "1 = 1", ()
 
 
-def list_resource_jobs_page(limit: int = 20, offset: int = 0, status_filter: str = "") -> Dict[str, Any]:
-    page_limit = max(1, min(int(limit or 20), RESOURCE_JOB_PAGE_MAX_LIMIT))
-    page_offset = max(0, int(offset or 0))
+def list_resource_jobs_page(
+    limit: int = 10,
+    offset: int = 0,
+    status_filter: str = "",
+    page: Optional[int] = None,
+    page_size: Optional[int] = None,
+) -> Dict[str, Any]:
+    page_limit = max(1, min(int(page_size or limit or 10), 100))
+    page_number = max(1, int(page or 1))
+    page_offset = max(0, (page_number - 1) * page_limit) if page is not None else max(0, int(offset or 0))
+    page_number = (page_offset // page_limit) + 1
     normalized_filter = normalize_resource_job_status_filter(status_filter)
     where_sql, where_params = _build_resource_job_filter_where(normalized_filter)
     ensure_db()
@@ -39,29 +47,31 @@ def list_resource_jobs_page(limit: int = 20, offset: int = 0, status_filter: str
         cursor.execute(f"SELECT COUNT(1) FROM resource_jobs WHERE {where_sql}", where_params)
         row = cursor.fetchone()
         total = int(row[0] if row else 0)
+        total_pages = max(1, (total + page_limit - 1) // page_limit)
+        page_number = min(page_number, total_pages)
+        page_offset = (page_number - 1) * page_limit
         cursor.execute(
             f"""
             SELECT *
             FROM resource_jobs
             WHERE {where_sql}
-            ORDER BY
-                CASE WHEN status IN ('pending', 'running', 'submitted') THEN 0 ELSE 1 END,
-                id DESC
+            ORDER BY created_at DESC, id DESC
             LIMIT ? OFFSET ?
             """,
             (*where_params, page_limit, page_offset),
         )
         rows = cursor.fetchall()
-    next_offset = page_offset + len(rows)
+    total_pages = max(1, (total + page_limit - 1) // page_limit)
     return {
         "jobs": [serialize_resource_job_row(row) for row in rows],
         "pagination": {
             "status": normalized_filter,
-            "limit": page_limit,
-            "offset": page_offset,
-            "next_offset": next_offset,
+            "page": page_number,
+            "page_size": page_limit,
             "total": total,
-            "has_more": next_offset < total,
+            "total_pages": total_pages,
+            "has_prev": page_number > 1,
+            "has_next": page_number < total_pages,
         },
     }
 

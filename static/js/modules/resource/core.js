@@ -3073,7 +3073,6 @@
 
         const resourceJobStateController = window.ResourceJobState.create({
             pageSize: RESOURCE_JOB_PAGE_SIZE,
-            maxWindowSize: RESOURCE_JOB_PAGE_MAX_SIZE,
         });
 
         function scheduleResourceJobWindowCalibration() {
@@ -3132,39 +3131,35 @@
             return result;
         }
 
-        function buildResourceJobsStateUrl({ status = resourceJobFilter, offset = 0, limit = RESOURCE_JOB_PAGE_SIZE } = {}) {
+        function buildResourceJobsStateUrl({ status = resourceJobFilter, page = 1, page_size = RESOURCE_JOB_PAGE_SIZE } = {}) {
             const params = new URLSearchParams();
             const normalizedStatus = normalizeResourceJobFilter(status);
             params.set('status', normalizedStatus);
-            params.set('offset', String(Math.max(0, Number(offset || 0) || 0)));
-            params.set('limit', String(Math.max(1, Math.min(RESOURCE_JOB_PAGE_MAX_SIZE, Number(limit || RESOURCE_JOB_PAGE_SIZE) || RESOURCE_JOB_PAGE_SIZE))));
+            params.set('page', String(Math.max(1, Number(page || 1) || 1)));
+            params.set('page_size', String(Math.max(1, Math.min(RESOURCE_JOB_PAGE_MAX_SIZE, Number(page_size || RESOURCE_JOB_PAGE_SIZE) || RESOURCE_JOB_PAGE_SIZE))));
             return `/resource/jobs/state?${params.toString()}`;
         }
 
-        function getResourceJobsStateRequest({ status = resourceJobFilter, reset = false, extend = false, mode = 'poll' } = {}) {
+        function getResourceJobsStateRequest({ status = resourceJobFilter, page = resourceJobStateController.snapshot().page || 1, reset = false, mode = 'poll' } = {}) {
             const normalizedStatus = normalizeResourceJobFilter(status);
             resourceJobFilter = normalizedStatus;
             resourceJobLoadError = '';
             return resourceJobStateController.begin({
                 status: normalizedStatus,
+                page,
                 reset,
-                extend,
                 mode,
             });
         }
 
-        async function fetchResourceJobsPage({ status = resourceJobFilter, reset = false, extend = false } = {}) {
+        async function fetchResourceJobsPage({ status = resourceJobFilter, page = 1, reset = false } = {}) {
             const normalizedStatus = normalizeResourceJobFilter(status);
             resourceJobFilter = normalizedStatus;
-            if (extend) {
-                resourceJobLoadingMore = true;
-                renderResourceJobs();
-            }
             const jobRequest = getResourceJobsStateRequest({
                 status: normalizedStatus,
+                page,
                 reset,
-                extend,
-                mode: 'window',
+                mode: 'page',
             });
             try {
                 const data = await window.MediaHubApi.getJson(buildResourceJobsStateUrl(jobRequest));
@@ -3174,22 +3169,18 @@
                 rejectResourceJobsRequest(jobRequest, e);
                 return null;
             } finally {
-                if (extend) {
-                    resourceJobLoadingMore = false;
-                    renderResourceJobs();
-                }
             }
         }
 
-        async function loadMoreResourceJobs() {
-            if (resourceJobLoadingMore) return;
+        async function loadResourceJobsPage(page) {
             const pagination = resourceState?.job_pagination && typeof resourceState.job_pagination === 'object'
                 ? resourceState.job_pagination
                 : {};
-            if (!pagination.has_more) return;
+            const nextPage = Math.max(1, Number(page || pagination.page || 1) || 1);
+            if (nextPage === Number(pagination.page || 1) && !pagination.has_next) return;
             await fetchResourceJobsPage({
                 status: pagination.status || resourceJobFilter,
-                extend: true,
+                page: nextPage,
             });
         }
 
