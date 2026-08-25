@@ -44,7 +44,7 @@
 | 17 | `subscribe logs-clear` | POST /subscription/logs/clear | (无 body) | (无 body) | ✅ 无问题 |
 | 18 | `subscribe rebuild` | POST /subscription/rebuild | `name` | `name(body)` | ✅ 无问题 |
 | 19 | `subscribe episodes` | GET /subscription/episodes | `name` (GET params) | `name(query)` | ✅ 无问题 |
-| 20 | `subscribe start-with-link` | POST /subscription/start_with_link | `name, link_url, savepath` | `name, link_url/raw_text, receive_code(body)` | 🟢 savepath 不被该端点使用（垃圾字段）；缺 receive_code（非必填） |
+| 20 | `subscribe start-with-link` | POST /subscription/start_with_link | `name, link_url, savepath` | `name, link_url/raw_text, receive_code(body)` | 🟢 支持 115 分享/磁力/电驴一次性扫描链接（磁力/电驴走离线中转入库）；savepath 不被该端点使用（垃圾字段）；缺 receive_code（非必填） |
 | 21 | `jobs list` | GET /resource/jobs/state | `limit, status` | `limit, offset, status(query)` | 🟢 缺 offset |
 | 22 | **`jobs create`** | POST /resource/jobs/create | `resource_id, savepath` | `resource_id/resource, savepath, receive_code, magnet_provider, auto_refresh, allow_duplicate, folder_id, sharetitle, refresh_delay_seconds, share_selection(body)` | 🟡 缺 receive_code/magnet_provider/auto_refresh/allow_duplicate/folder_id/sharetitle/refresh_delay_seconds/share_selection |
 | 23 | `jobs retry` | POST /resource/jobs/retry | `job_id` | `job_id(body)` | ✅ 无问题 |

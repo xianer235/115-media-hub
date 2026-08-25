@@ -2081,7 +2081,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sp_sub.add_argument("--quality", default="balanced", help="质量偏好 (4K/1080p/720p/balanced)")
     sp_sub.add_argument("--savepath", default="", help="115 保存路径（留空自动按媒体类型从常用目录推断）")
     sp_sub.add_argument("--provider", default="115", choices=["115", "quark"], help="网盘提供商")
-    sp_sub.add_argument("--link", default="", help="资源链接 (start-with-link)")
+    sp_sub.add_argument("--link", default="", help="资源链接 (start-with-link)：115 分享/磁力/电驴")
     sp_sub.add_argument("--task-name", default="", help="订阅名称 (rebuild/episodes)")
     # 补充参数
     sp_sub.add_argument("--title", default="", help="订阅标题（用于显示，可与名称不同）")
