@@ -691,6 +691,85 @@ class ScraperMonitorSyncTest(unittest.TestCase):
         self.assertIn("Episode.mkv", new_items[0]["name"])
         self.assertEqual(new_items[0]["size"], 4096)
 
+    def test_scraper_job_change_events_skip_auto_scrape_items(self):
+        cfg = self._cfg(self._task(auto_scrape_on_new=True))
+        old_local = "媒体库/Media/Source/Episode.mkv"
+        self._insert_monitor_file("影视监控", old_local, "Source/Episode.mkv", size=4096)
+        self._write_strm(old_local, "source")
+
+        _, _, result = self._run_confirmed(
+            cfg,
+            "move",
+            [
+                {
+                    "id": "job-dir",
+                    "name": "Source",
+                    "path": "Media/Source",
+                    "new_path": "Media/Moved",
+                    "new_cid": "moved-cid",
+                    "is_dir": True,
+                }
+            ],
+            source_action="scraper-job:84:forward",
+            dedupe_key="scraper-job-auto-scrape-skip",
+        )
+
+        self.assertEqual(result["completed"], 1)
+        self.assertEqual(result.get("new_media_items", []), [])
+
+    def test_folder_move_plus_file_rename_reports_net_strm_counts(self):
+        cfg = self._cfg()
+        old_local = "媒体库/Media/旧/F.mkv"
+        self._insert_monitor_file("影视监控", old_local, "旧/F.mkv", size=4096)
+        self._write_strm(old_local, "old")
+
+        prepared_folder = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="move",
+            entries=[
+                {
+                    "id": "dir1",
+                    "name": "旧",
+                    "path": "Media/旧",
+                    "new_path": "Media/新",
+                    "new_cid": "new-dir-cid",
+                    "is_dir": True,
+                }
+            ],
+            source_action="direct:move",
+            dedupe_key="net-count-folder",
+            cfg=cfg,
+        )
+        prepared_file = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="move",
+            entries=[
+                {
+                    "id": "f1",
+                    "name": "F.mkv",
+                    "path": "Media/新/F.mkv",
+                    "new_path": "Media/新/Season 01/G.mkv",
+                    "is_dir": False,
+                    "size": 4096,
+                }
+            ],
+            source_action="direct:move",
+            dedupe_key="net-count-file",
+            cfg=cfg,
+        )
+        monitor_changes.confirm_monitor_change_events(prepared_folder, succeeded=True, enqueue=False)
+        monitor_changes.confirm_monitor_change_events(prepared_file, succeeded=True, enqueue=False)
+
+        with patch.object(monitor_changes, "STRM_ROOT", self.strm_root):
+            result = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
+
+        self.assertEqual(result["completed"], 2)
+        # 中间态 STRM（Media/新/F.mkv）先由文件夹事件生成、再由文件事件删除，净统计应抵消。
+        self.assertEqual(result["generated"], 1)
+        self.assertEqual(result["deleted"], 1)
+        self.assertTrue(os.path.isfile(self._strm_path("媒体库/Media/新/Season 01/G.mkv")))
+        self.assertFalse(os.path.exists(self._strm_path("媒体库/Media/旧/F.mkv")))
+
     def test_change_sync_respects_auto_scrape_setting(self):
         cfg = self._cfg()
         old_local = "媒体库/Media/Source/Episode.mkv"
@@ -1982,6 +2061,46 @@ class ScraperMonitorSyncTest(unittest.TestCase):
                 ),
             ],
         )
+
+    def test_monitor_change_task_skips_empty_run(self):
+        cfg = self._cfg()
+        logs = AsyncMock()
+        with (
+            patch.object(monitor, "_claim_monitor_job", return_value=True),
+            patch.object(monitor, "get_config", return_value=cfg),
+            patch.object(monitor, "write_monitor_task_header", AsyncMock()),
+            patch.object(monitor, "write_monitor_section", AsyncMock()),
+            patch.object(monitor, "write_monitor_log", logs),
+            patch.object(monitor, "write_monitor_task_footer", AsyncMock()),
+            patch.object(monitor, "update_monitor_summary"),
+            patch.object(monitor, "schedule_ui_state_push"),
+            patch.object(monitor, "_finish_monitor_job", AsyncMock()),
+            patch.object(
+                monitor_changes,
+                "process_monitor_change_events",
+                AsyncMock(
+                    return_value={
+                        "completed": 0,
+                        "failed": 0,
+                        "discarded": 0,
+                        "generated": 0,
+                        "deleted": 0,
+                        "directory_count": 0,
+                        "file_count": 0,
+                        "manual_required": 0,
+                        "errors": [],
+                        "change_details": [],
+                        "new_media_items": [],
+                        "manual_required_paths": [],
+                    }
+                ),
+            ),
+        ):
+            asyncio.run(monitor.run_monitor_change_task("影视监控", payload={"event_ids": []}))
+
+        log_texts = [str(call.args[0]) for call in logs.await_args_list]
+        self.assertIn("无待处理变更，本轮跳过", log_texts)
+        self.assertFalse(any("变更同步汇总" in text for text in log_texts))
 
     def test_monitor_change_task_logs_one_shot_failure_without_retry_claim(self):
         cfg = self._cfg()

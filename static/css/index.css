@@ -4446,8 +4446,10 @@
         }
         .nav-task-center-btn .resource-job-trigger-badge {
             position: absolute;
-            top: -0.28rem;
+            top: 50%;
+            transform: translateY(-50%);
             right: -0.3rem;
+            z-index: 2;
             min-width: 1.1rem;
             padding: 0 0.3rem;
             font-size: 0.64rem;

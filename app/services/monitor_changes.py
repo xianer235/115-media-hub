@@ -1528,6 +1528,48 @@ def _event_added_media_items(
     return items
 
 
+def _event_strm_path_effects(
+    cfg: Dict[str, Any],
+    task: Dict[str, Any],
+    plan: Dict[str, Any],
+    *,
+    effective_plan: Optional[Dict[str, Any]] = None,
+) -> Tuple[List[str], List[str]]:
+    """返回事件删除/生成的 STRM 本地路径列表，供批次内按净效果统计。"""
+    active_plan = effective_plan if isinstance(effective_plan, dict) and effective_plan else plan
+    deleted_paths: List[str] = []
+    generated_paths: List[str] = []
+    if plan.get("remove_old"):
+        if plan.get("is_dir"):
+            for item in plan.get("indexed_files", []) if isinstance(plan.get("indexed_files"), list) else []:
+                context = _task_path_context(cfg, task, str(item.get("source_path", "") or ""))
+                local = str((context or {}).get("local_rel_path", "") or "")
+                if local:
+                    deleted_paths.append(local)
+        else:
+            old_context = plan.get("old_context") if isinstance(plan.get("old_context"), dict) else {}
+            local = str(old_context.get("local_rel_path", "") or "")
+            if local:
+                deleted_paths.append(local)
+    if active_plan.get("add_new"):
+        if active_plan.get("is_dir"):
+            for item in (
+                active_plan.get("indexed_files", [])
+                if isinstance(active_plan.get("indexed_files"), list)
+                else []
+            ):
+                context = _task_path_context(cfg, task, str(item.get("target_path", "") or ""))
+                local = str((context or {}).get("local_rel_path", "") or "")
+                if local:
+                    generated_paths.append(local)
+        else:
+            new_context = active_plan.get("new_context") if isinstance(active_plan.get("new_context"), dict) else {}
+            local = str(new_context.get("local_rel_path", "") or "")
+            if local:
+                generated_paths.append(local)
+    return deleted_paths, generated_paths
+
+
 async def _apply_precise_event(
     conn: Any,
     cfg: Dict[str, Any],
@@ -1593,6 +1635,7 @@ async def _apply_precise_event(
         if int(stats.get("manual_required", 0) or 0) > 0
         else ""
     )
+    stats["deleted_paths"], stats["generated_paths"] = _event_strm_path_effects(cfg, task, plan)
     return stats
 
 
@@ -1786,6 +1829,12 @@ async def _reconcile_event(
         if int(stats.get("manual_required", 0) or 0) > 0
         else ""
     )
+    stats["deleted_paths"], stats["generated_paths"] = _event_strm_path_effects(
+        cfg,
+        task,
+        plan,
+        effective_plan=effective_plan,
+    )
     return stats
 
 
@@ -1848,6 +1897,7 @@ async def process_monitor_change_events(
         "new_media_items": [],
         "manual_required_paths": [],
     }
+    strm_state: Dict[str, str] = {}
     with db_connection() as conn:
         events = _load_ready_events(conn, task_name=task_name, event_ids=event_ids)
         for event in events:
@@ -1907,10 +1957,38 @@ async def process_monitor_change_events(
                 change_detail = stats.get("change_detail")
                 if isinstance(change_detail, dict) and change_detail:
                     result["change_details"].append(change_detail)
-                for key in ("generated", "skipped", "deleted", "directory_count", "file_count", "manual_required"):
-                    result[key] += int(stats.get(key, 0) or 0)
+                result["skipped"] += int(stats.get("skipped", 0) or 0)
+                result["directory_count"] += int(stats.get("directory_count", 0) or 0)
+                result["file_count"] += int(stats.get("file_count", 0) or 0)
+                result["manual_required"] += int(stats.get("manual_required", 0) or 0)
+                for path in (
+                    stats.get("deleted_paths", [])
+                    if isinstance(stats.get("deleted_paths"), list)
+                    else []
+                ):
+                    if strm_state.get(path) == "generated":
+                        # 批次内先生成又被删除的中间态 STRM：相互抵消，不计入净删除/生成。
+                        del strm_state[path]
+                        result["generated"] -= 1
+                    else:
+                        strm_state[path] = "deleted"
+                        result["deleted"] += 1
+                for path in (
+                    stats.get("generated_paths", [])
+                    if isinstance(stats.get("generated_paths"), list)
+                    else []
+                ):
+                    if strm_state.get(path) == "deleted":
+                        del strm_state[path]
+                        result["deleted"] -= 1
+                    else:
+                        strm_state[path] = "generated"
+                        result["generated"] += 1
                 event_new = stats.get("new_media_items", [])
-                if isinstance(event_new, list):
+                if (
+                    isinstance(event_new, list)
+                    and not str(event.get("source_action", "") or "").strip().startswith("scraper-job:")
+                ):
                     result["new_media_items"].extend(event_new)
                 manual_path = str(stats.get("manual_required_path", "") or "").strip()
                 if manual_path and manual_path not in result["manual_required_paths"]:

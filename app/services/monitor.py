@@ -1302,6 +1302,16 @@ async def run_monitor_change_task(
         raw_event_ids = payload.get("event_ids", []) if isinstance(payload, dict) else []
         event_ids = raw_event_ids if isinstance(raw_event_ids, list) else None
         result = await process_monitor_change_events(task_name, cfg=cfg, event_ids=event_ids)
+        if (
+            max(0, int(result.get("completed", 0) or 0))
+            + max(0, int(result.get("failed", 0) or 0))
+            + max(0, int(result.get("discarded", 0) or 0))
+        ) <= 0:
+            await write_monitor_log("无待处理变更，本轮跳过", "info")
+            status_text = "变更同步完成"
+            await write_monitor_task_footer(task_name, status_text)
+            update_monitor_summary(status_text, task_name)
+            return
         await _write_monitor_change_details(result.get("change_details"))
         completed = max(0, int(result.get("completed", 0) or 0))
         failed = max(0, int(result.get("failed", 0) or 0))

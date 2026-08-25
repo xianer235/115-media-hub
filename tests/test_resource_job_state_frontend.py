@@ -295,6 +295,12 @@ class ResourceJobStateFrontendTest(unittest.TestCase):
         self.assertIn("resource-job-pagination-label", source)
         self.assertNotIn('<span class="scraper-empty-row">第 ${escapeHtml(String(page))}', source)
 
+    def test_nav_job_badge_does_not_overhang_above_button(self):
+        css = CSS_PATH.read_text(encoding="utf-8")
+        self.assertIn(".nav-task-center-btn .resource-job-trigger-badge", css)
+        self.assertIn("transform: translateY(-50%);", css)
+        self.assertNotIn("top: -0.28rem;", css)
+
     def test_resource_state_refresh_uses_the_current_page_contract(self):
         source = (ROOT / "static/js/modules/resource/core.js").read_text(encoding="utf-8")
         self.assertIn("params.set('job_page', String(jobRequest.page));", source)

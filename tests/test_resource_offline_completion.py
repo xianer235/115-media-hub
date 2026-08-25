@@ -433,5 +433,79 @@ class OfflineSubmitFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(submit.call_args.args[0], resource_service.poll_offline_resource_jobs_once)
 
 
+class OfflineFolderRefreshTest(unittest.IsolatedAsyncioTestCase):
+    def test_resolve_offline_download_folder_hint_matches_seed_folder(self):
+        class FakeFolderProvider:
+            def list_entries(self, cookie, cid):
+                return [
+                    {"id": "d1", "name": "【高清剧集网发布】九门[全30集].BlackTV", "is_dir": True},
+                    {"id": "f1", "name": "single.mkv", "is_dir": False},
+                ]
+
+        hint = resource_service.resolve_offline_download_folder_hint(
+            FakeFolderProvider(),
+            "cookie",
+            "0",
+            "【高清剧集网发布】九门[全30集].BlackTV",
+        )
+        self.assertEqual(hint, "【高清剧集网发布】九门[全30集].BlackTV")
+
+    def test_resolve_offline_download_folder_hint_empty_when_single_file(self):
+        class FakeFileProvider:
+            def list_entries(self, cookie, cid):
+                return [{"id": "f1", "name": "movie.mkv", "is_dir": False}]
+
+        hint = resource_service.resolve_offline_download_folder_hint(
+            FakeFileProvider(),
+            "cookie",
+            "0",
+            "movie.mkv",
+        )
+        self.assertEqual(hint, "")
+
+    async def test_trigger_refresh_uses_offline_folder_as_precise_scope(self):
+        job = {
+            "id": 71,
+            "resource_id": 0,
+            "title": "磁力任务 abcd",
+            "savepath": "115自存电视剧",
+            "sharetitle": "",
+            "monitor_task_name": "监控-电视剧",
+            "job_source": "manual_import",
+            "refresh_target_type": "",
+            "extra": {},
+            "extra_json": "{}",
+            "last_triggered_at": "",
+        }
+        captured = {}
+        with mock.patch.object(
+            resource_service, "get_resource_job", return_value=job
+        ), mock.patch.object(
+            resource_service,
+            "get_config",
+            return_value={"monitor_tasks": [{"name": "监控-电视剧"}]},
+        ), mock.patch.object(
+            resource_service,
+            "queue_monitor_job",
+            side_effect=lambda task, trigger, payload: captured.update(
+                task=task, trigger=trigger, payload=payload
+            )
+            or "started",
+        ), mock.patch.object(resource_service, "update_resource_job"), mock.patch.object(
+            resource_service, "update_resource_item_status"
+        ):
+            result = await resource_service.trigger_resource_job_refresh(
+                71,
+                reason="auto",
+                offline_folder_name="【高清剧集网发布】九门[全30集].BlackTV",
+            )
+        self.assertEqual(result["status"], "started")
+        self.assertEqual(
+            captured["payload"]["sharetitle"],
+            "【高清剧集网发布】九门[全30集].BlackTV",
+        )
+        self.assertEqual(captured["payload"]["refresh_target_type"], "folder")
+
+
 if __name__ == "__main__":
     unittest.main()

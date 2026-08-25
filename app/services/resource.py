@@ -195,8 +195,29 @@ async def _apply_offline_task_state(job: Dict[str, Any], task: Dict[str, Any]) -
             extra_json=safe_json_dumps(extra),
             status_detail="115 离线下载已完成，正在触发文件夹监控",
         )
+        offline_folder_hint = ""
         try:
-            await trigger_resource_job_refresh(job_id, reason="auto")
+            cfg = get_config()
+            provider = get_provider_or_none("115")
+            cookie = provider.get_cookie(cfg) if provider else ""
+            offline_folder_hint = await asyncio.to_thread(
+                resolve_offline_download_folder_hint,
+                provider,
+                cookie,
+                str(job.get("folder_id", "") or "").strip(),
+                str(task.get("name", "") or "").strip(),
+            )
+        except Exception:
+            offline_folder_hint = ""
+        try:
+            if offline_folder_hint:
+                await trigger_resource_job_refresh(
+                    job_id,
+                    reason="auto",
+                    offline_folder_name=offline_folder_hint,
+                )
+            else:
+                await trigger_resource_job_refresh(job_id, reason="auto")
         except Exception as exc:
             _mark_resource_job_failed(job_id, resource_id, f"115 已完成，但触发监控失败：{exc}")
         return
@@ -596,7 +617,12 @@ async def run_offline_resource_job_batch(
             _mark_resource_job_failed(job_id, resource_id, detail)
 
 
-async def trigger_resource_job_refresh(job_id: int, reason: str = "manual") -> Dict[str, Any]:
+async def trigger_resource_job_refresh(
+    job_id: int,
+    reason: str = "manual",
+    *,
+    offline_folder_name: str = "",
+) -> Dict[str, Any]:
     job = get_resource_job(job_id, include_private=True)
     if not job:
         raise RuntimeError("资源任务不存在")
@@ -627,6 +653,12 @@ async def trigger_resource_job_refresh(job_id: int, reason: str = "manual") -> D
     refresh_target_type = str(job.get("refresh_target_type", "") or "").strip()
     if refresh_target_type:
         payload["refresh_target_type"] = refresh_target_type
+    offline_folder = normalize_relative_path(str(offline_folder_name or "").strip())
+    if offline_folder and not payload["sharetitle"]:
+        # 磁力/电驴多文件种子会按种子名建文件夹：把实际下载文件夹作为精确刷新子目录，
+        # 避免 savepath 等于监控根目录时退化成全任务扫描。
+        payload["sharetitle"] = offline_folder
+        payload["refresh_target_type"] = "folder"
     status = queue_monitor_job(str(job["monitor_task_name"]).strip(), "resource", payload)
     update_resource_job(
         job_id,
@@ -641,6 +673,29 @@ async def trigger_resource_job_refresh(job_id: int, reason: str = "manual") -> D
             update_resource_item_status(conn, resource_id, "completed")
             conn.commit()
     return {"ok": True, "status": status}
+
+
+def resolve_offline_download_folder_hint(
+    provider: Any,
+    cookie: str,
+    folder_id: str,
+    task_name: str,
+) -> str:
+    """离线任务完成后，按种子名在保存目录里定位实际下载文件夹（无则返回空）。"""
+    normalized_name = str(task_name or "").strip()
+    if not normalized_name or not provider or not cookie:
+        return ""
+    normalized_folder_id = str(folder_id or "0").strip() or "0"
+    try:
+        entries = provider.list_entries(cookie, normalized_folder_id)
+    except Exception:
+        return ""
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        if bool(entry.get("is_dir", False)) and str(entry.get("name", "") or "").strip() == normalized_name:
+            return normalized_name
+    return ""
 
 
 async def schedule_resource_job_refresh(job_id: int) -> None:
