@@ -1637,6 +1637,46 @@ class ScraperMonitorSyncTest(unittest.TestCase):
             ).fetchall()
         self.assertEqual(rows, [("direct:delete", "failed", 1)])
 
+    def test_startup_discards_historical_deterministic_change_failure(self):
+        cfg = self._cfg()
+        prepared = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="move",
+            entries=[
+                {
+                    "id": "historical-invalid-manifest",
+                    "old_path": "Media/Source",
+                    "new_path": "Media/Dest",
+                    "is_dir": True,
+                }
+            ],
+            dedupe_key="historical-invalid-manifest",
+            cfg=cfg,
+        )
+        monitor_changes.confirm_monitor_change_events(prepared, succeeded=True, enqueue=False)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE monitor_change_events
+                SET status = 'failed', retry_count = 5, next_retry_at = 0,
+                    last_error = '精准同步索引清单路径无效或越界: Media/Source/Episode.mkv'
+                WHERE id = ?
+                """,
+                (prepared["event_ids"][0],),
+            )
+            conn.commit()
+
+        recovery = monitor_changes.recover_monitor_change_events(cfg=cfg, enqueue=False)
+
+        self.assertEqual(recovery["discarded"], 1)
+        with sqlite3.connect(self.db_path) as conn:
+            self.assertIsNone(
+                conn.execute(
+                    "SELECT id FROM monitor_change_events WHERE id = ?",
+                    (prepared["event_ids"][0],),
+                ).fetchone()
+            )
+
     def test_failed_event_at_retry_limit_is_requeued_after_handler_upgrade(self):
         cfg = self._cfg()
         prepared = monitor_changes.prepare_monitor_change_events(
@@ -1856,7 +1896,7 @@ class ScraperMonitorSyncTest(unittest.TestCase):
                 ("文件夹变更: 媒体库/旧目录 -> 媒体库/新目录（删除 2，生成 2）", "info"),
                 (
                     "变更同步汇总: 完成 2，失败 0，生成 1，删除 0，"
-                    "局部读取目录 0，文件 1，需手动监控 2",
+                    "局部读取目录 0，文件 1，需手动监控 2，丢弃 0",
                     "warn",
                 ),
             ],
@@ -1887,6 +1927,7 @@ class ScraperMonitorSyncTest(unittest.TestCase):
                         "directory_count": 0,
                         "file_count": 0,
                         "manual_required": 0,
+                        "discarded": 1,
                         "errors": [
                             {
                                 "event_id": 42,
@@ -1902,7 +1943,7 @@ class ScraperMonitorSyncTest(unittest.TestCase):
             asyncio.run(monitor.run_monitor_change_task("影视监控", payload={"event_ids": [42]}))
 
         messages = [(str(call.args[0]), str(call.args[1])) for call in logs.await_args_list]
-        self.assertIn(("变更事件 #42 失败: local write failed", "error"), messages)
+        self.assertIn(("变更事件 #42 已结束，不再重试: local write failed", "error"), messages)
         self.assertFalse(any("已保留重试" in message for message, _level in messages))
 
     def test_real_batch_plan_canonicalizes_relative_paths_and_renames_three_nested_files_without_remote_listing(self):
@@ -3456,7 +3497,8 @@ class ScraperMonitorSyncTest(unittest.TestCase):
         ):
             result = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
 
-        self.assertEqual(result["failed"], 1)
+        self.assertEqual(result["failed"], 0)
+        self.assertEqual(result["discarded"], 1)
         self.assertEqual(
             result["errors"],
             [
@@ -3682,20 +3724,71 @@ class ScraperMonitorSyncTest(unittest.TestCase):
         with patch.object(monitor_changes, "STRM_ROOT", self.strm_root):
             result = asyncio.run(monitor_changes.process_monitor_change_events(cfg=cfg))
 
-        self.assertEqual(result["failed"], 1)
+        self.assertEqual(result["failed"], 0)
+        self.assertEqual(result["discarded"], 1)
         self.assertTrue(os.path.exists(self._strm_path(old_local)))
         self.assertFalse(os.path.exists(self._strm_path(escaped_local)))
         with sqlite3.connect(self.db_path) as conn:
             rows = conn.execute(
                 "SELECT local_rel_path, remote_rel_path FROM monitor_files"
             ).fetchall()
-            event_status, error = conn.execute(
+            event_row = conn.execute(
                 "SELECT status, last_error FROM monitor_change_events WHERE id = ?",
                 (prepared["event_ids"][0],),
             ).fetchone()
         self.assertEqual(rows, [(old_local, "Source/../Escape.mkv")])
-        self.assertEqual(event_status, "failed")
-        self.assertIn("索引清单", error)
+        self.assertIsNone(event_row)
+
+    def test_temporary_local_failure_is_discarded_after_three_attempts(self):
+        cfg = self._cfg()
+        old_local = "媒体库/Media/RetryLimit/Old.mkv"
+        new_local = "媒体库/Media/RetryLimit/New.mkv"
+        self._insert_monitor_file("影视监控", old_local, "RetryLimit/Old.mkv", size=4096)
+        self._write_strm(old_local, "old")
+        prepared = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="rename",
+            entries=[
+                {
+                    "id": "retry-limit-local",
+                    "old_path": "Media/RetryLimit/Old.mkv",
+                    "new_path": "Media/RetryLimit/New.mkv",
+                    "is_dir": False,
+                    "size": 4096,
+                }
+            ],
+            dedupe_key="retry-limit-local",
+            cfg=cfg,
+        )
+        monitor_changes.confirm_monitor_change_events(prepared, succeeded=True, enqueue=False)
+        with patch.object(
+            monitor_changes,
+            "_write_strm_file",
+            side_effect=RuntimeError("temporary local write error"),
+        ):
+            for attempt in range(1, 4):
+                with patch.object(monitor_changes, "STRM_ROOT", self.strm_root):
+                    result = asyncio.run(
+                        monitor_changes.process_monitor_change_events(cfg=cfg)
+                    )
+                self.assertEqual(result["failed"], 1 if attempt < 3 else 0)
+                self.assertEqual(result["discarded"], 0 if attempt < 3 else 1)
+                if attempt < 3:
+                    with sqlite3.connect(self.db_path) as conn:
+                        conn.execute(
+                            "UPDATE monitor_change_events SET next_retry_at = 0 WHERE id = ?",
+                            (prepared["event_ids"][0],),
+                        )
+                        conn.commit()
+        with sqlite3.connect(self.db_path) as conn:
+            self.assertIsNone(
+                conn.execute(
+                    "SELECT id FROM monitor_change_events WHERE id = ?",
+                    (prepared["event_ids"][0],),
+                ).fetchone()
+            )
+        self.assertTrue(os.path.exists(self._strm_path(old_local)))
+        self.assertFalse(os.path.exists(self._strm_path(new_local)))
 
     def test_cross_task_manifest_respects_destination_size_filter_completeness(self):
         source_task = self._task(

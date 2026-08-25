@@ -1245,13 +1245,14 @@ async def run_monitor_change_task(
                 "directory_count",
                 "file_count",
                 "manual_required",
+                "discarded",
             )
         }
         await write_monitor_log(
             (
                 "变更同步汇总: 完成 {completed}，失败 {failed}，生成 {generated}，"
                 "删除 {deleted}，局部读取目录 {directory_count}，文件 {file_count}，"
-                "需手动监控 {manual_required}"
+                "需手动监控 {manual_required}，丢弃 {discarded}"
             ).format(**summary_values),
             "success"
             if int(result.get("failed", 0) or 0) == 0
@@ -1266,7 +1267,7 @@ async def run_monitor_change_task(
                 (
                     "变更事件 #{event_id} 失败，已保留重试: {error}"
                     if retryable
-                    else "变更事件 #{event_id} 失败: {error}"
+                    else "变更事件 #{event_id} 已结束，不再重试: {error}"
                 ).format(
                     event_id=max(0, int(error_item.get("event_id", 0) or 0)),
                     error=str(error_item.get("error", "") or "未知错误"),

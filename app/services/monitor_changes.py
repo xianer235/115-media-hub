@@ -27,12 +27,23 @@ from ..runtime_files import (
 from .strm_files import delete_managed_strm_file, managed_strm_file_path, remove_empty_parent_dirs
 
 
-MONITOR_CHANGE_MAX_RETRIES = 5
+MONITOR_CHANGE_MAX_RETRIES = 3
 MONITOR_CHANGE_RETRY_BASE_SECONDS = 5
 MONITOR_CHANGE_COMPLETED_RETENTION_DAYS = 30
 # Increment when a deployed handler changes how an event is interpreted.  A
 # maxed-out event from an older handler gets one fresh attempt after startup.
 MONITOR_CHANGE_HANDLER_REVISION = 1
+
+_DISCARDABLE_MONITOR_CHANGE_ERROR_PREFIXES = (
+    "精准同步索引清单路径无效或越界",
+    "精准同步索引清单格式无效",
+    "精准同步索引清单条目无效",
+    "精准同步索引清单目标路径无效或越界",
+    "精准同步旧路径无效或不完整",
+    "精准同步新路径无效或不完整",
+    "精准同步路径不完整，已保留旧 STRM",
+    "监控任务不存在",
+)
 
 _CHANGE_OPERATIONS = {"create", "copy", "move", "rename", "delete"}
 _CHANGE_OPERATION_ALIASES = {
@@ -1741,6 +1752,11 @@ def _is_one_shot_scraper_sync(event: Dict[str, Any]) -> bool:
     )
 
 
+def _is_discardable_monitor_change_error(error: Any) -> bool:
+    message = str(error or "").strip()
+    return any(message.startswith(prefix) for prefix in _DISCARDABLE_MONITOR_CHANGE_ERROR_PREFIXES)
+
+
 async def process_monitor_change_events(
     task_name: str = "",
     *,
@@ -1758,6 +1774,7 @@ async def process_monitor_change_events(
         "directory_count": 0,
         "file_count": 0,
         "manual_required": 0,
+        "discarded": 0,
         "errors": [],
         "change_details": [],
     }
@@ -1829,8 +1846,19 @@ async def process_monitor_change_events(
                 if restore_errors:
                     error_text = f"{error_text}; STRM 回滚失败: {'; '.join(restore_errors)}"
                 retryable = not _is_one_shot_scraper_sync(event)
-                if retryable:
-                    retry_count = max(0, int(event.get("retry_count", 0) or 0)) + 1
+                retry_count = max(0, int(event.get("retry_count", 0) or 0)) + 1
+                discard = (
+                    not restore_errors
+                    and (
+                        not retryable
+                        or _is_discardable_monitor_change_error(error_text)
+                        or retry_count >= MONITOR_CHANGE_MAX_RETRIES
+                    )
+                )
+                if discard:
+                    conn.execute("DELETE FROM monitor_change_events WHERE id = ?", (event_id,))
+                    result["discarded"] += 1
+                else:
                     backoff = min(3600, MONITOR_CHANGE_RETRY_BASE_SECONDS * (2 ** max(0, retry_count - 1)))
                     conn.execute(
                         """
@@ -1848,12 +1876,15 @@ async def process_monitor_change_events(
                             event_id,
                         ),
                     )
-                else:
-                    conn.execute("DELETE FROM monitor_change_events WHERE id = ?", (event_id,))
                 conn.commit()
-                result["failed"] += 1
+                if not discard:
+                    result["failed"] += 1
                 result["errors"].append(
-                    {"event_id": event_id, "error": error_text, "retryable": retryable}
+                    {
+                        "event_id": event_id,
+                        "error": error_text,
+                        "retryable": not discard,
+                    }
                 )
     return result
 
@@ -2014,6 +2045,19 @@ def recover_monitor_change_events(*, cfg: Optional[Dict[str, Any]] = None, enque
               AND source_action LIKE 'scraper-job:%'
             """
         )
+        discarded = 0
+        cursor.execute(
+            """
+            SELECT id, last_error
+            FROM monitor_change_events
+            WHERE status = 'failed' AND needs_reconcile = 0
+            """
+        )
+        for row in cursor.fetchall():
+            if not _is_discardable_monitor_change_error(row[1]):
+                continue
+            cursor.execute("DELETE FROM monitor_change_events WHERE id = ?", (int(row[0] or 0),))
+            discarded += max(0, int(cursor.rowcount or 0))
         cursor.execute(
             """
             SELECT id, status, operation, needs_reconcile, entry_snapshot_json
@@ -2104,7 +2148,12 @@ def recover_monitor_change_events(*, cfg: Optional[Dict[str, Any]] = None, enque
     deleted = cleanup_completed_monitor_change_events()
     if enqueue and task_names:
         _enqueue_task_names(task_names)
-    return {"recovered": recovered, "queued_tasks": sorted(set(task_names)), "deleted_completed": deleted}
+    return {
+        "recovered": recovered,
+        "discarded": discarded,
+        "queued_tasks": sorted(set(task_names)),
+        "deleted_completed": deleted,
+    }
 
 
 def queue_ready_monitor_change_tasks(*, cfg: Optional[Dict[str, Any]] = None) -> List[str]:
