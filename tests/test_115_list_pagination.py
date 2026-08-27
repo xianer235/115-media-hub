@@ -10,7 +10,7 @@ from app.providers import pan115
 from app.services import scraper as scraper_service
 
 
-def _raw_entry(name, fid="", cid="0"):
+def _raw_entry(name, fid="", cid="0", pid=""):
     item = {"n": name, "s": 123}
     if fid:
         item["fid"] = str(fid)
@@ -18,6 +18,8 @@ def _raw_entry(name, fid="", cid="0"):
         item["pc"] = f"pc-{name}"
     else:
         item["cid"] = str(cid or "0")
+    if pid:
+        item["pid"] = str(pid)
     return item
 
 
@@ -216,8 +218,8 @@ class Pan115ListPaginationTest(unittest.TestCase):
             return {
                 "state": True,
                 "data": [
-                    _raw_entry("命中.txt", fid="f1"),
-                    _raw_entry("命中目录", cid="c1"),
+                    _raw_entry("命中.txt", fid="f1", pid="p1"),
+                    _raw_entry("命中目录", cid="c1", pid="p2"),
                 ],
                 "count": 2,
             }
@@ -228,6 +230,7 @@ class Pan115ListPaginationTest(unittest.TestCase):
         self.assertIn("/files/search", captured["url"])
         self.assertIn("search_value=", captured["url"])
         self.assertEqual([item["name"] for item in payload["entries"]], ["命中.txt", "命中目录"])
+        self.assertEqual([item["parent_id"] for item in payload["entries"]], ["p1", "p2"])
         self.assertTrue(payload["search"])
         self.assertFalse(payload["has_more"])
         self.assertEqual(webapi_mock.call_count, 1)
@@ -246,6 +249,49 @@ class Pan115ListPaginationTest(unittest.TestCase):
 
         self.assertEqual(len(payload["entries"]), 1)
         self.assertEqual(len(calls), 2)
+
+    def test_resolve_115_folder_path_builds_ancestors_from_medialist(self):
+        captured = {}
+
+        def fake_webapi(url, **_kwargs):
+            captured["url"] = url
+            return {
+                "state": True,
+                "path": [
+                    {"cid": "p1", "name": "115自存电视剧", "pid": "0"},
+                    {"cid": "c1", "name": "狂飙 (2023) [tmdbid-210757]", "pid": "p1"},
+                ],
+                "data": [],
+            }
+
+        with mock.patch.object(pan115, "_request_115_webapi_json", side_effect=fake_webapi) as webapi_mock:
+            payload = pan115.resolve_115_folder_path("cookie", "c1")
+
+        self.assertIn("/files/medialist", captured["url"])
+        self.assertIn("cid=c1", captured["url"])
+        self.assertEqual(
+            payload["ancestors"],
+            [
+                {"id": "p1", "name": "115自存电视剧", "parent_id": "0"},
+                {"id": "c1", "name": "狂飙 (2023) [tmdbid-210757]", "parent_id": "p1"},
+            ],
+        )
+        self.assertEqual(payload["path"], "115自存电视剧/狂飙 (2023) [tmdbid-210757]")
+        self.assertEqual(webapi_mock.call_count, 1)
+
+    def test_resolve_115_folder_path_root_returns_empty_without_request(self):
+        with mock.patch.object(pan115, "_request_115_webapi_json") as webapi_mock:
+            payload = pan115.resolve_115_folder_path("cookie", "0")
+
+        self.assertEqual(payload["cid"], "0")
+        self.assertEqual(payload["path"], "")
+        self.assertEqual(payload["ancestors"], [])
+        webapi_mock.assert_not_called()
+
+    def test_resolve_115_folder_path_raises_when_medialist_fails(self):
+        with mock.patch.object(pan115, "_request_115_webapi_json", return_value={"state": False, "error": "boom"}):
+            with self.assertRaisesRegex(RuntimeError, "boom"):
+                pan115.resolve_115_folder_path("cookie", "c1")
 
     def test_rename_115_entries_posts_multiple_names_in_one_request(self):
         with mock.patch.object(
@@ -324,6 +370,64 @@ class ScraperEntriesSearchTest(unittest.TestCase):
         list_mock.assert_called_once()
         self.assertEqual(payload["search_source"], "local")
         self.assertEqual([item["name"] for item in payload["entries"]], ["命中.txt"])
+
+    def test_list_scraper_entries_official_search_marks_unknown_path(self):
+        search_payload = {
+            "entries": [
+                {"id": "c1", "name": "命中目录", "is_dir": True, "cid": "c1", "fid": ""},
+                {
+                    "id": "c2",
+                    "name": "带路径目录",
+                    "is_dir": True,
+                    "cid": "c2",
+                    "fid": "",
+                    "parent_id": "p_real",
+                    "path": "真实/上级/带路径目录",
+                },
+            ],
+            "summary": {"folder_count": 2, "file_count": 0},
+            "count": 2,
+            "offset": 0,
+            "next_offset": 2,
+            "has_more": False,
+            "entries_complete": True,
+        }
+        with mock.patch.object(scraper_service, "search_115_entries", return_value=search_payload):
+            payload = scraper_service.list_scraper_entries("115", "current_dir", False, "命中", 0, 300)
+
+        entries = {item["id"]: item for item in payload["entries"]}
+        self.assertTrue(entries["c1"]["search_result"])
+        self.assertTrue(entries["c1"]["path_unknown"])
+        self.assertEqual(entries["c1"]["parent_id"], "")
+        self.assertEqual(entries["c1"]["path"], "命中目录")
+        self.assertTrue(entries["c2"]["search_result"])
+        self.assertFalse(entries["c2"]["path_unknown"])
+        self.assertEqual(entries["c2"]["parent_id"], "p_real")
+        self.assertEqual(entries["c2"]["path"], "真实/上级/带路径目录")
+
+    def test_resolve_scraper_folder_path_115_uses_provider_resolver(self):
+        resolved = {
+            "cid": "c1",
+            "path": "115自存电视剧/狂飙 (2023) [tmdbid-210757]",
+            "ancestors": [
+                {"id": "p1", "name": "115自存电视剧", "parent_id": "0"},
+                {"id": "c1", "name": "狂飙 (2023) [tmdbid-210757]", "parent_id": "p1"},
+            ],
+        }
+        with mock.patch.object(scraper_service, "resolve_115_folder_path", return_value=resolved) as resolver_mock:
+            payload = scraper_service.resolve_scraper_folder_path("115", "c1")
+
+        resolver_mock.assert_called_once_with("cookie", "c1")
+        self.assertEqual(payload["path"], resolved["path"])
+        self.assertEqual(payload["ancestors"], resolved["ancestors"])
+
+    def test_resolve_scraper_folder_path_non_115_returns_empty(self):
+        payload = scraper_service.resolve_scraper_folder_path("quark", "c1")
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["provider"], "quark")
+        self.assertEqual(payload["path"], "")
+        self.assertEqual(payload["ancestors"], [])
 
 
 if __name__ == "__main__":

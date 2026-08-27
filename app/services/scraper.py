@@ -13,6 +13,7 @@ from ..providers.pan115 import (
     rename_115_entries,
     resolve_115_entry_by_name,
     resolve_115_folder_id_by_path,
+    resolve_115_folder_path,
     search_115_entries,
 )
 from ..providers.registry import get_or_none as get_provider_or_none, list_enabled as list_enabled_providers
@@ -788,11 +789,24 @@ def list_scraper_entries(
             offset=max(0, int(offset or 0)),
             limit=max(20, min(int(limit or 300), 1000)),
         )
-    entries = [
-        compact
-        for compact in (_compact_scraper_entry(item, target_id) for item in (payload.get("entries", []) if isinstance(payload, dict) else []))
-        if compact
-    ]
+    raw_entries = payload.get("entries", []) if isinstance(payload, dict) else []
+    entries = []
+    for raw_item in raw_entries:
+        compact = _compact_scraper_entry(raw_item, "" if search_source == "official" else target_id)
+        if compact:
+            entries.append(compact)
+    if search_source == "official":
+        # 官方搜索命中网盘任意位置，不能把结果当成当前目录的子项补全路径。
+        for raw_item, entry in zip(raw_entries, entries):
+            entry["search_result"] = True
+            raw_path = str((raw_item if isinstance(raw_item, dict) else {}).get("path", "") or "").strip()
+            entry["path_unknown"] = not raw_path
+            real_parent = str(entry.get("parent_id", "") or "").strip()
+            if not real_parent or real_parent == "0":
+                entry["parent_id"] = ""
+                entry["parent_path"] = ""
+            if not raw_path:
+                entry["path"] = str(entry.get("name", "") or "")
     if keyword and search_source == "local":
         lower_keyword = keyword.lower()
         entries = [item for item in entries if lower_keyword in str(item.get("name", "")).lower()]
@@ -845,6 +859,27 @@ def resolve_scraper_path_entry(provider: str, path: str) -> Dict[str, Any]:
         raise RuntimeError(f"未找到文件/目录: {normalized_path}")
     entry["path"] = normalized_path
     return entry
+
+
+def resolve_scraper_folder_path(provider: str, cid: str) -> Dict[str, Any]:
+    """按目录 id 返回网盘真实相对路径（目前仅 115 提供祖先链查询）。
+
+    用于 115 官方搜索结果命中网盘任意位置时，进入该目录后恢复真实路径栏；
+    其它网盘没有该能力时返回空路径，前端保持“根目录 / 该文件夹”的兜底显示。
+    """
+    normalized = normalize_scraper_provider(provider)
+    target_id = str(cid or "0").strip() or "0"
+    if normalized != "115":
+        return {"ok": True, "provider": normalized, "cid": target_id, "path": "", "ancestors": []}
+    cookie = _require_provider_cookie(normalized)
+    resolved = resolve_115_folder_path(cookie, target_id)
+    return {
+        "ok": True,
+        "provider": normalized,
+        "cid": str(resolved.get("cid", "") or target_id).strip() or target_id,
+        "path": str(resolved.get("path", "") or "").strip(),
+        "ancestors": resolved.get("ancestors") or [],
+    }
 
 
 def resolve_scraper_dest_folder_id(provider: str, dest: str) -> str:

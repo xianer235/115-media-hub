@@ -222,7 +222,9 @@ function syncScraperLocationHash() {
         params.set('tab', 'scraper');
         params.set('provider', String(state.provider || '115'));
         const path = currentParentPath();
-        if (path) params.set('path', path);
+        const hasSearchJump = state.trail.some(item => item.searchJump);
+        if (hasSearchJump) params.delete('path');
+        else if (path) params.set('path', path);
         else params.delete('path');
         const url = `${window.location.pathname}${window.location.search}#${params.toString()}`;
         history.replaceState(null, '', url);
@@ -339,16 +341,20 @@ function enrichEntry(entry) {
     const item = entry && typeof entry === 'object' ? entry : {};
     const id = String(item.id || item.cid || item.fid || '').trim();
     const name = String(item.name || '').trim();
-    const parentPath = currentParentPath();
+    const isSearchResult = !!item.search_result;
+    const parentPath = isSearchResult ? '' : currentParentPath();
     const itemPath = normalizePath(item.path || '');
     const combinedPath = normalizePath(joinPath(parentPath, name));
-    const path = itemPath && (itemPath.includes('/') || !parentPath) ? itemPath : combinedPath;
+    const path = isSearchResult
+        ? (itemPath || name)
+        : (itemPath && (itemPath.includes('/') || !parentPath) ? itemPath : combinedPath);
+    const rawParentId = String(item.parent_id || '').trim();
     return {
         ...item,
         id,
         name,
-        parent_id: normalizeCid(item.parent_id || state.cid),
-        parent_path: parentPath,
+        parent_id: isSearchResult ? rawParentId : normalizeCid(rawParentId || state.cid),
+        parent_path: isSearchResult ? normalizePath(item.parent_path || '') : parentPath,
         path,
         is_dir: !!item.is_dir,
         size: Number(item.size || 0) || 0,
@@ -368,7 +374,18 @@ function getSelectionPath(entry = {}) {
 
 function getSelectionParentPath(entry = {}) {
     const item = entry && typeof entry === 'object' ? entry : {};
-    return normalizePath(item.parent_path || currentParentPath());
+    const parentPath = normalizePath(item.parent_path || '');
+    if (item.search_result && !parentPath) return '';
+    return normalizePath(parentPath || currentParentPath());
+}
+
+function getUnknownSearchResultEntries(entries = []) {
+    return (Array.isArray(entries) ? entries : [])
+        .filter(item => item && item.search_result && item.path_unknown !== false);
+}
+
+function hasUnknownSearchResultEntries(entries = []) {
+    return getUnknownSearchResultEntries(entries).length > 0;
 }
 
 function buildMonitorScanScopes(entries) {
@@ -1869,7 +1886,16 @@ async function enterFolder(entryId) {
     state.navigationBusy = true;
     try {
         state.cid = nextCid;
-        state.trail = state.trail.concat([{ id: state.cid, name: entry.name }]);
+        if (entry.search_result) {
+            // 搜索结果来自网盘任意位置：先向服务端补查真实祖先链，恢复完整路径栏；
+            // 查询失败时退回“根目录 / 该文件夹”，避免把结果误挂到当前目录下。
+            const resolved = await resolveSearchFolderPath(entry, nextCid);
+            state.trail = resolved.resolved
+                ? [{ id: '0', name: '根目录' }, ...resolved.ancestors]
+                : [{ id: '0', name: '根目录' }, { id: state.cid, name: entry.name, searchJump: true }];
+        } else {
+            state.trail = state.trail.concat([{ id: state.cid, name: entry.name }]);
+        }
         state.search = '';
         $('scraper-search-input').value = '';
         clearPlan();
@@ -1881,6 +1907,34 @@ async function enterFolder(entryId) {
         renderEntries();
     }
     syncScraperLocationHash();
+}
+
+async function resolveSearchFolderPath(entry, cid) {
+    try {
+        const data = await window.MediaHubApi.getJson(
+            `/scraper/${encodeURIComponent(state.provider)}/folder-path?cid=${encodeURIComponent(cid)}`
+        );
+        const ancestors = (Array.isArray(data.ancestors) ? data.ancestors : [])
+            .map(item => item && typeof item === 'object' ? {
+                id: String(item.id || item.cid || '').trim(),
+                name: String(item.name || '').trim(),
+            } : null)
+            .filter(item => item && item.id && item.name && item.id !== '0');
+        const normalizedCid = String(cid || '').trim();
+        const lastAncestor = ancestors[ancestors.length - 1] || null;
+        if (lastAncestor && lastAncestor.id === normalizedCid) {
+            return { ancestors, resolved: true };
+        }
+        // 接口偶尔只返回上级链时，把当前目录补在末尾，保证路径栏完整可点击。
+        const folderName = String(entry?.name || '').trim();
+        if (!folderName) return { ancestors: [], resolved: false };
+        return {
+            ancestors: ancestors.concat([{ id: normalizedCid, name: folderName }]),
+            resolved: true,
+        };
+    } catch (error) {
+        return { ancestors: [], resolved: false };
+    }
 }
 
 async function goTrail(index) {
@@ -1932,6 +1986,10 @@ async function renameSelected() {
     const selected = getEffectiveSelectedEntries();
     if (selected.length !== 1) {
         showToast('请选择一个文件或文件夹进行重命名', { tone: 'warn', duration: 2400, placement: 'top-center' });
+        return;
+    }
+    if (hasUnknownSearchResultEntries(selected)) {
+        showToast('搜索结果真实路径未知，请先进入该文件夹后再重命名', { tone: 'warn', duration: 3000, placement: 'top-center' });
         return;
     }
     const target = selected[0];
@@ -1986,6 +2044,10 @@ function prepareMove() {
         showToast('请先选择要移动的条目', { tone: 'warn', duration: 2200, placement: 'top-center' });
         return;
     }
+    if (hasUnknownSearchResultEntries(selected)) {
+        showToast('搜索结果真实路径未知，请先进入该文件夹后再移动', { tone: 'warn', duration: 3000, placement: 'top-center' });
+        return;
+    }
     state.copyBuffer = null;
     state.moveBuffer = {
         provider: state.provider,
@@ -2002,6 +2064,10 @@ function prepareCopy() {
     const selected = getEffectiveSelectedEntries();
     if (!selected.length) {
         showToast('请先选择要复制的条目', { tone: 'warn', duration: 2200, placement: 'top-center' });
+        return;
+    }
+    if (hasUnknownSearchResultEntries(selected)) {
+        showToast('搜索结果真实路径未知，请先进入该文件夹后再复制', { tone: 'warn', duration: 3000, placement: 'top-center' });
         return;
     }
     state.moveBuffer = null;
@@ -2086,6 +2152,10 @@ async function deleteSelected() {
     const selected = getEffectiveSelectedEntries();
     if (!selected.length) {
         showToast('请先选择要删除的条目', { tone: 'warn', duration: 2200, placement: 'top-center' });
+        return;
+    }
+    if (hasUnknownSearchResultEntries(selected)) {
+        showToast('搜索结果真实路径未知，请先进入该文件夹后再删除', { tone: 'warn', duration: 3000, placement: 'top-center' });
         return;
     }
     const ok = await showConfirm(`确定删除 ${selected.length} 个条目吗？删除不纳入刮削任务回退。`, {
@@ -2958,6 +3028,9 @@ async function buildBatchPlan() {
 function buildPlanRequestPayload() {
     const entries = getEffectiveSelectedEntries();
     if (!entries.length) throw new Error('请先选择要刮削的文件或文件夹');
+    if (hasUnknownSearchResultEntries(entries)) {
+        throw new Error('搜索结果来自网盘其他位置，真实路径未知，请先进入该文件夹后再批量整理');
+    }
     if (!state.tmdb || Number(state.tmdb.tmdb_id || state.tmdb.id || 0) <= 0) {
         throw new Error('请先绑定 TMDB 条目');
     }

@@ -364,6 +364,60 @@ def get_115_file_info(cookie: str, file_id: str) -> Dict[str, Any]:
     raise RuntimeError(f"115 文件不存在或已删除：{normalized_id}")
 
 
+def resolve_115_folder_path(cookie: str, cid: str) -> Dict[str, Any]:
+    """按 cid 直查 115 目录的真实祖先链（一次 medialist 请求）。
+
+    返回 ``{"cid", "path", "ancestors"}``：``ancestors`` 是从根下第一级到目标
+    目录本身的 ``{id, name, parent_id}`` 列表，``path`` 为对应的相对路径字符串。
+    搜索结果命中网盘任意位置时，用该结果恢复真实路径栏，避免把结果误挂到当前目录下。
+    """
+    cookie = str(cookie or "").strip()
+    normalized_cid = str(cid or "0").strip() or "0"
+    if not cookie:
+        raise RuntimeError("115 Cookie 未配置")
+    if normalized_cid == "0":
+        return {"cid": normalized_cid, "path": "", "ancestors": []}
+    try:
+        throttle_115_api_requests()
+        params = {
+            "aid": 1,
+            "cid": normalized_cid,
+            "limit": 1,
+            "type": 6,
+            "nf": 1,
+            "format": "json",
+        }
+        url = "https://webapi.115.com/files/medialist?" + urllib.parse.urlencode(params)
+        result = _request_115_webapi_json(url, headers=_build_115_webapi_headers(cookie))
+        if not bool((result or {}).get("state", False)):
+            detail = (
+                str((result or {}).get("error", "")).strip()
+                or str((result or {}).get("msg", "")).strip()
+                or str((result or {}).get("message", "")).strip()
+                or "115 目录路径查询失败"
+            )
+            raise RuntimeError(detail)
+        raw_path = (result or {}).get("path") or []
+        ancestors = []
+        for raw_item in raw_path if isinstance(raw_path, list) else []:
+            if not isinstance(raw_item, dict):
+                continue
+            item_id = str(raw_item.get("cid") or raw_item.get("id") or "").strip()
+            name = str(raw_item.get("name") or "").strip()
+            parent_id = str(raw_item.get("pid") or raw_item.get("parent_id") or "").strip()
+            if item_id and name:
+                ancestors.append({"id": item_id, "name": name, "parent_id": parent_id})
+        mark_cookie_health_success("115", trigger="runtime:resolve_115_folder_path")
+        return {
+            "cid": normalized_cid,
+            "path": join_relative_path(*[item["name"] for item in ancestors]),
+            "ancestors": ancestors,
+        }
+    except Exception as exc:
+        mark_cookie_health_failure("115", exc, trigger="runtime:resolve_115_folder_path")
+        raise
+
+
 def throttle_115_api_requests(rate_limit_seconds: float = 0.0) -> None:
     global _api_115_last_request_monotonic
     min_interval = float(rate_limit_seconds or 0.0)
@@ -452,7 +506,7 @@ def _normalize_115_file_entry(item: Dict[str, Any]) -> Dict[str, Any]:
     entry_id = folder_id if is_dir else (file_id or str(source.get("pick_code") or source.get("pc") or sha1).strip())
     if not name or not entry_id:
         return {}
-    return {
+    payload = {
         "id": entry_id,
         "cid": folder_id if is_dir else "",
         "name": name,
@@ -462,6 +516,13 @@ def _normalize_115_file_entry(item: Dict[str, Any]) -> Dict[str, Any]:
         "sha1": sha1,
         "modified_at": str(source.get("te") or source.get("t") or source.get("tp") or source.get("tu") or "").strip(),
     }
+    parent_id = str(source.get("pid") or source.get("parent_id") or "").strip()
+    if parent_id:
+        payload["parent_id"] = parent_id
+    path = str(source.get("path") or "").strip()
+    if path:
+        payload["path"] = path
+    return payload
 
 
 def _is_retryable_115_list_error(exc: Exception) -> bool:

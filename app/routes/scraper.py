@@ -27,6 +27,7 @@ from ..services.scraper import (
     submit_scraper_job,
     submit_scraper_rollback,
     resolve_scraper_dest_folder_id,
+    resolve_scraper_folder_path,
     resolve_scraper_path_entry,
 )
 
@@ -54,6 +55,15 @@ async def get_scraper_entries_endpoint(provider: str, request: Request) -> Dict[
     limit = max(20, min(parse_int(request.query_params.get("limit", 0), default=0), 1000))
     try:
         return await asyncio.to_thread(list_scraper_entries, provider, cid, force_refresh, keyword, offset, limit)
+    except Exception as exc:
+        return _error_response(exc)
+
+
+@router.get("/scraper/{provider}/folder-path")
+async def get_scraper_folder_path_endpoint(provider: str, request: Request) -> Dict[str, Any]:
+    cid = str(request.query_params.get("cid", "0") or "0").strip() or "0"
+    try:
+        return await asyncio.to_thread(resolve_scraper_folder_path, provider, cid)
     except Exception as exc:
         return _error_response(exc)
 

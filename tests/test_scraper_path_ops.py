@@ -17,6 +17,7 @@ from app.providers import pan115  # noqa: E402
 class _FakeRequest:
     def __init__(self, data):
         self._data = data
+        self.query_params = dict((data or {}).get("_query", {}) or {})
 
     async def json(self):
         return self._data
@@ -123,6 +124,29 @@ class Pan115EntryResolveTest(unittest.TestCase):
 
 
 class ScraperPathOpsRouteTest(unittest.TestCase):
+    def test_folder_path_endpoint_returns_real_path(self):
+        resolved = {
+            "ok": True,
+            "provider": "115",
+            "cid": "c1",
+            "path": "115自存电视剧/狂飙 (2023) [tmdbid-210757]",
+            "ancestors": [
+                {"id": "p1", "name": "115自存电视剧", "parent_id": "0"},
+                {"id": "c1", "name": "狂飙 (2023) [tmdbid-210757]", "parent_id": "p1"},
+            ],
+        }
+        with patch.object(scraper_routes, "resolve_scraper_folder_path", return_value=resolved) as resolver:
+            result = asyncio.run(
+                scraper_routes.get_scraper_folder_path_endpoint(
+                    "115", _FakeRequest({"_query": {"cid": "c1"}})
+                )
+            )
+
+        self.assertTrue(result["ok"])
+        resolver.assert_called_once_with("115", "c1")
+        self.assertEqual(result["path"], resolved["path"])
+        self.assertEqual(result["ancestors"], resolved["ancestors"])
+
     def test_rename_path_resolves_and_preserves_request_id(self):
         resolved = {"id": "fid1", "parent_id": "cid0", "name": "x.mkv", "is_dir": False, "path": "/电影/x.mkv"}
         with patch.object(scraper_routes, "resolve_scraper_path_entry", return_value=resolved), patch.object(

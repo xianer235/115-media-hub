@@ -2001,6 +2001,46 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         self.assertIn("随文件夹重命名", preview_source)
         self.assertIn("文件未单独移动，保持原名", preview_source)
 
+    def test_search_result_path_is_not_faked_in_frontend(self):
+        source = SCRAPER_CORE_PATH.read_text(encoding="utf-8")
+        enrich_source = source[source.index("function enrichEntry("):source.index("function getSelectedEntries(")]
+        self.assertIn("const isSearchResult = !!item.search_result;", enrich_source)
+        self.assertIn("parent_path: isSearchResult ? normalizePath(item.parent_path || '') : parentPath", enrich_source)
+
+        enter_source = source[source.index("async function enterFolder("):source.index("async function goTrail(")]
+        self.assertIn("await resolveSearchFolderPath(entry, nextCid)", enter_source)
+        self.assertIn("resolved.ancestors", enter_source)
+        self.assertIn("searchJump: true", enter_source)
+
+        sync_source = source[source.index("function syncScraperLocationHash("):source.index("function closeToolPopovers(")]
+        self.assertIn("hasSearchJump", sync_source)
+        self.assertIn("params.delete('path')", sync_source)
+
+    def test_enter_search_result_folder_resolves_real_path(self):
+        source = SCRAPER_CORE_PATH.read_text(encoding="utf-8")
+        start = source.index("async function resolveSearchFolderPath(")
+        end = source.index("\nasync function goTrail(", start)
+        resolver_source = source[start:end]
+
+        self.assertIn("/folder-path?cid=", resolver_source)
+        self.assertIn("resolved: true", resolver_source)
+        self.assertIn("resolved: false", resolver_source)
+        self.assertIn("ancestors.concat", resolver_source)
+
+    def test_mutation_actions_block_unknown_search_result_path(self):
+        source = SCRAPER_CORE_PATH.read_text(encoding="utf-8")
+        self.assertIn("function hasUnknownSearchResultEntries(", source)
+        rename_source = source[source.index("async function renameSelected("):source.index("function prepareMove(")]
+        self.assertIn("请先进入该文件夹后再重命名", rename_source)
+        move_source = source[source.index("function prepareMove("):source.index("function prepareCopy(")]
+        self.assertIn("请先进入该文件夹后再移动", move_source)
+        copy_source = source[source.index("function prepareCopy("):source.index("async function moveHere(")]
+        self.assertIn("请先进入该文件夹后再复制", copy_source)
+        delete_source = source[source.index("async function deleteSelected("):source.index("function handleClick(")]
+        self.assertIn("请先进入该文件夹后再删除", delete_source)
+        plan_source = source[source.index("function buildPlanRequestPayload("):source.index("function applyPlanResponse(")]
+        self.assertIn("请先进入该文件夹后再批量整理", plan_source)
+
     def test_scan_merges_loose_tv_episode_files_into_one_item(self):
         entries = []
         for index in range(1, 21):
