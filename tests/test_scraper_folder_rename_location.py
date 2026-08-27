@@ -138,6 +138,113 @@ class ScraperFolderRenameLocationTest(unittest.TestCase):
         file_action = file_actions[0]
         self.assertEqual(file_action["target_parent_path"], "一级/新片名 (2024)")
         self.assertEqual(file_action["new_path"], "一级/新片名 (2024)/新片名 (2024).mkv")
+        self.assertEqual([row for row in plan["unchanged_rows"] if not row.get("is_dir")], [])
+
+    def test_folder_rename_only_keeps_standard_file_as_passive_row(self):
+        """文件已是标准名、唯一变化是外层文件夹改名时，不再生成文件动作。"""
+        folder_entry = {
+            "id": "cid_B",
+            "name": "B",
+            "is_dir": True,
+            "parent_id": "cid_A",
+            "parent_path": "一级",
+            "path": "一级/B",
+            "size": 0,
+        }
+        file_entry = {
+            "id": "f1",
+            "name": "新片名 (2024).mkv",
+            "is_dir": False,
+            "parent_id": "cid_B",
+            "parent_path": "一级/B",
+            "path": "一级/B/新片名 (2024).mkv",
+            "size": 1024,
+        }
+        payload = self._build_payload(folder_entry, base_cid="0", base_path="")
+        with contextlib.ExitStack() as stack:
+            for patcher in self._patch_plan_io():
+                stack.enter_context(patcher)
+            with mock.patch.object(
+                scraper_service,
+                "_expand_selected_scraper_entries",
+                return_value=([file_entry], []),
+            ):
+                plan = scraper_service.build_scraper_rename_plan(payload)
+
+        self.assertEqual(len([action for action in plan["actions"] if action.get("is_dir")]), 1)
+        self.assertEqual([action for action in plan["actions"] if not action.get("is_dir")], [])
+        passive = [row for row in plan["unchanged_rows"] if not row.get("is_dir")]
+        self.assertEqual(len(passive), 1)
+        self.assertEqual(passive[0]["new_path"], "一级/新片名 (2024)/新片名 (2024).mkv")
+        self.assertIn("随文件夹重命名", passive[0]["note"])
+        self.assertEqual(plan["unchanged_count"], 1)
+
+    def test_folder_rename_keeps_season_subfolder_file_passive(self):
+        """剧集文件已在 Season 子目录且文件名标准，文件夹改名后仍只需一次改名。"""
+        folder_entry = {
+            "id": "cid_B",
+            "name": "剧集B",
+            "is_dir": True,
+            "parent_id": "cid_A",
+            "parent_path": "一级",
+            "path": "一级/剧集B",
+            "size": 0,
+        }
+        file_entry = {
+            "id": "f1",
+            "name": "新片名 (2026) - S01E01.mkv",
+            "is_dir": False,
+            "parent_id": "cid_B",
+            "parent_path": "一级/剧集B/Season 01",
+            "path": "一级/剧集B/Season 01/新片名 (2026) - S01E01.mkv",
+            "size": 1024,
+        }
+        payload = {
+            "provider": "115",
+            "base_cid": "0",
+            "base_path": "",
+            "entries": [folder_entry],
+            "tmdb": {
+                "tmdb_id": 2,
+                "id": 2,
+                "title": "新片名",
+                "original_title": "New Title",
+                "year": 2026,
+                "tmdb_media_type": "tv",
+                "media_type": "tv",
+                "tmdb_total_episodes": 10,
+                "tmdb_total_seasons": 1,
+                "tmdb_season_episode_map": {"1": 10},
+                "tmdb_episode_mode": "seasonal",
+            },
+            "options": {
+                "file_name_mode": "standard",
+                "rename_selected_folders": True,
+                "organize_into_media_folder": True,
+                "organize_inside_source_folder": False,
+                "include_tmdb_id": False,
+                "use_season_subfolder": True,
+                "preserve_file_info": False,
+                "season": 1,
+                "episode_mode": "auto",
+            },
+        }
+        with contextlib.ExitStack() as stack:
+            for patcher in self._patch_plan_io():
+                stack.enter_context(patcher)
+            with mock.patch.object(
+                scraper_service,
+                "_expand_selected_scraper_entries",
+                return_value=([file_entry], []),
+            ):
+                plan = scraper_service.build_scraper_rename_plan(payload)
+
+        self.assertEqual(len([action for action in plan["actions"] if action.get("is_dir")]), 1)
+        self.assertEqual([action for action in plan["actions"] if not action.get("is_dir")], [])
+        passive = [row for row in plan["unchanged_rows"] if not row.get("is_dir")]
+        self.assertEqual(len(passive), 1)
+        self.assertEqual(passive[0]["new_path"], "一级/新片名 (2026)/Season 01/新片名 (2026) - S01E01.mkv")
+        self.assertIn("随文件夹重命名", passive[0]["note"])
 
 
 class ScraperFolderRenameExecutionTest(unittest.TestCase):

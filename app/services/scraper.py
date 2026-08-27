@@ -1204,7 +1204,7 @@ _SCRAPER_CN_AD_SITE_ACTION_RE = re.compile(
 SCRAPER_COMMON_NOISE_PHRASES = (
     "无字片源", "无字幕版", "无字幕", "无水印", "无广告", "无删减", "未删减", "未删节",
     "完整版", "加长版", "剧场版", "导演剪辑版", "重制版", "修复版", "高清修复版", "4k修复版",
-    "国配版", "国语版", "国语配音", "粤语版", "双音轨", "多音轨", "中英双语", "国粤双语",
+    "国配版", "国语版", "国语配音", "国语音轨", "粤语版", "双音轨", "多音轨", "中英双语", "国粤双语",
     "特效中字", "内嵌中字", "外挂字幕", "简体中字", "繁体中字",
     "中文字幕", "中文配音", "中文音轨", "中文版",
     "提取码", "磁力链接", "种子下载", "网盘下载", "百度网盘", "夸克网盘", "阿里云盘", "天翼云盘", "城通网盘",
@@ -1228,6 +1228,53 @@ _SCRAPER_STANDALONE_NOISE_RE = re.compile(
     + "|".join(re.escape(word) for word in SCRAPER_STANDALONE_NOISE_WORDS)
     + ")(?![\u4e00-\u9fff])"
 )
+
+_NOISE_RULES_CACHE: Dict[Tuple[Tuple[str, ...], Tuple[str, ...]], Tuple[re.Pattern, re.Pattern, frozenset]] = {}
+
+
+def _normalize_scraper_noise_items(value: Any) -> Tuple[str, ...]:
+    if isinstance(value, str):
+        raw_items = re.split(r"[\r\n,]+", value)
+    elif isinstance(value, (list, tuple)):
+        raw_items = value
+    else:
+        raw_items = []
+    normalized: List[str] = []
+    seen: Set[str] = set()
+    for raw in raw_items:
+        item = str(raw or "").strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        normalized.append(item)
+    return tuple(normalized)
+
+
+def _get_scraper_noise_rules() -> Tuple[re.Pattern, re.Pattern, frozenset]:
+    """返回（复合词正则、独立词正则、独立词 key 集合），内置词表 + 设置里的自定义词。"""
+    try:
+        cfg = get_config()
+    except Exception:
+        # 配置存储不可用时（如单测环境、启动早期）回退到内置词表，行为与旧版一致。
+        cfg = {}
+    custom_phrases = _normalize_scraper_noise_items(cfg.get("scraper_noise_phrases") or [])
+    custom_words = _normalize_scraper_noise_items(cfg.get("scraper_standalone_noise_words") or [])
+    cache_key = (custom_phrases, custom_words)
+    cached = _NOISE_RULES_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    phrases = tuple(SCRAPER_COMMON_NOISE_PHRASES) + custom_phrases
+    words = tuple(SCRAPER_STANDALONE_NOISE_WORDS) + custom_words
+    common_re = re.compile("|".join(re.escape(phrase) for phrase in phrases), re.IGNORECASE)
+    standalone_re = re.compile(
+        "(?<![\u4e00-\u9fff])(?:"
+        + "|".join(re.escape(word) for word in words)
+        + ")(?![\u4e00-\u9fff])"
+    )
+    standalone_keys = frozenset(_normalize_scraper_keyword_compact(word) for word in words)
+    rules = (common_re, standalone_re, standalone_keys)
+    _NOISE_RULES_CACHE[cache_key] = rules
+    return rules
 
 
 def _scraper_cn_ad_site_matches(value: str) -> List[str]:
@@ -1536,9 +1583,10 @@ def _is_scraper_generic_keyword(value: str) -> bool:
         return True
     if key in SCRAPER_GENERIC_CATEGORY_KEYS:
         return True
-    if not _normalize_scraper_keyword_compact(_SCRAPER_COMMON_NOISE_RE.sub(" ", str(value or ""))):
+    common_re, _, standalone_keys = _get_scraper_noise_rules()
+    if not _normalize_scraper_keyword_compact(common_re.sub(" ", str(value or ""))):
         return True
-    if key in _SCRAPER_STANDALONE_NOISE_KEYS:
+    if key in standalone_keys:
         return True
     for fragment in _scraper_cn_ad_site_matches(value):
         if _normalize_scraper_keyword_compact(fragment) == key:
@@ -1577,8 +1625,9 @@ def _clean_search_title(value: str) -> str:
         text,
     )
     text = re.sub(r"(?:简繁英|简中|繁中|中英|国英|国粤|中法|双语|内嵌|外挂|特效|简繁|繁简)?(?:字幕|双字)(?!组|站|网)", " ", text)
-    text = _SCRAPER_COMMON_NOISE_RE.sub(" ", text)
-    text = _SCRAPER_STANDALONE_NOISE_RE.sub(" ", text)
+    common_re, standalone_re, _ = _get_scraper_noise_rules()
+    text = common_re.sub(" ", text)
+    text = standalone_re.sub(" ", text)
     text = re.sub(r"[\[\(（【][^\]\)）】]{0,90}?(?:第.+?季|s\d{1,2}e\d{1,4})[^\]\)）】]{0,90}?[\]\)）】]", " ", text, flags=re.I)
     text = re.sub(r"^[\[\(（【][A-Za-z0-9][A-Za-z0-9._ +&-]{0,40}[\]\)）】]\s*", " ", text)
     text = re.sub(r"[\[\(（【][A-Za-z0-9][A-Za-z0-9._ +&-]{0,60}[\]\)）】]", " ", text)
@@ -2230,6 +2279,31 @@ def _scraper_file_folder_anchor(file_entry: Dict[str, Any], folder_anchors: Dict
                 best_parent = str(parent_path or "")
     return best_parent
 
+
+def _is_scraper_folder_prefix_only_change(
+    old_path: str,
+    new_path: str,
+    folder_rename_paths: List[Tuple[str, str]],
+) -> bool:
+    """文件本身没变化，只是所在文件夹被重命名：新旧路径仅文件夹前缀不同。
+
+    例如 一级/B/新片名 (2024).mkv -> 一级/新片名 (2024)/新片名 (2024).mkv，
+    网盘侧只需一次文件夹改名，文件不应生成独立的移动/改名动作。
+    """
+    normalized_old = normalize_relative_path(str(old_path or ""))
+    normalized_new = normalize_relative_path(str(new_path or ""))
+    if not normalized_old or not normalized_new:
+        return False
+    for raw_old_folder, raw_new_folder in folder_rename_paths:
+        old_prefix = f"{normalize_relative_path(str(raw_old_folder or ''))}/"
+        new_prefix = f"{normalize_relative_path(str(raw_new_folder or ''))}/"
+        if normalized_old.startswith(old_prefix) and normalized_new.startswith(new_prefix):
+            suffix = normalized_old[len(old_prefix):]
+            if suffix and suffix == normalized_new[len(new_prefix):]:
+                return True
+    return False
+
+
 def _get_scraper_entries_page(
     provider: str,
     cookie: str,
@@ -2686,6 +2760,21 @@ def build_scraper_rename_plan(
                 issues.append(f"{old_name or '--'}：{action_issue}")
             actions.append(action)
             action_index += 1
+    folder_rename_paths: List[Tuple[str, str]] = [
+        (
+            normalize_relative_path(str(item.get("old_path", "") or "")),
+            normalize_relative_path(str(item.get("new_path", "") or "")),
+        )
+        for item in actions
+        if bool(item.get("is_dir"))
+        and bool(item.get("ready"))
+        and not item.get("issue")
+    ]
+    folder_rename_paths = [
+        (old_folder, new_folder)
+        for old_folder, new_folder in folder_rename_paths
+        if old_folder and new_folder and old_folder != new_folder
+    ]
     for file_index, entry in enumerate(expanded_files):
         entry_name = str(entry.get("name", "") or "")
         category = _scraper_file_category(entry_name)
@@ -2763,6 +2852,21 @@ def build_scraper_rename_plan(
                     "new_name": entry_name,
                     "new_path": target_path,
                     "is_dir": False,
+                }
+            )
+            continue
+        if _is_scraper_folder_prefix_only_change(old_path, target_path, folder_rename_paths):
+            # 文件本身没变，只是外层文件夹被重命名（目录 ID 不变）：
+            # 网盘侧只需一次文件夹改名，文件不应作为独立可执行动作。
+            unchanged_count += 1
+            unchanged_rows.append(
+                {
+                    "old_name": entry_name,
+                    "old_path": old_path,
+                    "new_name": entry_name,
+                    "new_path": target_path,
+                    "is_dir": False,
+                    "note": "随文件夹重命名，文件未单独移动",
                 }
             )
             continue

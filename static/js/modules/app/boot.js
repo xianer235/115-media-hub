@@ -145,6 +145,7 @@
                     const el = document.getElementById(k);
                     if (el && k !== 'trees' && k !== 'sensitive_configured') {
                         if (el.type === 'checkbox') el.checked = cfg[k];
+                        else if (Array.isArray(cfg[k])) el.value = cfg[k].join('\n');
                         else el.value = cfg[k];
                     }
                 });

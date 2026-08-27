@@ -1359,6 +1359,36 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         self.assertIn("state.planOptionsSnapshot", source)
         self.assertIn("批量整理选项已变更", source)
 
+    def test_batch_plan_preview_forwards_grouped_tv_entries(self):
+        # 散落剧集文件在扫描时合并为一个条目（entries 含全部文件），
+        # 生成批量预览时必须把完整文件列表传给后端，否则只整理第一个文件。
+        source = SCRAPER_CORE_PATH.read_text(encoding="utf-8")
+        build_source = source[source.index("async function buildBatchPlan("):source.index("function buildPlanRequestPayload(")]
+        mapping = build_source[build_source.index("items: selected.map"):build_source.index("state.batchPlanContext = requestPayload")]
+        self.assertIn("entry: item.entry", mapping)
+        self.assertIn("entries: Array.isArray(item.entries) && item.entries.length ? item.entries : undefined", mapping)
+
+    def test_manual_episode_batch_apply_rerenders_preview(self):
+        # 批量预览里应用/清除手动集数后必须重渲染，否则提示成功但界面仍是旧计划。
+        source = SCRAPER_CORE_PATH.read_text(encoding="utf-8")
+        update_source = source[source.index("async function updateManualEpisode("):source.index("async function executePlan(")]
+        batch_branch = update_source[update_source.index("state.plan?.tmdb?.batch"):update_source.index("let payload;")]
+        self.assertLess(batch_branch.index("applyPlanResponse(data);"), batch_branch.index("renderPlan();"))
+        self.assertLess(batch_branch.index("renderPlan();"), batch_branch.index("已应用手动集数"))
+        self.assertLess(batch_branch.index("renderEntries();"), batch_branch.index("已应用手动集数"))
+        self.assertIn("state.batchPlanContext = previousContext;", batch_branch)
+
+    def test_rename_prompt_backdrop_close_uses_pointerdown_not_click(self):
+        # 重命名框小、文本选择容易拖出边界：遮罩关闭必须用 pointerdown，
+        # 不能在 click 里判断遮罩，否则拖选后在遮罩上松开也会误关。
+        source = SCRAPER_CORE_PATH.read_text(encoding="utf-8")
+        prompt_source = source[source.index("async function promptText("):source.index("function renderProviderTabs(")]
+        self.assertIn("modal.addEventListener('pointerdown'", prompt_source)
+        self.assertIn("if (event.target === modal) cleanup(null);", prompt_source)
+        self.assertIn("if (!modal.isConnected) return;", prompt_source)
+        click_source = prompt_source[prompt_source.index("modal.addEventListener('click'"):]
+        self.assertNotIn("event.target === modal", click_source)
+
     def test_common_noise_phrases_stripped_and_real_titles_kept(self):
         self.assertEqual(scraper._extract_scraper_title_candidates("监狱星级餐厅 无字片源"), ["监狱星级餐厅"])
         self.assertEqual(
@@ -1393,6 +1423,15 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
             scraper._extract_scraper_title_candidates("我的中文老师.2024.mp4"),
             ["我的中文老师"],
         )
+
+    def test_guoyu_audio_track_phrase_cleaned(self):
+        self.assertEqual(
+            scraper._extract_scraper_title_candidates("监狱星级餐厅.国语音轨.2024.1080p.mkv"),
+            ["监狱星级餐厅"],
+        )
+        self.assertEqual(scraper._extract_scraper_title_candidates("监狱星级餐厅[国语音轨]"), ["监狱星级餐厅"])
+        self.assertTrue(scraper._is_scraper_generic_keyword("国语音轨"))
+        self.assertEqual(scraper._extract_scraper_title_candidates("国语音轨"), [])
 
     def test_batch_matching_busy_shows_spinner_with_items(self):
         source = SCRAPER_CORE_PATH.read_text(encoding="utf-8")
@@ -1920,6 +1959,7 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
                         "new_name": "a.mkv",
                         "new_path": "影视/a.mkv",
                         "is_dir": False,
+                        "note": "随文件夹重命名，文件未单独移动",
                     }
                 ],
                 "ignored_count": 0,
@@ -1940,6 +1980,7 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         self.assertEqual(plan["actions"], [])
         self.assertEqual(len(plan["unchanged_rows"]), 1)
         self.assertEqual(plan["unchanged_rows"][0]["item_name"], "文件夹A")
+        self.assertEqual(plan["unchanged_rows"][0]["note"], "随文件夹重命名，文件未单独移动")
 
     def test_preview_renders_unchanged_rows_as_skipped(self):
         source = SCRAPER_CORE_PATH.read_text(encoding="utf-8")
@@ -1952,6 +1993,13 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         self.assertIn(".scraper-preview-row.is-unchanged", css)
         self.assertIn("html.theme-day .scraper-preview-row.is-unchanged", css)
         self.assertIn(".scraper-preview-status.is-muted", css)
+
+    def test_preview_renders_folder_rename_passive_row_note(self):
+        source = SCRAPER_CORE_PATH.read_text(encoding="utf-8")
+        preview_source = source[source.index("const planWarnings = Array.isArray(state.plan?.warnings)"):source.index("function renderPlan()")]
+        self.assertIn("const followsFolderRename = !!row.note;", preview_source)
+        self.assertIn("随文件夹重命名", preview_source)
+        self.assertIn("文件未单独移动，保持原名", preview_source)
 
     def test_scan_merges_loose_tv_episode_files_into_one_item(self):
         entries = []

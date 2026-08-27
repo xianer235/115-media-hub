@@ -393,6 +393,23 @@
                         </div>
                     </div>
                 </div>
+
+                <div id="settings-scraper-filter" class="group-card settings-section-card" style="order: 9;">
+                    <h3 class="group-title">9. 批量整理过滤词（可选）</h3>
+                    <div class="space-y-4">
+                        <label class="block">
+                            <span class="text-xs text-slate-500">复合过滤词（每行一个，任意位置出现即删除）</span>
+                            <textarea id="scraper_noise_phrases" rows="4" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="国语音轨&#10;无水印&#10;夸克网盘"></textarea>
+                        </label>
+                        <label class="block">
+                            <span class="text-xs text-slate-500">独立过滤词（每行一个，按词边界删除）</span>
+                            <textarea id="scraper_standalone_noise_words" rows="3" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="国语&#10;中文"></textarea>
+                        </label>
+                        <div class="text-xs text-slate-500 leading-6">
+                            内置默认过滤词表始终生效，这里只追加自定义词；短词请放在“独立过滤词”，避免把真实片名里的字删掉。
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <div id="settings-save-dock" class="group-card settings-save-card">

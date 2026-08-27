@@ -651,8 +651,14 @@ async function promptText({ title = '输入名称', message = '', defaultValue =
             if (event.key === 'Escape') cleanup(null);
             if (event.key === 'Enter' && !event.isComposing) cleanup(String(input.value || '').trim());
         };
+        // 遮罩关闭只认 pointerdown（按下时就在遮罩上）：文本选择从输入框拖出、
+        // 在遮罩上松开时点击事件的公共祖先仍是遮罩，若用 click 判断会误关重命名框。
+        modal.addEventListener('pointerdown', (event) => {
+            if (event.target === modal) cleanup(null);
+        });
         modal.addEventListener('click', (event) => {
-            if (event.target === modal || event.target.closest('[data-prompt-cancel]')) cleanup(null);
+            if (!modal.isConnected) return;
+            if (event.target.closest('[data-prompt-cancel]')) cleanup(null);
             if (event.target.closest('[data-prompt-confirm]')) cleanup(String(input.value || '').trim());
         });
         document.addEventListener('keydown', onKeydown);
@@ -1012,16 +1018,20 @@ function renderEntries() {
         const unchangedRows = Array.isArray(state.plan?.unchanged_rows) ? state.plan.unchanged_rows : [];
         const unchangedHtml = unchangedRows.map((row) => {
             const title = row.item_name ? `${row.item_name} / ${row.old_name || '--'}` : (row.old_name || '--');
+            const followsFolderRename = !!row.note;
+            const rowTitle = followsFolderRename
+                ? (row.new_path || row.old_path || row.old_name || '--')
+                : (row.old_path || row.old_name || '--');
             return `
                 <div class="scraper-preview-row is-unchanged">
                     <div class="scraper-preview-original">
                         <span class="scraper-plan-badge">${row.is_dir ? '文件夹' : '文件'}</span>
-                        <strong title="${escapeHtml(row.old_path || row.old_name || '--')}">${escapeHtml(title)}</strong>
+                        <strong title="${escapeHtml(rowTitle)}">${escapeHtml(title)}</strong>
                     </div>
                     <div class="scraper-preview-target">
                         <div class="scraper-preview-target-head">
-                            <span class="scraper-preview-status is-muted">无变化</span>
-                            <strong>保持原名，已跳过</strong>
+                            <span class="scraper-preview-status is-muted">${followsFolderRename ? '随文件夹重命名' : '无变化'}</span>
+                            <strong>${followsFolderRename ? '文件未单独移动，保持原名' : '保持原名，已跳过'}</strong>
                         </div>
                     </div>
                     <label class="scraper-preview-check">
@@ -2920,6 +2930,7 @@ async function buildBatchPlan() {
             item_index: Number(item.item_index || 0),
             name: item.name,
             entry: item.entry,
+            entries: Array.isArray(item.entries) && item.entries.length ? item.entries : undefined,
             tmdb: getBatchBinding(Number(item.item_index || 0)),
         })),
     };
@@ -3071,6 +3082,7 @@ async function updateManualEpisode(actionIndex, { clear = false } = {}) {
     const entryId = String(action?.entry_id || '').trim();
     if (!action || !entryId) return;
     const previousOverrides = { ...state.planEpisodeOverrides };
+    const previousContext = state.batchPlanContext;
     if (clear) {
         delete state.planEpisodeOverrides[entryId];
     } else {
@@ -3105,9 +3117,12 @@ async function updateManualEpisode(actionIndex, { clear = false } = {}) {
         try {
             const data = await window.MediaHubApi.postJson('/scraper/batch/plan', state.batchPlanContext);
             applyPlanResponse(data);
+            renderPlan();
+            renderEntries();
             showToast(clear ? '已恢复自动识别' : '已应用手动集数', { tone: 'success', duration: 2200, placement: 'top-center' });
         } catch (error) {
             state.planEpisodeOverrides = previousOverrides;
+            state.batchPlanContext = previousContext;
             showToast(`更新预览失败：${error.message || '未知错误'}`, { tone: 'error', duration: 3600, placement: 'top-center' });
         }
         return;

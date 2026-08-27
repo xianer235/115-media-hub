@@ -76,6 +76,20 @@ function formatFavoriteDirLines(items = []) {
         .join('\n');
 }
 
+function parseKeywordLines(value = '', maxItems = 200) {
+    const seen = new Set();
+    return String(value || '')
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(Boolean)
+        .filter(item => {
+            if (seen.has(item)) return false;
+            seen.add(item);
+            return true;
+        })
+        .slice(0, Math.max(1, Number(maxItems) || 200));
+}
+
 export function renderResourceFavoriteDirSettings(favoriteDirs = {}) {
     const grid = document.getElementById('resource-favorite-dir-settings-grid');
     if (!grid) return;
@@ -164,6 +178,8 @@ function collectSettingsPayload({
     cfg.tmdb_enabled = !!document.getElementById('tmdb_enabled')?.checked;
     cfg.pansou_enabled = !!document.getElementById('pansou_enabled')?.checked;
     cfg.resource_favorite_dirs = collectResourceFavoriteDirs();
+    cfg.scraper_noise_phrases = parseKeywordLines(document.getElementById('scraper_noise_phrases')?.value);
+    cfg.scraper_standalone_noise_words = parseKeywordLines(document.getElementById('scraper_standalone_noise_words')?.value);
 
     // Dynamically collect provider cookies
     const meta = window.providerMeta || [];

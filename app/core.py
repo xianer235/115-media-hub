@@ -1031,6 +1031,8 @@ def default_config() -> Dict[str, Any]:
         "resource_sources": [],
         "resource_quick_links": [],
         "resource_favorite_dirs": {"115": [], "quark": []},
+        "scraper_noise_phrases": [],
+        "scraper_standalone_noise_words": [],
     }
 
 
@@ -2363,6 +2365,31 @@ def resolve_provider_relative_path(
     return provider, relative_path
 
 
+SCRAPER_NOISE_WORDS_MAX_ITEMS = 200
+SCRAPER_NOISE_WORD_MAX_LENGTH = 50
+
+
+def normalize_scraper_noise_words(value: Any) -> List[str]:
+    """把设置里的自定义过滤词归一化为去重保序的字符串列表。"""
+    if isinstance(value, str):
+        raw_items = re.split(r"[\r\n,]+", value)
+    elif isinstance(value, (list, tuple)):
+        raw_items = value
+    else:
+        raw_items = []
+    normalized: List[str] = []
+    seen: Set[str] = set()
+    for raw in raw_items:
+        item = str(raw or "").strip()
+        if not item or len(item) > SCRAPER_NOISE_WORD_MAX_LENGTH or item in seen:
+            continue
+        seen.add(item)
+        normalized.append(item)
+        if len(normalized) >= SCRAPER_NOISE_WORDS_MAX_ITEMS:
+            break
+    return normalized
+
+
 def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     merged = default_config()
     merged.update(cfg or {})
@@ -2584,6 +2611,10 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     stored_pw = str(merged.get("password", "") or "")
     if stored_pw and not is_password_hashed(stored_pw):
         merged["password"] = hash_password(stored_pw)
+    merged["scraper_noise_phrases"] = normalize_scraper_noise_words(merged.get("scraper_noise_phrases", []))
+    merged["scraper_standalone_noise_words"] = normalize_scraper_noise_words(
+        merged.get("scraper_standalone_noise_words", [])
+    )
     return order_config_for_save(merged)
 
 
