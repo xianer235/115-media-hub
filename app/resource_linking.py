@@ -276,6 +276,20 @@ def pick_magnet_title(link_url: str, index: int = 0) -> str:
     return "磁力任务"
 
 
+def pick_ed2k_title(link_url: str, index: int = 0) -> str:
+    token = trim_resource_link_token(link_url)
+    parts = token.split("|")
+    if len(parts) >= 3 and parts[0].lower() == "ed2k://" and parts[1].lower() == "file":
+        filename = urllib.parse.unquote(str(parts[2] or "").strip())
+        if filename:
+            normalized = normalize_resource_title(filename)
+            if normalized and not is_resource_title_link_like(normalized):
+                return normalized
+    if index > 0:
+        return f"ED2K任务 #{index}"
+    return "ED2K任务"
+
+
 def pick_link_fallback_title(link_type: str, link_url: str, index: int = 0) -> str:
     normalized_type = str(link_type or "").strip().lower()
     if normalized_type == "magnet":
@@ -285,7 +299,7 @@ def pick_link_fallback_title(link_type: str, link_url: str, index: int = 0) -> s
     if normalized_type == "quark":
         return f"夸克分享任务 #{index}" if index > 0 else "夸克分享任务"
     if normalized_type == "ed2k":
-        return f"ED2K任务 #{index}" if index > 0 else "ED2K任务"
+        return pick_ed2k_title(link_url, index=index)
     if normalized_type == "link":
         return f"链接任务 #{index}" if index > 0 else "链接任务"
     return f"资源任务 #{index}" if index > 0 else "资源任务"
@@ -576,6 +590,7 @@ __all__ = [
     "extract_magnet_hash",
     "extract_ed2k_hash",
     "pick_magnet_title",
+    "pick_ed2k_title",
     "pick_link_fallback_title",
     "parse_115_share_payload",
     "parse_quark_share_payload",

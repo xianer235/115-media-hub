@@ -256,6 +256,29 @@
 
         let subscriptionFolderPickerCallback = null;
 
+        function getSubscriptionRecommendedFolderName() {
+            const tmdbTitle = String(document.getElementById('subscription_tmdb_title')?.value || '').trim();
+            const tmdbYear = normalizeTmdbYear(document.getElementById('subscription_tmdb_year')?.value || '');
+            const title = tmdbTitle || String(document.getElementById('subscription_title')?.value || '').trim();
+            const year = tmdbYear || normalizeTmdbYear(document.getElementById('subscription_year')?.value || '');
+            if (!title) return '';
+            return window.MediaHubTitleUtils?.recommendFolderName(title, year) || '';
+        }
+
+        function applySubscriptionRecommendedFolderName() {
+            const input = document.getElementById('subscription-folder-create-name');
+            const name = getSubscriptionRecommendedFolderName();
+            if (input && name) input.value = name;
+            renderSubscriptionRecommendedFolderButton();
+        }
+
+        function renderSubscriptionRecommendedFolderButton() {
+            const btn = document.getElementById('subscription-folder-recommend-btn');
+            if (!btn) return;
+            const has = !!getSubscriptionRecommendedFolderName();
+            btn.classList.toggle('hidden', !has);
+        }
+
         async function openSubscriptionFolderModal(pickerCallback = null, providerOverride = '') {
             const provider = String(providerOverride || '').trim() || getCurrentSubscriptionProvider();
             subscriptionFolderPickerCallback = typeof pickerCallback === 'function' ? pickerCallback : null;
@@ -267,6 +290,7 @@
             showLockedModal('subscription-folder-modal');
             const createInput = document.getElementById('subscription-folder-create-name');
             if (createInput) createInput.value = '';
+            applySubscriptionRecommendedFolderName();
             setSubscriptionFolderCreateBusy(false);
             renderSubscriptionFolderBreadcrumbs();
             await loadSubscriptionFolders(subscriptionFolderTrail[subscriptionFolderTrail.length - 1]?.id || '0');

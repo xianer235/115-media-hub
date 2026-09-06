@@ -13,11 +13,13 @@ from app.resource_ed2k import (
     parse_ed2k_link,
     resolve_ed2k_page,
 )
+from app.services.scraper import recommend_media_folder_name
 from app.resource_linking import (
     get_resource_link_records,
     detect_resource_link_type,
     extract_resource_candidates,
     extract_resource_links,
+    pick_link_fallback_title,
 )
 from app.resource_tg import parse_telegram_posts_page
 from app.routes import resource as resource_routes
@@ -86,6 +88,57 @@ class ResourceEd2kParsingTest(unittest.TestCase):
         self.assertEqual(item["size_bytes"], 7848651243)
         self.assertEqual(item["file_hash"], "af33bd45b385b16a4bef434c760e0182")
         self.assertEqual(item["link_url"], SAMPLE_LINK)
+
+    def test_pick_link_fallback_title_prefers_ed2k_filename(self):
+        title = pick_link_fallback_title("ed2k", SAMPLE_LINK, index=0)
+        self.assertEqual(title, parse_ed2k_link(SAMPLE_LINK)["filename"])
+
+    def test_single_ed2k_link_candidate_uses_filename_as_title(self):
+        candidates = extract_resource_candidates(SAMPLE_LINK)
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["title"], parse_ed2k_link(SAMPLE_LINK)["filename"])
+
+    def test_ed2k_candidate_title_handles_backslash_and_sha1_hash_field(self):
+        link = (
+            "ed2k://|file|[RB4K.CN].Dead.to.Rights.2025.HKG.1080p.Blu-ray.AVC.TrueHD.7.1-"
+            r"Thor\@HDSky.iso|46547533824|A6F4E14BB1A912937A890DFE0A88518F|"
+            "h=GA2RUNSRYRDCN3NVZYSDEEQAMXACEWHU|/"
+        )
+        candidates = extract_resource_candidates(link)
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["link_type"], "ed2k")
+        self.assertEqual(candidates[0]["title"], r"[RB4K.CN].Dead.to.Rights.2025.HKG.1080p.Blu-ray.AVC.TrueHD.7.1-Thor\@HDSky.iso")
+
+    def test_recommend_media_folder_name_cleans_release_and_appends_year(self):
+        self.assertEqual(
+            recommend_media_folder_name(
+                "Deadpool.3.2024.IMAX.2160p.UHD.BluRay.x265.10bit.DDP5.1.Atmos-CHDWEB",
+                "2024",
+            ),
+            "Deadpool 3 (2024)",
+        )
+        self.assertEqual(
+            recommend_media_folder_name("Your Sky 那片晴空之下 (2026)", "2026"),
+            "那片晴空之下 (2026)",
+        )
+        self.assertEqual(
+            recommend_media_folder_name("狂飙 (2023) 1080p 国语中字", "2023"),
+            "狂飙 (2023)",
+        )
+        self.assertEqual(
+            recommend_media_folder_name("剧集：Your Sky 那片晴空之下 (2026)", "2026"),
+            "那片晴空之下 (2026)",
+        )
+        self.assertEqual(
+            recommend_media_folder_name("电视剧：狂飙 2023 1080p 国语中字", "2023"),
+            "狂飙 (2023)",
+        )
+        # 电影/剧集等作为片名一部分时不应被误删。
+        self.assertEqual(
+            recommend_media_folder_name("电影人生 2023 1080p", "2023"),
+            "电影人生 (2023)",
+        )
+        self.assertEqual(recommend_media_folder_name("", "2023"), "未命名影视")
 
     def test_extract_ed2k_items_deduplicates_by_hash_and_size(self):
         duplicate_with_other_name = SAMPLE_LINK.replace("摇滚兄弟私生活.2024", "另一个文件名")
@@ -571,6 +624,27 @@ class ResourceEd2kResolveRouteTest(unittest.IsolatedAsyncioTestCase):
             self.response_json(response),
             {"ok": False, "msg": "资源外链请求失败：代理连接失败"},
         )
+
+    def recommend_folder_name_endpoint(self):
+        endpoint = next(
+            (
+                route.endpoint
+                for route in resource_routes.router.routes
+                if getattr(route, "path", "") == "/resource/items/recommend_folder_name"
+                and "POST" in getattr(route, "methods", set())
+            ),
+            None,
+        )
+        self.assertIsNotNone(endpoint, "POST /resource/items/recommend_folder_name 尚未注册")
+        return endpoint
+
+    async def test_recommend_folder_name_endpoint_returns_cleaned_name(self):
+        endpoint = self.recommend_folder_name_endpoint()
+        response = await endpoint(
+            FakeJsonRequest({"title": "狂飙 (2023) 1080p 国语中字", "year": "2023"})
+        )
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["folder_name"], "狂飙 (2023)")
 
 
 if __name__ == "__main__":

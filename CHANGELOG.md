@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.2] - 2026-09-07
+
+### 订阅标题与目录推荐
+
+- 订阅表单绑定 TMDB 后，订阅标题（即任务名）总是替换为标准片名（`tmdb_title`），年份同步为 `tmdb_year`，不再只回填空标题。
+- 订阅保存目录选择器与资源导入目录选择器（仅电驴/磁力/telegra 页面）的“新建文件夹”处新增“推荐名称”按钮并自动预填 `片名 (年份)`：绑定 TMDB 用标准片名，未绑定用清洗标题，资源导入用识别到的标题；网盘分享类不预填，避免与已命名文件夹冲突。
+
+### 资源导入推荐名称（复用刮削规则）
+
+- 新增 `POST /resource/items/recommend_folder_name` 与 `recommend_media_folder_name`：直接复用刮削的标题候选抽取（guessit + 手写解析）与噪声清洗（站点前缀/清晰度/编码/字幕/媒体标签），并做目录名安全化与“片名 (年份)”格式化。
+- 剥离资源标题开头的“剧集/电视剧/电影/影片/动漫/番剧/综艺/纪录片/资源/合集”等类型前缀（仅在作为标签且后面跟冒号/空格/括号时），`剧集：Your Sky 那片晴空之下 (2026)` → `那片晴空之下 (2026)`；`电影人生 2023` 这类“电影”是片名一部分的不会被误删。
+- 修复推荐名“年份重复”：标题已带 `(2026)` 时不再出现 `( ) (2026)`。
+
+### 电驴解析与大爆炸选词
+
+- 裸电驴链接不再只显示“ED2K任务”：`pick_link_fallback_title` 对 `ed2k` 取真实文件名（与磁力取 `dn` 行为一致），资源卡片/导入弹窗/大爆炸均用文件名。
+- “大爆炸”文件夹标题对通用/链接式标题自动回退到已解析的 ED2K 文件名，兼容已保存的旧资源。
+
+### 界面修复
+
+- 修复电驴“文件夹名称”行三控件（输入框/推荐名称/重新选词）布局错乱与点击失败：`.resource-ed2k-folder-input-row` 改为三列网格（`minmax(0,1fr) auto 42px`），并把 `applyRecommendedResourceEd2kFolderName` 挂到 window。
+
+### 验证
+
+- 完整 unittest 689 项、`compileall`、改动 JS `node --check`、`git diff --check`、version.json JSON 解析均通过；Docker 未重建，真实 115 电驴/磁力导入推荐名与订阅保存目录推荐待浏览器复核。
+
 ## [0.10.1] - 2026-08-28
 
 ### 批量整理与识别

@@ -1689,6 +1689,46 @@ def _clean_search_title(value: str) -> str:
     return text or _strip_extension(value)
 
 
+_SCRAPER_MEDIA_LABEL_PREFIX_RE = re.compile(
+    r"^(?:[\[【（(]\s*)?(?:剧集|电视剧|电影|影片|影视|动漫|动画|動畫|番剧|综艺|纪录片|紀錄片|纪实|紀實|资源|資源|合集|合輯)"
+    r"(?:[\]】）)]\s*)?(?:\s+|[:：])",
+    re.IGNORECASE,
+)
+
+
+def _strip_scraper_media_label_prefix(value: str) -> str:
+    return _SCRAPER_MEDIA_LABEL_PREFIX_RE.sub("", str(value or "")).strip()
+
+
+def recommend_media_folder_name(title: str, year: str = "", raw_text: str = "") -> str:
+    """按刮削标题解析规则生成“片名 (年份)”形式的推荐文件夹名。
+
+    magnet / ED2K 等资源名通常是发布名，直接作为文件夹名会保留大量清晰度、
+    编码、站点标识等噪音。这里复用刮削的标题候选抽取与噪声清洗，并做目录名
+    安全化，返回适合“新建文件夹”默认值的名称。
+    """
+    source = str(title or "").strip() or str(raw_text or "").strip()
+    candidate = ""
+    for item in _extract_scraper_title_candidates(source):
+        cleaned = sanitize_115_folder_name(item, fallback="").strip()
+        if len(_scraper_keyword_key(cleaned)) >= 2 and not _is_scraper_generic_keyword(cleaned):
+            candidate = cleaned
+            break
+    if not candidate:
+        candidate = _clean_search_title(source)
+    candidate = _strip_scraper_media_label_prefix(candidate)
+    candidate = sanitize_115_folder_name(candidate, fallback="").strip()
+    if not candidate:
+        return "未命名影视"
+    normalized_year = normalize_tmdb_year(year)
+    if normalized_year:
+        candidate = sanitize_115_folder_name(
+            f"{candidate} ({normalized_year})",
+            fallback=candidate,
+        )
+    return candidate
+
+
 def _scraper_keyword_key(value: str) -> str:
     return re.sub(r"[\W_]+", "", str(value or "").lower())
 

@@ -151,6 +151,7 @@
                                             </section>
                                             <div class="resource-ed2k-folder-input-row">
                                                 <input id="resource-ed2k-folder-name" class="resource-ed2k-folder-input" placeholder="文件夹名称" oninput="updateResourceEd2kFolderName(this.value)">
+                                                <button id="resource-ed2k-recommend-btn" type="button" class="resource-ed2k-quiet-btn" onclick="applyRecommendedResourceEd2kFolderName()" title="一键填入推荐名称" aria-label="填入推荐名称">推荐名称</button>
                                                 <button type="button" class="resource-ed2k-reselect-btn" onclick="reopenResourceEd2kTitleSelector()" title="重新选择标题文字" aria-label="重新选择标题文字">
                                                     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
                                                         <path d="M12 20h9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
@@ -227,6 +228,7 @@
                     </div>
                     <div class="flex flex-col sm:flex-row gap-2">
                         <input id="resource-folder-create-name" class="w-full sm:flex-1 bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm" placeholder="在当前目录新建文件夹（例如：电影）">
+                        <button id="resource-folder-recommend-btn" type="button" onclick="applyResourceRecommendedFolderName()" class="px-4 py-3 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 text-sky-200 text-sm font-bold whitespace-nowrap border border-sky-500/30 hidden" title="一键填入推荐名称" aria-label="填入推荐名称">推荐名称</button>
                         <button id="resource-folder-create-btn" type="button" onclick="createResourceFolderInCurrent()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold whitespace-nowrap">新建文件夹</button>
                     </div>
                     <div id="resource-folder-list" class="space-y-3"></div>

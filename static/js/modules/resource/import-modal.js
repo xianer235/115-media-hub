@@ -48,9 +48,14 @@
             return `${size.toFixed(digits)} ${units[unitIndex]}`;
         }
 
-        function applyResourceEd2kResolvedData(item, data) {
+        async function applyResourceEd2kResolvedData(item, data) {
             const items = Array.isArray(data?.items) ? data.items.filter(entry => entry && entry.link_url) : [];
-            const titleText = String(item?.title || data?.title || 'ED2K 资源').trim() || 'ED2K 资源';
+            const importMode = getResourceImportMode(item);
+            let titleText = String(item?.title || data?.title || 'ED2K 资源').trim() || 'ED2K 资源';
+            if (importMode === 'ed2k-direct') {
+                const directTitle = window.ResourceEd2kImport?.resolveFolderTitleSource(item, items);
+                if (directTitle) titleText = directTitle;
+            }
             resourceEd2kState.loading = false;
             resourceEd2kState.error = '';
             resourceEd2kState.pageTitle = String(data?.title || '').trim();
@@ -61,10 +66,11 @@
             resourceEd2kState.items = items;
             resourceEd2kState.selectedItemIds = items.map(entry => String(entry.id || entry.link_url));
             resourceEd2kState.createFolder = true;
-            resourceEd2kState.folderName = '';
+            const recommendedFolderName = await getRecommendedResourceEd2kFolderName();
+            resourceEd2kState.folderName = recommendedFolderName;
             const folderNameInput = document.getElementById('resource-ed2k-folder-name');
             const createFolderInput = document.getElementById('resource-ed2k-create-folder');
-            if (folderNameInput) folderNameInput.value = '';
+            if (folderNameInput) folderNameInput.value = recommendedFolderName;
             if (createFolderInput) createFolderInput.checked = true;
         }
 
@@ -96,7 +102,7 @@
                     });
                 }
                 if (requestToken !== resourceEd2kState.requestToken || selectedResourceItem !== item) return;
-                applyResourceEd2kResolvedData(item, data);
+                await applyResourceEd2kResolvedData(item, data);
             } catch (error) {
                 if (requestToken !== resourceEd2kState.requestToken || selectedResourceItem !== item) return;
                 resourceEd2kState.loading = false;
@@ -295,6 +301,44 @@
 
         function updateResourceEd2kFolderName(value) {
             resourceEd2kState.folderName = String(value || '');
+            syncResourceMonitorTaskOptions(document.getElementById('resource_job_savepath')?.value || '');
+            syncResourceEd2kSubmitButton();
+        }
+
+        async function fetchRecommendedFolderName(title, year, rawText) {
+            if (!title) return '';
+            try {
+                const data = await window.MediaHubApi.postJson('/resource/items/recommend_folder_name', {
+                    title: String(title || ''),
+                    year: String(year || ''),
+                    raw_text: String(rawText || ''),
+                });
+                return String(data?.folder_name || '').trim();
+            } catch (error) {
+                return window.MediaHubTitleUtils?.recommendFolderName(
+                    String(title || ''),
+                    String(year || '')
+                ) || '';
+            }
+        }
+
+        async function getRecommendedResourceEd2kFolderName() {
+            const title = String(resourceEd2kState?.titleText || '').trim();
+            if (!title) return '';
+            const year = window.MediaHubTitleUtils?.extractShowYear(
+                `${title} ${String(selectedResourceItem?.raw_text || '')}`,
+                String(selectedResourceItem?.year || '')
+            ) || '';
+            return fetchRecommendedFolderName(title, year, String(selectedResourceItem?.raw_text || ''));
+        }
+
+        async function applyRecommendedResourceEd2kFolderName() {
+            const input = document.getElementById('resource-ed2k-folder-name');
+            if (!input) return;
+            const name = await getRecommendedResourceEd2kFolderName();
+            if (!input || !name) return;
+            input.value = name;
+            resourceEd2kState.folderName = name;
             syncResourceMonitorTaskOptions(document.getElementById('resource_job_savepath')?.value || '');
             syncResourceEd2kSubmitButton();
         }
@@ -1101,6 +1145,48 @@
             }
         }
 
+        function isResourceRecommendedFolderCandidate(item) {
+            const linkType = getEffectiveResourceLinkType(item);
+            return ['ed2k', 'magnet'].includes(linkType);
+        }
+
+        let resourceRecommendedFolderName = '';
+
+        async function getResourceRecommendedFolderName() {
+            const item = selectedResourceItem;
+            if (!item || !isResourceRecommendedFolderCandidate(item)) return '';
+            const importMode = getResourceImportMode(item);
+            if (importMode === 'ed2k-direct' || importMode === 'ed2k-page') {
+                const folderName = String(resourceEd2kState?.folderName || '').trim();
+                if (folderName) return folderName;
+                const rawTitle = String(resourceEd2kState?.titleText || item?.title || '').trim();
+                const year = window.MediaHubTitleUtils?.extractShowYear(
+                    `${rawTitle} ${String(item?.raw_text || '')}`,
+                    String(item?.year || '')
+                ) || '';
+                return fetchRecommendedFolderName(rawTitle, year, String(item?.raw_text || ''));
+            }
+            const rawTitle = String(item?.title || '').trim();
+            const year = window.MediaHubTitleUtils?.extractShowYear(
+                `${rawTitle} ${String(item?.raw_text || '')}`,
+                String(item?.year || '')
+            ) || '';
+            return fetchRecommendedFolderName(rawTitle, year, String(item?.raw_text || ''));
+        }
+
+        async function applyResourceRecommendedFolderName() {
+            const input = document.getElementById('resource-folder-create-name');
+            resourceRecommendedFolderName = await getResourceRecommendedFolderName();
+            if (input && resourceRecommendedFolderName) input.value = resourceRecommendedFolderName;
+            renderResourceRecommendedFolderButton();
+        }
+
+        function renderResourceRecommendedFolderButton() {
+            const btn = document.getElementById('resource-folder-recommend-btn');
+            if (!btn) return;
+            btn.classList.toggle('hidden', !resourceRecommendedFolderName);
+        }
+
         async function openResourceFolderModal() {
             syncResourceProviderUI();
             const provider = getCurrentResourceProvider();
@@ -1116,6 +1202,7 @@
             showLockedModal('resource-folder-modal');
             const createInput = document.getElementById('resource-folder-create-name');
             if (createInput) createInput.value = '';
+            await applyResourceRecommendedFolderName();
             setResourceFolderCreateBusy(false);
             renderResourceFolderBreadcrumbs();
             await loadResourceFolders(resourceFolderTrail[resourceFolderTrail.length - 1]?.id || '0');
@@ -1189,6 +1276,7 @@
             clearResourceEd2kTitleSelection,
             completeResourceEd2kTitleSelection,
             continueResourceEd2kTitleSelection,
+            applyRecommendedResourceEd2kFolderName,
             reopenResourceEd2kTitleSelector,
             retryResourceEd2kResolve,
             setAllResourceEd2kFilesChecked,

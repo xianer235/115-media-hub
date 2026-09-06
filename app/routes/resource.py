@@ -29,6 +29,7 @@ from ..services.resource import (
     run_resource_job,
     trigger_resource_job_refresh,
 )
+from ..services.scraper import recommend_media_folder_name
 
 router = APIRouter()
 resource_job_create_lock = asyncio.Lock()
@@ -1048,6 +1049,16 @@ async def preview_resource_text(request: Request) -> Dict[str, Any]:
     if not candidates:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "未识别到可导入内容"})
     return {"ok": True, "items": candidates}
+
+
+@router.post("/resource/items/recommend_folder_name")
+async def recommend_resource_folder_name(request: Request) -> Dict[str, Any]:
+    data = await request.json()
+    title = str(data.get("title", "") or "").strip()
+    year = str(data.get("year", "") or "").strip()
+    raw_text = str(data.get("raw_text", "") or "").strip()
+    folder_name = recommend_media_folder_name(title, year=year, raw_text=raw_text)
+    return {"ok": True, "folder_name": folder_name}
 
 
 @router.post("/resource/ed2k/resolve")

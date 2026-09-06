@@ -979,21 +979,9 @@
         }
 
         function buildSubscriptionTitleFromResource(item) {
+            const source = String(item?.title || item?.normalized_title || '').trim();
             const fallback = String(item?.title || item?.normalized_title || '未命名资源').trim() || '未命名资源';
-            let title = String(item?.title || '').trim() || fallback;
-
-            title = title.split(/\s*[|｜丨]+\s*/)[0].trim() || title;
-            title = title
-                .replace(/[._]+/g, ' ')
-                .replace(/[\[\【(（][^\]\】)）]{0,90}(?:2160p|1080p|720p|4k|uhd|hdr|web(?:-|\s)?dl|bluray|x26[45]|h\.?26[45]|aac|ddp|atmos|中字|双语|國語|国语|粤语|简繁|完结|全集|更新|s\d{1,2}\s*e?\d{0,4}|第\s*[零〇一二三四五六七八九十两兩0-9]+\s*(?:季|集|话|話))[^\]\】)）]*[\]\】)）]/gi, ' ')
-                .replace(/\b(19|20)\d{2}\b/g, ' ')
-                .replace(/\b(?:S\d{1,2}\s*E?\d{0,4}|E\d{1,4}|EP?\s*\d{1,4})\b/gi, ' ')
-                .replace(/第\s*[零〇一二三四五六七八九十两兩0-9]{1,4}\s*(?:季|集|话|話)/g, ' ')
-                .replace(/(?:全|共)\s*\d{1,4}\s*(?:集|话|話)/g, ' ')
-                .replace(/\d{1,4}\s*(?:集|话|話)\s*(?:全|完|完结|完結)?/g, ' ')
-                .replace(/\s{2,}/g, ' ')
-                .trim();
-            return title || fallback;
+            return window.MediaHubTitleUtils?.cleanShowTitle(source, fallback) || fallback;
         }
 
         function inferSubscriptionDraftFromResource(item) {
@@ -1297,11 +1285,11 @@
                 }
                 setSubscriptionTmdbBinding(binding);
                 const titleInput = document.getElementById('subscription_title');
-                if (titleInput && !String(titleInput.value || '').trim()) {
+                if (titleInput) {
                     titleInput.value = String(binding.tmdb_title || target.title || '').trim();
                 }
                 const yearInput = document.getElementById('subscription_year');
-                if (yearInput && !normalizeTmdbYear(yearInput.value || '') && normalizeTmdbYear(binding.tmdb_year || '')) {
+                if (yearInput && normalizeTmdbYear(binding.tmdb_year || '')) {
                     yearInput.value = normalizeTmdbYear(binding.tmdb_year || '');
                 }
                 const aliasesInput = document.getElementById('subscription_aliases');

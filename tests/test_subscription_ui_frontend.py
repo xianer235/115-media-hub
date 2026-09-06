@@ -7,7 +7,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 UI_PATH = ROOT / "static/js/modules/subscription/ui.js"
 LINK_TAGS_PATH = ROOT / "static/js/modules/resource/link-tags.js"
+TITLE_UTILS_PATH = ROOT / "static/js/modules/app/title-utils.js"
 TEMPLATE_PATH = ROOT / "templates/index.html"
+SUBSCRIPTION_MODAL_TEMPLATE_PATH = ROOT / "templates/partials/modals/subscription.html"
 
 
 def run_subscription_ui(expression, provider_meta=None):
@@ -36,6 +38,28 @@ process.stdout.write(JSON.stringify(result));
     return json.loads(completed.stdout)
 
 
+def run_title_utils(expression):
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const context = {{ window: {{}} }};
+vm.createContext(context);
+vm.runInContext(fs.readFileSync({json.dumps(str(TITLE_UTILS_PATH))}, 'utf8'), context);
+const api = context.window.MediaHubTitleUtils;
+const result = ({expression});
+process.stdout.write(JSON.stringify(result));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(completed.stderr.strip())
+    return json.loads(completed.stdout)
+
+
 class SubscriptionUiFrontendTest(unittest.TestCase):
     def test_resource_link_tags_load_before_subscription_ui(self):
         html = TEMPLATE_PATH.read_text(encoding="utf-8")
@@ -43,6 +67,51 @@ class SubscriptionUiFrontendTest(unittest.TestCase):
             html.index('src="/static/js/modules/resource/link-tags.js'),
             html.index('src="/static/js/modules/subscription/ui.js'),
         )
+
+    def test_title_utils_loads_before_subscription_ui_and_resource_import(self):
+        html = TEMPLATE_PATH.read_text(encoding="utf-8")
+        self.assertLess(
+            html.index('src="/static/js/modules/app/title-utils.js'),
+            html.index('src="/static/js/modules/subscription/ui.js'),
+        )
+        self.assertLess(
+            html.index('src="/static/js/modules/app/title-utils.js'),
+            html.index('src="/static/js/modules/resource/import-modal.js'),
+        )
+
+    def test_recommend_folder_name_formats_title_with_year(self):
+        result = run_title_utils("""
+        ({
+            withYear: api.recommendFolderName('沙丘 2', '2024'),
+            withoutYear: api.recommendFolderName('沙丘 2', ''),
+            yearInTitle: api.recommendFolderName('沙丘 2 2024', '2024'),
+            yearInParens: api.recommendFolderName('Your Sky 那片晴空之下 (2026)', '2026'),
+            unsafe: api.recommendFolderName('A/B:*?<|C', '2023'),
+            magnetStyle: api.recommendFolderName('死侍与金刚狼 2024 1080p WEB-DL 中字', '2024'),
+        })
+        """)
+        self.assertEqual(result["withYear"], "沙丘 2 (2024)")
+        self.assertEqual(result["withoutYear"], "沙丘 2")
+        self.assertEqual(result["yearInTitle"], "沙丘 2 (2024)")
+        self.assertEqual(result["yearInParens"], "Your Sky 那片晴空之下 (2026)")
+        self.assertEqual(result["unsafe"], "A B:＊？＜ (2023)")
+        self.assertEqual(result["magnetStyle"], "死侍与金刚狼 (2024)")
+
+    def test_bind_tmdb_always_replaces_subscription_title(self):
+        source = UI_PATH.read_text(encoding="utf-8")
+        bind_body = source[source.index("function selectSubscriptionTmdbResult("):source.index("function openSubscriptionTmdbSearchModal(")]
+        self.assertNotIn("!String(titleInput.value || '').trim()", bind_body)
+        self.assertIn("titleInput.value = String(binding.tmdb_title || target.title || '').trim();", bind_body)
+        self.assertIn("yearInput.value = normalizeTmdbYear(binding.tmdb_year || '');", bind_body)
+
+    def test_subscription_folder_modal_prefills_recommended_name(self):
+        folders_source = (ROOT / "static/js/modules/subscription/folders.js").read_text(encoding="utf-8")
+        self.assertIn("function getSubscriptionRecommendedFolderName(", folders_source)
+        self.assertIn("applySubscriptionRecommendedFolderName();", folders_source)
+        self.assertIn("window.MediaHubTitleUtils?.recommendFolderName", folders_source)
+        html = SUBSCRIPTION_MODAL_TEMPLATE_PATH.read_text(encoding="utf-8")
+        self.assertIn('id="subscription-folder-recommend-btn"', html)
+        self.assertIn('onclick="applySubscriptionRecommendedFolderName()"', html)
 
     def test_subscription_provider_badges_use_global_tones(self):
         providers = [

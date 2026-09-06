@@ -255,6 +255,7 @@
                     </div>
                     <div class="flex flex-col sm:flex-row gap-2">
                         <input id="subscription-folder-create-name" class="w-full sm:flex-1 bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm" placeholder="在当前目录新建文件夹（例如：电影）">
+                        <button id="subscription-folder-recommend-btn" type="button" onclick="applySubscriptionRecommendedFolderName()" class="px-4 py-3 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 text-sky-200 text-sm font-bold whitespace-nowrap border border-sky-500/30 hidden" title="一键填入推荐名称" aria-label="填入推荐名称">推荐名称</button>
                         <button id="subscription-folder-create-btn" type="button" onclick="createSubscriptionFolderInCurrent()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold whitespace-nowrap">新建文件夹</button>
                     </div>
                     <div id="subscription-folder-list" class="space-y-3"></div>

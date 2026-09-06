@@ -110,14 +110,37 @@
         return items;
     }
 
+    const GENERIC_TITLE_PATTERN = /^(ed2k任务|磁力任务|未命名资源|资源任务|链接任务|115分享任务|夸克分享任务)(?:\s*#\d+)?$/i;
+    const LINK_LIKE_TITLE_PATTERN = /^(ed2k:\/\/|magnet:\?|https?:\/\/|tg:\/\/)/i;
+
+    function isGenericResourceTitle(value) {
+        const text = String(value || '').trim();
+        if (!text) return true;
+        if (LINK_LIKE_TITLE_PATTERN.test(text)) return true;
+        return GENERIC_TITLE_PATTERN.test(text);
+    }
+
+    function resolveFolderTitleSource(item, items) {
+        const recordTitle = String(item?.title || '').trim();
+        if (!isGenericResourceTitle(recordTitle)) return recordTitle;
+        const firstItem = (Array.isArray(items) ? items : []).find(
+            entry => entry && String(entry.filename || entry.title || '').trim()
+        );
+        return firstItem
+            ? String(firstItem.filename || firstItem.title || '').trim()
+            : '';
+    }
+
     global.ResourceEd2kImport = Object.freeze({
         applySelectionRange,
         buildTargetSavepath,
         collectDirectEd2kItems,
         composeFolderName,
+        isGenericResourceTitle,
         normalizeFolderName,
         normalizeRelativePath,
         parseEd2kLink,
+        resolveFolderTitleSource,
         shouldShowTitleSelector,
         tokenizeTitle,
     });
