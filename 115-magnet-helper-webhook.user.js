@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         115-media-hub助手
 // @namespace    http://tampermonkey.net/
-// @version      2.5.0
+// @version      2.6.0
 // @description  检测网页 magnet / torrent / 115 / 夸克分享链接并生成快捷按钮
 // @author       仙儿
 // @license      MIT
@@ -22,6 +22,7 @@
     const DETECTABLE_LINK_REGEX = /(magnet:\?xt=urn:btih:[A-Za-z0-9]{32,40}[^\s<>'"]*|https?:\/\/[^\s<>'"]+?\.torrent(?:\?[^\s<>'"]*)?|https?:\/\/(?:115cdn|115|anxia)\.com\/s\/[A-Za-z0-9]+[^\s<>'"]*|https?:\/\/(?:pan|www)\.quark\.cn\/s\/[A-Za-z0-9]+[^\s<>'"]*)/gi;
     const STORE_TASKS_KEY = 'magnet_push_tasks_v2';
     const STORE_SECRET_KEY = 'magnet_push_secret_v2';
+    const STORE_EXCLUDE_HOSTS_KEY = 'magnet_push_exclude_hosts_v1';
 
     const BTN_CLASS = 'mh-push-btn';
     const COPY_BTN_CLASS = 'mh-copy-btn';
@@ -59,6 +60,7 @@
 
     let tasks = [];
     let secret = '';
+    let excludeHosts = [];
     let toastTimer = null;
     let managerEditorState = { mode: 'none', taskId: '' };
 
@@ -122,12 +124,14 @@
     }
 
     async function loadPersistedState() {
-        const [storedTasks, storedSecret] = await Promise.all([
+        const [storedTasks, storedSecret, storedExcludeHosts] = await Promise.all([
             readStore(STORE_TASKS_KEY, []),
-            readStore(STORE_SECRET_KEY, '')
+            readStore(STORE_SECRET_KEY, ''),
+            readStore(STORE_EXCLUDE_HOSTS_KEY, [])
         ]);
         tasks = normalizeTaskList(storedTasks);
         secret = String(storedSecret || '').trim();
+        excludeHosts = normalizeExcludeHostList(storedExcludeHosts);
     }
 
     function normalizeSavePath(path) {
@@ -378,6 +382,60 @@
     function setSecret(nextSecret) {
         secret = String(nextSecret || '').trim();
         writeStore(STORE_SECRET_KEY, secret);
+    }
+
+    // 排除域名：用户在“任务管理器”里维护，匹配到的域名下脚本不注入任何按钮。
+    // 支持裸域名 / IP，以及带协议、端口、路径、通配符前缀的写法，统一归一化成 hostname。
+    function normalizeExcludeHost(entry) {
+        let text = String(entry || '').trim().toLowerCase();
+        if (!text) return '';
+        text = text.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
+        text = text.split(/[/?#]/, 1)[0];
+        text = text.replace(/:\d+$/, '');
+        text = text.replace(/^\*\./, '').replace(/^\./, '').trim();
+        return text;
+    }
+
+    function normalizeExcludeHostList(list) {
+        const lines = Array.isArray(list)
+            ? list
+            : String(list || '').split(/\r?\n/);
+        const seen = new Set();
+        const out = [];
+        lines.forEach((line) => String(line || '').split(/\r?\n/).forEach((token) => {
+            const normalized = normalizeExcludeHost(token);
+            if (!normalized || seen.has(normalized)) return;
+            seen.add(normalized);
+            out.push(normalized);
+        }));
+        return out;
+    }
+
+    // 裸域名同时匹配其子域名（example.com 会匹配 a.example.com）；带 http/https 或通配符也能识别。
+    function isHostExcluded(hostname, entries) {
+        const host = String(hostname || '').trim().toLowerCase();
+        if (!host) return false;
+        return normalizeExcludeHostList(entries).some((entry) => {
+            if (!entry) return false;
+            return host === entry || host.endsWith('.' + entry);
+        });
+    }
+
+    function currentHostname() {
+        try {
+            return (window.location && window.location.hostname) || '';
+        } catch (err) {
+            return '';
+        }
+    }
+
+    function getExcludeHosts() {
+        return excludeHosts.slice();
+    }
+
+    function saveExcludeHosts(next) {
+        excludeHosts = normalizeExcludeHostList(next);
+        writeStore(STORE_EXCLUDE_HOSTS_KEY, excludeHosts);
     }
 
     function showToast(message, tone = 'success') {
@@ -1318,6 +1376,8 @@
             addTaskBtn: document.getElementById('mh-manager-task-add'),
             summary: document.getElementById('mh-manager-summary'),
             list: document.getElementById('mh-manager-list'),
+            excludeInput: document.getElementById('mh-manager-exclude'),
+            excludeSaveBtn: document.getElementById('mh-manager-exclude-save'),
             closeBtn: document.getElementById('mh-manager-close')
         };
     }
@@ -1483,6 +1543,16 @@
                     </div>
                 </div>
 
+                <div style="margin-top:12px;padding:12px;border-radius:10px;border:1px solid #334155;background:#0b1220;">
+                    <div style="font-size:13px;font-weight:700;color:#f8fafc;">不生效的网页（排除域名）</div>
+                    <div style="margin-top:4px;font-size:12px;line-height:1.6;color:#94a3b8;">在这些域名下脚本将停止识别链接、不生成任何按钮。每行一个域名；支持带协议、端口、路径或通配符（如 example.com 同时排除它的子域名）。留空表示所有网页都生效。</div>
+                    <textarea id="mh-manager-exclude" rows="3" placeholder="例如：hub.example.com&#10;127.0.0.1:18080&#10;*.nas.local" style="margin-top:8px;width:100%;box-sizing:border-box;resize:vertical;padding:8px 10px;border:1px solid #475569;border-radius:8px;background:#020617;color:#f8fafc;outline:none;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;"></textarea>
+                    <div style="margin-top:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                        <button id="mh-manager-exclude-save" type="button" style="padding:8px 12px;border-radius:8px;border:1px solid #334155;background:#2563eb;color:#fff;cursor:pointer;">保存排除域名</button>
+                        <span style="font-size:12px;color:#94a3b8;">当前页面：<span id="mh-manager-exclude-current">${escapeHtml(currentHostname())}</span></span>
+                    </div>
+                </div>
+
                 <div style="margin-top:12px;padding:12px;border-radius:10px;border:1px solid #334155;background:#0b1220;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
                     <div style="font-size:12px;color:#cbd5e1;">默认只显示任务和新增按钮，编辑区按需展开。</div>
                     <button id="mh-manager-task-add" type="button" style="padding:8px 12px;border-radius:8px;border:1px solid #334155;background:#0f766e;color:#ecfeff;cursor:pointer;">新增任务</button>
@@ -1513,6 +1583,15 @@
                 const next = String(els.secretInput.value || '').trim();
                 setSecret(next);
                 showToast(next ? '签名密钥已保存' : '签名密钥已清空');
+            });
+        }
+        if (els.excludeSaveBtn && els.excludeInput) {
+            els.excludeSaveBtn.addEventListener('click', () => {
+                const lines = String(els.excludeInput.value || '').trim();
+                saveExcludeHosts(normalizeExcludeHostList(lines));
+                els.excludeInput.value = excludeHosts.join('\n');
+                const count = excludeHosts.length;
+                showToast(count ? `已保存 ${count} 个排除域名` : '已清空排除域名，所有网页将生效');
             });
         }
         if (els.addTaskBtn) {
@@ -1613,6 +1692,7 @@
         if (!els.overlay || !els.secretInput) return;
         els.overlay.style.display = 'block';
         els.secretInput.value = getSecret();
+        if (els.excludeInput) els.excludeInput.value = excludeHosts.join('\n');
         resetManagerEditorState();
         renderManagerTaskList();
     }
@@ -1631,6 +1711,13 @@
     async function init() {
         await loadPersistedState();
         registerMenus();
+
+        // 匹配到“排除域名”时，不在该网页注入任何按钮；仍保留油猴菜单/任务管理器以便用户修改排除名单。
+        const excluded = isHostExcluded(currentHostname(), excludeHosts);
+        if (excluded) {
+            console.info(`[${APP_NAME}] 当前域名已在排除名单中，跳过：${currentHostname()}`);
+            return;
+        }
 
         if (!getSecret() || !activeTasks().length) {
             showToast('尚未配置签名密钥和任务，点击任意“115”按钮或油猴菜单即可配置', 'error');
@@ -1656,6 +1743,12 @@
                 getSecret,
                 setSecret,
                 saveTasks,
+                getExcludeHosts,
+                saveExcludeHosts,
+                normalizeExcludeHost,
+                normalizeExcludeHostList,
+                isHostExcluded,
+                currentHostname,
                 getTasks: () => tasks,
                 normalizeTaskList,
                 validateManagerTask,

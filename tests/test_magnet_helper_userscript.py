@@ -361,3 +361,87 @@ context.fetch = async () => ({ ok: true, status: 200, text: async () => 'ok2' })
         self.assertTrue(result["hasPicker"])
         self.assertTrue(result["hasManage"])
         self.assertEqual(result["pickedId"], "t1")
+
+    def test_exclude_hosts_normalize_and_match(self):
+        # 排除域名应统一归一化为 hostname，裸域名同时匹配子域名，且带协议/端口/路径/通配符都能识别。
+        setup = "context.window = {};"
+        result = run_userscript(
+            """
+(() => {
+  const entries = [
+    'https://Hub.Example.com:8443/path?x=1',
+    '*.nas.local',
+    '/cgi-bin/foo',
+    'EXAMPLE.COM',
+    'example.com',
+    ''
+  ];
+  const normalized = api.normalizeExcludeHostList(entries);
+  return {
+    normalized,
+    ipv6: api.normalizeExcludeHost('[::1]:18080'),
+    current: api.currentHostname(),
+    match: api.isHostExcluded('hub.example.com', entries),
+    exact: api.isHostExcluded('example.com', entries),
+    sub: api.isHostExcluded('a.b.example.com', entries),
+    nas: api.isHostExcluded('nas.local', entries),
+    other: api.isHostExcluded('other.com', entries),
+    noHost: api.isHostExcluded('', entries)
+  };
+})()
+""",
+            setup,
+        )
+        self.assertEqual(result["normalized"], ["hub.example.com", "nas.local", "example.com"])
+        self.assertEqual(result["ipv6"], "[::1]")
+        self.assertEqual(result["current"], "")
+        self.assertTrue(result["match"])
+        self.assertTrue(result["exact"])
+        self.assertTrue(result["sub"])
+        self.assertTrue(result["nas"])
+        self.assertFalse(result["other"])
+        self.assertFalse(result["noHost"])
+
+    def test_exclude_hosts_persist_and_reload(self):
+        # 排除域名应可保存到 GM 存储，并在下一次启动 loadPersistedState 时回读。
+        setup = """
+const store = {};
+const writes = [];
+context.GM_getValue = async (key, fallback) => (key in store ? store[key] : fallback);
+context.GM_setValue = async (key, value) => { store[key] = value; writes.push([key, value]); };
+"""
+        result = run_userscript(
+            """
+(async () => {
+  await api.loadPersistedState();
+  api.saveExcludeHosts(['http://hub.example.com:18080', 'example.com', 'example.com', '  ']);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const afterSave = api.getExcludeHosts();
+  // 模拟下一次启动重新加载
+  await api.loadPersistedState();
+  const afterReload = api.getExcludeHosts();
+  return {
+    afterSave,
+    afterReload,
+    writes,
+    excluded: api.isHostExcluded('a.example.com', afterReload)
+  };
+})()
+""",
+            setup,
+        )
+        self.assertEqual(result["afterSave"], ["hub.example.com", "example.com"])
+        self.assertEqual(result["afterReload"], ["hub.example.com", "example.com"])
+        self.assertEqual(result["writes"][0][0], "magnet_push_exclude_hosts_v1")
+        self.assertTrue(result["excluded"])
+
+    def test_exclude_hosts_ui_marked_in_userscript(self):
+        # 任务管理器中必须包含“排除域名”设置区与保存按钮，用户在菜单里即可配置。
+        source = USERSCRIPT_PATH.read_text(encoding="utf-8")
+        for marker in (
+            "mh-manager-exclude",
+            "mh-manager-exclude-save",
+            "不生效的网页（排除域名）",
+            "保存排除域名",
+        ):
+            self.assertIn(marker, source)
