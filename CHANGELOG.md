@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.3] - 2026-09-07
+
+### 油猴脚本“不生效的网页（排除域名）”
+
+- 任务管理器中新增「不生效的网页（排除域名）」设置区（位于签名密钥框下方）：每行填一个域名，支持带协议、端口、路径或通配符（`https://hub.xxx:8443/path`、`*.nas.local`），裸域名同时匹配其子域名（`example.com` 同时排除 `a.example.com`）；留空表示所有网页生效。
+- 新增存储键 `magnet_push_exclude_hosts_v1`，接入既有 `GM_getValue/GM_setValue` 与 localStorage 兜底持久化；归一化函数 `normalizeExcludeHost`/`normalizeExcludeHostList`、匹配函数 `isHostExcluded` 已导出供 node 回归测试。
+- `init` 启动时若当前页面域名命中排除名单，脚本跳过扫描与按钮注入（不再弹未配置提示），但保留油猴菜单/任务管理器入口，方便用户随时改回；排除名单在页面加载时判定，修改后刷新页面生效。
+- 脚本 `@version` 由 `2.5.0` 升至 `2.6.0`，方便 Tampermonkey/Userscripts 通过版本号识别更新。
+
+### 验证
+
+- 新增 3 项 node 回归（排除域名归一化与子域名匹配、持久化回读、脚本内 UI 标记）；完整 unittest、`node --check`、`git diff --check` 均通过；Docker 未重建，用户脚本已提交待推送后部署到 `hub.shuxian.fun` 并重新安装验证。
+
 ## [0.10.2] - 2026-09-07
 
 ### 订阅标题与目录推荐
