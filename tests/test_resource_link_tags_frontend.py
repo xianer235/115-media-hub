@@ -283,6 +283,33 @@ class ResourceLinkTagsIntegrationTest(unittest.TestCase):
         self.assertIn("function getResourceImportCandidates(item)", source)
         self.assertIn("openResourceLinkChoiceModal", source)
 
+    def test_resource_core_candidates_dedup_ed2k_by_import_mode(self):
+        source = CORE_PATH.read_text(encoding="utf-8")
+        start = source.index("        function getResourceImportCandidates(")
+        end = source.index("        function openResourceLinkChoiceModal(", start)
+        body = source[start:end]
+
+        self.assertIn("const seenEd2kImportModes = new Set();", body)
+        self.assertIn("const importMode = getResourceImportMode(candidate);", body)
+        self.assertIn("seenEd2kImportModes.has(key)", body)
+        self.assertNotIn("hasEd2kCandidate", body)
+
+    def test_resource_core_target_savepath_uses_effective_child_folder(self):
+        source = CORE_PATH.read_text(encoding="utf-8")
+        start = source.index("        function getResourceImportTargetSavepath(")
+        end = source.index("        function syncResourceSavepathPreview(", start)
+        body = source[start:end]
+
+        self.assertIn("const createsSubfolder = shouldCreateResourceEd2kSubfolder(parentSavepath, folderName, createFolder);", body)
+        self.assertIn("buildTargetSavepath(parentSavepath, folderName, createsSubfolder)", body)
+
+    def test_resource_core_dedupes_same_name_subfolder(self):
+        source = CORE_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("function getResourceEd2kSavepathLastSegment(savepath = '')", source)
+        self.assertIn("function shouldCreateResourceEd2kSubfolder(savepath = '', folderName = '', createFolder = true)", source)
+        self.assertIn("return childName !== lastSegment;", source)
+
     def test_resource_core_exports_display_helpers_for_channel_manager(self):
         source = CORE_PATH.read_text(encoding="utf-8")
         export_start = source.index("        Object.assign(window, {")

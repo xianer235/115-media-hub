@@ -13,7 +13,7 @@ from app.resource_ed2k import (
     parse_ed2k_link,
     resolve_ed2k_page,
 )
-from app.services.scraper import recommend_media_folder_name
+from app.services.scraper import _extract_scraper_title_candidates, recommend_media_folder_name
 from app.resource_linking import (
     get_resource_link_records,
     detect_resource_link_type,
@@ -138,6 +138,34 @@ class ResourceEd2kParsingTest(unittest.TestCase):
             recommend_media_folder_name("电影人生 2023 1080p", "2023"),
             "电影人生 (2023)",
         )
+
+    def test_recommend_media_folder_name_preserves_inner_colon(self):
+        self.assertEqual(
+            recommend_media_folder_name("电影：阿凡达：水之道", "2022"),
+            "阿凡达：水之道 (2022)",
+        )
+        self.assertEqual(
+            recommend_media_folder_name("电影: 热辣滚烫: 拳击教练", "2024"),
+            "热辣滚烫：拳击教练 (2024)",
+        )
+        self.assertEqual(
+            recommend_media_folder_name("电视剧：狂飙：一路狂飙", "2023"),
+            "狂飙：一路狂飙 (2023)",
+        )
+        self.assertEqual(
+            recommend_media_folder_name("剧集: 三体: 降维打击 S01E01 2023", "2023"),
+            "三体：降维打击 (2023)",
+        )
+
+    def test_extract_scraper_title_candidates_keeps_search_split_by_default(self):
+        # 默认（搜索候选）仍把冒号当分隔符拆出 CJK 独立词，保留原有搜索行为。
+        self.assertIn(
+            "那片晴空之下",
+            _extract_scraper_title_candidates("Your Sky 那片晴空之下 (2026)"),
+        )
+        # 推荐名路径用 preserve_colon=True 时保留标题内冒号。
+        colon_candidates = _extract_scraper_title_candidates("电影：阿凡达：水之道", preserve_colon=True)
+        self.assertTrue(any("水之道" in candidate and ":" in candidate for candidate in colon_candidates))
         self.assertEqual(recommend_media_folder_name("", "2023"), "未命名影视")
 
     def test_extract_ed2k_items_deduplicates_by_hash_and_size(self):

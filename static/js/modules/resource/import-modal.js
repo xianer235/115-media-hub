@@ -31,8 +31,7 @@
         function isResourceEd2kReady() {
             if (!isResourceEd2kImportActive() || resourceEd2kState.loading || resourceEd2kState.error) return false;
             if (!Array.isArray(resourceEd2kState.selectedItemIds) || !resourceEd2kState.selectedItemIds.length) return false;
-            return resourceEd2kState.createFolder === false
-                || !!window.ResourceEd2kImport?.normalizeFolderName(resourceEd2kState.folderName);
+            return true;
         }
 
         function formatResourceEd2kSize(value) {
@@ -167,6 +166,29 @@
             const createFolderInput = document.getElementById('resource-ed2k-create-folder');
             const folderNameInput = document.getElementById('resource-ed2k-folder-name');
             const reselectBtn = document.querySelector('.resource-ed2k-reselect-btn');
+            const emptyNameHint = document.getElementById('resource-ed2k-empty-name-hint');
+            const savepath = String(document.getElementById('resource_job_savepath')?.value || '').trim();
+            const lastSegment = window.shouldCreateResourceEd2kSubfolder
+                ? window.getResourceEd2kSavepathLastSegment(savepath)
+                : '';
+            const currentFolderName = String(
+                document.getElementById('resource-ed2k-folder-name')?.value
+                || resourceEd2kState.folderName
+                || ''
+            ).trim();
+            const normalizedCurrentName = window.ResourceEd2kImport?.normalizeFolderName(currentFolderName) || '';
+            // 所选目录末段名 == 新建文件夹名时视为同名嵌套，清空第二个名称（设为空置），保存到第一层目录。
+            let duplicateCleared = false;
+            if (
+                resourceEd2kState.createFolder !== false
+                && lastSegment
+                && normalizedCurrentName
+                && normalizedCurrentName === lastSegment
+            ) {
+                resourceEd2kState.folderName = '';
+                if (folderNameInput) folderNameInput.value = '';
+                duplicateCleared = true;
+            }
             if (createFolderInput) createFolderInput.checked = resourceEd2kState.createFolder !== false;
             if (folderNameInput) {
                 if (document.activeElement !== folderNameInput && folderNameInput.value !== resourceEd2kState.folderName) {
@@ -175,6 +197,16 @@
                 folderNameInput.disabled = resourceEd2kState.createFolder === false;
             }
             if (reselectBtn) reselectBtn.disabled = resourceEd2kState.createFolder === false || !resourceEd2kState.titleTokens.length;
+            if (emptyNameHint) {
+                const createsSubfolder = window.shouldCreateResourceEd2kSubfolder
+                    ? window.shouldCreateResourceEd2kSubfolder(savepath, resourceEd2kState.folderName, resourceEd2kState.createFolder !== false)
+                    : (resourceEd2kState.createFolder !== false && !!window.ResourceEd2kImport?.normalizeFolderName(resourceEd2kState.folderName));
+                emptyNameHint.classList.toggle('hidden', resourceEd2kState.createFolder === false || !!createsSubfolder);
+            }
+            if (duplicateCleared) {
+                syncResourceMonitorTaskOptions(savepath);
+                syncResourceEd2kSubmitButton();
+            }
         }
 
         function renderResourceEd2kImport() {
@@ -303,6 +335,7 @@
             resourceEd2kState.folderName = String(value || '');
             syncResourceMonitorTaskOptions(document.getElementById('resource_job_savepath')?.value || '');
             syncResourceEd2kSubmitButton();
+            syncResourceEd2kFolderControls();
         }
 
         async function fetchRecommendedFolderName(title, year, rawText) {
@@ -341,6 +374,7 @@
             resourceEd2kState.folderName = name;
             syncResourceMonitorTaskOptions(document.getElementById('resource_job_savepath')?.value || '');
             syncResourceEd2kSubmitButton();
+            syncResourceEd2kFolderControls();
         }
 
         function setResourceEd2kCreateFolder(checked) {
@@ -717,7 +751,7 @@
                     if (!isResourceEd2kReady()) {
                         const message = resourceEd2kState.error
                             ? '资源外链解析失败，请重试'
-                            : (!resourceEd2kState.selectedItemIds.length ? '请至少选择一个 ED2K 文件' : '请填写新建文件夹名称');
+                            : '请至少选择一个 ED2K 文件';
                         showToast(message, { tone: 'warn', duration: 2800, placement: 'top-center' });
                         return;
                     }
@@ -729,6 +763,9 @@
                     resourceEd2kState.folderName = folderName;
                     const folderNameInput = document.getElementById('resource-ed2k-folder-name');
                     if (folderNameInput) folderNameInput.value = folderName;
+                    const createsSubfolder = window.shouldCreateResourceEd2kSubfolder
+                        ? window.shouldCreateResourceEd2kSubfolder(savepath, folderName, resourceEd2kState.createFolder !== false)
+                        : (resourceEd2kState.createFolder !== false && !!folderName);
                     syncResourceMonitorTaskOptions(document.getElementById('resource_job_savepath')?.value || '');
                     let data = {};
                     try {
@@ -736,8 +773,8 @@
                             items: selectedItems.map(entry => ({ link_url: entry.link_url })),
                             parent_savepath: savepath,
                             parent_folder_id: folderId,
-                            create_folder: resourceEd2kState.createFolder !== false,
-                            folder_name: folderName,
+                            create_folder: createsSubfolder,
+                            folder_name: createsSubfolder ? folderName : '',
                             refresh_delay_seconds: refreshDelaySeconds,
                             auto_refresh: !!((window.providerMeta || []).find(meta => meta.name === '115')?.supports_monitor),
                             source_url: resourceEd2kState.sourceUrl || selectedResourceItem?.link_url || '',

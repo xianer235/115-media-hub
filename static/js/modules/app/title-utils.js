@@ -42,6 +42,7 @@
             .replace(/[\u0000-\u001f\u007f]+/gu, '')
             .replace(/[\\/]+/gu, ' ')
             .replace(/[*?"<>|]/gu, character => FOLDER_CHARACTER_REPLACEMENTS[character] || '')
+            .replace(/:/g, '：')
             .replace(/\s+/gu, ' ')
             .trim();
     }

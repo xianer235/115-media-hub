@@ -652,16 +652,21 @@ export function renderProviderAuthBlocks(cfg, sensitiveMeta) {
             : '<span class="w-2 h-2 rounded-full bg-slate-600 inline-block ml-1" title="未配置"></span>';
 
         return '<div class="provider-auth-block mb-3 bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">' +
-            '<div class="flex items-center justify-between p-3 cursor-pointer" onclick="toggleProviderBlock(\'' + p.name + '\')">' +
+            '<div data-provider-header="' + p.name + '" class="flex items-center justify-between p-3 cursor-pointer" role="button" aria-expanded="false" onclick="toggleProviderBlock(\'' + p.name + '\')">' +
                 '<div class="flex items-center gap-3">' +
                     '<span class="text-sm text-slate-200">' + p.label + '</span>' +
                     statusDot +
                     tagsHtml +
                 '</div>' +
-                '<label class="relative inline-flex items-center cursor-pointer" onclick="event.stopPropagation()">' +
-                    '<input type="checkbox" id="provider_enabled_' + p.name + '" ' + (enabled ? 'checked' : '') + ' onchange="toggleProviderEnabled(\'' + p.name + '\', this.checked)" class="sr-only peer">' +
-                    '<div class="provider-toggle w-9 h-5 bg-slate-600 rounded-full peer peer-checked:bg-emerald-500/70 peer-focus:ring-2 peer-focus:ring-emerald-400/30 after:content-[\'\'] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>' +
-                '</label>' +
+                '<div class="flex items-center gap-2">' +
+                    '<svg class="provider-chevron" data-provider-chevron="' + p.name + '" viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true">' +
+                        '<path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' +
+                    '</svg>' +
+                    '<label class="relative inline-flex items-center cursor-pointer" onclick="event.stopPropagation()">' +
+                        '<input type="checkbox" id="provider_enabled_' + p.name + '" ' + (enabled ? 'checked' : '') + ' onchange="toggleProviderEnabled(\'' + p.name + '\', this.checked)" class="sr-only peer">' +
+                        '<div class="provider-toggle w-9 h-5 bg-slate-600 rounded-full peer peer-checked:bg-emerald-500/70 peer-focus:ring-2 peer-focus:ring-emerald-400/30 after:content-[\'\'] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>' +
+                    '</label>' +
+                '</div>' +
             '</div>' +
             '<div id="provider-block-body-' + p.name + '" class="p-3 pt-0 border-t border-slate-700/50 hidden">' +
                 authHint +
@@ -684,7 +689,14 @@ export function renderProviderAuthBlocks(cfg, sensitiveMeta) {
 
 function toggleProviderBlock(name) {
     const body = document.getElementById('provider-block-body-' + name);
-    if (body) body.classList.toggle('hidden');
+    if (!body) return;
+    const wasVisible = !body.classList.contains('hidden');
+    body.classList.toggle('hidden');
+    const block = body.closest?.('.provider-auth-block');
+    const chevron = block?.querySelector('[data-provider-chevron="' + name + '"]');
+    if (chevron) chevron.classList.toggle('is-open', !wasVisible);
+    const header = block?.querySelector('[data-provider-header="' + name + '"]');
+    if (header) header.setAttribute('aria-expanded', String(!wasVisible));
 }
 
 function toggleProviderEnabled(name, checked) {

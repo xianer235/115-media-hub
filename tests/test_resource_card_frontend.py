@@ -48,6 +48,18 @@ class ResourceCardFrontendTest(unittest.TestCase):
         self.assertNotIn(">磁力下载网盘</span>", source)
         self.assertNotIn(">固定离线下载</span>", source)
 
+    def test_provider_auth_chevron_hint_and_toggle_state(self):
+        source = SETTINGS_PATH.read_text(encoding="utf-8")
+        css = CSS_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("class=\"provider-chevron\"", source)
+        self.assertIn("data-provider-chevron", source)
+        self.assertIn("data-provider-header", source)
+        self.assertIn("aria-expanded=\"false\"", source)
+        self.assertIn("chevron.classList.toggle('is-open'", source)
+        self.assertIn(".provider-chevron", css)
+        self.assertIn(".provider-chevron.is-open { transform: rotate(180deg); }", css)
+
     def test_phone_portrait_actions_span_card_in_one_four_column_row(self):
         css = CSS_PATH.read_text(encoding="utf-8")
         theme_day_start = css.index("html.theme-day {\n            --bg: #eef4fb")

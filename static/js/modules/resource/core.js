@@ -318,14 +318,16 @@
 
         function getResourceImportCandidates(item) {
             const candidates = [];
-            let hasEd2kCandidate = false;
+            const seenEd2kImportModes = new Set();
             getResourceLinkRecords(item).forEach(record => {
                 const candidate = createResourceLinkActionItem(item, record);
                 const linkType = getEffectiveResourceLinkType(candidate);
                 if (!canOpenResourceImportLink(candidate) || !isLinkTypeCookieConfigured(linkType)) return;
                 if (linkType === 'ed2k') {
-                    if (hasEd2kCandidate) return;
-                    hasEd2kCandidate = true;
+                    const importMode = getResourceImportMode(candidate);
+                    const key = `${String(importMode || 'none').trim().toLowerCase()}:${String(linkType || '').trim().toLowerCase()}`;
+                    if (seenEd2kImportModes.has(key)) return;
+                    seenEd2kImportModes.add(key);
                 }
                 candidates.push(candidate);
             });
@@ -1920,10 +1922,24 @@
                 || resourceEd2kState.folderName
                 || ''
             ).trim();
+            const createsSubfolder = shouldCreateResourceEd2kSubfolder(parentSavepath, folderName, createFolder);
             if (window.ResourceEd2kImport?.buildTargetSavepath) {
-                return window.ResourceEd2kImport.buildTargetSavepath(parentSavepath, folderName, createFolder);
+                return window.ResourceEd2kImport.buildTargetSavepath(parentSavepath, folderName, createsSubfolder);
             }
-            return createFolder ? joinRelativePathInput(parentSavepath, folderName) : parentSavepath;
+            return createsSubfolder ? joinRelativePathInput(parentSavepath, folderName) : parentSavepath;
+        }
+
+        function getResourceEd2kSavepathLastSegment(savepath = '') {
+            return normalizeRelativePathInput(savepath).split('/').filter(Boolean).pop() || '';
+        }
+
+        function shouldCreateResourceEd2kSubfolder(savepath = '', folderName = '', createFolder = true) {
+            if (createFolder === false) return false;
+            const childName = String(window.ResourceEd2kImport?.normalizeFolderName(folderName) || '').trim();
+            if (!childName) return false;
+            const lastSegment = getResourceEd2kSavepathLastSegment(savepath);
+            if (!lastSegment) return true;
+            return childName !== lastSegment;
         }
 
         function syncResourceSavepathPreview(savepath = '') {
@@ -3741,6 +3757,8 @@
             getResourceDisplayLinkTypeBadgeClass,
             getResourceDisplayLinkTypeLabel,
             getResourceImportMode,
+            getResourceEd2kSavepathLastSegment,
+            shouldCreateResourceEd2kSubfolder,
             isLinkTypeCookieConfigured,
             isProviderCookieConfigured,
             normalizeReceiveCodeInput,

@@ -94,8 +94,12 @@ class SubscriptionUiFrontendTest(unittest.TestCase):
         self.assertEqual(result["withoutYear"], "沙丘 2")
         self.assertEqual(result["yearInTitle"], "沙丘 2 (2024)")
         self.assertEqual(result["yearInParens"], "Your Sky 那片晴空之下 (2026)")
-        self.assertEqual(result["unsafe"], "A B:＊？＜ (2023)")
+        self.assertEqual(result["unsafe"], "A B：＊？＜ (2023)")
         self.assertEqual(result["magnetStyle"], "死侍与金刚狼 (2024)")
+
+    def test_title_utils_maps_colon_to_full_width_in_folder_name(self):
+        source = TITLE_UTILS_PATH.read_text(encoding="utf-8")
+        self.assertIn(".replace(/:/g, '：')", source)
 
     def test_bind_tmdb_always_replaces_subscription_title(self):
         source = UI_PATH.read_text(encoding="utf-8")

@@ -402,6 +402,7 @@ class ResourceEd2kBatchRouteTest(unittest.IsolatedAsyncioTestCase):
                         "parent_savepath": "电视剧",
                         "parent_folder_id": "tv-folder",
                         "create_folder": False,
+                        "folder_name": "",
                     }
                 )
             )

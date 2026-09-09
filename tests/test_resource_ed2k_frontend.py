@@ -308,6 +308,50 @@ class ResourceEd2kFrontendLogicTest(unittest.TestCase):
             submit_body.index("postJson('/resource/ed2k/jobs/create-batch'"),
         )
 
+    def test_ed2k_ready_does_not_require_nonempty_folder_name(self):
+        body = self.modal_function_body("isResourceEd2kReady")
+
+        self.assertIn("isResourceEd2kImportActive() || resourceEd2kState.loading || resourceEd2kState.error", body)
+        self.assertIn("selectedItemIds", body)
+        self.assertNotIn("normalizeFolderName(resourceEd2kState.folderName)", body)
+
+    def test_submit_creates_subfolder_only_when_folder_name_present(self):
+        source = MODAL_MODULE_PATH.read_text(encoding="utf-8")
+        start = source.index("                if (isResourceEd2kImportActive()) {")
+        end = source.index("rememberResourceRefreshDelaySeconds", start)
+        submit_body = source[start:end]
+
+        self.assertIn("window.shouldCreateResourceEd2kSubfolder", submit_body)
+        self.assertIn("create_folder: createsSubfolder", submit_body)
+        self.assertIn("folder_name: createsSubfolder ? folderName : ''", submit_body)
+
+    def test_folder_controls_clear_same_name_subfolder(self):
+        source = MODAL_MODULE_PATH.read_text(encoding="utf-8")
+        body = self.modal_function_body("syncResourceEd2kFolderControls")
+
+        self.assertIn("window.getResourceEd2kSavepathLastSegment(savepath)", body)
+        self.assertIn("normalizedCurrentName === lastSegment", body)
+        self.assertIn("resourceEd2kState.folderName = '';", body)
+
+    def test_ed2k_empty_folder_name_hint_in_template(self):
+        html = TEMPLATE_PATH.read_text(encoding="utf-8")
+        css = CSS_PATH.read_text(encoding="utf-8")
+
+        self.assertIn('id="resource-ed2k-empty-name-hint"', html)
+        self.assertIn("名称为空时将直接保存到所选目录", html)
+        self.assertIn(".resource-ed2k-empty-name-hint", css)
+
+    def test_stepper_sits_above_ed2k_files_and_share_browser(self):
+        html = TEMPLATE_PATH.read_text(encoding="utf-8")
+        stepper = html.index('id="resource-import-stepper"')
+        ed2k_card = html.index('id="resource-ed2k-card"')
+        raw_card = html.index('id="resource-import-raw-card"')
+        share_browser = html.index('id="resource-share-browser-card"')
+
+        self.assertLess(stepper, ed2k_card)
+        self.assertLess(stepper, raw_card)
+        self.assertLess(stepper, share_browser)
+
     def test_target_path_uses_optional_child_folder(self):
         result = run_ed2k_frontend(
             "({ withFolder: api.buildTargetSavepath('电视剧', '摇滚兄弟私生活 (2024) - S03', true), "

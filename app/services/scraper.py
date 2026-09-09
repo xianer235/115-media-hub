@@ -1457,7 +1457,7 @@ _SCRAPER_PART_WORDS = {
 }
 
 
-def _split_scraper_mixed_language_title(title: str) -> List[str]:
+def _split_scraper_mixed_language_title(title: str, preserve_colon: bool = False) -> List[str]:
     """把中英混排标题拆成独立候选：中文部分优先，再英文部分。"""
     text = str(title or "").strip()
     if not text:
@@ -1466,8 +1466,12 @@ def _split_scraper_mixed_language_title(title: str) -> List[str]:
     latin = re.sub(r"^[\d\s._-]+", "", latin)
     latin = re.sub(r"^[\s:：,，;；|/\\·•]+|[\s:：,，;；|/\\·•]+$", "", latin)
     latin = re.sub(r"\s+", " ", latin).strip(" -_.")
-    cjk = re.sub(r"[^\u4e00-\u9fff]+", " ", text)
-    cjk = re.sub(r"\s+", " ", cjk).strip(" -_.")
+    if preserve_colon:
+        cjk = re.sub(r"[^\u4e00-\u9fff\uFF1A:]+", " ", text)
+        cjk = re.sub(r"\s+", " ", cjk).strip(" -_.").strip("：: ")
+    else:
+        cjk = re.sub(r"[^\u4e00-\u9fff]+", " ", text)
+        cjk = re.sub(r"\s+", " ", cjk).strip(" -_.")
     parts: List[str] = []
     for part in (cjk, latin):
         key_len = len(_scraper_keyword_key(part))
@@ -1581,7 +1585,7 @@ def _legacy_extract_scraper_title_candidates(raw: str) -> List[str]:
     return candidates
 
 
-def _extract_scraper_title_candidates(raw: str) -> List[str]:
+def _extract_scraper_title_candidates(raw: str, preserve_colon: bool = False) -> List[str]:
     """按发布名结构提取候选标题（guessit 主解析 + 手写解析兜底合并）。
 
     guessit 擅长处理站点前缀、父目录路径、季集结构与发布组；手写解析补充多部曲
@@ -1595,7 +1599,7 @@ def _extract_scraper_title_candidates(raw: str) -> List[str]:
     candidates = _merge_scraper_title_candidates(candidates + _legacy_extract_scraper_title_candidates(text))
     split_candidates: List[str] = []
     for candidate in candidates:
-        split_candidates.extend(_split_scraper_mixed_language_title(candidate))
+        split_candidates.extend(_split_scraper_mixed_language_title(candidate, preserve_colon=preserve_colon))
     candidates = _merge_scraper_title_candidates(split_candidates + candidates)
     return candidates
 
@@ -1700,6 +1704,15 @@ def _strip_scraper_media_label_prefix(value: str) -> str:
     return _SCRAPER_MEDIA_LABEL_PREFIX_RE.sub("", str(value or "")).strip()
 
 
+def _sanitize_folder_preserving_colon(value: Any, fallback: Any = "") -> str:
+    """目录名安全化时保留标题内的冒号（转全角），去掉孤立首尾冒号/空格。"""
+    text = str(value or "").replace(":", "：").strip()
+    text = re.sub(r"^[：\s]+", "", text)
+    text = re.sub(r"[：\s]+$", "", text)
+    text = re.sub(r"：\s+", "：", text)
+    return sanitize_115_folder_name(text, fallback=fallback).strip()
+
+
 def recommend_media_folder_name(title: str, year: str = "", raw_text: str = "") -> str:
     """按刮削标题解析规则生成“片名 (年份)”形式的推荐文件夹名。
 
@@ -1709,20 +1722,20 @@ def recommend_media_folder_name(title: str, year: str = "", raw_text: str = "") 
     """
     source = str(title or "").strip() or str(raw_text or "").strip()
     candidate = ""
-    for item in _extract_scraper_title_candidates(source):
-        cleaned = sanitize_115_folder_name(item, fallback="").strip()
+    for item in _extract_scraper_title_candidates(source, preserve_colon=True):
+        cleaned = _sanitize_folder_preserving_colon(item, fallback="")
         if len(_scraper_keyword_key(cleaned)) >= 2 and not _is_scraper_generic_keyword(cleaned):
             candidate = cleaned
             break
     if not candidate:
-        candidate = _clean_search_title(source)
+        candidate = _sanitize_folder_preserving_colon(_clean_search_title(source), fallback="")
     candidate = _strip_scraper_media_label_prefix(candidate)
-    candidate = sanitize_115_folder_name(candidate, fallback="").strip()
+    candidate = _sanitize_folder_preserving_colon(candidate, fallback="")
     if not candidate:
         return "未命名影视"
     normalized_year = normalize_tmdb_year(year)
     if normalized_year:
-        candidate = sanitize_115_folder_name(
+        candidate = _sanitize_folder_preserving_colon(
             f"{candidate} ({normalized_year})",
             fallback=candidate,
         )

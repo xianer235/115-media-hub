@@ -9452,6 +9452,11 @@
         html.theme-day .text-sky-500 { color: #0369a1 !important; }
         html.theme-day .text-sky-700 { color: #075985 !important; }
         /* provider toggle switch - day mode */
+        .provider-chevron {
+            color: #94a3b8;
+            transition: transform 0.18s ease;
+        }
+        .provider-chevron.is-open { transform: rotate(180deg); }
         html.theme-day .provider-toggle {
             background: #cbd5e1 !important;
             box-shadow: inset 0 1px 3px rgba(15, 23, 42, 0.12);
@@ -9462,6 +9467,7 @@
         html.theme-day .peer:checked + .provider-toggle {
             background: rgba(16, 185, 129, 0.55) !important;
         }
+        html.theme-day .provider-chevron { color: #64748b !important; }
         html.theme-day .cookie-health-bar {
             border-color: rgba(148, 163, 184, 0.74);
             background: rgba(248, 250, 252, 0.95);
@@ -16286,6 +16292,12 @@
             font-size: 0.82rem;
         }
         .resource-ed2k-folder-input:disabled { opacity: 0.5; }
+        .resource-ed2k-empty-name-hint {
+            margin-top: 0.4rem;
+            color: #fbbf24;
+            font-size: 0.72rem;
+            line-height: 1.4;
+        }
         .resource-ed2k-reselect-btn {
             width: 42px;
             height: 42px;

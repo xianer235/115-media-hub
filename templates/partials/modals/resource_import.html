@@ -33,6 +33,20 @@
                                     </div>
                                 </div>
                             </div>
+                            <div id="resource-import-stepper" class="resource-import-stepper hidden">
+                                <div class="resource-import-step" data-step="1">
+                                    <span class="resource-import-step-index">1</span>
+                                    <span class="resource-import-step-text">选择资源</span>
+                                </div>
+                                <div class="resource-import-step" data-step="2">
+                                    <span class="resource-import-step-index">2</span>
+                                    <span class="resource-import-step-text">选择目录</span>
+                                </div>
+                                <div class="resource-import-step" data-step="3">
+                                    <span class="resource-import-step-index">3</span>
+                                    <span class="resource-import-step-text">提交导入</span>
+                                </div>
+                            </div>
                             <div id="resource-ed2k-card" class="resource-detail-card resource-ed2k-card hidden">
                                 <div id="resource-ed2k-status" class="resource-ed2k-status hidden"></div>
                                 <section id="resource-ed2k-files-section" class="resource-ed2k-section hidden">
@@ -58,20 +72,6 @@
                                     </div>
                                 </div>
                                 <div id="resource-import-raw-text" class="resource-detail-text">--</div>
-                            </div>
-                            <div id="resource-import-stepper" class="resource-import-stepper hidden">
-                                <div class="resource-import-step" data-step="1">
-                                    <span class="resource-import-step-index">1</span>
-                                    <span class="resource-import-step-text">选择资源</span>
-                                </div>
-                                <div class="resource-import-step" data-step="2">
-                                    <span class="resource-import-step-index">2</span>
-                                    <span class="resource-import-step-text">选择目录</span>
-                                </div>
-                                <div class="resource-import-step" data-step="3">
-                                    <span class="resource-import-step-index">3</span>
-                                    <span class="resource-import-step-text">提交导入</span>
-                                </div>
                             </div>
                             <div id="resource-share-browser-card" class="resource-detail-card hidden">
                                 <div class="resource-import-toolbar">
@@ -159,6 +159,7 @@
                                                     </svg>
                                                 </button>
                                             </div>
+                                            <div id="resource-ed2k-empty-name-hint" class="resource-ed2k-empty-name-hint hidden">名称为空时将直接保存到所选目录</div>
                                         </div>
                                         <div class="resource-import-compact-meta">
                                             <div class="resource-import-compact-item">
