@@ -1,12 +1,24 @@
 import asyncio
+import time
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from ..background import submit_background
 from ..config_runtime import build_public_settings_payload, merge_settings_preserve_sensitive
 from ..core import *  # noqa: F401,F403
+from ..http_utils import http_request_bytes
 from ..providers.registry import get_or_none as _get_provider_or_none
+from ..providers.aliyun_oauth import create_aliyun_oauth_session, exchange_aliyun_code
+from ..providers.pan115_qr import (
+    build_115_qrcode_image_url,
+    get_115_qr_apps,
+    get_115_qr_default_app,
+    get_115_qrcode_status,
+    get_115_qrcode_token,
+    normalize_115_qr_app,
+    post_115_qrcode_result,
+)
 from ..services.notify import send_notify_test_message
 from ..services.sign115 import refresh_sign115_status, run_sign115_job
 
@@ -223,3 +235,202 @@ async def test_provider_cookie(request: Request) -> JSONResponse:
             return JSONResponse(content={"ok": False, "error": error_msg or "认证失败"})
     except Exception as e:
         return JSONResponse(status_code=400, content={"ok": False, "error": str(e)})
+
+
+@router.get("/settings/providers/115/qrcode/apps")
+async def get_115_qrcode_apps_endpoint(request: Request) -> Dict[str, Any]:
+    """返回 115 扫码可选的客户端列表（含推荐/默认标记）。"""
+    return {"ok": True, "apps": get_115_qr_apps(), "default": get_115_qr_default_app()}
+
+
+@router.get("/settings/providers/115/qrcode/token")
+async def get_115_qrcode_token_endpoint(request: Request) -> JSONResponse:
+    """第一步：获取 115 扫码二维码 token 及透传用的图片地址。"""
+    try:
+        data = await asyncio.to_thread(get_115_qrcode_token)
+        uid = str(data.get("uid", "") or "").strip()
+        return JSONResponse(content={
+            "ok": True,
+            "uid": uid,
+            "time": data.get("time", ""),
+            "sign": data.get("sign", ""),
+            "image_url": build_115_qrcode_image_url(uid),
+        })
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+
+
+@router.get("/settings/providers/115/qrcode/image")
+async def get_115_qrcode_image_endpoint(request: Request) -> Response:
+    """透传 115 官方二维码图片（避免前端直连 115 被 CORS 拦）。"""
+    uid = request.query_params.get("uid", "").strip()
+    if not uid:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "缺少 uid"})
+    try:
+        content = await asyncio.to_thread(
+            http_request_bytes,
+            build_115_qrcode_image_url(uid),
+            20,
+            {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"},
+        )
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+    return Response(content=content, media_type="image/png")
+
+
+@router.get("/settings/providers/115/qrcode/status")
+async def get_115_qrcode_status_endpoint(request: Request) -> JSONResponse:
+    """第二步：轮询扫码状态。status: 0等待 1已扫 2已登录 -1过期 -2取消。"""
+    uid = request.query_params.get("uid", "").strip()
+    time = request.query_params.get("time", "")
+    sign = request.query_params.get("sign", "")
+    if not uid or not time or not sign:
+        return JSONResponse(content={"ok": False, "error": "缺少二维码参数"})
+    try:
+        status = await asyncio.to_thread(get_115_qrcode_status, uid, time, sign)
+        return JSONResponse(content={"ok": True, "status": status})
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+
+
+@router.post("/settings/providers/115/qrcode/result")
+async def post_115_qrcode_result_endpoint(request: Request) -> JSONResponse:
+    """第三步：扫码成功后绑定设备、写入 cookie_115 并触发健康检查。"""
+    try:
+        incoming = await request.json()
+    except Exception:
+        incoming = {}
+    payload = incoming if isinstance(incoming, dict) else {}
+    uid = str(payload.get("uid", "") or "").strip()
+    app = str(payload.get("app", "") or "").strip()
+    if not uid:
+        return JSONResponse(content={"ok": False, "error": "缺少 uid"})
+    try:
+        cookie = await asyncio.to_thread(post_115_qrcode_result, uid, app)
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+
+    cfg = get_config()
+    cfg["cookie_115"] = cookie
+    save_config(cfg)
+    mark_cookie_health_checking("115", trigger="qrcode_login")
+    submit_background(_run_postsave_health_checks, label="postsave-health-checks")
+    return JSONResponse(content={
+        "ok": True,
+        "app": normalize_115_qr_app(app),
+        "message": "扫码成功，已绑定并保存 Cookie",
+    })
+
+
+@router.get("/settings/providers/aliyun/oauth/start")
+async def get_aliyun_oauth_start(request: Request) -> JSONResponse:
+    """生成阿里云盘官方授权会话，返回 state 与授权地址（页面含扫码二维码）。"""
+    try:
+        session = create_aliyun_oauth_session()
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+    return JSONResponse(content={
+        "ok": True,
+        "state": session["state"],
+        "authorize_url": session["authorize_url"],
+        "code_verifier": session["code_verifier"],
+    })
+
+
+@router.post("/settings/providers/aliyun/oauth/complete")
+async def post_aliyun_oauth_complete(request: Request) -> JSONResponse:
+    """用授权码换取访问凭证（公开客户端返回长期 access_token），写入配置并做一次连接检测。"""
+    try:
+        incoming = await request.json()
+    except Exception:
+        incoming = {}
+    payload = incoming if isinstance(incoming, dict) else {}
+    state = str(payload.get("state", "") or "").strip()
+    code = str(payload.get("code", "") or "").strip()
+    code_verifier = str(payload.get("code_verifier", "") or "").strip()
+    if not state or not code or not code_verifier:
+        return JSONResponse(content={"ok": False, "error": "缺少 state/code/code_verifier"})
+    try:
+        token_bundle = await asyncio.to_thread(exchange_aliyun_code, code, code_verifier)
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc), "message": str(exc)})
+
+    access_token = str(token_bundle.get("access_token", "") or "").strip()
+    refresh_token = str(token_bundle.get("refresh_token", "") or "").strip()
+    if not access_token and not refresh_token:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "error": "授权成功但响应缺少 access_token（公开客户端不返回 refresh_token）",
+                "message": "授权成功但响应缺少 access_token（公开客户端不返回 refresh_token）",
+            },
+        )
+
+    cfg = get_config()
+    if access_token:
+        # 公开客户端：30 天有效期、不支持刷新，直接存为令牌并按 access_token 模式使用
+        expires_in = int(token_bundle.get("expires_in", 2592000) or 2592000)
+        cfg["aliyun_refresh_token"] = access_token
+        cfg["aliyun_token_is_access"] = True
+        cfg["aliyun_access_expires_at"] = time.time() + expires_in
+    else:
+        cfg["aliyun_refresh_token"] = refresh_token
+        cfg["aliyun_token_is_access"] = False
+        cfg["aliyun_access_expires_at"] = 0
+    save_config(cfg)
+
+    provider = _get_provider_or_none("aliyun")
+    probe_ok = False
+    if provider is not None:
+        try:
+            probe_ok = await asyncio.to_thread(
+                provider.probe_connectivity, access_token or refresh_token
+            )
+        except Exception:
+            probe_ok = False
+
+    submit_background(_run_postsave_health_checks, label="postsave-health-checks")
+    return JSONResponse(content={
+        "ok": True,
+        "probe_ok": probe_ok,
+        "message": "阿里云盘授权成功，已保存访问凭证" + ("，连接检测成功" if probe_ok else "，连接检测失败，请检查"),
+    })
+
+
+@router.get("/settings/providers/{provider}/credential")
+async def get_provider_credential(provider: str) -> JSONResponse:
+    """回显某网盘已保存的凭证（Cookie / access_token），便于复制到其它应用。
+
+    仅返回该 provider 的 config_keys 中非空值；主凭证取第一个非空 config_key
+    （按 get_cookie 的约定）。该路由挂载在 settings_router 下，受 require_auth 保护。
+    """
+    prov = _get_provider_or_none(provider)
+    if prov is None:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "未知网盘"})
+
+    cfg = get_config()
+    keys = list(prov.config_keys or []) or [f"cookie_{prov.name}"]
+    credentials: Dict[str, str] = {}
+    for key in keys:
+        value = str(cfg.get(key, "") or "").strip()
+        if value:
+            credentials[key] = value
+
+    primary_key = ""
+    primary_value = ""
+    for key in keys:
+        if key in credentials:
+            primary_key = key
+            primary_value = credentials[key]
+            break
+
+    return JSONResponse(content={
+        "ok": True,
+        "provider": provider,
+        "label": prov.label,
+        "configured": bool(credentials),
+        "credential_key": primary_key,
+        "credential": primary_value,
+        "credentials": credentials,
+    })

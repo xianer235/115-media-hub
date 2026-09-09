@@ -107,6 +107,20 @@ def http_request_text(
         return decode_response_body(resp)
 
 
+def http_request_bytes(
+    url: str,
+    timeout: int = 30,
+    extra_headers: Optional[Dict[str, str]] = None,
+    proxy_url: str = "",
+) -> bytes:
+    """读取响应原始字节，用于透传图片等二进制内容。"""
+    normalized_url = normalize_http_url(url)
+    headers = dict(extra_headers or {})
+    req = urllib.request.Request(normalized_url, headers=headers, method="GET")
+    with build_http_opener(proxy_url).open(req, timeout=timeout) as resp:
+        return resp.read()
+
+
 def http_request_text_with_final_url(
     url: str,
     timeout: int = 30,

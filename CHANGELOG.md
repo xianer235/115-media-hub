@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.4] - 2026-09-09
+
+### 115 网盘内置扫码登录
+
+- 设置页「网盘认证与签到」的 115 认证块新增「扫码登录」：后端三步扫码（`qrcodeapi.115.com` 取 token/轮询状态 → `passportapi.115.com` 换 Cookie），前端展示二维码与扫码客户端，扫码成功后自动写入 `cookie_115` 并触发健康检查。
+- 扫码客户端可手选，默认微信小程序（推荐），可选支付宝小程序、电视端、安卓/iOS 等；默认使用不常用设备身份，避免把你已登录的网页端或 App 挤下线。已剔除下架的 linux/mac/windows 客户端。
+
+### 阿里云盘内置官方 OAuth + PKCE 扫码授权
+
+- 阿里云盘认证改为内置官方 OAuth：公开客户端 `client_id` + `redirect_uri=oob`，设置页新增「内置扫码授权」，授权码输入 + 绑定保存，无需第三方中转（原 `aliyuntoken.vercel.app` 降级为备用说明）。
+- 修复换取链路：PDS 的 `oauth/access_token` 只接受 `application/x-www-form-urlencoded`（改表单提交）；公开客户端实际走 **plain PKCE**（`code_challenge` 直接等于 `code_verifier`，官方文档明确"原始值而非摘要值"），此前按标准 S256 会报 `invalid s256 code_verifier`。
+- 公开客户端返回的是 **30 天有效期的 access_token 且不支持刷新**（无 refresh_token）：因此把 access_token 作为阿里云盘令牌保存（`aliyun_token_is_access` 标记 + 到期时间），`_ensure_access_token` 直接当 Bearer 使用；保留早期手动粘贴 refresh_token 的刷新流程做兼容。到期后需重新扫码授权一次。
+
+### 设置页「网盘认证与签到」布局优化
+
+- 对 115 / 阿里云：把「扫码登录 / 扫码授权」作为「推荐」置顶，手动粘贴（Cookie / token）降为「备用」，底部统一「健康检查」；两块视觉样式统一（同徽章、同标题字重、同说明层级）。
+- 修复「推荐 / 备用」两行左侧起始位置不一致（去掉内嵌面板的多余内边距）；修复日/夜模式未适配（扫描面板改 `bg-slate-900/50`，日间翻成 `--surface` 白底）；精简说明文案、调整描述与徽章基线。
+
+### 网盘凭证回显 / 一键复制
+
+- 新增 `GET /settings/providers/{name}/credential`（挂 `settings_router`，受 `require_auth` 登录保护），返回已保存的 Cookie / access_token。
+- 设置页每张网盘卡「健康检查」行新增「复制凭证」按钮：一键复制已配置的 Cookie/access_token 到剪贴板（失败降级为弹窗手动复制），便于把同一凭证粘到其它应用。仅 cookie/password_cookie/refresh_token 类型网盘显示；账号密码型（123云盘）不显示；未配置时置灰。
+
+### 验证
+
+- 新增 `tests/test_pan115_qr.py`（10 项）、`tests/test_aliyun_oauth.py`（16 项）、`tests/test_provider_credential.py`（4 项）；完整 unittest 通过，`compileall`、改动 JS `node --check`、`git diff --check`、`version.json` JSON 解析均通过；Docker 未重建，真实 115 扫码与阿里云盘授权链路需在部署后使用真实账号复测。
+
 ## [0.10.3] - 2026-09-07
 
 ### 油猴脚本“不生效的网页（排除域名）”

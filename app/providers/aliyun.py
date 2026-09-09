@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 import requests
 
 from .base import CloudProvider
+from .aliyun_oauth import ALIYUN_OPEN_CLIENT_ID, build_aliyun_refresh_payload
 from .registry import register
 
 
@@ -44,23 +45,55 @@ class AliyunProvider(CloudProvider):
         with self._token_lock:
             if self._access_token and now < self._token_expiry - 60:
                 return self._access_token
+            # 公开客户端（无 AppSecret）授权拿到的是 30 天有效期的 access_token 且不支持刷新，
+            # 因此标记后直接作为 Bearer 使用；手动/旧三方 refresh_token 仍走刷新流程（兼容）。
+            is_access_mode = False
+            stored_access = ""
+            expires_at = 0.0
+            try:
+                from ..core import get_config as _get_aliyun_config
+
+                cfg = _get_aliyun_config()
+                is_access_mode = (
+                    str(cfg.get("aliyun_token_is_access", "") or "").strip().lower()
+                    in ("1", "true", "yes")
+                )
+                stored_access = str(cfg.get("aliyun_refresh_token", "") or "").strip()
+                expires_at = float(cfg.get("aliyun_access_expires_at", 0) or 0)
+            except Exception:
+                is_access_mode = False
+            if is_access_mode:
+                if not stored_access:
+                    raise RuntimeError("阿里云盘 access_token 为空，请重新扫码授权")
+                if expires_at and now >= expires_at - 60:
+                    raise RuntimeError("阿里云盘 access_token 已过期，请重新扫码授权")
+                self._access_token = stored_access
+                self._token_expiry = expires_at or now + 30 * 86400
+                return stored_access
             last_error = None
+            # 官方 Open API 优先（公开客户端 + client_id）；其余阿里云盘自有域名端点保留作回退，
+            # 兼容早期手动粘贴的 refresh_token。不再依赖第三方中继（api.alistgo.com）刷新。
             token_endpoints = [
-                "https://auth.alipan.com/v2/account/token",
-                "https://auth.aliyundrive.com/v2/account/token",
-                "https://api.alistgo.com/alist/ali_open/token",
+                ("https://openapi.alipan.com/oauth/access_token", {"client_id": ALIYUN_OPEN_CLIENT_ID}),
+                ("https://auth.alipan.com/v2/account/token", {}),
+                ("https://auth.aliyundrive.com/v2/account/token", {}),
             ]
-            for url in token_endpoints:
+            for url, extra in token_endpoints:
                 try:
-                    resp = requests.post(
-                        url,
-                        json={
-                            "grant_type": "refresh_token",
-                            "refresh_token": refresh_token,
-                        },
-                        headers={"Content-Type": "application/json"},
-                        timeout=15,
-                    )
+                    if extra:
+                        # 官方 Open API 上报 application/x-www-form-urlencoded
+                        resp = requests.post(
+                            url,
+                            data=build_aliyun_refresh_payload(refresh_token),
+                            timeout=15,
+                        )
+                    else:
+                        resp = requests.post(
+                            url,
+                            json={"grant_type": "refresh_token", "refresh_token": refresh_token},
+                            headers={"Content-Type": "application/json"},
+                            timeout=15,
+                        )
                     resp.raise_for_status()
                     data = resp.json()
                     token = data.get("access_token")
@@ -71,10 +104,17 @@ class AliyunProvider(CloudProvider):
                         if drive_id:
                             self._drive_id = drive_id
                         return token
-                    err_msg = str(data.get("message", "") or data.get("error_description", "") or "")
+                    err_msg = str(
+                        data.get("message", "")
+                        or data.get("error_description", "")
+                        or data.get("error", "")
+                        or data.get("msg", "")
+                    ).strip()
+                    # 官方端点报 invalid_client / invalid_grant（token 不匹配该 client）时，
+                    # 记下错误并继续尝试回退端点，不在此处中断。
                     if err_msg:
                         last_error = err_msg
-                        break
+                        continue
                 except requests.RequestException as exc:
                     last_error = str(exc)
                     continue

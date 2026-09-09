@@ -991,6 +991,8 @@ def default_config() -> Dict[str, Any]:
         "123pan_username": "",
         "123pan_password": "",
         "aliyun_refresh_token": "",
+        "aliyun_token_is_access": False,
+        "aliyun_access_expires_at": 0,
         "provider_enabled": _build_provider_enabled_defaults(),
         "default_magnet_provider": "115",
         "sign115_enabled": False,

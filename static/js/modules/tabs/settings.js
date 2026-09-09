@@ -621,7 +621,7 @@ export function renderProviderAuthBlocks(cfg, sensitiveMeta) {
             ? ((!!sm[mixedUsernameKey] && !!sm[mixedPasswordKey]) || !!sm[cookieKey])
             : !!sm[cookieKey];
         const placeholder = p.auth_type === 'refresh_token'
-            ? '粘贴 refresh_token'
+            ? (p.name === 'aliyun' ? '粘贴 access_token / refresh_token' : '粘贴 refresh_token')
             : p.auth_type === 'password'
             ? '输入 ' + p.label + ' 账号'
             : p.auth_type === 'password_cookie'
@@ -629,8 +629,10 @@ export function renderProviderAuthBlocks(cfg, sensitiveMeta) {
             : '粘贴 ' + p.label + ' Cookie';
 
         let authHint = '';
-        if (p.auth_type === 'refresh_token') {
-            authHint = '<a href="https://aliyuntoken.vercel.app/" target="_blank" class="text-xs text-blue-400 hover:text-blue-300">获取 refresh_token（手机扫码）</a>';
+        if (p.auth_type === 'refresh_token' && p.name === 'aliyun') {
+            authHint = '<span class="text-xs text-slate-500">内置扫码授权后可自动填写（长期 access_token）；也可粘贴旧 refresh_token</span>';
+        } else if (p.auth_type === 'refresh_token') {
+            authHint = '<a href="https://aliyuntoken.vercel.app/" target="_blank" class="text-xs text-blue-400 hover:text-blue-300">备用：用第三方工具获取 refresh_token（不推荐）</a>';
         } else if (p.auth_type === 'oauth2') {
             authHint = '<span class="text-xs text-slate-500">Cookie + OAuth2 自动续期</span>';
         } else if (p.auth_type === 'password') {
@@ -651,6 +653,77 @@ export function renderProviderAuthBlocks(cfg, sensitiveMeta) {
             ? '<span class="w-2 h-2 rounded-full bg-emerald-400 inline-block ml-1" title="已配置"></span>'
             : '<span class="w-2 h-2 rounded-full bg-slate-600 inline-block ml-1" title="未配置"></span>';
 
+        const isScanProvider = p.name === '115' || p.name === 'aliyun';
+
+        const manualInputs = p.auth_type === 'password'
+            ? ('<input id="' + cookieKey + '" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-2" placeholder="' + placeholder + '">' +
+               '<input id="' + passwordKey + '" type="password" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-2" placeholder="输入 ' + p.label + ' 密码">')
+            : p.auth_type === 'password_cookie'
+            ? ('<input id="' + mixedUsernameKey + '" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-2" placeholder="输入 ' + p.label + ' 账号">' +
+               '<input id="' + mixedPasswordKey + '" type="password" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-2" placeholder="输入 ' + p.label + ' 密码">' +
+               '<textarea id="' + cookieKey + '" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-2 font-mono" rows="3" placeholder="' + placeholder + '"></textarea>')
+            : '<textarea id="' + cookieKey + '" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-2 font-mono" rows="3" placeholder="' + placeholder + '"></textarea>';
+
+        const canCopyCredential = ['cookie', 'password_cookie', 'refresh_token'].includes(p.auth_type);
+        const copyStatusId = 'provider-copy-status-' + p.name;
+        const copyButton = canCopyCredential
+            ? '<button type="button" id="provider-copy-' + p.name + '" onclick="copyProviderCredential(\'' + p.name + '\')" ' +
+              'class="text-xs text-slate-400 hover:text-slate-200 bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded-lg transition-colors' + (isConfigured ? '' : ' opacity-50 cursor-not-allowed') + '"' +
+              (isConfigured ? '' : ' disabled title="未配置凭证"') + '>复制凭证</button>' +
+              '<span id="' + copyStatusId + '" class="text-xs text-slate-500"></span>'
+            : '';
+        const healthRow = '<div class="mt-2 flex items-center gap-2">' +
+            '<button type="button" onclick="testProviderCookie(\'' + p.name + '\')" class="text-xs text-slate-400 hover:text-slate-200 bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded-lg transition-colors">健康检查</button>' +
+            '<span id="provider-health-' + p.name + '" class="text-xs text-slate-500"></span>' +
+            copyButton +
+        '</div>';
+
+        const scanBlock = p.name === '115'
+            ? '<div id="pan115-qr-wrap">' +
+                '<div class="flex items-center justify-between mb-2">' +
+                    '<div class="flex items-center gap-2">' +
+                        '<span class="text-[11px] leading-4 px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-400/30">推荐</span>' +
+                        '<span class="text-sm font-medium text-slate-200">扫码登录</span>' +
+                    '</div>' +
+                    '<button type="button" id="pan115-qr-btn" onclick="start115QrLogin()" class="text-xs text-slate-200 hover:text-white bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded-lg transition-colors">获取二维码</button>' +
+                '</div>' +
+                '<p class="text-[11px] leading-relaxed text-slate-500 mb-2">用不常用设备（微信/支付宝小程序、电视端）扫码，自动写入 Cookie，不挤掉你现有登录。</p>' +
+                '<div class="mb-2">' +
+                    '<label class="text-[11px] text-slate-500 block mb-1" for="pan115-qr-client">扫码客户端</label>' +
+                    '<select id="pan115-qr-client" class="w-full bg-slate-900 border-slate-700 rounded-xl p-2 text-sm">' +
+                        '<option value="wechatmini" selected>微信小程序</option>' +
+                    '</select>' +
+                '</div>' +
+                '<div id="pan115-qr" class="hidden">' +
+                    '<img id="pan115-qr-image" class="w-44 h-44 bg-white rounded-xl p-1" alt="115 扫码二维码" />' +
+                    '<div id="pan115-qr-status" class="text-xs text-slate-500 mt-2"></div>' +
+                '</div>' +
+            '</div>'
+            : p.name === 'aliyun'
+            ? '<div id="aliyun-oauth-wrap">' +
+                '<div class="flex items-center justify-between mb-2">' +
+                    '<div class="flex items-center gap-2">' +
+                        '<span class="text-[11px] leading-4 px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-400/30">推荐</span>' +
+                        '<span class="text-sm font-medium text-slate-200">扫码授权</span>' +
+                    '</div>' +
+                    '<button type="button" id="aliyun-oauth-btn" onclick="startAliyunOAuth()" class="text-xs text-slate-200 hover:text-white bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded-lg transition-colors">获取授权码</button>' +
+                '</div>' +
+                '<p class="text-[11px] leading-relaxed text-slate-500 mb-2">官方 OAuth 授权，扫码后自动写入长期 access_token，有效约 30 天，到期重扫一次即可。</p>' +
+                '<div class="flex items-center gap-2">' +
+                    '<input id="aliyun-oauth-code" class="flex-1 min-w-0 bg-slate-900 border-slate-700 rounded-xl p-3 text-sm font-mono" placeholder="粘贴授权码（code）" />' +
+                    '<button type="button" id="aliyun-oauth-bind-btn" onclick="bindAliyunCode()" class="shrink-0 text-xs text-slate-200 hover:text-white bg-slate-700 hover:bg-slate-600 px-3 py-2 rounded-lg transition-colors">绑定并保存</button>' +
+                '</div>' +
+                '<div id="aliyun-oauth-status" class="text-xs text-slate-500 mt-2"></div>' +
+            '</div>'
+            : '';
+
+        const manualLabel = scanBlock
+            ? '<div class="flex items-center gap-2 mb-1">' +
+                '<span class="text-[11px] leading-4 px-1.5 py-0.5 rounded bg-slate-700/40 text-slate-400 border border-slate-600">备用</span>' +
+                '<span class="text-xs text-slate-400">手动粘贴 ' + (p.name === 'aliyun' ? 'access_token / refresh_token' : 'Cookie') + '</span>' +
+              '</div>'
+            : '';
+
         return '<div class="provider-auth-block mb-3 bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">' +
             '<div data-provider-header="' + p.name + '" class="flex items-center justify-between p-3 cursor-pointer" role="button" aria-expanded="false" onclick="toggleProviderBlock(\'' + p.name + '\')">' +
                 '<div class="flex items-center gap-3">' +
@@ -669,22 +742,302 @@ export function renderProviderAuthBlocks(cfg, sensitiveMeta) {
                 '</div>' +
             '</div>' +
             '<div id="provider-block-body-' + p.name + '" class="p-3 pt-0 border-t border-slate-700/50 hidden">' +
-                authHint +
-                (p.auth_type === 'password'
-                    ? ('<input id="' + cookieKey + '" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-2" placeholder="' + placeholder + '">' +
-                       '<input id="' + passwordKey + '" type="password" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-2" placeholder="输入 ' + p.label + ' 密码">')
-                    : p.auth_type === 'password_cookie'
-                    ? ('<input id="' + mixedUsernameKey + '" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-2" placeholder="输入 ' + p.label + ' 账号">' +
-                       '<input id="' + mixedPasswordKey + '" type="password" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-2" placeholder="输入 ' + p.label + ' 密码">' +
-                       '<textarea id="' + cookieKey + '" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-2 font-mono" rows="3" placeholder="' + placeholder + '"></textarea>')
-                    : '<textarea id="' + cookieKey + '" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-2 font-mono" rows="3" placeholder="' + placeholder + '"></textarea>') +
-                '<div class="mt-2 flex items-center gap-2">' +
-                    '<button type="button" onclick="testProviderCookie(\'' + p.name + '\')" class="text-xs text-slate-400 hover:text-slate-200 bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded-lg transition-colors">健康检查</button>' +
-                    '<span id="provider-health-' + p.name + '" class="text-xs text-slate-500"></span>' +
-                '</div>' +
+                (scanBlock
+                    ? scanBlock +
+                      '<div class="mt-3 pt-3 border-t border-slate-700/50">' + manualLabel + manualInputs + '</div>' +
+                      healthRow
+                    : authHint + manualInputs + healthRow) +
             '</div>' +
         '</div>';
     }).join('');
+
+    populatePan115QrClients();
+}
+
+let _pan115QrTimer = null;
+let _pan115QrAttempts = 0;
+const _PAN115_QR_DEFAULT_CLIENTS = [
+    ['wechatmini', '微信小程序（推荐，默认）'],
+    ['alipaymini', '支付宝小程序（推荐）'],
+    ['tv', '电视端 TV（推荐）'],
+    ['qandroid', '安卓 Q 版'],
+    ['android', '安卓 App'],
+    ['ios', 'iOS App'],
+    ['web', '网页端 Web（不推荐，会顶掉现有登录）'],
+];
+
+function _fillPan115QrClientDefaults(selectEl) {
+    if (!selectEl) return;
+    selectEl.innerHTML = _PAN115_QR_DEFAULT_CLIENTS.map(([value, label]) =>
+        '<option value="' + escapeHtml(value) + '"' + (value === 'wechatmini' ? ' selected' : '') + '>' + escapeHtml(label) + '</option>'
+    ).join('');
+}
+
+async function populatePan115QrClients() {
+    const selectEl = document.getElementById('pan115-qr-client');
+    if (!selectEl) return;
+    try {
+        const data = await window.MediaHubApi.getJson('/settings/providers/115/qrcode/apps');
+        const apps = Array.isArray(data?.apps) ? data.apps : [];
+        if (apps.length) {
+            selectEl.innerHTML = apps.map((a) =>
+                '<option value="' + escapeHtml(a.value) + '"' + (a.default ? ' selected' : '') + '>' +
+                escapeHtml(a.label) + (a.rec ? '（推荐）' : '') + '</option>'
+            ).join('');
+            return;
+        }
+    } catch (_) { /* fall through to defaults */ }
+    _fillPan115QrClientDefaults(selectEl);
+}
+
+function _pan115QrSetStatus(text, isError = false) {
+    const statusEl = document.getElementById('pan115-qr-status');
+    if (statusEl) {
+        statusEl.textContent = text;
+        statusEl.className = 'text-xs mt-2 ' + (isError ? 'text-red-400' : 'text-slate-500');
+    }
+}
+
+function _pan115QrResetButton() {
+    const btn = document.getElementById('pan115-qr-btn');
+    if (btn) {
+        btn.disabled = false;
+        btn.innerText = '获取二维码';
+    }
+}
+
+function _pan115QrStop() {
+    if (_pan115QrTimer) {
+        clearInterval(_pan115QrTimer);
+        _pan115QrTimer = null;
+    }
+}
+
+function _pan115QrClientValue() {
+    const selectEl = document.getElementById('pan115-qr-client');
+    return selectEl ? (selectEl.value || 'wechatmini') : 'wechatmini';
+}
+
+async function start115QrLogin() {
+    const wrap = document.getElementById('pan115-qr');
+    const img = document.getElementById('pan115-qr-image');
+    const btn = document.getElementById('pan115-qr-btn');
+    if (!wrap || !img) return;
+    _pan115QrStop();
+    _pan115QrAttempts = 0;
+    if (btn) {
+        btn.disabled = true;
+        btn.innerText = '获取中…';
+    }
+    _pan115QrSetStatus('正在获取二维码…');
+    wrap.classList.remove('hidden');
+    try {
+        const data = await window.MediaHubApi.getJson('/settings/providers/115/qrcode/token');
+        if (!data?.ok) throw new Error(data?.error || '获取二维码失败');
+        const uid = data.uid, time = data.time, sign = data.sign;
+        img.src = '/settings/providers/115/qrcode/image?uid=' + encodeURIComponent(uid);
+        _pan115QrSetStatus('请使用 115 App 或所选客户端扫码（默认微信小程序）');
+        _pan115QrTimer = setInterval(() => poll115QrLogin(uid, time, sign), 2000);
+    } catch (e) {
+        _pan115QrSetStatus('✗ 获取二维码失败：' + (e?.message || e), true);
+        _pan115QrResetButton();
+    }
+}
+
+async function poll115QrLogin(uid, time, sign) {
+    _pan115QrAttempts += 1;
+    try {
+        const data = await window.MediaHubApi.getJson(
+            '/settings/providers/115/qrcode/status?uid=' + encodeURIComponent(uid) +
+            '&time=' + encodeURIComponent(time) +
+            '&sign=' + encodeURIComponent(sign)
+        );
+        const code = Number(data?.status);
+        if (code === 0) {
+            _pan115QrSetStatus('等待扫码…');
+        } else if (code === 1) {
+            _pan115QrSetStatus('已扫码，请在手机上确认…');
+        } else if (code === 2) {
+            _pan115QrStop();
+            await finish115QrLogin(uid);
+            return;
+        } else if (code === -1) {
+            _pan115QrStop();
+            _pan115QrSetStatus('二维码已过期，请重新获取', true);
+            _pan115QrResetButton();
+        } else if (code === -2) {
+            _pan115QrStop();
+            _pan115QrSetStatus('已取消扫码', true);
+            _pan115QrResetButton();
+        } else {
+            _pan115QrStop();
+            _pan115QrSetStatus('二维码状态异常，请重新获取', true);
+            _pan115QrResetButton();
+        }
+    } catch (e) {
+        _pan115QrStop();
+        _pan115QrSetStatus('轮询失败：' + (e?.message || e), true);
+        _pan115QrResetButton();
+    }
+    if (_pan115QrAttempts >= 90) {
+        _pan115QrStop();
+        _pan115QrSetStatus('二维码已超时，请重新获取', true);
+        _pan115QrResetButton();
+    }
+}
+
+async function finish115QrLogin(uid) {
+    _pan115QrSetStatus('扫码成功，正在绑定设备并保存 Cookie…');
+    try {
+        const app = _pan115QrClientValue();
+        const data = await window.MediaHubApi.postJson('/settings/providers/115/qrcode/result', { uid, app });
+        if (data?.ok) {
+            _pan115QrSetStatus('✓ 已绑定「' + (data.app || app) + '」，Cookie 已保存，正在检测…');
+            if (typeof window.checkCookieHealthProvider === 'function') {
+                window.checkCookieHealthProvider('115');
+            }
+            if (typeof window.renderProviderAuthBlocks === 'function' && typeof window.MediaHubApi === 'object') {
+                window.MediaHubApi.getJson('/get_settings').then((cfg) => {
+                    if (cfg && typeof window.renderProviderAuthBlocks === 'function') {
+                        window.renderProviderAuthBlocks(cfg, cfg.sensitive_configured || {});
+                    }
+                }).catch(() => {});
+            }
+        } else {
+            _pan115QrSetStatus('✗ 保存失败：' + (data?.error || '请重试'), true);
+        }
+    } catch (e) {
+        _pan115QrSetStatus('✗ 保存失败：' + (e?.message || e), true);
+    }
+    _pan115QrResetButton();
+}
+
+let _aliyunOAuthState = null;
+
+function setAliyunOAuthStatus(text, isError = false) {
+    const statusEl = document.getElementById('aliyun-oauth-status');
+    if (statusEl) {
+        statusEl.textContent = text;
+        statusEl.className = 'text-xs ' + (isError ? 'text-red-400' : 'text-slate-500');
+    }
+}
+
+async function startAliyunOAuth() {
+    const authBtn = document.getElementById('aliyun-oauth-btn');
+    if (authBtn) {
+        authBtn.disabled = true;
+        authBtn.innerText = '生成中…';
+    }
+    try {
+        const codeEl = document.getElementById('aliyun-oauth-code');
+        if (codeEl) codeEl.value = '';
+        const data = await window.MediaHubApi.getJson('/settings/providers/aliyun/oauth/start');
+        if (!data?.ok) throw new Error(data?.error || '获取授权失败');
+        _aliyunOAuthState = { state: data.state, code_verifier: data.code_verifier };
+        if (data.authorize_url) {
+            window.open(data.authorize_url, '_blank');
+        }
+        if (authBtn) {
+            authBtn.disabled = true;
+            authBtn.innerText = '已生成授权页';
+        }
+        setAliyunOAuthStatus('已在新窗口打开官方授权页，请扫码授权后复制授权码并粘贴到下方');
+    } catch (e) {
+        setAliyunOAuthStatus('✗ ' + (e?.message || e), true);
+        if (authBtn) {
+            authBtn.disabled = false;
+            authBtn.innerText = '获取授权码';
+        }
+    }
+}
+
+async function bindAliyunCode() {
+    const codeEl = document.getElementById('aliyun-oauth-code');
+    const code = String(codeEl?.value || '').trim();
+    const btn = document.getElementById('aliyun-oauth-bind-btn');
+    const authBtn = document.getElementById('aliyun-oauth-btn');
+    if (!code || !_aliyunOAuthState || !_aliyunOAuthState.code_verifier) {
+        setAliyunOAuthStatus('请先点击“获取授权码”并粘贴授权码', true);
+        return;
+    }
+    if (btn) {
+        btn.disabled = true;
+        btn.innerText = '绑定中…';
+    }
+    setAliyunOAuthStatus('正在换取访问凭证…');
+    try {
+        const data = await window.MediaHubApi.postJson('/settings/providers/aliyun/oauth/complete', {
+            state: _aliyunOAuthState.state,
+            code,
+            code_verifier: _aliyunOAuthState.code_verifier,
+        });
+        if (data?.ok) {
+            _aliyunOAuthState = null;
+            setAliyunOAuthStatus('✓ ' + (data.message || '授权成功，已保存访问凭证'));
+            if (typeof window.checkCookieHealthProvider === 'function') {
+                window.checkCookieHealthProvider('aliyun');
+            }
+            if (typeof window.renderProviderAuthBlocks === 'function' && typeof window.MediaHubApi === 'object') {
+                window.MediaHubApi.getJson('/get_settings').then((cfg) => {
+                    if (cfg && typeof window.renderProviderAuthBlocks === 'function') {
+                        window.renderProviderAuthBlocks(cfg, cfg.sensitive_configured || {});
+                    }
+                }).catch(() => {});
+            }
+        } else {
+            setAliyunOAuthStatus('✗ ' + (data?.error || '换取失败，请重试'), true);
+        }
+    } catch (e) {
+        setAliyunOAuthStatus('✗ ' + (e?.message || e), true);
+    }
+    if (btn) {
+        btn.disabled = false;
+        btn.innerText = '绑定并保存';
+    }
+    if (authBtn) {
+        authBtn.disabled = false;
+        authBtn.innerText = '获取授权码';
+    }
+}
+
+async function copyProviderCredential(name) {
+    const statusEl = document.getElementById('provider-copy-status-' + name);
+    const setStatus = (text, isError = false) => {
+        if (statusEl) {
+            statusEl.textContent = text;
+            statusEl.className = 'text-xs ' + (isError ? 'text-red-400' : 'text-slate-500');
+        }
+    };
+    setStatus('获取中…');
+    try {
+        const data = await window.MediaHubApi.getJson('/settings/providers/' + encodeURIComponent(name) + '/credential');
+        if (!data?.ok) throw new Error(data?.error || '获取失败');
+        const value = String(data.credential || '').trim();
+        if (!value) {
+            setStatus('未配置凭证');
+            return;
+        }
+        try {
+            if (!navigator.clipboard?.writeText) throw new Error('当前浏览器不支持剪贴板接口');
+            await navigator.clipboard.writeText(value);
+            setStatus('已复制 ✓');
+            if (typeof window.showToast === 'function') {
+                window.showToast('已复制 ' + (data.label || name) + ' 凭证到剪贴板', { tone: 'success', duration: 2200, placement: 'top-center' });
+            }
+        } catch (clipError) {
+            if (typeof window.showAppPrompt === 'function') {
+                window.showAppPrompt('复制失败，请手动复制凭证：', value);
+                setStatus('请手动复制');
+            } else {
+                throw clipError;
+            }
+        }
+    } catch (e) {
+        setStatus('复制失败', true);
+        if (typeof window.showToast === 'function') {
+            window.showToast('复制失败：' + (e?.message || e), { tone: 'error', duration: 3000, placement: 'top-center' });
+        }
+    }
 }
 
 function toggleProviderBlock(name) {
@@ -1091,6 +1444,10 @@ if (typeof window !== 'undefined') {
     window.toggleProviderBlock = toggleProviderBlock;
     window.toggleProviderEnabled = toggleProviderEnabled;
     window.testProviderCookie = testProviderCookie;
+    window.start115QrLogin = start115QrLogin;
+    window.startAliyunOAuth = startAliyunOAuth;
+    window.bindAliyunCode = bindAliyunCode;
+    window.copyProviderCredential = copyProviderCredential;
     window.renderCookieHealthBar = renderCookieHealthBar;
     window.updateCookieHealthBar = updateCookieHealthBar;
     window.checkCookieHealthProviders = checkCookieHealthProviders;
