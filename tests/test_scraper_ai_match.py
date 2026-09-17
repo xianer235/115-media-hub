@@ -141,6 +141,55 @@ class AiMatchRuntimeConfigTest(unittest.TestCase):
         self.assertEqual(cfg["ai_match_max_concurrency"], 8)
         self.assertEqual(cfg["ai_match_base_url"], "http://x/v1")
 
+    def test_disable_thinking_default_true(self):
+        self.assertTrue(ai_match.build_ai_match_runtime_config({})["disable_thinking"])
+        self.assertFalse(
+            ai_match.build_ai_match_runtime_config({"ai_match_disable_thinking": False})["disable_thinking"]
+        )
+        self.assertTrue(core.normalize_config({})["ai_match_disable_thinking"])
+
+
+class AiMatchThinkingControlTest(unittest.TestCase):
+    def _deepseek_runtime(self, disable=True):
+        runtime = dict(_runtime())
+        runtime["base_url"] = "https://api.deepseek.com/v1"
+        runtime["model"] = "deepseek-flash"
+        runtime["disable_thinking"] = disable
+        return runtime
+
+    def test_supports_thinking_control_by_host_or_model(self):
+        self.assertTrue(
+            ai_match._supports_thinking_control({"base_url": "https://api.deepseek.com/v1", "model": "x"})
+        )
+        self.assertTrue(
+            ai_match._supports_thinking_control({"base_url": "http://local/v1", "model": "deepseek-flash"})
+        )
+        self.assertFalse(
+            ai_match._supports_thinking_control({"base_url": "http://127.0.0.1:11434/v1", "model": "qwen2.5:7b"})
+        )
+
+    def test_deepseek_payload_disables_thinking(self):
+        response = _FakeResponse(200, {"choices": [{"message": {"content": '{"keyword": "X"}'}}]})
+        with mock.patch.object(ai_match.requests, "post", return_value=response) as post:
+            ai_match._ai_chat_json(self._deepseek_runtime(), [{"role": "user", "content": "hi"}])
+        self.assertEqual(post.call_args.kwargs["json"]["thinking"], {"type": "disabled"})
+
+    def test_non_deepseek_payload_omits_thinking(self):
+        response = _FakeResponse(200, {"choices": [{"message": {"content": '{"keyword": "X"}'}}]})
+        with mock.patch.object(ai_match.requests, "post", return_value=response) as post:
+            ai_match._ai_chat_json(_runtime(), [{"role": "user", "content": "hi"}])
+        self.assertNotIn("thinking", post.call_args.kwargs["json"])
+
+    def test_thinking_flag_off_omits_field(self):
+        response = _FakeResponse(200, {"choices": [{"message": {"content": '{"keyword": "X"}'}}]})
+        with mock.patch.object(ai_match.requests, "post", return_value=response) as post:
+            ai_match._ai_chat_json(self._deepseek_runtime(disable=False), [{"role": "user", "content": "hi"}])
+        self.assertNotIn("thinking", post.call_args.kwargs["json"])
+
+    def test_prompts_contain_lowercase_json(self):
+        self.assertIn("json", ai_match._QUERY_SYSTEM_PROMPT)
+        self.assertIn("json", ai_match._SELECT_SYSTEM_PROMPT)
+
 
 class AiMatchGenerateQueryTest(unittest.TestCase):
     def test_generate_query_ok(self):

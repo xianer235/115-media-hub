@@ -1,11 +1,11 @@
 {
-  "version": "0.11.0",
+  "version": "0.11.1",
   "buildDate": "2026-09-18T00:00:00+08:00",
   "notes": [
-    "刮削新增可选“AI 候选增强”：批量识别时对未自动匹配的影视条目调用 OpenAI 兼容大模型（DeepSeek/Qwen/OpenAI/本地 Ollama 等），先产出关键词+年份+媒体类型去 TMDB 搜索，再对候选做二次选择",
-    "AI 只给候选建议、不自动改名：命中结果以 source=ai 候选并入并标记为“AI 建议”，仍需在批量整理里人工确认后生成计划、提交执行，可回滚",
-    "设置页新增“6b. AI 刮削辅助”：配置 base_url / API Key / 模型 / 超时 / 并发 / temperature，API Key 按敏感字段处理（回显留空、留空不覆盖）",
-    "AI 调用失败只标记该条错误并保留原有识别结果，整批识别不中断；并发默认 3、单条超时默认 20 秒，均可配置"
+    "DeepSeek 适配：识别到 DeepSeek 端点（base_url 含 deepseek 或模型名以 deepseek 开头）时自动关闭思考模式（thinking.type=disabled），避免结构化抽取白白消耗思考 token；该字段只在 DeepSeek 端点下发，不会影响 OpenAI/Ollama 等其它兼容端点",
+    "刮削 AI 候选增强：批量识别对未自动匹配条目调用 OpenAI 兼容大模型，先产出关键词+年份+媒体类型去 TMDB 搜索，再对候选二次选择；只给“AI 建议”，人工确认后才改名，可回滚",
+    "推荐模型 deepseek-flash（DeepSeek-V4.1-Flash）：1M 上下文、支持 JSON Output；非思考模式适合“文件名→关键词”与候选选择，空闲时段（工作日 9:00-12:00、14:00-18:00 之外）半价",
+    "JSON Output 提示词补上小写 json 字样与输出样例，满足 DeepSeek“prompt 必须含 json”的要求；设置页新增 ai_match_disable_thinking（默认开启）"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

@@ -62,6 +62,7 @@ def build_ai_match_runtime_config(cfg: Optional[Dict[str, Any]] = None) -> Dict[
             AI_MATCH_MIN_CONCURRENCY,
             AI_MATCH_MAX_CONCURRENCY,
         ),
+        "disable_thinking": bool(active_cfg.get("ai_match_disable_thinking", True)),
         "max_candidates": AI_MATCH_MAX_CANDIDATES,
     }
 
@@ -130,6 +131,17 @@ def _safe_response_text(response: requests.Response) -> str:
     return text[:200]
 
 
+def _supports_thinking_control(runtime: Dict[str, Any]) -> bool:
+    """是否对 DeepSeek 风格的 thinking 参数做控制。
+
+    `thinking: {type: disabled}` 是 DeepSeek 的请求字段；其它 OpenAI 兼容端点（OpenAI /
+    Ollama / Qwen 等）不识别该字段，可能直接返回 400，因此只在识别为 DeepSeek 时下发。
+    """
+    base_url = str(runtime.get("base_url") or "").lower()
+    model = str(runtime.get("model") or "").lower()
+    return "deepseek" in base_url or model.startswith("deepseek")
+
+
 def _ai_chat_json(runtime: Dict[str, Any], messages: List[Dict[str, str]]) -> Tuple[Optional[Dict[str, Any]], str]:
     url = f"{runtime['base_url']}/chat/completions"
     headers = {
@@ -137,6 +149,8 @@ def _ai_chat_json(runtime: Dict[str, Any], messages: List[Dict[str, str]]) -> Tu
         "Content-Type": "application/json",
     }
     last_error = "AI 接口调用失败"
+    # DeepSeek 思考模式默认开启（effort 默认 high），结构化抽取不需要，关掉省时省钱。
+    disable_thinking = bool(runtime.get("disable_thinking", True)) and _supports_thinking_control(runtime)
     # 部分 OpenAI 兼容端点不支持 response_format，先带 JSON 模式请求，被拒后去掉重试一次。
     for use_json_mode in (True, False):
         payload: Dict[str, Any] = {
@@ -146,6 +160,8 @@ def _ai_chat_json(runtime: Dict[str, Any], messages: List[Dict[str, str]]) -> Tu
         }
         if use_json_mode:
             payload["response_format"] = {"type": "json_object"}
+        if disable_thinking:
+            payload["thinking"] = {"type": "disabled"}
         try:
             response = requests.post(url, json=payload, headers=headers, timeout=runtime["timeout_seconds"])
         except requests.RequestException as exc:
@@ -170,13 +186,17 @@ def _ai_chat_json(runtime: Dict[str, Any], messages: List[Dict[str, str]]) -> Tu
 _QUERY_SYSTEM_PROMPT = (
     "你是影视刮削助手。用户会给你网盘里的文件夹名和文件名，可能包含广告、站点后缀、分辨率、"
     "编码等噪声，或中英混排。请判断它最可能对应的影视作品，并给出适合在 TMDB 搜索的关键词。"
-    "只返回 JSON，不要任何解释。JSON 字段：keyword（字符串，作品名称，中文或原文名均可）、"
+    "只返回一个 json 对象，不要任何解释，形如 "
+    '{"keyword": "黑客帝国", "year": "1999", "media_type": "movie"}。'
+    "json 字段：keyword（字符串，作品名称，中文或原文名均可）、"
     "year（字符串，四位年份，无法确定留空）、media_type（movie 或 tv，无法确定留空）。"
 )
 
 _SELECT_SYSTEM_PROMPT = (
     "你是影视刮削助手。用户会给出网盘条目信息和若干 TMDB 候选，请从中选出与之最匹配的一个。"
-    "若没有明显匹配，请给较低的 confidence。只返回 JSON，不要任何解释。JSON 字段："
+    "若没有明显匹配，请给较低的 confidence。只返回一个 json 对象，不要任何解释，形如 "
+    '{"tmdb_id": 603, "media_type": "movie", "confidence": 90, "reason": "片名与年份一致"}。'
+    "json 字段："
     "tmdb_id（整数，必须是候选中的 tmdb_id）、media_type（movie 或 tv）、"
     "confidence（0-100 的整数）、reason（简短中文理由）。"
 )

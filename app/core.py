@@ -920,6 +920,7 @@ _SETTINGS_CONFIG_KEY_ORDER_AFTER_AUTH: Tuple[str, ...] = (
     "ai_match_timeout_seconds",
     "ai_match_temperature",
     "ai_match_max_concurrency",
+    "ai_match_disable_thinking",
     # 9. 通知推送
     "notify_push_enabled",
     "notify_monitor_enabled",
@@ -1031,6 +1032,7 @@ def default_config() -> Dict[str, Any]:
         "ai_match_timeout_seconds": 20,
         "ai_match_temperature": 0,
         "ai_match_max_concurrency": 3,
+        "ai_match_disable_thinking": True,
         "pansou_enabled": False,
         "pansou_base_url": "",
         "pansou_username": "",
@@ -2491,6 +2493,8 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         merged["ai_match_temperature"] = 0
     if "ai_match_max_concurrency" not in merged:
         merged["ai_match_max_concurrency"] = 3
+    if "ai_match_disable_thinking" not in merged:
+        merged["ai_match_disable_thinking"] = True
     if "pansou_enabled" not in merged:
         merged["pansou_enabled"] = False
     if "pansou_base_url" not in merged:
@@ -2648,6 +2652,7 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     except (TypeError, ValueError):
         ai_match_max_concurrency = 3
     merged["ai_match_max_concurrency"] = max(1, min(8, ai_match_max_concurrency))
+    merged["ai_match_disable_thinking"] = normalize_bool(merged.get("ai_match_disable_thinking", True), default=True)
     try:
         tg_channel_threads = int(merged.get("tg_channel_threads", TG_CHANNEL_THREADS_DEFAULT) or TG_CHANNEL_THREADS_DEFAULT)
     except (TypeError, ValueError):

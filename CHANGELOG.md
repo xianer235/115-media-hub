@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.1] - 2026-09-18
+
+### DeepSeek 适配（关闭思考模式）
+
+- DeepSeek 官方文档确认：`deepseek-flash`（DeepSeek-V4.1-Flash）**默认开启思考模式**（`reasoning_effort` 默认 `high`），而思考模式会忽略 `temperature`，对本项目「文件名→关键词」这种结构化抽取属纯浪费。现在识别到 DeepSeek 端点时自动在请求体加 `thinking: {"type": "disabled"}`。
+- **只在 DeepSeek 端点下发该字段**：判定条件为 `base_url` 含 `deepseek` 或模型名以 `deepseek` 开头；OpenAI / Ollama / Qwen 等其它 OpenAI 兼容端点不会收到这个非标准字段，避免被拒 400。新增设置项 `ai_match_disable_thinking`（默认开启）可关闭该行为。
+- JSON Output 提示词补上小写 `json` 字样与输出样例，满足 DeepSeek「system/user prompt 必须含 json 字样并给出样例」的要求；原有的「被拒后去掉 `response_format` 重试」继续兼容不支持该参数的端点。
+- 文档与示例推荐模型更新为 `deepseek-flash`（1M 上下文、支持 JSON Output / Tool Calls；空闲时段——工作日 9:00-12:00、14:00-18:00 之外——价格为高峰一半）。
+
+### 验证
+
+- `tests/test_scraper_ai_match.py` 增至 35 项：新增 `thinking` 仅对 DeepSeek 端点下发、非 DeepSeek 端点不下发、开关关闭时不下发、端点识别（host/model）、提示词含小写 `json`、`disable_thinking` 默认值等用例；完整 unittest 通过，`compileall`、`git diff --check` 通过。
+
 ## [0.11.0] - 2026-09-18
 
 ### 刮削「AI 候选增强」（批量识别 AI 回退）

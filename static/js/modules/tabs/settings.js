@@ -183,6 +183,7 @@ function collectSettingsPayload({
     cfg.notify_monitor_enabled = !!document.getElementById('notify_monitor_enabled')?.checked;
     cfg.tmdb_enabled = !!document.getElementById('tmdb_enabled')?.checked;
     cfg.ai_match_enabled = !!document.getElementById('ai_match_enabled')?.checked;
+    cfg.ai_match_disable_thinking = !!document.getElementById('ai_match_disable_thinking')?.checked;
     cfg.pansou_enabled = !!document.getElementById('pansou_enabled')?.checked;
     cfg.resource_favorite_dirs = collectResourceFavoriteDirs();
     cfg.scraper_noise_phrases = parseKeywordLines(document.getElementById('scraper_noise_phrases')?.value);
