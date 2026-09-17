@@ -83,6 +83,20 @@ def _normalize_thinking_mode(cfg: Dict[str, Any]) -> str:
     return "auto" if normalize_bool(legacy, default=True) else "enabled"
 
 
+def _normalize_base_url(value: Any) -> str:
+    """把用户填的接口地址规范成 base_url。
+
+    官方文档的 base_url 不带路径（如 https://api.deepseek.com），代码会自行拼 /chat/completions；
+    但用户常直接粘贴完整地址，这里把多余的 /chat/completions、/completions 去掉，避免拼成
+    .../chat/completions/chat/completions 这种 404。
+    """
+    base = str(value or "").strip().rstrip("/")
+    for suffix in ("/chat/completions", "/completions"):
+        if base.lower().endswith(suffix):
+            base = base[: -len(suffix)].rstrip("/")
+    return base
+
+
 def build_ai_match_runtime_config(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     active_cfg = cfg if isinstance(cfg, dict) else get_config()
     cache_ttl_hours = _clamp_int(
@@ -93,7 +107,7 @@ def build_ai_match_runtime_config(cfg: Optional[Dict[str, Any]] = None) -> Dict[
     )
     return {
         "enabled": bool(active_cfg.get("ai_match_enabled", False)),
-        "base_url": str(active_cfg.get("ai_match_base_url", "") or "").strip().rstrip("/"),
+        "base_url": _normalize_base_url(active_cfg.get("ai_match_base_url", "")),
         "api_key": str(active_cfg.get("ai_match_api_key", "") or "").strip(),
         "model": str(active_cfg.get("ai_match_model", "") or "").strip(),
         "timeout_seconds": _clamp_int(
@@ -123,6 +137,10 @@ def validate_ai_match_runtime_config(cfg: Optional[Dict[str, Any]] = None) -> Op
         return "AI 刮削辅助未启用"
     if not runtime["base_url"]:
         return "AI 接口地址（base_url）未填写"
+    if not runtime["base_url"].lower().startswith(("http://", "https://")):
+        return "AI 接口地址需要以 http:// 或 https:// 开头"
+    if "/anthropic" in runtime["base_url"].lower():
+        return "AI 接口地址填的是 Anthropic 端点（/anthropic）；本项目只支持 OpenAI 兼容端点，请改用 base_url (OpenAI)"
     if not runtime["api_key"]:
         return "AI API Key 未填写"
     if not runtime["model"]:

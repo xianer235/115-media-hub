@@ -1,11 +1,10 @@
 {
-  "version": "0.11.2",
+  "version": "0.11.3",
   "buildDate": "2026-09-18T00:00:00+08:00",
   "notes": [
-    "AI 刮削辅助新增结果缓存：按「条目身份 + TMDB 候选集合 + 模型配置」缓存成功结果（默认 24 小时，设为 0 可关闭），同一批重跑不再重复调用大模型",
-    "省一半调用：关键词搜索已直接命中高分且明显领先（评分≥80 且领先≥12）或只有唯一候选时，自动跳过第二次 AI 选择",
-    "网络更稳+成本可见：对超时/连接错误与 429/5xx 最多重试 3 次并尊重 Retry-After；批量识别返回 ai_usage（调用次数、缓存命中、token 数），前端汇总栏显示本次用量",
-    "新增最低采纳置信度 ai_match_min_confidence（默认 0 = 不过滤，低于门槛只提示不采纳）；思考模式改为三态 ai_match_thinking_mode（auto/disabled/enabled），旧版布尔配置自动迁移"
+    "AI 接口地址容错：base_url 若粘贴了完整地址（含 /chat/completions）会自动去掉再拼一次，避免出现 .../chat/completions/chat/completions 这种 404",
+    "AI 接口校验更明确：base_url 必须以 http:// 或 https:// 开头；填入 Anthropic 端点（/anthropic）会直接提示本项目只支持 OpenAI 兼容端点",
+    "文档与设置页占位符改用 DeepSeek 官方写法 https://api.deepseek.com（实测带 /v1 亦可正常调用）；Ollama 仍填 http://127.0.0.1:11434/v1"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

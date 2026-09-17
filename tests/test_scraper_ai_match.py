@@ -166,6 +166,45 @@ class AiMatchRuntimeConfigTest(unittest.TestCase):
         self.assertEqual(runtime["cache_ttl_hours"], 24)
         self.assertEqual(runtime["cache_ttl_seconds"], 24 * 3600)
 
+    def test_base_url_normalization(self):
+        cases = {
+            "https://api.deepseek.com/": "https://api.deepseek.com",
+            "https://api.deepseek.com/v1/": "https://api.deepseek.com/v1",
+            "https://api.deepseek.com/chat/completions": "https://api.deepseek.com",
+            "https://api.deepseek.com/v1/chat/completions": "https://api.deepseek.com/v1",
+        }
+        for raw, expected in cases.items():
+            self.assertEqual(
+                ai_match.build_ai_match_runtime_config({"ai_match_base_url": raw})["base_url"],
+                expected,
+            )
+
+    def test_request_url_is_not_doubled(self):
+        cfg = {
+            "ai_match_enabled": True,
+            "ai_match_base_url": "https://api.deepseek.com/chat/completions",
+            "ai_match_api_key": "k",
+            "ai_match_model": "deepseek-flash",
+            "ai_match_cache_ttl_hours": 0,
+        }
+        runtime = ai_match.build_ai_match_runtime_config(cfg)
+        with mock.patch.object(ai_match.requests, "post", return_value=_ok_response()) as post:
+            ai_match._ai_chat_json(runtime, [])
+        self.assertEqual(post.call_args.args[0], "https://api.deepseek.com/chat/completions")
+
+    def test_validate_rejects_anthropic_endpoint_and_bad_scheme(self):
+        base = {
+            "ai_match_enabled": True,
+            "ai_match_base_url": "https://api.deepseek.com/anthropic",
+            "ai_match_api_key": "sk-test",
+            "ai_match_model": "deepseek-flash",
+        }
+        message = ai_match.validate_ai_match_runtime_config(base)
+        self.assertIn("Anthropic", message)
+        bad_scheme = {**base, "ai_match_base_url": "api.deepseek.com"}
+        scheme_message = ai_match.validate_ai_match_runtime_config(bad_scheme)
+        self.assertIn("http", scheme_message)
+
 
 class AiMatchChatJsonTest(unittest.TestCase):
     def test_chat_json_ok(self):

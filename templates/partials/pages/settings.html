@@ -177,7 +177,7 @@
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <label class="block">
                                 <span class="text-xs text-slate-500">接口地址（base_url）</span>
-                                <input id="ai_match_base_url" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如 https://api.deepseek.com/v1">
+                                <input id="ai_match_base_url" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如 https://api.deepseek.com（官方写法，也可带 /v1）">
                             </label>
                             <label class="block">
                                 <span class="text-xs text-slate-500">API Key</span>
@@ -221,7 +221,7 @@
                             </select>
                         </label>
                         <div class="text-xs text-slate-500 leading-6">
-                            兼容 DeepSeek / Qwen / OpenAI / 本地 Ollama 等任意 OpenAI 格式的 <code>/chat/completions</code> 接口（Ollama 填 <code>http://127.0.0.1:11434/v1</code>）。开启后 AI 只会对未自动匹配的条目给出候选建议，仍需在批量整理里人工确认后才会改名，不会自动执行。
+                            兼容 DeepSeek / Qwen / OpenAI / 本地 Ollama 等任意 OpenAI 格式的 <code>/chat/completions</code> 接口（DeepSeek 填 <code>https://api.deepseek.com</code> 或 <code>https://api.deepseek.com/v1</code>；Ollama 填 <code>http://127.0.0.1:11434/v1</code>）。此处只支持 OpenAI 兼容端点，请不要填 Anthropic 端点（<code>/anthropic</code>）。开启后 AI 只会对未自动匹配的条目给出候选建议，仍需在批量整理里人工确认后才会改名，不会自动执行。
                         </div>
                     </div>
                 </div>

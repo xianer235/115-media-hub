@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.3] - 2026-09-18
+
+### AI 接口地址容错与校验
+
+- `base_url` 规范化：若粘贴的是完整地址（如 `https://api.deepseek.com/chat/completions`、`.../v1/chat/completions`），自动去掉尾部 `/chat/completions`（及 `/completions`）后再拼接，避免出现 `.../chat/completions/chat/completions` 导致 404。
+- 校验更明确：`base_url` 必须以 `http://` 或 `https://` 开头；若填入 Anthropic 端点（含 `/anthropic`）直接提示「本项目只支持 OpenAI 兼容端点」。本项目的请求体是 OpenAI 格式，`/anthropic` 走的协议不同，填了必然失败。
+- 文档与设置页占位符改为 DeepSeek 官方写法 `https://api.deepseek.com`。实测 `https://api.deepseek.com/chat/completions` 与 `https://api.deepseek.com/v1/chat/completions` 都返回 DeepSeek 鉴权错误（`Authentication Fails (governor)`），说明带不带 `/v1` 均可；两者都包含 `deepseek`，因此「思考模式 auto」的端点识别同样生效。
+
+### 验证
+
+- `tests/test_scraper_ai_match.py` 增至 54 项：新增 base_url 规范化（4 种写法）、请求 URL 不重复拼接、Anthropic 端点与非法 scheme 校验用例；完整 unittest 通过，`compileall`、改动 JS `node --check`、`git diff --check` 均通过。
+
 ## [0.11.2] - 2026-09-18
 
 ### AI 刮削辅助优化（成本、速度、可靠性）
