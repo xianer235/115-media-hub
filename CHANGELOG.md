@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.5] - 2026-09-18
+
+### 油猴脚本：任务选择弹窗新增「复制磁力链接」（脚本 `@version` 升至 2.7.0）
+
+- 点页面上磁力/torrent 链接旁的「115」按钮后，弹出的任务选择器里新增一个**与推送任务同层级**的「复制磁力链接」入口（同一个任务列表容器内、同样的行样式，紫色区分、右侧标注「不推送」），不配置任务或不想推送时也能直接拿到磁力。
+- torrent 链接没有现成磁力，点击复制时会复用推送时的同一套解析逻辑（`resolveMagnetFromSource`）先转成磁力再复制；弹窗内会让用户知道这一点（提示「torrent 链接会先自动转成磁力」）。
+- 复制成功后按钮短暂显示「已复制磁力链接」并弹提示，**弹窗保持打开**，用户可继续选择任务推送；复制失败（剪贴板不可用、torrent 解析失败等）在按钮上显示失败原因并弹错误提示，弹窗同样不关闭。
+- 新增 `copyMagnetFromSource(sourceLink)` 内部函数并导出到测试 API；页面链接旁仍然只保留原来的单个「115」按钮，未改动页面注入形态。
+
+### 验证
+
+- `tests/test_magnet_helper_userscript.py` 增至 15 项：新增「弹窗内存在复制磁力入口且与推送任务同级」「torrent 来源提示会先转换」「点复制后写入剪贴板、按钮变已复制、弹窗保持打开且未选中任务」三项回归；完整 unittest 805 项通过，`node --check`、`git diff --check` 均通过。
+
 ## [0.11.4] - 2026-09-18
 
 ### AI 刮削辅助：可读性、可用性测试与用量统计

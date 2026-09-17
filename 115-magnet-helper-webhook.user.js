@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         115-media-hub助手
 // @namespace    http://tampermonkey.net/
-// @version      2.6.0
-// @description  检测网页 magnet / torrent / 115 / 夸克分享链接并生成快捷按钮
+// @version      2.7.0
+// @description  检测网页 magnet / torrent / 115 / 夸克分享链接并生成快捷按钮（点 115 后的弹窗内可一键复制磁力）
 // @author       仙儿
 // @license      MIT
 // @match        *://*/*
@@ -1059,6 +1059,10 @@
 
             const overlay = document.createElement('div');
             overlay.id = 'mh-task-picker-overlay';
+            const canCopySource = !!source;
+            const copyHint = torrentHint
+                ? 'torrent 链接会先自动转成磁力，再复制到剪贴板'
+                : '把这条磁力链接复制到剪贴板，不推送任务';
             overlay.style.cssText = [
                 'position:fixed',
                 'inset:0',
@@ -1091,6 +1095,15 @@
                                 <div style="margin-top:2px;font-size:11px;color:#94a3b8;">${escapeHtml(task.webhookUrl)}</div>
                             </button>
                         `).join('')}
+                        ${canCopySource ? `
+                            <button type="button" data-mh-picker-action="copy-magnet" style="text-align:left;padding:10px 12px;border-radius:10px;border:1px solid #7c3aed;background:#1e1b4b;color:#e2e8f0;cursor:pointer;transition:all .16s ease;">
+                                <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;">
+                                    <div style="font-size:13px;font-weight:700;color:#ddd6fe;">复制磁力链接</div>
+                                    <div style="font-size:11px;color:#a5b4fc;">不推送</div>
+                                </div>
+                                <div style="margin-top:4px;font-size:12px;color:#cbd5e1;">${escapeHtml(copyHint)}</div>
+                            </button>
+                        ` : ''}
                     </div>
                     <div style="margin-top:12px;padding-top:12px;border-top:1px solid #334155;display:flex;justify-content:flex-end;">
                         <button type="button" data-mh-picker-action="manage" style="padding:7px 12px;border-radius:9px;border:1px solid #334155;background:#1e293b;color:#93c5fd;cursor:pointer;">任务管理</button>
@@ -1111,7 +1124,7 @@
             };
 
             document.addEventListener('keydown', onKeydown, true);
-            overlay.addEventListener('click', (event) => {
+            overlay.addEventListener('click', async (event) => {
                 if (event.target === overlay) {
                     done(null);
                     return;
@@ -1126,6 +1139,30 @@
                 if (action === 'manage') {
                     done(null);
                     openTaskManager();
+                    return;
+                }
+                if (action === 'copy-magnet') {
+                    if (btn.disabled) return;
+                    btn.disabled = true;
+                    const originalHtml = btn.innerHTML;
+                    btn.textContent = '正在复制...';
+                    try {
+                        await copyMagnetFromSource(source);
+                        btn.textContent = '已复制磁力链接';
+                        showToast('磁力链接已复制');
+                        window.setTimeout(() => {
+                            btn.innerHTML = originalHtml;
+                            btn.disabled = false;
+                        }, 900);
+                    } catch (err) {
+                        const message = err && err.message ? err.message : '未知错误';
+                        btn.textContent = `复制失败：${message}`;
+                        showToast(`复制失败: ${message}`, 'error');
+                        window.setTimeout(() => {
+                            btn.innerHTML = originalHtml;
+                            btn.disabled = false;
+                        }, 1400);
+                    }
                     return;
                 }
                 if (action === 'pick') {
@@ -1281,6 +1318,15 @@
         });
 
         return button;
+    }
+
+    async function copyMagnetFromSource(sourceLink) {
+        const source = normalizeSourceLink(sourceLink);
+        if (!source) throw new Error('链接为空');
+        // torrent 链接没有现成磁力，复用推送时的同一套解析逻辑。
+        const magnet = await resolveMagnetFromSource(source);
+        await copyTextToClipboard(magnet);
+        return magnet;
     }
 
     function shouldSkipTextNode(node) {
@@ -1763,6 +1809,7 @@
                 buildSignedHeaders,
                 registerMenus,
                 createPushButton,
+                copyMagnetFromSource,
                 chooseTask
             }
         };

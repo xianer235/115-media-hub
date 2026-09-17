@@ -445,3 +445,82 @@ context.GM_setValue = async (key, value) => { store[key] = value; writes.push([k
             "保存排除域名",
         ):
             self.assertIn(marker, source)
+
+
+class MagnetHelperPickerCopyTest(unittest.TestCase):
+    """点 115 后的任务选择弹窗里，复制磁力按钮与推送选项同层级。"""
+
+    def _setup(self):
+        return DOM_SETUP + """
+const copied = [];
+context.navigator = { clipboard: { writeText: async (value) => { copied.push(value); } } };
+"""
+
+    def _open_picker_source(self, source_link):
+        return f"""
+(async () => {{
+  const pickPromise = api.chooseTask(
+    [{{ id: 't1', name: '电影', webhookUrl: 'http://x/webhook/电影', savepath: '自存' }}],
+    {json.dumps(source_link)}
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const picker = registry.find((el) => el.id === 'mh-task-picker-overlay');
+  const html = picker ? picker.innerHTML : '';
+  const cancelBtn = makeEl('button');
+  cancelBtn.dataset.mhPickerAction = 'cancel';
+  cancelBtn.closest = () => cancelBtn;
+  picker._listeners.click({{ target: cancelBtn, preventDefault() {{}} }});
+  await pickPromise;
+  return {{ html }};
+}})()
+"""
+
+    def test_task_picker_has_copy_magnet_row_for_magnet(self):
+        result = run_userscript(self._open_picker_source("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef"), self._setup())
+        html = result["html"]
+        self.assertIn('data-mh-picker-action="copy-magnet"', html)
+        self.assertIn("复制磁力链接", html)
+        self.assertIn("不推送", html)
+        # 已经是磁力时不需要转换提示
+        self.assertNotIn("torrent 链接会先自动转成磁力", html)
+
+    def test_task_picker_copy_row_mentions_torrent_conversion(self):
+        result = run_userscript(self._open_picker_source("https://example.com/abc.torrent"), self._setup())
+        self.assertIn("torrent 链接会先自动转成磁力", result["html"])
+
+    def test_task_picker_copy_magnet_copies_and_keeps_dialog_open(self):
+        magnet = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef"
+        result = run_userscript(
+            f"""
+(async () => {{
+  const pickPromise = api.chooseTask(
+    [{{ id: 't1', name: '电影', webhookUrl: 'http://x/webhook/电影', savepath: '自存' }}],
+    {json.dumps(magnet)}
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const picker = registry.find((el) => el.id === 'mh-task-picker-overlay');
+  const copyBtn = makeEl('button');
+  copyBtn.dataset.mhPickerAction = 'copy-magnet';
+  copyBtn.closest = () => copyBtn;
+  picker._listeners.click({{ target: copyBtn, preventDefault() {{}} }});
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const stillOpen = !!registry.find((el) => el.id === 'mh-task-picker-overlay');
+  const copiedCount = copied.length;
+  const copyText = copyBtn.textContent;
+  const copyDisabled = !!copyBtn.disabled;
+  const cancelBtn = makeEl('button');
+  cancelBtn.dataset.mhPickerAction = 'cancel';
+  cancelBtn.closest = () => cancelBtn;
+  picker._listeners.click({{ target: cancelBtn, preventDefault() {{}} }});
+  const picked = await pickPromise;
+  return {{ copied, copiedCount, copyText, copyDisabled, stillOpen, picked }};
+}})()
+""",
+            self._setup(),
+        )
+        self.assertEqual(result["copied"], [magnet])
+        self.assertEqual(result["copyText"], "已复制磁力链接")
+        self.assertTrue(result["copyDisabled"])
+        # 复制不应该关闭弹窗，用户仍可继续选任务推送
+        self.assertTrue(result["stillOpen"])
+        self.assertIsNone(result["picked"])
