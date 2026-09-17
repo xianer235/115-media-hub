@@ -62,6 +62,7 @@ const state = {
     batchBusy: false,
     batchScan: null,
     batchIdentify: null,
+    batchAiUsage: null,
     batchBindings: {},
     batchIncluded: new Set(),
     batchSearchState: {},
@@ -2395,6 +2396,7 @@ function resetBatchContext() {
     state.batchBusy = false;
     state.batchScan = null;
     state.batchIdentify = null;
+    state.batchAiUsage = null;
     state.batchBindings = {};
     state.batchIncluded = new Set();
     state.batchSearchState = {};
@@ -2516,6 +2518,7 @@ async function scanBatch(entries) {
         });
         state.batchScan = data || {};
         state.batchIdentify = null;
+        state.batchAiUsage = null;
         state.batchBindings = {};
         state.batchIncluded = new Set();
         state.batchSearchState = {};
@@ -2546,6 +2549,7 @@ async function identifyBatch() {
             })),
         });
         state.batchIdentify = Array.isArray(data.results) ? data.results : [];
+        state.batchAiUsage = data && typeof data.ai_usage === 'object' && data.ai_usage ? data.ai_usage : null;
         for (const result of state.batchIdentify) {
             if (result?.ok && result.auto_pick) {
                 const index = Number(result.item_index || 0);
@@ -2704,11 +2708,13 @@ function renderBatchItem(item) {
     } else {
         const queryText = identify?.query || item.name || '';
         const aiError = String(identify?.ai_error || '').trim();
+        const aiLowConfidence = Number(identify?.ai_low_confidence || 0);
+        const aiNote = aiError || (aiLowConfidence > 0 ? `置信度 ${aiLowConfidence}，低于门槛未采纳` : '');
         matchHtml = `
             <div class="scraper-batch-match">
                 <span class="scraper-batch-badge is-manual">未匹配</span>
                 <span class="scraper-batch-status-text">${identify ? `未找到可信条目（关键词：${escapeHtml(queryText)}）` : '等待识别'}</span>
-                ${aiError ? `<span class="scraper-batch-ai-note" title="${escapeHtml(aiError)}">AI：${escapeHtml(aiError)}</span>` : ''}
+                ${aiNote ? `<span class="scraper-batch-ai-note" title="${escapeHtml(aiNote)}">AI：${escapeHtml(aiNote)}</span>` : ''}
             </div>
         `;
         actionsHtml = `<button type="button" class="scraper-compact-btn" data-batch-search="${escapeHtml(String(index))}">搜索绑定</button>`;
@@ -2776,6 +2782,13 @@ function renderBatch() {
         const index = Number(item.item_index || 0);
         return state.batchIncluded.has(index) && !!getBatchBinding(index);
     });
+    const aiUsage = state.batchAiUsage && typeof state.batchAiUsage === 'object' ? state.batchAiUsage : null;
+    const aiCalls = Number(aiUsage?.calls || 0);
+    const aiCacheHits = Number(aiUsage?.cache_hits || 0);
+    const aiTokens = Number(aiUsage?.total_tokens || 0);
+    const aiUsageText = (aiCalls || aiCacheHits)
+        ? `AI 调用 ${aiCalls} 次${aiCacheHits ? `（缓存命中 ${aiCacheHits}）` : ''}${aiTokens ? ` · ${aiTokens} tokens` : ''}`
+        : '';
     if (state.batchBusy) {
         summary.innerHTML = '<span class="scraper-busy-spinner inline" aria-hidden="true"></span>正在扫描并匹配 TMDB 条目，请稍候...';
     } else {
@@ -2784,6 +2797,7 @@ function renderBatch() {
             <span> / 自动匹配 ${escapeHtml(String(autoCount))}，建议 ${escapeHtml(String(suggestCount))}，待确认 ${escapeHtml(String(manualCount))}</span>
             <span> / 已勾选 ${escapeHtml(String(includedCount))}（已绑定 ${escapeHtml(String(boundCount))}）</span>
             ${issues.length ? `<em class="scraper-plan-warning">${escapeHtml(String(issues.length))} 个扫描提醒</em>` : ''}
+            ${aiUsageText ? `<span class="scraper-ai-usage">${escapeHtml(aiUsageText)}</span>` : ''}
         `;
     }
     list.innerHTML = items.map(item => renderBatchItem(item)).join('');

@@ -315,7 +315,8 @@ CLI 专属环境变量（见「命令行工具」）：`MH_USERNAME` / `MH_PASSW
 
 ## 近期更新（以 `version.json` 为准）
 
-- 当前版本：`0.11.1`
+- 当前版本：`0.11.2`
+- AI 刮削辅助优化：新增结果缓存（默认 24 小时，重跑不重复计费）、高分命中时自动跳过第二次 AI 选择（省一半调用）、对超时/429/5xx 最多重试 3 次并尊重 `Retry-After`、批量识别返回并显示 `ai_usage`（调用次数 / 缓存命中 / token）、新增 `ai_match_min_confidence` 最低采纳置信度（默认 0 不过滤）；思考模式改为三态 `ai_match_thinking_mode`（auto/disabled/enabled），旧布尔配置自动迁移。
 - DeepSeek 适配：AI 刮削辅助识别到 DeepSeek 端点（base_url 含 `deepseek` 或模型名以 `deepseek` 开头）时自动关闭思考模式（`thinking.type=disabled`），结构化抽取更快更省；该字段只在 DeepSeek 端点下发，不影响 OpenAI/Ollama 等其它端点；推荐模型 `deepseek-flash`（1M 上下文、支持 JSON Output，空闲时段半价）。
 - 刮削新增可选「AI 候选增强」：批量识别时对未自动匹配的条目调用 OpenAI 兼容大模型（DeepSeek/Qwen/OpenAI/本地 Ollama 等）——先产出关键词+年份+媒体类型去 TMDB 搜索，再对候选二次选择；AI 只给「AI 建议」，需人工确认后才会改名，不写 auto_pick、不自动执行，可回滚；设置页新增「6b. AI 刮削辅助」配置块（base_url/API Key/模型/超时/并发/temperature，API Key 走敏感字段），默认关闭。
 - 115 网盘新增内置扫码登录（客户端可手选，默认微信小程序）；阿里云盘改为内置官方 OAuth + PKCE 扫码授权并适配“30 天 access_token 不支持刷新”的公开客户端模式。

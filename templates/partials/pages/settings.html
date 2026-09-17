@@ -198,13 +198,27 @@
                                 <input id="ai_match_max_concurrency" type="number" min="1" max="8" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="3">
                             </label>
                         </div>
-                        <label class="block max-w-xs">
-                            <span class="text-xs text-slate-500">temperature</span>
-                            <input id="ai_match_temperature" type="number" min="0" max="2" step="0.1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
-                        </label>
-                        <label class="flex items-center gap-3 cursor-pointer text-sm">
-                            <input type="checkbox" id="ai_match_disable_thinking" class="ui-checkbox">
-                            对 DeepSeek 关闭思考模式（结构化抽取更快更省；仅识别到 DeepSeek 端点时才发送该参数）
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <label class="block">
+                                <span class="text-xs text-slate-500">temperature</span>
+                                <input id="ai_match_temperature" type="number" min="0" max="2" step="0.1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
+                            </label>
+                            <label class="block">
+                                <span class="text-xs text-slate-500">最低采纳置信度（0 = 不过滤）</span>
+                                <input id="ai_match_min_confidence" type="number" min="0" max="100" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
+                            </label>
+                            <label class="block">
+                                <span class="text-xs text-slate-500">结果缓存（小时，0 = 关闭）</span>
+                                <input id="ai_match_cache_ttl_hours" type="number" min="0" max="720" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="24">
+                            </label>
+                        </div>
+                        <label class="block max-w-xl">
+                            <span class="text-xs text-slate-500">思考模式</span>
+                            <select id="ai_match_thinking_mode" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1">
+                                <option value="auto">自动：仅识别到 DeepSeek 时关闭思考（推荐）</option>
+                                <option value="disabled">始终关闭：对所有端点都发送 thinking 参数（仅中转/自建网关兼容时使用）</option>
+                                <option value="enabled">保持开启：不发送该参数，交给端点默认</option>
+                            </select>
                         </label>
                         <div class="text-xs text-slate-500 leading-6">
                             兼容 DeepSeek / Qwen / OpenAI / 本地 Ollama 等任意 OpenAI 格式的 <code>/chat/completions</code> 接口（Ollama 填 <code>http://127.0.0.1:11434/v1</code>）。开启后 AI 只会对未自动匹配的条目给出候选建议，仍需在批量整理里人工确认后才会改名，不会自动执行。

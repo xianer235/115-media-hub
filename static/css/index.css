@@ -14682,6 +14682,11 @@
             overflow-wrap: anywhere;
         }
 
+        .scraper-ai-usage {
+            color: #a5b4fc;
+            font-size: 0.78rem;
+        }
+
         .scraper-batch-badge.is-manual {
             color: #cbd5e1;
             background: rgba(100, 116, 139, 0.18);
@@ -15262,6 +15267,10 @@
         }
 
         html.theme-day .scraper-batch-ai-note {
+            color: #4338ca;
+        }
+
+        html.theme-day .scraper-ai-usage {
             color: #4338ca;
         }
 

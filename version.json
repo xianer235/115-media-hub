@@ -1,11 +1,11 @@
 {
-  "version": "0.11.1",
+  "version": "0.11.2",
   "buildDate": "2026-09-18T00:00:00+08:00",
   "notes": [
-    "DeepSeek 适配：识别到 DeepSeek 端点（base_url 含 deepseek 或模型名以 deepseek 开头）时自动关闭思考模式（thinking.type=disabled），避免结构化抽取白白消耗思考 token；该字段只在 DeepSeek 端点下发，不会影响 OpenAI/Ollama 等其它兼容端点",
-    "刮削 AI 候选增强：批量识别对未自动匹配条目调用 OpenAI 兼容大模型，先产出关键词+年份+媒体类型去 TMDB 搜索，再对候选二次选择；只给“AI 建议”，人工确认后才改名，可回滚",
-    "推荐模型 deepseek-flash（DeepSeek-V4.1-Flash）：1M 上下文、支持 JSON Output；非思考模式适合“文件名→关键词”与候选选择，空闲时段（工作日 9:00-12:00、14:00-18:00 之外）半价",
-    "JSON Output 提示词补上小写 json 字样与输出样例，满足 DeepSeek“prompt 必须含 json”的要求；设置页新增 ai_match_disable_thinking（默认开启）"
+    "AI 刮削辅助新增结果缓存：按「条目身份 + TMDB 候选集合 + 模型配置」缓存成功结果（默认 24 小时，设为 0 可关闭），同一批重跑不再重复调用大模型",
+    "省一半调用：关键词搜索已直接命中高分且明显领先（评分≥80 且领先≥12）或只有唯一候选时，自动跳过第二次 AI 选择",
+    "网络更稳+成本可见：对超时/连接错误与 429/5xx 最多重试 3 次并尊重 Retry-After；批量识别返回 ai_usage（调用次数、缓存命中、token 数），前端汇总栏显示本次用量",
+    "新增最低采纳置信度 ai_match_min_confidence（默认 0 = 不过滤，低于门槛只提示不采纳）；思考模式改为三态 ai_match_thinking_mode（auto/disabled/enabled），旧版布尔配置自动迁移"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

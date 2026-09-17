@@ -920,7 +920,9 @@ _SETTINGS_CONFIG_KEY_ORDER_AFTER_AUTH: Tuple[str, ...] = (
     "ai_match_timeout_seconds",
     "ai_match_temperature",
     "ai_match_max_concurrency",
-    "ai_match_disable_thinking",
+    "ai_match_thinking_mode",
+    "ai_match_min_confidence",
+    "ai_match_cache_ttl_hours",
     # 9. 通知推送
     "notify_push_enabled",
     "notify_monitor_enabled",
@@ -1032,7 +1034,9 @@ def default_config() -> Dict[str, Any]:
         "ai_match_timeout_seconds": 20,
         "ai_match_temperature": 0,
         "ai_match_max_concurrency": 3,
-        "ai_match_disable_thinking": True,
+        "ai_match_thinking_mode": "auto",
+        "ai_match_min_confidence": 0,
+        "ai_match_cache_ttl_hours": 24,
         "pansou_enabled": False,
         "pansou_base_url": "",
         "pansou_username": "",
@@ -2493,8 +2497,12 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         merged["ai_match_temperature"] = 0
     if "ai_match_max_concurrency" not in merged:
         merged["ai_match_max_concurrency"] = 3
-    if "ai_match_disable_thinking" not in merged:
-        merged["ai_match_disable_thinking"] = True
+    if "ai_match_thinking_mode" not in merged:
+        merged["ai_match_thinking_mode"] = "auto"
+    if "ai_match_min_confidence" not in merged:
+        merged["ai_match_min_confidence"] = 0
+    if "ai_match_cache_ttl_hours" not in merged:
+        merged["ai_match_cache_ttl_hours"] = 24
     if "pansou_enabled" not in merged:
         merged["pansou_enabled"] = False
     if "pansou_base_url" not in merged:
@@ -2652,7 +2660,26 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     except (TypeError, ValueError):
         ai_match_max_concurrency = 3
     merged["ai_match_max_concurrency"] = max(1, min(8, ai_match_max_concurrency))
-    merged["ai_match_disable_thinking"] = normalize_bool(merged.get("ai_match_disable_thinking", True), default=True)
+    ai_thinking_mode = str(merged.get("ai_match_thinking_mode", "") or "").strip().lower()
+    raw_cfg = cfg if isinstance(cfg, dict) else {}
+    legacy_disable_thinking = raw_cfg.get("ai_match_disable_thinking")
+    if "ai_match_thinking_mode" not in raw_cfg and legacy_disable_thinking is not None:
+        # 兼容 0.11.1 的布尔配置：true=auto（仅 DeepSeek 关闭），false=enabled（不干预）。
+        ai_thinking_mode = "auto" if normalize_bool(legacy_disable_thinking, default=True) else "enabled"
+    elif ai_thinking_mode not in ("auto", "disabled", "enabled"):
+        ai_thinking_mode = "auto"
+    merged["ai_match_thinking_mode"] = ai_thinking_mode
+    merged.pop("ai_match_disable_thinking", None)
+    try:
+        ai_match_min_confidence = int(merged.get("ai_match_min_confidence", 0) or 0)
+    except (TypeError, ValueError):
+        ai_match_min_confidence = 0
+    merged["ai_match_min_confidence"] = max(0, min(100, ai_match_min_confidence))
+    try:
+        ai_match_cache_ttl_hours = int(merged.get("ai_match_cache_ttl_hours", 24) or 24)
+    except (TypeError, ValueError):
+        ai_match_cache_ttl_hours = 24
+    merged["ai_match_cache_ttl_hours"] = max(0, min(24 * 30, ai_match_cache_ttl_hours))
     try:
         tg_channel_threads = int(merged.get("tg_channel_threads", TG_CHANNEL_THREADS_DEFAULT) or TG_CHANNEL_THREADS_DEFAULT)
     except (TypeError, ValueError):

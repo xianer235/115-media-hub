@@ -14,7 +14,16 @@ def _runtime():
         "timeout_seconds": 5,
         "max_concurrency": 3,
         "max_candidates": 5,
+        "thinking_mode": "auto",
+        "min_confidence": 0,
+        "cache_ttl_seconds": 0,
     }
+
+
+def _cached_runtime():
+    runtime = dict(_runtime())
+    runtime["cache_ttl_seconds"] = 3600
+    return runtime
 
 
 def _fake_candidate(tmdb_id=603, media_type="movie", title="The Matrix", year="1999", popularity=30.0):
@@ -28,6 +37,34 @@ def _fake_candidate(tmdb_id=603, media_type="movie", title="The Matrix", year="1
         "vote_average": 8.2,
         "overview": "A hacker learns the truth.",
     }
+
+
+def _low_score_candidates():
+    # 标题与关键词完全无关 -> 打分低且接近，确保走 AI 二次选择而不是跳过。
+    return [
+        _fake_candidate(tmdb_id=603, title="Totally Unrelated", year="1999"),
+        _fake_candidate(tmdb_id=604, title="Another Unrelated", year="2001"),
+    ]
+
+
+class _FakeResponse:
+    def __init__(self, status_code, payload=None, text="", headers=None):
+        self.status_code = status_code
+        self._payload = payload
+        self.text = text
+        self.headers = headers or {}
+
+    def json(self):
+        if self._payload is None:
+            raise ValueError("no json")
+        return self._payload
+
+
+def _ok_response(content='{"keyword": "X"}', usage=None):
+    payload = {"choices": [{"message": {"content": content}}]}
+    if usage is not None:
+        payload["usage"] = usage
+    return _FakeResponse(200, payload)
 
 
 class AiMatchJsonParseTest(unittest.TestCase):
@@ -48,50 +85,6 @@ class AiMatchJsonParseTest(unittest.TestCase):
         self.assertIsNone(ai_match._parse_json_object("[1, 2, 3]"))
 
 
-class _FakeResponse:
-    def __init__(self, status_code, payload=None, text=""):
-        self.status_code = status_code
-        self._payload = payload
-        self.text = text
-
-    def json(self):
-        if self._payload is None:
-            raise ValueError("no json")
-        return self._payload
-
-
-class AiMatchChatJsonTest(unittest.TestCase):
-    def test_chat_json_ok(self):
-        response = _FakeResponse(200, {"choices": [{"message": {"content": '{"keyword": "X"}'}}]})
-        with mock.patch.object(ai_match.requests, "post", return_value=response) as post:
-            data, error = ai_match._ai_chat_json(_runtime(), [{"role": "user", "content": "hi"}])
-        self.assertEqual(error, "")
-        self.assertEqual(data, {"keyword": "X"})
-        self.assertEqual(post.call_count, 1)
-
-    def test_chat_json_retries_without_json_mode_on_400(self):
-        first = _FakeResponse(400, text="response_format not supported")
-        second = _FakeResponse(200, {"choices": [{"message": {"content": '{"keyword": "Y"}'}}]})
-        with mock.patch.object(ai_match.requests, "post", side_effect=[first, second]) as post:
-            data, error = ai_match._ai_chat_json(_runtime(), [{"role": "user", "content": "hi"}])
-        self.assertEqual(error, "")
-        self.assertEqual(data, {"keyword": "Y"})
-        self.assertEqual(post.call_count, 2)
-        self.assertNotIn("response_format", post.call_args_list[1].kwargs["json"])
-
-    def test_chat_json_http_error(self):
-        with mock.patch.object(ai_match.requests, "post", return_value=_FakeResponse(500, text="boom")):
-            data, error = ai_match._ai_chat_json(_runtime(), [])
-        self.assertIsNone(data)
-        self.assertIn("HTTP 500", error)
-
-    def test_chat_json_timeout(self):
-        with mock.patch.object(ai_match.requests, "post", side_effect=ai_match.requests.RequestException("timeout")):
-            data, error = ai_match._ai_chat_json(_runtime(), [])
-        self.assertIsNone(data)
-        self.assertIn("AI 请求失败", error)
-
-
 class AiMatchRuntimeConfigTest(unittest.TestCase):
     def test_disabled_by_default(self):
         self.assertFalse(ai_match.build_ai_match_runtime_config({})["enabled"])
@@ -109,7 +102,7 @@ class AiMatchRuntimeConfigTest(unittest.TestCase):
             "ai_match_enabled": True,
             "ai_match_base_url": "https://api.deepseek.com/v1/",
             "ai_match_api_key": "sk-test",
-            "ai_match_model": "deepseek-chat",
+            "ai_match_model": "deepseek-flash",
         }
         self.assertIsNone(ai_match.validate_ai_match_runtime_config(full))
         runtime = ai_match.build_ai_match_runtime_config(full)
@@ -126,6 +119,9 @@ class AiMatchRuntimeConfigTest(unittest.TestCase):
         self.assertEqual(cfg["ai_match_timeout_seconds"], 20)
         self.assertEqual(cfg["ai_match_temperature"], 0)
         self.assertEqual(cfg["ai_match_max_concurrency"], 3)
+        self.assertEqual(cfg["ai_match_thinking_mode"], "auto")
+        self.assertEqual(cfg["ai_match_min_confidence"], 0)
+        self.assertEqual(cfg["ai_match_cache_ttl_hours"], 24)
 
     def test_normalize_config_clamps(self):
         cfg = core.normalize_config(
@@ -133,28 +129,140 @@ class AiMatchRuntimeConfigTest(unittest.TestCase):
                 "ai_match_timeout_seconds": 999,
                 "ai_match_temperature": 9,
                 "ai_match_max_concurrency": 100,
+                "ai_match_min_confidence": 999,
+                "ai_match_cache_ttl_hours": 99999,
                 "ai_match_base_url": "http://x/v1/",
             }
         )
         self.assertEqual(cfg["ai_match_timeout_seconds"], 120)
         self.assertEqual(cfg["ai_match_temperature"], 2.0)
         self.assertEqual(cfg["ai_match_max_concurrency"], 8)
+        self.assertEqual(cfg["ai_match_min_confidence"], 100)
+        self.assertEqual(cfg["ai_match_cache_ttl_hours"], 720)
         self.assertEqual(cfg["ai_match_base_url"], "http://x/v1")
 
-    def test_disable_thinking_default_true(self):
-        self.assertTrue(ai_match.build_ai_match_runtime_config({})["disable_thinking"])
-        self.assertFalse(
-            ai_match.build_ai_match_runtime_config({"ai_match_disable_thinking": False})["disable_thinking"]
+    def test_thinking_mode_default_and_legacy_migration(self):
+        self.assertEqual(ai_match.build_ai_match_runtime_config({})["thinking_mode"], "auto")
+        self.assertEqual(
+            ai_match.build_ai_match_runtime_config({"ai_match_thinking_mode": "disabled"})["thinking_mode"],
+            "disabled",
         )
-        self.assertTrue(core.normalize_config({})["ai_match_disable_thinking"])
+        # 兼容 0.11.1 的布尔键：false -> enabled（不干预），true -> auto
+        self.assertEqual(
+            ai_match.build_ai_match_runtime_config({"ai_match_disable_thinking": False})["thinking_mode"],
+            "enabled",
+        )
+        self.assertEqual(
+            ai_match.build_ai_match_runtime_config({"ai_match_disable_thinking": True})["thinking_mode"],
+            "auto",
+        )
+        migrated = core.normalize_config({"ai_match_disable_thinking": False})
+        self.assertEqual(migrated["ai_match_thinking_mode"], "enabled")
+        self.assertNotIn("ai_match_disable_thinking", migrated)
+
+    def test_runtime_cache_and_confidence_defaults(self):
+        runtime = ai_match.build_ai_match_runtime_config({})
+        self.assertEqual(runtime["min_confidence"], 0)
+        self.assertEqual(runtime["cache_ttl_hours"], 24)
+        self.assertEqual(runtime["cache_ttl_seconds"], 24 * 3600)
+
+
+class AiMatchChatJsonTest(unittest.TestCase):
+    def test_chat_json_ok(self):
+        with mock.patch.object(ai_match.requests, "post", return_value=_ok_response()) as post:
+            data, error, usage = ai_match._ai_chat_json(_runtime(), [{"role": "user", "content": "hi"}])
+        self.assertEqual(error, "")
+        self.assertEqual(data, {"keyword": "X"})
+        self.assertEqual(post.call_count, 1)
+        self.assertEqual(usage["total_tokens"], 0)
+
+    def test_chat_json_returns_usage(self):
+        response = _ok_response(
+            usage={
+                "prompt_tokens": 1200,
+                "completion_tokens": 40,
+                "total_tokens": 1240,
+                "prompt_cache_hit_tokens": 1000,
+            }
+        )
+        with mock.patch.object(ai_match.requests, "post", return_value=response):
+            _data, error, usage = ai_match._ai_chat_json(_runtime(), [])
+        self.assertEqual(error, "")
+        self.assertEqual(usage["prompt_tokens"], 1200)
+        self.assertEqual(usage["completion_tokens"], 40)
+        self.assertEqual(usage["prompt_cache_hit_tokens"], 1000)
+        self.assertEqual(usage["total_tokens"], 1240)
+
+    def test_chat_json_retries_without_json_mode_on_400(self):
+        first = _FakeResponse(400, text="response_format not supported")
+        with mock.patch.object(ai_match.requests, "post", side_effect=[first, _ok_response()]) as post, \
+                mock.patch.object(ai_match.time, "sleep") as sleep:
+            data, error, _usage = ai_match._ai_chat_json(_runtime(), [{"role": "user", "content": "hi"}])
+        self.assertEqual(error, "")
+        self.assertEqual(data, {"keyword": "X"})
+        self.assertEqual(post.call_count, 2)
+        self.assertNotIn("response_format", post.call_args_list[1].kwargs["json"])
+        sleep.assert_not_called()
+
+    def test_chat_json_retries_on_500(self):
+        responses = [_FakeResponse(500, text="boom"), _ok_response()]
+        with mock.patch.object(ai_match.requests, "post", side_effect=responses) as post, \
+                mock.patch.object(ai_match.time, "sleep") as sleep:
+            data, error, _usage = ai_match._ai_chat_json(_runtime(), [])
+        self.assertEqual(error, "")
+        self.assertEqual(data, {"keyword": "X"})
+        self.assertEqual(post.call_count, 2)
+        sleep.assert_called()
+
+    def test_chat_json_retries_on_timeout(self):
+        with mock.patch.object(
+            ai_match.requests,
+            "post",
+            side_effect=[ai_match.requests.RequestException("timeout"), _ok_response()],
+        ) as post, mock.patch.object(ai_match.time, "sleep"):
+            _data, error, _usage = ai_match._ai_chat_json(_runtime(), [])
+        self.assertEqual(error, "")
+        self.assertEqual(post.call_count, 2)
+
+    def test_chat_json_gives_up_after_max_attempts(self):
+        with mock.patch.object(ai_match.requests, "post", return_value=_FakeResponse(503, text="down")) as post, \
+                mock.patch.object(ai_match.time, "sleep"):
+            data, error, _usage = ai_match._ai_chat_json(_runtime(), [])
+        self.assertIsNone(data)
+        self.assertIn("HTTP 503", error)
+        self.assertEqual(post.call_count, ai_match.AI_MATCH_MAX_ATTEMPTS)
+
+    def test_chat_json_does_not_retry_plain_4xx(self):
+        with mock.patch.object(ai_match.requests, "post", return_value=_FakeResponse(401, text="unauthorized")) as post, \
+                mock.patch.object(ai_match.time, "sleep") as sleep:
+            data, error, _usage = ai_match._ai_chat_json(_runtime(), [])
+        self.assertIsNone(data)
+        self.assertIn("HTTP 401", error)
+        self.assertEqual(post.call_count, 1)
+        sleep.assert_not_called()
+
+    def test_chat_json_uses_retry_after_header(self):
+        responses = [_FakeResponse(429, text="slow down", headers={"Retry-After": "3"}), _ok_response()]
+        with mock.patch.object(ai_match.requests, "post", side_effect=responses), \
+                mock.patch.object(ai_match.time, "sleep") as sleep:
+            _data, error, _usage = ai_match._ai_chat_json(_runtime(), [])
+        self.assertEqual(error, "")
+        sleep.assert_called_once_with(3.0)
+
+    def test_chat_json_timeout_error_message(self):
+        with mock.patch.object(ai_match.requests, "post", side_effect=ai_match.requests.RequestException("timeout")), \
+                mock.patch.object(ai_match.time, "sleep"):
+            data, error, _usage = ai_match._ai_chat_json(_runtime(), [])
+        self.assertIsNone(data)
+        self.assertIn("AI 请求失败", error)
 
 
 class AiMatchThinkingControlTest(unittest.TestCase):
-    def _deepseek_runtime(self, disable=True):
+    def _deepseek_runtime(self, thinking_mode="auto"):
         runtime = dict(_runtime())
         runtime["base_url"] = "https://api.deepseek.com/v1"
         runtime["model"] = "deepseek-flash"
-        runtime["disable_thinking"] = disable
+        runtime["thinking_mode"] = thinking_mode
         return runtime
 
     def test_supports_thinking_control_by_host_or_model(self):
@@ -168,27 +276,79 @@ class AiMatchThinkingControlTest(unittest.TestCase):
             ai_match._supports_thinking_control({"base_url": "http://127.0.0.1:11434/v1", "model": "qwen2.5:7b"})
         )
 
-    def test_deepseek_payload_disables_thinking(self):
-        response = _FakeResponse(200, {"choices": [{"message": {"content": '{"keyword": "X"}'}}]})
-        with mock.patch.object(ai_match.requests, "post", return_value=response) as post:
+    def test_auto_sends_disabled_for_deepseek(self):
+        with mock.patch.object(ai_match.requests, "post", return_value=_ok_response()) as post:
             ai_match._ai_chat_json(self._deepseek_runtime(), [{"role": "user", "content": "hi"}])
         self.assertEqual(post.call_args.kwargs["json"]["thinking"], {"type": "disabled"})
 
-    def test_non_deepseek_payload_omits_thinking(self):
-        response = _FakeResponse(200, {"choices": [{"message": {"content": '{"keyword": "X"}'}}]})
-        with mock.patch.object(ai_match.requests, "post", return_value=response) as post:
+    def test_auto_omits_thinking_for_unknown_endpoint(self):
+        with mock.patch.object(ai_match.requests, "post", return_value=_ok_response()) as post:
             ai_match._ai_chat_json(_runtime(), [{"role": "user", "content": "hi"}])
         self.assertNotIn("thinking", post.call_args.kwargs["json"])
 
-    def test_thinking_flag_off_omits_field(self):
-        response = _FakeResponse(200, {"choices": [{"message": {"content": '{"keyword": "X"}'}}]})
-        with mock.patch.object(ai_match.requests, "post", return_value=response) as post:
-            ai_match._ai_chat_json(self._deepseek_runtime(disable=False), [{"role": "user", "content": "hi"}])
+    def test_enabled_mode_never_sends_thinking(self):
+        with mock.patch.object(ai_match.requests, "post", return_value=_ok_response()) as post:
+            ai_match._ai_chat_json(self._deepseek_runtime("enabled"), [{"role": "user", "content": "hi"}])
         self.assertNotIn("thinking", post.call_args.kwargs["json"])
+
+    def test_disabled_mode_sends_even_for_unknown_endpoint(self):
+        runtime = dict(_runtime())
+        runtime["thinking_mode"] = "disabled"
+        with mock.patch.object(ai_match.requests, "post", return_value=_ok_response()) as post:
+            ai_match._ai_chat_json(runtime, [{"role": "user", "content": "hi"}])
+        self.assertEqual(post.call_args.kwargs["json"]["thinking"], {"type": "disabled"})
 
     def test_prompts_contain_lowercase_json(self):
         self.assertIn("json", ai_match._QUERY_SYSTEM_PROMPT)
         self.assertIn("json", ai_match._SELECT_SYSTEM_PROMPT)
+
+
+class AiMatchCacheTest(unittest.TestCase):
+    def setUp(self):
+        ai_match.clear_ai_match_cache()
+
+    def tearDown(self):
+        ai_match.clear_ai_match_cache()
+
+    def test_query_cache_hit_avoids_second_call(self):
+        with mock.patch.object(ai_match.requests, "post", return_value=_ok_response()) as post:
+            first = ai_match.ai_match_generate_query({"name": "片"}, runtime=_cached_runtime())
+            second = ai_match.ai_match_generate_query({"name": "片"}, runtime=_cached_runtime())
+        self.assertTrue(first["ok"])
+        self.assertFalse(first["cached"])
+        self.assertTrue(second["cached"])
+        self.assertEqual(second["keyword"], "X")
+        self.assertEqual(post.call_count, 1)
+
+    def test_query_cache_disabled_calls_every_time(self):
+        with mock.patch.object(ai_match.requests, "post", return_value=_ok_response()) as post:
+            ai_match.ai_match_generate_query({"name": "片"}, runtime=_runtime())
+            ai_match.ai_match_generate_query({"name": "片"}, runtime=_runtime())
+        self.assertEqual(post.call_count, 2)
+
+    def test_cached_result_reports_cache_hit_usage(self):
+        with mock.patch.object(ai_match.requests, "post", return_value=_ok_response()):
+            ai_match.ai_match_generate_query({"name": "片"}, runtime=_cached_runtime())
+            second = ai_match.ai_match_generate_query({"name": "片"}, runtime=_cached_runtime())
+        self.assertEqual(second["usage"]["cache_hits"], 1)
+        self.assertEqual(second["usage"]["calls"], 0)
+
+    def test_select_cache_key_includes_candidates(self):
+        candidates = [_fake_candidate(tmdb_id=603), _fake_candidate(tmdb_id=604, title="Sequel")]
+        first_response = _FakeResponse(200, {"choices": [{"message": {"content": '{"tmdb_id": 603, "confidence": 80}'}}]})
+        second_response = _FakeResponse(200, {"choices": [{"message": {"content": '{"tmdb_id": 604, "confidence": 80}'}}]})
+        with mock.patch.object(ai_match.requests, "post", side_effect=[first_response, second_response]) as post:
+            first = ai_match.ai_match_select_candidate({"name": "片"}, candidates, runtime=_cached_runtime())
+            repeat = ai_match.ai_match_select_candidate({"name": "片"}, candidates, runtime=_cached_runtime())
+            other = ai_match.ai_match_select_candidate({"name": "片"}, [candidates[0]], runtime=_cached_runtime())
+        self.assertEqual(post.call_count, 2)
+        self.assertTrue(repeat["cached"])
+        self.assertFalse(other["cached"])
+
+    def test_clear_cache(self):
+        with mock.patch.object(ai_match.requests, "post", return_value=_ok_response()):
+            ai_match.ai_match_generate_query({"name": "片"}, runtime=_cached_runtime())
+        self.assertEqual(ai_match.clear_ai_match_cache(), 1)
 
 
 class AiMatchGenerateQueryTest(unittest.TestCase):
@@ -196,7 +356,7 @@ class AiMatchGenerateQueryTest(unittest.TestCase):
         with mock.patch.object(
             ai_match,
             "_ai_chat_json",
-            return_value=({"keyword": " 黑客帝国 ", "year": "1999", "media_type": "movie"}, ""),
+            return_value=({"keyword": " 黑客帝国 ", "year": "1999", "media_type": "movie"}, "", {}),
         ):
             result = ai_match.ai_match_generate_query({"name": "黑客帝国4"}, runtime=_runtime())
         self.assertTrue(result["ok"])
@@ -208,23 +368,24 @@ class AiMatchGenerateQueryTest(unittest.TestCase):
         with mock.patch.object(
             ai_match,
             "_ai_chat_json",
-            return_value=({"keyword": "X", "year": "19", "media_type": "anime"}, ""),
+            return_value=({"keyword": "X", "year": "19", "media_type": "anime"}, "", {}),
         ):
             result = ai_match.ai_match_generate_query({"name": "X"}, runtime=_runtime())
         self.assertEqual(result["year"], "")
         self.assertEqual(result["media_type"], "")
 
     def test_generate_query_empty_keyword(self):
-        with mock.patch.object(ai_match, "_ai_chat_json", return_value=({"keyword": "   "}, "")):
+        with mock.patch.object(ai_match, "_ai_chat_json", return_value=({"keyword": "   "}, "", {})):
             result = ai_match.ai_match_generate_query({"name": "X"}, runtime=_runtime())
         self.assertFalse(result["ok"])
         self.assertIn("关键词", result["error"])
 
     def test_generate_query_surfaces_error(self):
-        with mock.patch.object(ai_match, "_ai_chat_json", return_value=(None, "AI 请求失败：boom")):
+        with mock.patch.object(ai_match, "_ai_chat_json", return_value=(None, "AI 请求失败：boom", {})):
             result = ai_match.ai_match_generate_query({"name": "X"}, runtime=_runtime())
         self.assertFalse(result["ok"])
         self.assertIn("boom", result["error"])
+        self.assertEqual(result["usage"]["calls"], 1)
 
 
 class AiMatchSelectCandidateTest(unittest.TestCase):
@@ -233,7 +394,7 @@ class AiMatchSelectCandidateTest(unittest.TestCase):
         with mock.patch.object(
             ai_match,
             "_ai_chat_json",
-            return_value=({"tmdb_id": 604, "media_type": "movie", "confidence": 88, "reason": "续集"}, ""),
+            return_value=({"tmdb_id": 604, "media_type": "movie", "confidence": 88, "reason": "续集"}, "", {}),
         ):
             result = ai_match.ai_match_select_candidate({"name": "黑客帝国2"}, candidates, runtime=_runtime())
         self.assertTrue(result["ok"])
@@ -241,7 +402,7 @@ class AiMatchSelectCandidateTest(unittest.TestCase):
         self.assertEqual(result["confidence"], 88)
 
     def test_select_rejects_unknown_id(self):
-        with mock.patch.object(ai_match, "_ai_chat_json", return_value=({"tmdb_id": 999, "confidence": 90}, "")):
+        with mock.patch.object(ai_match, "_ai_chat_json", return_value=({"tmdb_id": 999, "confidence": 90}, "", {})):
             result = ai_match.ai_match_select_candidate({"name": "X"}, [_fake_candidate()], runtime=_runtime())
         self.assertFalse(result["ok"])
 
@@ -250,55 +411,100 @@ class AiMatchSelectCandidateTest(unittest.TestCase):
         self.assertFalse(result["ok"])
 
     def test_select_clamps_confidence(self):
-        with mock.patch.object(ai_match, "_ai_chat_json", return_value=({"tmdb_id": 603, "confidence": 250}, "")):
+        with mock.patch.object(ai_match, "_ai_chat_json", return_value=({"tmdb_id": 603, "confidence": 250}, "", {})):
             result = ai_match.ai_match_select_candidate({"name": "X"}, [_fake_candidate()], runtime=_runtime())
         self.assertEqual(result["confidence"], 100)
 
     def test_select_surfaces_error(self):
-        with mock.patch.object(ai_match, "_ai_chat_json", return_value=(None, "AI 接口返回 HTTP 500")):
+        with mock.patch.object(ai_match, "_ai_chat_json", return_value=(None, "AI 接口返回 HTTP 500", {})):
             result = ai_match.ai_match_select_candidate({"name": "X"}, [_fake_candidate()], runtime=_runtime())
         self.assertFalse(result["ok"])
         self.assertIn("HTTP 500", result["error"])
 
 
+def _fallback_cfg(**overrides):
+    cfg = {
+        "ai_match_enabled": True,
+        "ai_match_base_url": "http://x/v1",
+        "ai_match_api_key": "k",
+        "ai_match_model": "m",
+        "ai_match_timeout_seconds": 5,
+        "ai_match_temperature": 0,
+        "ai_match_max_concurrency": 3,
+        "ai_match_min_confidence": 0,
+        "ai_match_cache_ttl_hours": 24,
+        "ai_match_thinking_mode": "auto",
+        "tmdb_enabled": True,
+        "tmdb_api_key": "key",
+    }
+    cfg.update(overrides)
+    return cfg
+
+
+def _manual_result(item_index=1):
+    return {
+        "item_index": item_index,
+        "ok": True,
+        "status": "manual",
+        "confidence": 0,
+        "candidates": [],
+        "media_type": "movie",
+        "year": "",
+    }
+
+
+def _raw_item(item_index=1, name="黑客帝国4"):
+    return {"item_index": item_index, "name": name, "entry": {"id": str(item_index), "name": name}, "files": []}
+
+
+def _generated_ok(usage=None):
+    return {
+        "ok": True,
+        "keyword": "黑客帝国",
+        "year": "1999",
+        "media_type": "movie",
+        "error": "",
+        "cached": False,
+        "usage": {"calls": 1} if usage is None else usage,
+    }
+
+
+def _selected_ok(candidate, confidence=92, reason="片名匹配", usage=None):
+    return {
+        "ok": True,
+        "candidate": candidate,
+        "tmdb_id": int(candidate.get("id", 0) or 0),
+        "media_type": "movie",
+        "confidence": confidence,
+        "reason": reason,
+        "error": "",
+        "cached": False,
+        "usage": {"calls": 1} if usage is None else usage,
+    }
+
+
 class AiMatchFallbackIntegrationTest(unittest.TestCase):
-    def _cfg(self):
-        return {
-            "ai_match_enabled": True,
-            "ai_match_base_url": "http://x/v1",
-            "ai_match_api_key": "k",
-            "ai_match_model": "m",
-            "ai_match_timeout_seconds": 5,
-            "ai_match_temperature": 0,
-            "ai_match_max_concurrency": 3,
-            "tmdb_enabled": True,
-            "tmdb_api_key": "key",
-        }
+    def setUp(self):
+        ai_match.clear_ai_match_cache()
 
     def test_use_ai_override(self):
-        self.assertFalse(scraper._scraper_ai_match_requested({"use_ai": False}, self._cfg()))
+        self.assertFalse(scraper._scraper_ai_match_requested({"use_ai": False}, _fallback_cfg()))
         self.assertTrue(scraper._scraper_ai_match_requested({"use_ai": True}, {"ai_match_enabled": False}))
-        self.assertTrue(scraper._scraper_ai_match_requested({}, self._cfg()))
+        self.assertTrue(scraper._scraper_ai_match_requested({}, _fallback_cfg()))
         self.assertFalse(scraper._scraper_ai_match_requested({}, {}))
 
     def test_fallback_merges_ai_candidate_without_autopick(self):
-        results = [
-            {"item_index": 1, "ok": True, "status": "manual", "confidence": 0, "candidates": [], "media_type": "movie", "year": ""},
-            {"item_index": 2, "ok": True, "status": "auto", "confidence": 90, "candidates": [], "media_type": "movie", "year": ""},
-        ]
-        raw_items = [
-            {"item_index": 1, "name": "黑客帝国4", "entry": {"id": "1", "name": "黑客帝国4"}, "files": []},
-            {"item_index": 2, "name": "已匹配", "entry": {"id": "2", "name": "已匹配"}, "files": []},
-        ]
-        candidate = _fake_candidate(tmdb_id=603, title="The Matrix", year="1999")
+        results = [_manual_result(1), {**_manual_result(2), "status": "auto", "confidence": 90}]
+        raw_items = [_raw_item(1), _raw_item(2, name="已匹配")]
+        candidate = _fake_candidate(tmdb_id=603)
         with mock.patch(
             "app.services.ai_match.ai_match_generate_query",
-            return_value={"ok": True, "keyword": "黑客帝国", "year": "1999", "media_type": "movie", "error": ""},
+            return_value=_generated_ok(),
         ), mock.patch(
             "app.services.ai_match.ai_match_select_candidate",
-            return_value={"ok": True, "candidate": candidate, "tmdb_id": 603, "media_type": "movie", "confidence": 92, "reason": "片名匹配", "error": ""},
-        ), mock.patch.object(scraper, "_search_batch_tmdb_candidates", return_value=[candidate]):
-            scraper._apply_ai_match_fallback(results, raw_items, {}, self._cfg())
+            return_value=_selected_ok(candidate),
+        ), mock.patch.object(scraper, "_search_batch_tmdb_candidates", return_value=_low_score_candidates()):
+            usage = scraper._apply_ai_match_fallback(results, raw_items, {}, _fallback_cfg())
 
         target = results[0]
         self.assertEqual(target["status"], "suggest")
@@ -310,81 +516,134 @@ class AiMatchFallbackIntegrationTest(unittest.TestCase):
         self.assertNotIn("auto_pick", target)
         self.assertEqual(results[1]["status"], "auto")
         self.assertNotIn("ai_keyword", results[1])
+        self.assertEqual(usage["calls"], 2)
+
+    def test_fallback_skips_select_for_single_candidate(self):
+        results = [_manual_result(1)]
+        raw_items = [_raw_item(1)]
+        candidate = _fake_candidate(tmdb_id=603)
+        with mock.patch(
+            "app.services.ai_match.ai_match_generate_query",
+            return_value=_generated_ok(),
+        ), mock.patch(
+            "app.services.ai_match.ai_match_select_candidate",
+            side_effect=AssertionError("不应调用二次选择"),
+        ) as select, mock.patch.object(scraper, "_search_batch_tmdb_candidates", return_value=[candidate]):
+            usage = scraper._apply_ai_match_fallback(results, raw_items, {}, _fallback_cfg())
+
+        select.assert_not_called()
+        self.assertTrue(results[0]["ai_skipped_select"])
+        self.assertEqual(results[0]["status"], "suggest")
+        self.assertEqual(results[0]["ai_selected"]["id"], 603)
+        self.assertEqual(usage["calls"], 1)
+
+    def test_fallback_min_confidence_rejects_low_confidence(self):
+        results = [_manual_result(1)]
+        raw_items = [_raw_item(1)]
+        candidate = _fake_candidate(tmdb_id=603)
+        with mock.patch(
+            "app.services.ai_match.ai_match_generate_query",
+            return_value=_generated_ok(),
+        ), mock.patch(
+            "app.services.ai_match.ai_match_select_candidate",
+            return_value=_selected_ok(candidate, confidence=40),
+        ), mock.patch.object(scraper, "_search_batch_tmdb_candidates", return_value=_low_score_candidates()):
+            scraper._apply_ai_match_fallback(results, raw_items, {}, _fallback_cfg(ai_match_min_confidence=90))
+
+        self.assertEqual(results[0]["ai_low_confidence"], 40)
+        self.assertNotIn("ai_selected", results[0])
+        self.assertEqual(results[0]["status"], "manual")
+
+    def test_fallback_aggregates_usage(self):
+        results = [_manual_result(1)]
+        raw_items = [_raw_item(1)]
+        candidate = _fake_candidate(tmdb_id=603)
+        generated_usage = {"prompt_tokens": 1000, "completion_tokens": 20, "total_tokens": 1020, "calls": 1}
+        select_usage = {
+            "prompt_tokens": 800,
+            "completion_tokens": 10,
+            "total_tokens": 810,
+            "prompt_cache_hit_tokens": 500,
+            "calls": 1,
+        }
+        with mock.patch(
+            "app.services.ai_match.ai_match_generate_query",
+            return_value=_generated_ok(generated_usage),
+        ), mock.patch(
+            "app.services.ai_match.ai_match_select_candidate",
+            return_value=_selected_ok(candidate, usage=select_usage),
+        ), mock.patch.object(scraper, "_search_batch_tmdb_candidates", return_value=_low_score_candidates()):
+            usage = scraper._apply_ai_match_fallback(results, raw_items, {}, _fallback_cfg())
+
+        self.assertEqual(usage["calls"], 2)
+        self.assertEqual(usage["prompt_tokens"], 1800)
+        self.assertEqual(usage["total_tokens"], 1830)
+        self.assertEqual(usage["prompt_cache_hit_tokens"], 500)
+        self.assertEqual(results[0]["ai_usage"]["calls"], 2)
 
     def test_fallback_config_error_annotates_only_targets(self):
-        results = [
-            {"item_index": 1, "ok": True, "status": "manual", "candidates": [], "media_type": "movie", "year": ""},
-            {"item_index": 2, "ok": True, "status": "auto", "candidates": [], "media_type": "movie", "year": ""},
-        ]
-        raw_items = [
-            {"item_index": 1, "name": "X", "entry": {"id": "1", "name": "X"}, "files": []},
-            {"item_index": 2, "name": "Y", "entry": {"id": "2", "name": "Y"}, "files": []},
-        ]
-        cfg = self._cfg()
-        cfg["ai_match_model"] = ""
-        scraper._apply_ai_match_fallback(results, raw_items, {}, cfg)
+        results = [_manual_result(1), {**_manual_result(2), "status": "auto"}]
+        raw_items = [_raw_item(1), _raw_item(2, name="Y")]
+        scraper._apply_ai_match_fallback(results, raw_items, {}, _fallback_cfg(ai_match_model=""))
         self.assertIn("ai_error", results[0])
         self.assertNotIn("ai_error", results[1])
 
     def test_fallback_disabled_does_nothing(self):
-        results = [{"item_index": 1, "ok": True, "status": "manual", "candidates": [], "media_type": "movie", "year": ""}]
-        raw_items = [{"item_index": 1, "name": "X", "entry": {"id": "1", "name": "X"}, "files": []}]
-        scraper._apply_ai_match_fallback(results, raw_items, {}, {"ai_match_enabled": False})
+        results = [_manual_result(1)]
+        raw_items = [_raw_item(1)]
+        usage = scraper._apply_ai_match_fallback(results, raw_items, {}, {"ai_match_enabled": False})
+        self.assertEqual(usage, {})
         self.assertNotIn("ai_keyword", results[0])
         self.assertNotIn("ai_error", results[0])
 
     def test_fallback_ai_failure_keeps_candidates(self):
         original = _fake_candidate(tmdb_id=111, title="Original")
-        results = [
-            {"item_index": 1, "ok": True, "status": "suggest", "candidates": [original], "media_type": "movie", "year": ""}
-        ]
-        raw_items = [{"item_index": 1, "name": "X", "entry": {"id": "1", "name": "X"}, "files": []}]
+        results = [{**_manual_result(1), "status": "suggest", "candidates": [original]}]
+        raw_items = [_raw_item(1)]
         with mock.patch(
             "app.services.ai_match.ai_match_generate_query",
-            return_value={"ok": False, "keyword": "", "year": "", "media_type": "", "error": "AI 请求失败"},
+            return_value={"ok": False, "keyword": "", "year": "", "media_type": "", "error": "AI 请求失败", "usage": {"calls": 1}},
         ):
-            scraper._apply_ai_match_fallback(results, raw_items, {}, self._cfg())
+            scraper._apply_ai_match_fallback(results, raw_items, {}, _fallback_cfg())
         self.assertEqual(results[0]["ai_error"], "AI 请求失败")
         self.assertEqual(results[0]["candidates"][0]["id"], 111)
 
     def test_fallback_select_failure_still_merges_keyword_candidates(self):
-        candidate = _fake_candidate(tmdb_id=603, title="The Matrix", year="1999")
-        results = [
-            {"item_index": 1, "ok": True, "status": "manual", "candidates": [], "media_type": "movie", "year": ""}
-        ]
-        raw_items = [{"item_index": 1, "name": "黑客帝国", "entry": {"id": "1", "name": "黑客帝国"}, "files": []}]
+        results = [_manual_result(1)]
+        raw_items = [_raw_item(1)]
         with mock.patch(
             "app.services.ai_match.ai_match_generate_query",
-            return_value={"ok": True, "keyword": "黑客帝国", "year": "1999", "media_type": "movie", "error": ""},
+            return_value=_generated_ok(),
         ), mock.patch(
             "app.services.ai_match.ai_match_select_candidate",
-            return_value={"ok": False, "candidate": {}, "error": "AI 候选选择失败"},
-        ), mock.patch.object(scraper, "_search_batch_tmdb_candidates", return_value=[candidate]):
-            scraper._apply_ai_match_fallback(results, raw_items, {}, self._cfg())
+            return_value={"ok": False, "candidate": {}, "error": "AI 候选选择失败", "usage": {"calls": 1}},
+        ), mock.patch.object(scraper, "_search_batch_tmdb_candidates", return_value=_low_score_candidates()):
+            scraper._apply_ai_match_fallback(results, raw_items, {}, _fallback_cfg())
 
         self.assertEqual(results[0]["status"], "suggest")
-        self.assertEqual(results[0]["candidates"][0]["id"], 603)
+        self.assertTrue(results[0]["candidates"])
         self.assertEqual(results[0]["ai_error"], "AI 候选选择失败")
         self.assertNotIn("ai_selected", results[0])
 
+    def test_should_skip_ai_select_rules(self):
+        self.assertFalse(scraper._should_skip_ai_select([]))
+        self.assertTrue(scraper._should_skip_ai_select([{"score": 10}]))
+        self.assertTrue(scraper._should_skip_ai_select([{"score": 90}, {"score": 10}]))
+        self.assertFalse(scraper._should_skip_ai_select([{"score": 75}, {"score": 10}]))
+        self.assertFalse(scraper._should_skip_ai_select([{"score": 90}, {"score": 85}]))
+
     def test_fallback_parallel_targets(self):
-        results = [
-            {"item_index": index, "ok": True, "status": "manual", "candidates": [], "media_type": "movie", "year": ""}
-            for index in (1, 2)
-        ]
-        raw_items = [
-            {"item_index": index, "name": f"片{index}", "entry": {"id": str(index), "name": f"片{index}"}, "files": []}
-            for index in (1, 2)
-        ]
-        candidate = _fake_candidate(tmdb_id=603, title="The Matrix", year="1999")
+        results = [_manual_result(1), _manual_result(2)]
+        raw_items = [_raw_item(1), _raw_item(2, name="片2")]
+        candidate = _fake_candidate(tmdb_id=603)
         with mock.patch(
             "app.services.ai_match.ai_match_generate_query",
-            return_value={"ok": True, "keyword": "黑客帝国", "year": "1999", "media_type": "movie", "error": ""},
+            return_value=_generated_ok(),
         ), mock.patch(
             "app.services.ai_match.ai_match_select_candidate",
-            return_value={"ok": True, "candidate": candidate, "tmdb_id": 603, "media_type": "movie", "confidence": 80, "reason": "ok", "error": ""},
-        ), mock.patch.object(scraper, "_search_batch_tmdb_candidates", return_value=[candidate]):
-            scraper._apply_ai_match_fallback(results, raw_items, {}, self._cfg())
+            return_value=_selected_ok(candidate, confidence=80),
+        ), mock.patch.object(scraper, "_search_batch_tmdb_candidates", return_value=_low_score_candidates()):
+            scraper._apply_ai_match_fallback(results, raw_items, {}, _fallback_cfg())
         for result in results:
             self.assertEqual(result["status"], "suggest")
             self.assertEqual(result["ai_keyword"], "黑客帝国")
@@ -392,23 +651,18 @@ class AiMatchFallbackIntegrationTest(unittest.TestCase):
 
 
 class IdentifyBatchWiringTest(unittest.TestCase):
-    def test_batch_identify_invokes_ai_fallback(self):
-        raw = [{"item_index": 1, "name": "X", "entry": {"id": "1", "name": "X"}, "files": []}]
+    def test_batch_identify_invokes_ai_fallback_and_reports_usage(self):
+        raw = [_raw_item(1)]
         payload = {"provider": "115", "items": raw}
-        item_result = {
-            "item_index": 1,
-            "ok": True,
-            "status": "manual",
-            "candidates": [],
-            "media_type": "movie",
-            "year": "",
-        }
+        item_result = _manual_result(1)
         seen = {}
+        usage = {"calls": 2, "prompt_tokens": 100, "completion_tokens": 5, "total_tokens": 105, "cache_hits": 0, "prompt_cache_hit_tokens": 0}
 
         def fake_apply(results, raw_items, request_payload, cfg):
             seen["applied"] = True
             seen["results"] = results
             seen["raw_items"] = raw_items
+            return usage
 
         with mock.patch.object(scraper, "get_config", return_value={"tmdb_enabled": True, "tmdb_api_key": "k"}), \
                 mock.patch.object(scraper, "validate_tmdb_runtime_config", return_value=None), \
@@ -420,6 +674,7 @@ class IdentifyBatchWiringTest(unittest.TestCase):
         self.assertEqual(seen["results"][0]["item_index"], 1)
         self.assertEqual(seen["raw_items"], raw)
         self.assertEqual(output["results"][0]["item_index"], 1)
+        self.assertEqual(output["ai_usage"], usage)
 
 
 if __name__ == "__main__":

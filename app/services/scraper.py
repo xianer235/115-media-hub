@@ -5224,6 +5224,21 @@ def _merge_scraper_ai_candidates(limit: int = 5, *groups: Any) -> List[Dict[str,
     return merged
 
 
+# 关键词搜索已直接命中高分且明显领先时，跳过第二次 AI 选择调用（省一半调用）。
+AI_MATCH_SKIP_SELECT_SCORE = 80
+AI_MATCH_SKIP_SELECT_GAP = 12
+
+
+def _should_skip_ai_select(candidates: List[Dict[str, Any]]) -> bool:
+    if not isinstance(candidates, list) or not candidates:
+        return False
+    if len(candidates) == 1:
+        return True
+    top = max(0, int(candidates[0].get("score", 0) or 0))
+    second = max(0, int(candidates[1].get("score", 0) or 0))
+    return top >= AI_MATCH_SKIP_SELECT_SCORE and (top - second) >= AI_MATCH_SKIP_SELECT_GAP
+
+
 def _ai_match_one_item(
     raw_item: Dict[str, Any],
     result: Dict[str, Any],
@@ -5234,15 +5249,25 @@ def _ai_match_one_item(
 
     所有异常都在这里吞掉并写进 result["ai_error"]，绝不打断整批识别。
     """
-    from .ai_match import ai_match_generate_query, ai_match_select_candidate
+    from .ai_match import (
+        ai_match_generate_query,
+        ai_match_select_candidate,
+        empty_ai_usage,
+        merge_ai_usage,
+    )
+
+    usage = empty_ai_usage()
 
     try:
         generated = ai_match_generate_query(raw_item, runtime=runtime)
     except Exception as exc:  # noqa: BLE001 - 单条失败不影响整批
         result["ai_error"] = f"AI 关键词生成失败：{exc}"
+        result["ai_usage"] = usage
         return
+    merge_ai_usage(usage, generated.get("usage"))
     if not generated.get("ok"):
         result["ai_error"] = str(generated.get("error") or "AI 关键词生成失败")
+        result["ai_usage"] = usage
         return
     keyword = str(generated.get("keyword") or "").strip()
     ai_year = str(generated.get("year") or "").strip()
@@ -5252,6 +5277,7 @@ def _ai_match_one_item(
     result["ai_media_type"] = ai_media_type
     if not keyword:
         result["ai_error"] = "AI 未给出有效关键词"
+        result["ai_usage"] = usage
         return
 
     media_type = ai_media_type or str(result.get("media_type") or "").strip()
@@ -5260,10 +5286,12 @@ def _ai_match_one_item(
         found = _search_batch_tmdb_candidates(keyword, media_type, year, cfg)
     except Exception as exc:  # noqa: BLE001
         result["ai_error"] = f"AI 关键词搜索 TMDB 失败：{exc}"
+        result["ai_usage"] = usage
         return
     existing_candidates = result.get("candidates") if isinstance(result.get("candidates"), list) else []
     if not found:
         result["ai_error"] = "AI 关键词未搜到 TMDB 结果"
+        result["ai_usage"] = usage
         return
 
     scored: List[Dict[str, Any]] = []
@@ -5280,15 +5308,34 @@ def _ai_match_one_item(
     max_candidates = max(1, int(runtime.get("max_candidates", 5) or 5))
     top_candidates = scored[:max_candidates]
 
-    try:
-        selection = ai_match_select_candidate(raw_item, top_candidates, runtime=runtime)
-    except Exception as exc:  # noqa: BLE001
-        selection = {"ok": False, "candidate": {}, "confidence": 0, "reason": "", "error": f"AI 候选选择失败：{exc}"}
+    if _should_skip_ai_select(top_candidates):
+        # 关键词已直接命中一个明显更优的候选，不必再多花一次 AI 调用。
+        result["ai_skipped_select"] = True
+        selection = {
+            "ok": True,
+            "candidate": top_candidates[0],
+            "confidence": max(0, min(100, int(top_candidates[0].get("score", 0) or 0))),
+            "reason": "关键词直接命中高分候选，已跳过二次选择",
+        }
+    else:
+        try:
+            selection = ai_match_select_candidate(raw_item, top_candidates, runtime=runtime)
+        except Exception as exc:  # noqa: BLE001
+            selection = {"ok": False, "candidate": {}, "confidence": 0, "reason": "", "error": f"AI 候选选择失败：{exc}"}
+        merge_ai_usage(usage, selection.get("usage"))
+
+    min_confidence = max(0, min(100, int(runtime.get("min_confidence", 0) or 0)))
 
     if selection.get("ok"):
         chosen = selection.get("candidate") if isinstance(selection.get("candidate"), dict) else {}
         confidence = max(0, min(100, int(selection.get("confidence", 0) or 0)))
         reason = str(selection.get("reason") or "").strip()
+        if min_confidence > 0 and confidence < min_confidence:
+            # 模型自己都没把握，不当作建议，避免干扰人工判断。
+            result["ai_low_confidence"] = confidence
+            result["ai_reason"] = reason
+            result["ai_usage"] = usage
+            return
         marked = {
             **chosen,
             "source": "ai",
@@ -5301,6 +5348,7 @@ def _ai_match_one_item(
         result["candidates"] = _merge_scraper_ai_candidates(5, [marked], top_candidates, existing_candidates)
         if str(result.get("status") or "") == "manual":
             result["status"] = "suggest"
+        result["ai_usage"] = usage
         return
 
     result["ai_error"] = str(selection.get("error") or "AI 候选选择失败")
@@ -5310,6 +5358,7 @@ def _ai_match_one_item(
         result["candidates"] = merged
         if str(result.get("status") or "") == "manual":
             result["status"] = "suggest"
+    result["ai_usage"] = usage
 
 
 def _apply_ai_match_fallback(
@@ -5317,12 +5366,17 @@ def _apply_ai_match_fallback(
     raw_items: List[Dict[str, Any]],
     payload: Dict[str, Any],
     cfg: Dict[str, Any],
-) -> None:
-    """对确定性识别未自动匹配（status != auto）的条目补充 AI 候选。"""
+) -> Dict[str, int]:
+    """对确定性识别未自动匹配（status != auto）的条目补充 AI 候选，返回本次 AI 用量汇总。"""
     if not _scraper_ai_match_requested(payload, cfg):
-        return
+        return {}
 
-    from .ai_match import build_ai_match_runtime_config, validate_ai_match_runtime_config
+    from .ai_match import (
+        build_ai_match_runtime_config,
+        validate_ai_match_runtime_config,
+        empty_ai_usage,
+        merge_ai_usage,
+    )
 
     runtime = build_ai_match_runtime_config(cfg)
     config_error = validate_ai_match_runtime_config(cfg)
@@ -5348,28 +5402,34 @@ def _apply_ai_match_fallback(
         targets.append((raw_item, result))
 
     if not targets:
-        return
+        return {}
     if config_error:
         for _raw_item, result in targets:
             result["ai_error"] = config_error
-        return
+        return {}
 
     max_workers = max(1, int(runtime.get("max_concurrency", 1) or 1))
     if max_workers <= 1 or len(targets) == 1:
         for raw_item, result in targets:
             _ai_match_one_item(raw_item, result, cfg, runtime)
-        return
+    else:
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(targets))) as executor:
+            futures = [
+                executor.submit(_ai_match_one_item, raw_item, result, cfg, runtime)
+                for raw_item, result in targets
+            ]
+            for future in futures:
+                try:
+                    future.result()
+                except Exception:  # noqa: BLE001 - 防御性兜底，单条异常不影响整批
+                    continue
 
-    with ThreadPoolExecutor(max_workers=min(max_workers, len(targets))) as executor:
-        futures = [
-            executor.submit(_ai_match_one_item, raw_item, result, cfg, runtime)
-            for raw_item, result in targets
-        ]
-        for future in futures:
-            try:
-                future.result()
-            except Exception:  # noqa: BLE001 - 防御性兜底，单条异常不影响整批
-                continue
+    totals = empty_ai_usage()
+    for _raw_item, result in targets:
+        merge_ai_usage(totals, result.get("ai_usage"))
+    if totals["calls"] or totals["cache_hits"]:
+        return totals
+    return {}
 
 
 def identify_scraper_batch_items(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -5382,8 +5442,11 @@ def identify_scraper_batch_items(payload: Dict[str, Any]) -> Dict[str, Any]:
     if config_error:
         raise RuntimeError(config_error)
     results = [_identify_scraper_batch_item(item, cfg) for item in raw_items]
-    _apply_ai_match_fallback(results, raw_items, payload, cfg)
-    return {"ok": True, "provider": provider, "results": results}
+    ai_usage = _apply_ai_match_fallback(results, raw_items, payload, cfg)
+    response: Dict[str, Any] = {"ok": True, "provider": provider, "results": results}
+    if ai_usage:
+        response["ai_usage"] = ai_usage
+    return response
 
 
 def _resolve_batch_tmdb_binding(tmdb: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, Any]:

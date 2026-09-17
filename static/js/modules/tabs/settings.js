@@ -155,6 +155,9 @@ function collectSettingsPayload({
         'ai_match_timeout_seconds',
         'ai_match_temperature',
         'ai_match_max_concurrency',
+        'ai_match_thinking_mode',
+        'ai_match_min_confidence',
+        'ai_match_cache_ttl_hours',
         'pansou_base_url',
         'pansou_username',
         'pansou_password',
@@ -183,7 +186,6 @@ function collectSettingsPayload({
     cfg.notify_monitor_enabled = !!document.getElementById('notify_monitor_enabled')?.checked;
     cfg.tmdb_enabled = !!document.getElementById('tmdb_enabled')?.checked;
     cfg.ai_match_enabled = !!document.getElementById('ai_match_enabled')?.checked;
-    cfg.ai_match_disable_thinking = !!document.getElementById('ai_match_disable_thinking')?.checked;
     cfg.pansou_enabled = !!document.getElementById('pansou_enabled')?.checked;
     cfg.resource_favorite_dirs = collectResourceFavoriteDirs();
     cfg.scraper_noise_phrases = parseKeywordLines(document.getElementById('scraper_noise_phrases')?.value);
@@ -214,6 +216,10 @@ function collectSettingsPayload({
     cfg.ai_match_temperature = Math.min(2, Math.max(0, Number.isFinite(rawAiTemperature) ? rawAiTemperature : 0));
     const rawAiConcurrency = parseInt(document.getElementById('ai_match_max_concurrency')?.value || '', 10);
     cfg.ai_match_max_concurrency = Math.min(8, Math.max(1, Number.isFinite(rawAiConcurrency) ? rawAiConcurrency : 3));
+    const rawAiMinConfidence = parseInt(document.getElementById('ai_match_min_confidence')?.value || '', 10);
+    cfg.ai_match_min_confidence = Math.min(100, Math.max(0, Number.isFinite(rawAiMinConfidence) ? rawAiMinConfidence : 0));
+    const rawAiCacheTtl = parseInt(document.getElementById('ai_match_cache_ttl_hours')?.value || '', 10);
+    cfg.ai_match_cache_ttl_hours = Math.min(720, Math.max(0, Number.isFinite(rawAiCacheTtl) ? rawAiCacheTtl : 24));
 
     const rawTgThreads = parseInt(document.getElementById('tg_channel_threads')?.value || '', 10);
     cfg.tg_channel_threads = Math.min(20, Math.max(1, Number.isFinite(rawTgThreads) ? rawTgThreads : 6));

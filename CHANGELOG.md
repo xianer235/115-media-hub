@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.2] - 2026-09-18
+
+### AI 刮削辅助优化（成本、速度、可靠性）
+
+- **结果缓存（省钱）**：按「条目身份 + TMDB 候选集合 + 模型配置」缓存成功结果，默认 24 小时（`ai_match_cache_ttl_hours`，设 0 关闭）。刮削会反复扫同一批目录，命中缓存后不再重复调用大模型；缓存命中不计 token，只在用量里记 `cache_hits`。
+- **省掉第二次调用（省一半）**：关键词搜索已经直接命中高分且明显领先的候选（评分 ≥80 且领先第二 ≥12），或只有唯一候选时，跳过第二次 AI 选择，直接采用该候选并标记 `ai_skipped_select`。
+- **有限重试（更稳）**：对超时/连接错误与 429/500/502/503/504 做最多 3 次退避重试，并尊重响应头 `Retry-After`；普通 4xx（如 401）不重试，避免无效放大。
+- **用量可见（成本透明）**：解析响应的 `usage`，每条识别结果带 `ai_usage`，批量接口返回顶层 `ai_usage`（调用次数、缓存命中、prompt/completion/total token、缓存命中 token）；刮削批量汇总栏显示「AI 调用 N 次（缓存命中 M）· X tokens」。
+- **最低采纳置信度**：新增 `ai_match_min_confidence`（默认 0 = 不过滤）。低于门槛的 AI 结果不采纳为建议，只在结果里记 `ai_low_confidence`，前端显示「置信度 N，低于门槛未采纳」，减少低质量建议干扰。
+- **端点识别兜底**：思考模式由布尔开关改为三态 `ai_match_thinking_mode`——`auto`（默认，仅识别到 DeepSeek 时关闭）、`disabled`（对所有端点都发送，供中转/自建网关使用）、`enabled`（不干预）。0.11.1 的布尔配置 `ai_match_disable_thinking` 自动迁移并清理。
+
+### 验证
+
+- `tests/test_scraper_ai_match.py` 增至 51 项：新增缓存命中/关闭/候选签名区分、429+`Retry-After`、500/超时重试与上限、普通 4xx 不重试、用量解析与批量汇总、跳过二次选择规则、最低置信度不采纳、思考模式三态与旧配置迁移等用例；完整 unittest 782 项通过，`compileall`、改动 JS `node --check`、`git diff --check` 均通过。
+
 ## [0.11.1] - 2026-09-18
 
 ### DeepSeek 适配（关闭思考模式）
