@@ -2678,11 +2678,18 @@ function renderBatchItem(item) {
         actionsHtml = `<button type="button" class="scraper-compact-btn" data-batch-search="${escapeHtml(String(index))}">改绑</button>`;
     } else if (identify?.status === 'suggest' && Array.isArray(identify.candidates) && identify.candidates.length) {
         const candidate = identify.candidates[0];
+        const isAi = candidate?.source === 'ai' || !!identify.ai_selected;
+        const aiConfidence = Number((identify.ai_confidence ?? candidate?.ai_confidence) || 0);
+        const aiReason = String(identify.ai_reason || candidate?.ai_reason || '').trim();
+        const aiNote = isAi
+            ? [aiConfidence > 0 ? `置信度 ${aiConfidence}` : '', aiReason].filter(Boolean).join(' · ')
+            : '';
         matchHtml = `
             <div class="scraper-batch-match">
-                <span class="scraper-batch-badge is-suggest">建议</span>
+                <span class="scraper-batch-badge ${isAi ? 'is-ai' : 'is-suggest'}">${isAi ? 'AI 建议' : '建议'}</span>
                 <strong title="${escapeHtml(getBatchCandidateTitle(candidate))}">${escapeHtml(getBatchCandidateTitle(candidate))}</strong>
                 <span class="scraper-batch-type">${typeLabel}</span>
+                ${aiNote ? `<span class="scraper-batch-ai-note" title="${escapeHtml(aiNote)}">${escapeHtml(aiNote)}</span>` : ''}
                 <button type="button" class="scraper-compact-btn scraper-primary-soft" data-batch-accept="${escapeHtml(String(index))}">接受</button>
             </div>
         `;
@@ -2696,10 +2703,12 @@ function renderBatchItem(item) {
         `;
     } else {
         const queryText = identify?.query || item.name || '';
+        const aiError = String(identify?.ai_error || '').trim();
         matchHtml = `
             <div class="scraper-batch-match">
                 <span class="scraper-batch-badge is-manual">未匹配</span>
                 <span class="scraper-batch-status-text">${identify ? `未找到可信条目（关键词：${escapeHtml(queryText)}）` : '等待识别'}</span>
+                ${aiError ? `<span class="scraper-batch-ai-note" title="${escapeHtml(aiError)}">AI：${escapeHtml(aiError)}</span>` : ''}
             </div>
         `;
         actionsHtml = `<button type="button" class="scraper-compact-btn" data-batch-search="${escapeHtml(String(index))}">搜索绑定</button>`;

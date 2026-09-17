@@ -7,6 +7,7 @@ _STATIC_SENSITIVE_KEYS: Tuple[str, ...] = (
     "notify_wecom_webhook",
     "notify_wecom_app_secret",
     "tmdb_api_key",
+    "ai_match_api_key",
     "pansou_password",
     "pansou_token",
 )

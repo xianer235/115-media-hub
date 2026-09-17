@@ -14670,6 +14670,18 @@
             border: 1px solid rgba(245, 158, 11, 0.5);
         }
 
+        .scraper-batch-badge.is-ai {
+            color: #a5b4fc;
+            background: rgba(99, 102, 241, 0.16);
+            border: 1px solid rgba(99, 102, 241, 0.5);
+        }
+
+        .scraper-batch-ai-note {
+            color: #a5b4fc;
+            font-size: 0.72rem;
+            overflow-wrap: anywhere;
+        }
+
         .scraper-batch-badge.is-manual {
             color: #cbd5e1;
             background: rgba(100, 116, 139, 0.18);
@@ -15241,6 +15253,16 @@
             color: #92400e;
             background: #fef3c7;
             border-color: #f59e0b;
+        }
+
+        html.theme-day .scraper-batch-badge.is-ai {
+            color: #3730a3;
+            background: #e0e7ff;
+            border-color: #818cf8;
+        }
+
+        html.theme-day .scraper-batch-ai-note {
+            color: #4338ca;
         }
 
         html.theme-day .scraper-batch-badge.is-manual {

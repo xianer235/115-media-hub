@@ -5192,6 +5192,186 @@ def _identify_scraper_batch_item(
     }
 
 
+def _scraper_ai_match_requested(payload: Dict[str, Any], cfg: Dict[str, Any]) -> bool:
+    """请求体 use_ai 优先；缺省时跟随配置开关。"""
+    raw = payload.get("use_ai") if isinstance(payload, dict) else None
+    if isinstance(raw, bool):
+        return raw
+    return bool(cfg.get("ai_match_enabled", False))
+
+
+def _merge_scraper_ai_candidates(limit: int = 5, *groups: Any) -> List[Dict[str, Any]]:
+    """按 (media_type, tmdb_id) 去重合并候选，靠前的分组优先保留。"""
+    merged: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for group in groups:
+        if not isinstance(group, list):
+            continue
+        for candidate in group:
+            if not isinstance(candidate, dict):
+                continue
+            tmdb_id = max(0, parse_int(candidate.get("id", 0), 0))
+            media_type = normalize_tmdb_media_type(candidate.get("media_type"), "")
+            if tmdb_id <= 0:
+                continue
+            key = f"{media_type}:{tmdb_id}"
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(candidate)
+            if len(merged) >= limit:
+                return merged
+    return merged
+
+
+def _ai_match_one_item(
+    raw_item: Dict[str, Any],
+    result: Dict[str, Any],
+    cfg: Dict[str, Any],
+    runtime: Dict[str, Any],
+) -> None:
+    """对单个未自动匹配条目执行「AI 关键词 → TMDB 搜索 → AI 二次选择」。
+
+    所有异常都在这里吞掉并写进 result["ai_error"]，绝不打断整批识别。
+    """
+    from .ai_match import ai_match_generate_query, ai_match_select_candidate
+
+    try:
+        generated = ai_match_generate_query(raw_item, runtime=runtime)
+    except Exception as exc:  # noqa: BLE001 - 单条失败不影响整批
+        result["ai_error"] = f"AI 关键词生成失败：{exc}"
+        return
+    if not generated.get("ok"):
+        result["ai_error"] = str(generated.get("error") or "AI 关键词生成失败")
+        return
+    keyword = str(generated.get("keyword") or "").strip()
+    ai_year = str(generated.get("year") or "").strip()
+    ai_media_type = str(generated.get("media_type") or "").strip()
+    result["ai_keyword"] = keyword
+    result["ai_year"] = ai_year
+    result["ai_media_type"] = ai_media_type
+    if not keyword:
+        result["ai_error"] = "AI 未给出有效关键词"
+        return
+
+    media_type = ai_media_type or str(result.get("media_type") or "").strip()
+    year = ai_year or str(result.get("year") or "").strip()
+    try:
+        found = _search_batch_tmdb_candidates(keyword, media_type, year, cfg)
+    except Exception as exc:  # noqa: BLE001
+        result["ai_error"] = f"AI 关键词搜索 TMDB 失败：{exc}"
+        return
+    existing_candidates = result.get("candidates") if isinstance(result.get("candidates"), list) else []
+    if not found:
+        result["ai_error"] = "AI 关键词未搜到 TMDB 结果"
+        return
+
+    scored: List[Dict[str, Any]] = []
+    for candidate in found:
+        candidate_score = _score_batch_tmdb_candidate(keyword, year, media_type, candidate)
+        scored.append({**candidate, "score": candidate_score})
+    scored.sort(
+        key=lambda payload: (
+            max(0, int(payload.get("score", 0) or 0)),
+            float(payload.get("popularity", 0) or 0),
+        ),
+        reverse=True,
+    )
+    max_candidates = max(1, int(runtime.get("max_candidates", 5) or 5))
+    top_candidates = scored[:max_candidates]
+
+    try:
+        selection = ai_match_select_candidate(raw_item, top_candidates, runtime=runtime)
+    except Exception as exc:  # noqa: BLE001
+        selection = {"ok": False, "candidate": {}, "confidence": 0, "reason": "", "error": f"AI 候选选择失败：{exc}"}
+
+    if selection.get("ok"):
+        chosen = selection.get("candidate") if isinstance(selection.get("candidate"), dict) else {}
+        confidence = max(0, min(100, int(selection.get("confidence", 0) or 0)))
+        reason = str(selection.get("reason") or "").strip()
+        marked = {
+            **chosen,
+            "source": "ai",
+            "ai_confidence": confidence,
+            "ai_reason": reason,
+        }
+        result["ai_selected"] = marked
+        result["ai_confidence"] = confidence
+        result["ai_reason"] = reason
+        result["candidates"] = _merge_scraper_ai_candidates(5, [marked], top_candidates, existing_candidates)
+        if str(result.get("status") or "") == "manual":
+            result["status"] = "suggest"
+        return
+
+    result["ai_error"] = str(selection.get("error") or "AI 候选选择失败")
+    # 二次选择失败时仍保留关键词命中的候选作为建议，同时保留原确定性候选。
+    merged = _merge_scraper_ai_candidates(5, top_candidates, existing_candidates)
+    if merged:
+        result["candidates"] = merged
+        if str(result.get("status") or "") == "manual":
+            result["status"] = "suggest"
+
+
+def _apply_ai_match_fallback(
+    results: List[Dict[str, Any]],
+    raw_items: List[Dict[str, Any]],
+    payload: Dict[str, Any],
+    cfg: Dict[str, Any],
+) -> None:
+    """对确定性识别未自动匹配（status != auto）的条目补充 AI 候选。"""
+    if not _scraper_ai_match_requested(payload, cfg):
+        return
+
+    from .ai_match import build_ai_match_runtime_config, validate_ai_match_runtime_config
+
+    runtime = build_ai_match_runtime_config(cfg)
+    config_error = validate_ai_match_runtime_config(cfg)
+
+    raw_by_index: Dict[int, Dict[str, Any]] = {}
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            continue
+        index = max(0, parse_int(raw.get("item_index", 0), 0))
+        if index > 0 and index not in raw_by_index:
+            raw_by_index[index] = raw
+
+    targets: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
+    for result in results:
+        if not isinstance(result, dict) or not result.get("ok"):
+            continue
+        if str(result.get("status") or "") == "auto":
+            continue
+        index = max(0, parse_int(result.get("item_index", 0), 0))
+        raw_item = raw_by_index.get(index)
+        if raw_item is None:
+            continue
+        targets.append((raw_item, result))
+
+    if not targets:
+        return
+    if config_error:
+        for _raw_item, result in targets:
+            result["ai_error"] = config_error
+        return
+
+    max_workers = max(1, int(runtime.get("max_concurrency", 1) or 1))
+    if max_workers <= 1 or len(targets) == 1:
+        for raw_item, result in targets:
+            _ai_match_one_item(raw_item, result, cfg, runtime)
+        return
+
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(targets))) as executor:
+        futures = [
+            executor.submit(_ai_match_one_item, raw_item, result, cfg, runtime)
+            for raw_item, result in targets
+        ]
+        for future in futures:
+            try:
+                future.result()
+            except Exception:  # noqa: BLE001 - 防御性兜底，单条异常不影响整批
+                continue
+
+
 def identify_scraper_batch_items(payload: Dict[str, Any]) -> Dict[str, Any]:
     provider = normalize_scraper_provider(payload.get("provider", "115")) or "115"
     raw_items = payload.get("items", []) if isinstance(payload.get("items"), list) else []
@@ -5202,6 +5382,7 @@ def identify_scraper_batch_items(payload: Dict[str, Any]) -> Dict[str, Any]:
     if config_error:
         raise RuntimeError(config_error)
     results = [_identify_scraper_batch_item(item, cfg) for item in raw_items]
+    _apply_ai_match_fallback(results, raw_items, payload, cfg)
     return {"ok": True, "provider": provider, "results": results}
 
 

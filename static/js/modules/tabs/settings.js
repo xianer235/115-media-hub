@@ -149,6 +149,12 @@ function collectSettingsPayload({
         'tmdb_api_key',
         'tmdb_language',
         'tmdb_region',
+        'ai_match_base_url',
+        'ai_match_api_key',
+        'ai_match_model',
+        'ai_match_timeout_seconds',
+        'ai_match_temperature',
+        'ai_match_max_concurrency',
         'pansou_base_url',
         'pansou_username',
         'pansou_password',
@@ -176,6 +182,7 @@ function collectSettingsPayload({
     cfg.notify_push_enabled = !!document.getElementById('notify_push_enabled')?.checked;
     cfg.notify_monitor_enabled = !!document.getElementById('notify_monitor_enabled')?.checked;
     cfg.tmdb_enabled = !!document.getElementById('tmdb_enabled')?.checked;
+    cfg.ai_match_enabled = !!document.getElementById('ai_match_enabled')?.checked;
     cfg.pansou_enabled = !!document.getElementById('pansou_enabled')?.checked;
     cfg.resource_favorite_dirs = collectResourceFavoriteDirs();
     cfg.scraper_noise_phrases = parseKeywordLines(document.getElementById('scraper_noise_phrases')?.value);
@@ -199,6 +206,13 @@ function collectSettingsPayload({
 
     const rawTmdbCacheTtl = parseInt(document.getElementById('tmdb_cache_ttl_hours')?.value || '', 10);
     cfg.tmdb_cache_ttl_hours = Math.min(720, Math.max(1, Number.isFinite(rawTmdbCacheTtl) ? rawTmdbCacheTtl : 24));
+
+    const rawAiTimeout = parseInt(document.getElementById('ai_match_timeout_seconds')?.value || '', 10);
+    cfg.ai_match_timeout_seconds = Math.min(120, Math.max(3, Number.isFinite(rawAiTimeout) ? rawAiTimeout : 20));
+    const rawAiTemperature = parseFloat(document.getElementById('ai_match_temperature')?.value || '');
+    cfg.ai_match_temperature = Math.min(2, Math.max(0, Number.isFinite(rawAiTemperature) ? rawAiTemperature : 0));
+    const rawAiConcurrency = parseInt(document.getElementById('ai_match_max_concurrency')?.value || '', 10);
+    cfg.ai_match_max_concurrency = Math.min(8, Math.max(1, Number.isFinite(rawAiConcurrency) ? rawAiConcurrency : 3));
 
     const rawTgThreads = parseInt(document.getElementById('tg_channel_threads')?.value || '', 10);
     cfg.tg_channel_threads = Math.min(20, Math.max(1, Number.isFinite(rawTgThreads) ? rawTgThreads : 6));

@@ -912,6 +912,14 @@ _SETTINGS_CONFIG_KEY_ORDER_AFTER_AUTH: Tuple[str, ...] = (
     "tmdb_cache_ttl_hours",
     "tmdb_language",
     "tmdb_region",
+    # 8b. AI 刮削辅助（OpenAI 兼容接口）
+    "ai_match_enabled",
+    "ai_match_base_url",
+    "ai_match_api_key",
+    "ai_match_model",
+    "ai_match_timeout_seconds",
+    "ai_match_temperature",
+    "ai_match_max_concurrency",
     # 9. 通知推送
     "notify_push_enabled",
     "notify_monitor_enabled",
@@ -1016,6 +1024,13 @@ def default_config() -> Dict[str, Any]:
         "tmdb_language": "zh-CN",
         "tmdb_region": "CN",
         "tmdb_cache_ttl_hours": 24,
+        "ai_match_enabled": False,
+        "ai_match_base_url": "",
+        "ai_match_api_key": "",
+        "ai_match_model": "",
+        "ai_match_timeout_seconds": 20,
+        "ai_match_temperature": 0,
+        "ai_match_max_concurrency": 3,
         "pansou_enabled": False,
         "pansou_base_url": "",
         "pansou_username": "",
@@ -2462,6 +2477,20 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         merged["tmdb_region"] = "CN"
     if "tmdb_cache_ttl_hours" not in merged:
         merged["tmdb_cache_ttl_hours"] = 24
+    if "ai_match_enabled" not in merged:
+        merged["ai_match_enabled"] = False
+    if "ai_match_base_url" not in merged:
+        merged["ai_match_base_url"] = ""
+    if "ai_match_api_key" not in merged:
+        merged["ai_match_api_key"] = ""
+    if "ai_match_model" not in merged:
+        merged["ai_match_model"] = ""
+    if "ai_match_timeout_seconds" not in merged:
+        merged["ai_match_timeout_seconds"] = 20
+    if "ai_match_temperature" not in merged:
+        merged["ai_match_temperature"] = 0
+    if "ai_match_max_concurrency" not in merged:
+        merged["ai_match_max_concurrency"] = 3
     if "pansou_enabled" not in merged:
         merged["pansou_enabled"] = False
     if "pansou_base_url" not in merged:
@@ -2600,6 +2629,25 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     except (TypeError, ValueError):
         tmdb_cache_ttl_hours = 24
     merged["tmdb_cache_ttl_hours"] = max(1, min(24 * 30, tmdb_cache_ttl_hours))
+    merged["ai_match_enabled"] = normalize_bool(merged.get("ai_match_enabled", False), default=False)
+    merged["ai_match_base_url"] = str(merged.get("ai_match_base_url", "") or "").strip().rstrip("/")
+    merged["ai_match_api_key"] = str(merged.get("ai_match_api_key", "") or "").strip()
+    merged["ai_match_model"] = str(merged.get("ai_match_model", "") or "").strip()
+    try:
+        ai_match_timeout_seconds = int(merged.get("ai_match_timeout_seconds", 20) or 20)
+    except (TypeError, ValueError):
+        ai_match_timeout_seconds = 20
+    merged["ai_match_timeout_seconds"] = max(3, min(120, ai_match_timeout_seconds))
+    try:
+        ai_match_temperature = float(merged.get("ai_match_temperature", 0) or 0)
+    except (TypeError, ValueError):
+        ai_match_temperature = 0.0
+    merged["ai_match_temperature"] = max(0.0, min(2.0, ai_match_temperature))
+    try:
+        ai_match_max_concurrency = int(merged.get("ai_match_max_concurrency", 3) or 3)
+    except (TypeError, ValueError):
+        ai_match_max_concurrency = 3
+    merged["ai_match_max_concurrency"] = max(1, min(8, ai_match_max_concurrency))
     try:
         tg_channel_threads = int(merged.get("tg_channel_threads", TG_CHANNEL_THREADS_DEFAULT) or TG_CHANNEL_THREADS_DEFAULT)
     except (TypeError, ValueError):

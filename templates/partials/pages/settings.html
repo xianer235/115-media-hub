@@ -167,6 +167,47 @@
                     </div>
                 </div>
 
+                <div id="settings-ai-match" class="group-card settings-section-card" style="order: 6;">
+                    <h3 class="group-title">6b. AI 刮削辅助（可选，OpenAI 兼容接口）</h3>
+                    <div class="space-y-4">
+                        <label class="flex items-center gap-3 cursor-pointer text-sm">
+                            <input type="checkbox" id="ai_match_enabled" class="ui-checkbox">
+                            在批量识别时，对未自动匹配的条目调用大模型补充候选
+                        </label>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <label class="block">
+                                <span class="text-xs text-slate-500">接口地址（base_url）</span>
+                                <input id="ai_match_base_url" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如 https://api.deepseek.com/v1">
+                            </label>
+                            <label class="block">
+                                <span class="text-xs text-slate-500">API Key</span>
+                                <input id="ai_match_api_key" type="password" autocomplete="new-password" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="留空表示不修改已保存的 Key">
+                            </label>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <label class="block">
+                                <span class="text-xs text-slate-500">模型名称</span>
+                                <input id="ai_match_model" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如 deepseek-chat">
+                            </label>
+                            <label class="block">
+                                <span class="text-xs text-slate-500">超时（秒）</span>
+                                <input id="ai_match_timeout_seconds" type="number" min="3" max="120" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="20">
+                            </label>
+                            <label class="block">
+                                <span class="text-xs text-slate-500">并发数</span>
+                                <input id="ai_match_max_concurrency" type="number" min="1" max="8" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="3">
+                            </label>
+                        </div>
+                        <label class="block max-w-xs">
+                            <span class="text-xs text-slate-500">temperature</span>
+                            <input id="ai_match_temperature" type="number" min="0" max="2" step="0.1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
+                        </label>
+                        <div class="text-xs text-slate-500 leading-6">
+                            兼容 DeepSeek / Qwen / OpenAI / 本地 Ollama 等任意 OpenAI 格式的 <code>/chat/completions</code> 接口（Ollama 填 <code>http://127.0.0.1:11434/v1</code>）。开启后 AI 只会对未自动匹配的条目给出候选建议，仍需在批量整理里人工确认后才会改名，不会自动执行。
+                        </div>
+                    </div>
+                </div>
+
                 <div id="settings-tg-sources" class="group-card settings-section-card" style="order: 3;">
                     <div class="resource-source-panel">
                         <div class="resource-source-panel-head">
