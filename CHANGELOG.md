@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.0] - 2026-09-18
+
+### 刮削「AI 候选增强」（批量识别 AI 回退）
+
+- 批量识别时，对确定性识别未自动匹配（`status != auto`，即 manual/suggest）的条目新增可选 AI 回退：调用 OpenAI 兼容大模型（兼容 DeepSeek / Qwen / OpenAI / 本地 Ollama 等任意 `/chat/completions` 端点），先用条目名/文件名产出「关键词 + 年份 + 媒体类型」，据此复用现有 TMDB 搜索，再让模型从候选中二次选择最匹配的一部。
+- **AI 只给候选建议、不自动改名**：命中结果以 `source=ai` 候选并入候选列表并置为 `suggest`，前端显示「AI 建议」徽标 + 置信度 + 理由，仍需用户在批量整理里点「接受」、生成计划、确认提交后才会执行，且可回滚。刻意不写 `auto_pick`，避免静默预选整批 AI 猜测。
+- 识别结果新增可选字段 `ai_keyword / ai_year / ai_media_type / ai_selected / ai_confidence / ai_reason / ai_error`；任一环节失败只在该条写 `ai_error` 并保留原确定性候选，整批识别不中断。AI 回退默认按 `ai_match_max_concurrency` 并发（默认 3），单条超时默认 20 秒。
+- `/scraper/batch/identify` 支持可选 `use_ai` 请求字段覆盖配置（缺省跟随配置开关）。
+
+### 配置与设置页
+
+- 新增 7 个配置项：`ai_match_enabled` / `ai_match_base_url` / `ai_match_api_key` / `ai_match_model` / `ai_match_timeout_seconds` / `ai_match_temperature` / `ai_match_max_concurrency`，接入 `default_config`/`normalize_config`（超时 3–120 秒、并发 1–8、temperature 0–2）。
+- `ai_match_api_key` 按敏感字段处理：`/get_settings` 回显留空并给出「已配置」标记，保存时留空不覆盖。
+- 设置页新增「6b. AI 刮削辅助」卡片（启用开关、base_url、API Key、模型、超时、并发、temperature），并适配日/夜模式；批量识别结果对 AI 候选显示「AI 建议」徽标、置信度与理由，未匹配项显示 AI 错误提示。
+
+### 验证
+
+- 新增 `tests/test_scraper_ai_match.py`（29 项：JSON 围栏/嵌套解析、HTTP 400 去 `response_format` 重试与 500/超时、配置校验与 clamp、关键词与选择解析、回退合并/并发/接线）；完整 unittest 760 项通过，`compileall`、改动 JS `node --check`、`git diff --check` 均通过。
+- Docker 未重建；真实大模型端点（DeepSeek/Qwen/Ollama）与设置页保存 + 批量识别需在部署后实测。
+
 ## [0.10.4] - 2026-09-09
 
 ### 115 网盘内置扫码登录

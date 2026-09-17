@@ -1,12 +1,11 @@
 {
-  "version": "0.10.4",
-  "buildDate": "2026-09-09T00:00:00+08:00",
+  "version": "0.11.0",
+  "buildDate": "2026-09-18T00:00:00+08:00",
   "notes": [
-    "115 网盘新增内置扫码登录：设置页 115 认证块支持扫码，客户端可手选（默认微信小程序，推荐），避免挤掉现有网页端/App 登录，扫码后自动写入 Cookie",
-    "阿里云盘改为内置官方 OAuth + PKCE 扫码授权：公开 client_id + redirect_uri=oob，无需第三方中转；修复换取链路（token 用表单提交、公开客户端实际走 plain PKCE）",
-    "阿里云盘公开客户端返回 30 天有效 access_token 且不支持刷新：改为存 access_token 模式（aliyun_token_is_access）直接当 Bearer 用，保留旧 refresh_token 手动模式兼容",
-    "设置页“网盘认证与签到”布局优化：扫码/内置授权作为“推荐”置顶，手动粘贴降为“备用”，115 与阿里云样式统一，修复推荐/备用左对齐与日/夜适配",
-    "网盘认证新增凭证回显/一键复制：健康检查行新增“复制凭证”，一键复制已保存的 Cookie/access_token 到剪贴板（失败降级为手动复制），便于切到其它应用"
+    "刮削新增可选“AI 候选增强”：批量识别时对未自动匹配的影视条目调用 OpenAI 兼容大模型（DeepSeek/Qwen/OpenAI/本地 Ollama 等），先产出关键词+年份+媒体类型去 TMDB 搜索，再对候选做二次选择",
+    "AI 只给候选建议、不自动改名：命中结果以 source=ai 候选并入并标记为“AI 建议”，仍需在批量整理里人工确认后生成计划、提交执行，可回滚",
+    "设置页新增“6b. AI 刮削辅助”：配置 base_url / API Key / 模型 / 超时 / 并发 / temperature，API Key 按敏感字段处理（回显留空、留空不覆盖）",
+    "AI 调用失败只标记该条错误并保留原有识别结果，整批识别不中断；并发默认 3、单条超时默认 20 秒，均可配置"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"
