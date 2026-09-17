@@ -63,6 +63,8 @@ const state = {
     batchScan: null,
     batchIdentify: null,
     batchAiUsage: null,
+    batchAiEnabled: false,
+    batchAiConfigError: '',
     batchBindings: {},
     batchIncluded: new Set(),
     batchSearchState: {},
@@ -2397,6 +2399,8 @@ function resetBatchContext() {
     state.batchScan = null;
     state.batchIdentify = null;
     state.batchAiUsage = null;
+    state.batchAiEnabled = false;
+    state.batchAiConfigError = '';
     state.batchBindings = {};
     state.batchIncluded = new Set();
     state.batchSearchState = {};
@@ -2519,6 +2523,8 @@ async function scanBatch(entries) {
         state.batchScan = data || {};
         state.batchIdentify = null;
         state.batchAiUsage = null;
+        state.batchAiEnabled = false;
+        state.batchAiConfigError = '';
         state.batchBindings = {};
         state.batchIncluded = new Set();
         state.batchSearchState = {};
@@ -2550,6 +2556,8 @@ async function identifyBatch() {
         });
         state.batchIdentify = Array.isArray(data.results) ? data.results : [];
         state.batchAiUsage = data && typeof data.ai_usage === 'object' && data.ai_usage ? data.ai_usage : null;
+        state.batchAiEnabled = !!(data && data.ai_enabled);
+        state.batchAiConfigError = String(data?.ai_config_error || '').trim();
         for (const result of state.batchIdentify) {
             if (result?.ok && result.auto_pick) {
                 const index = Number(result.item_index || 0);
@@ -2685,15 +2693,18 @@ function renderBatchItem(item) {
         const isAi = candidate?.source === 'ai' || !!identify.ai_selected;
         const aiConfidence = Number((identify.ai_confidence ?? candidate?.ai_confidence) || 0);
         const aiReason = String(identify.ai_reason || candidate?.ai_reason || '').trim();
+        const aiError = String(identify?.ai_error || '').trim();
+        const aiLowConfidence = Number(identify?.ai_low_confidence || 0);
         const aiNote = isAi
             ? [aiConfidence > 0 ? `置信度 ${aiConfidence}` : '', aiReason].filter(Boolean).join(' · ')
-            : '';
+            : (aiError || (aiLowConfidence > 0 ? `置信度 ${aiLowConfidence}，低于门槛未采纳` : ''));
+        const aiNoteText = isAi ? aiNote : (aiNote ? `AI：${aiNote}` : '');
         matchHtml = `
             <div class="scraper-batch-match">
                 <span class="scraper-batch-badge ${isAi ? 'is-ai' : 'is-suggest'}">${isAi ? 'AI 建议' : '建议'}</span>
                 <strong title="${escapeHtml(getBatchCandidateTitle(candidate))}">${escapeHtml(getBatchCandidateTitle(candidate))}</strong>
                 <span class="scraper-batch-type">${typeLabel}</span>
-                ${aiNote ? `<span class="scraper-batch-ai-note" title="${escapeHtml(aiNote)}">${escapeHtml(aiNote)}</span>` : ''}
+                ${aiNoteText ? `<span class="scraper-batch-ai-note" title="${escapeHtml(aiNoteText)}">${escapeHtml(aiNoteText)}</span>` : ''}
                 <button type="button" class="scraper-compact-btn scraper-primary-soft" data-batch-accept="${escapeHtml(String(index))}">接受</button>
             </div>
         `;
@@ -2786,9 +2797,18 @@ function renderBatch() {
     const aiCalls = Number(aiUsage?.calls || 0);
     const aiCacheHits = Number(aiUsage?.cache_hits || 0);
     const aiTokens = Number(aiUsage?.total_tokens || 0);
-    const aiUsageText = (aiCalls || aiCacheHits)
-        ? `AI 调用 ${aiCalls} 次${aiCacheHits ? `（缓存命中 ${aiCacheHits}）` : ''}${aiTokens ? ` · ${aiTokens} tokens` : ''}`
-        : '';
+    const aiConfigError = String(state.batchAiConfigError || '').trim();
+    let aiUsageText = '';
+    let aiUsageTone = '';
+    if (aiCalls || aiCacheHits) {
+        aiUsageText = `AI 调用 ${aiCalls} 次${aiCacheHits ? `（缓存命中 ${aiCacheHits}）` : ''}${aiTokens ? ` · ${aiTokens} tokens` : ''}`;
+    } else if (aiConfigError) {
+        aiUsageText = `AI 未运行：${aiConfigError}`;
+        aiUsageTone = ' is-warn';
+    } else if (state.batchAiEnabled) {
+        aiUsageText = 'AI 已启用，本次没有可处理的未匹配条目';
+        aiUsageTone = ' is-muted';
+    }
     if (state.batchBusy) {
         summary.innerHTML = '<span class="scraper-busy-spinner inline" aria-hidden="true"></span>正在扫描并匹配 TMDB 条目，请稍候...';
     } else {
@@ -2797,7 +2817,7 @@ function renderBatch() {
             <span> / 自动匹配 ${escapeHtml(String(autoCount))}，建议 ${escapeHtml(String(suggestCount))}，待确认 ${escapeHtml(String(manualCount))}</span>
             <span> / 已勾选 ${escapeHtml(String(includedCount))}（已绑定 ${escapeHtml(String(boundCount))}）</span>
             ${issues.length ? `<em class="scraper-plan-warning">${escapeHtml(String(issues.length))} 个扫描提醒</em>` : ''}
-            ${aiUsageText ? `<span class="scraper-ai-usage">${escapeHtml(aiUsageText)}</span>` : ''}
+            ${aiUsageText ? `<span class="scraper-ai-usage${aiUsageTone}">${escapeHtml(aiUsageText)}</span>` : ''}
         `;
     }
     list.innerHTML = items.map(item => renderBatchItem(item)).join('');

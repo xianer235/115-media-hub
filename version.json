@@ -1,10 +1,11 @@
 {
-  "version": "0.11.3",
+  "version": "0.11.4",
   "buildDate": "2026-09-18T00:00:00+08:00",
   "notes": [
-    "AI 接口地址容错：base_url 若粘贴了完整地址（含 /chat/completions）会自动去掉再拼一次，避免出现 .../chat/completions/chat/completions 这种 404",
-    "AI 接口校验更明确：base_url 必须以 http:// 或 https:// 开头；填入 Anthropic 端点（/anthropic）会直接提示本项目只支持 OpenAI 兼容端点",
-    "文档与设置页占位符改用 DeepSeek 官方写法 https://api.deepseek.com（实测带 /v1 亦可正常调用）；Ollama 仍填 http://127.0.0.1:11434/v1"
+    "批量整理可读性：AI 参与的建议显示靛蓝「AI 建议」徽标 + 置信度/理由；本来就是「建议」的条目也会显示 AI 的错误或「低于门槛未采纳」，不再静默",
+    "批量整理顶部汇总栏新增 AI 状态：有调用时显示「AI 调用 N 次（缓存命中 M）· X tokens」；AI 已启用但配置不全时直接显示「AI 未运行：<原因>」",
+    "设置页 6b 新增「测试 AI 可用性」：用当前表单配置（Key 留空则沿用已保存的）发一条真实样例，返回耗时、模型、是否关闭思考模式与样例识别结果",
+    "设置页 6b 新增「用量统计」：累计调用次数、缓存命中、输入/输出/总 token、缓存命中 token、最近调用时间与最近错误，支持刷新与重置"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

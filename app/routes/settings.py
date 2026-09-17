@@ -9,6 +9,7 @@ from ..config_runtime import build_public_settings_payload, merge_settings_prese
 from ..core import *  # noqa: F401,F403
 from ..http_utils import http_request_bytes
 from ..providers.registry import get_or_none as _get_provider_or_none
+from ..services import ai_match as ai_match_service
 from ..providers.aliyun_oauth import create_aliyun_oauth_session, exchange_aliyun_code
 from ..providers.pan115_qr import (
     build_115_qrcode_image_url,
@@ -170,6 +171,34 @@ async def test_notify_push(request: Request) -> JSONResponse:
 async def get_providers(request: Request) -> JSONResponse:
     cfg = get_config()
     return JSONResponse(get_all_capabilities(cfg))
+
+
+@router.post("/settings/ai_match/test")
+async def test_ai_match(request: Request) -> JSONResponse:
+    incoming = await request.json()
+    incoming_payload = incoming if isinstance(incoming, dict) else {}
+    # 允许用当前表单里的值测试（不必先保存）；Key 留空时沿用已保存的值。
+    cfg = normalize_config(merge_settings_preserve_sensitive(get_config(), incoming_payload))
+    try:
+        result = await asyncio.to_thread(ai_match_service.ai_match_test_connection, cfg)
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
+    if not result.get("ok"):
+        # 前端 buildApiError 读的是 msg/message/detail，这里补一个 msg 让失败原因能显示出来。
+        failure = dict(result)
+        failure.setdefault("msg", str(result.get("error") or "AI 测试失败"))
+        return JSONResponse(status_code=400, content=failure)
+    return JSONResponse(content=result)
+
+
+@router.get("/settings/ai_match/usage")
+async def get_ai_match_usage(request: Request) -> Dict[str, Any]:
+    return {"ok": True, "usage": ai_match_service.get_ai_match_usage()}
+
+
+@router.post("/settings/ai_match/usage/reset")
+async def reset_ai_match_usage(request: Request) -> Dict[str, Any]:
+    return {"ok": True, "usage": ai_match_service.reset_ai_match_usage()}
 
 
 @router.get("/settings/115/sign/status")

@@ -5366,10 +5366,13 @@ def _apply_ai_match_fallback(
     raw_items: List[Dict[str, Any]],
     payload: Dict[str, Any],
     cfg: Dict[str, Any],
-) -> Dict[str, int]:
-    """对确定性识别未自动匹配（status != auto）的条目补充 AI 候选，返回本次 AI 用量汇总。"""
+) -> Dict[str, Any]:
+    """对确定性识别未自动匹配（status != auto）的条目补充 AI 候选。
+
+    返回本次 AI 运行状态：{"requested": 是否启用, "config_error": 配置错误, "usage": 用量汇总}。
+    """
     if not _scraper_ai_match_requested(payload, cfg):
-        return {}
+        return {"requested": False, "config_error": "", "usage": {}}
 
     from .ai_match import (
         build_ai_match_runtime_config,
@@ -5402,11 +5405,11 @@ def _apply_ai_match_fallback(
         targets.append((raw_item, result))
 
     if not targets:
-        return {}
+        return {"requested": True, "config_error": "", "usage": {}}
     if config_error:
         for _raw_item, result in targets:
             result["ai_error"] = config_error
-        return {}
+        return {"requested": True, "config_error": config_error, "usage": {}}
 
     max_workers = max(1, int(runtime.get("max_concurrency", 1) or 1))
     if max_workers <= 1 or len(targets) == 1:
@@ -5427,9 +5430,8 @@ def _apply_ai_match_fallback(
     totals = empty_ai_usage()
     for _raw_item, result in targets:
         merge_ai_usage(totals, result.get("ai_usage"))
-    if totals["calls"] or totals["cache_hits"]:
-        return totals
-    return {}
+    usage = totals if (totals["calls"] or totals["cache_hits"]) else {}
+    return {"requested": True, "config_error": "", "usage": usage}
 
 
 def identify_scraper_batch_items(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -5442,10 +5444,16 @@ def identify_scraper_batch_items(payload: Dict[str, Any]) -> Dict[str, Any]:
     if config_error:
         raise RuntimeError(config_error)
     results = [_identify_scraper_batch_item(item, cfg) for item in raw_items]
-    ai_usage = _apply_ai_match_fallback(results, raw_items, payload, cfg)
+    ai_state = _apply_ai_match_fallback(results, raw_items, payload, cfg)
     response: Dict[str, Any] = {"ok": True, "provider": provider, "results": results}
-    if ai_usage:
-        response["ai_usage"] = ai_usage
+    if ai_state.get("requested"):
+        response["ai_enabled"] = True
+        config_error = str(ai_state.get("config_error") or "").strip()
+        if config_error:
+            response["ai_config_error"] = config_error
+        usage = ai_state.get("usage") if isinstance(ai_state.get("usage"), dict) else {}
+        if usage.get("calls") or usage.get("cache_hits"):
+            response["ai_usage"] = usage
     return response
 
 

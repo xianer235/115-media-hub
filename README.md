@@ -315,7 +315,8 @@ CLI 专属环境变量（见「命令行工具」）：`MH_USERNAME` / `MH_PASSW
 
 ## 近期更新（以 `version.json` 为准）
 
-- 当前版本：`0.11.3`
+- 当前版本：`0.11.4`
+- AI 刮削辅助可读性与运维：批量整理里 AI 建议显示靛蓝「AI 建议」+ 置信度/理由，确定性「建议」条目也会显示 AI 的报错或「低于门槛未采纳」；汇总栏显示「AI 调用 N 次（缓存命中 M）· X tokens」，配置不全时显示「AI 未运行：原因」。设置页 6b 新增「测试 AI 可用性」（用当前表单配置发真实样例，返回耗时/模型/是否关闭思考/样例识别结果）与「用量统计」（累计调用、缓存命中、输入输出 token、最近调用与错误，可刷新重置）。
 - AI 接口地址容错：`base_url` 粘贴完整地址（含 `/chat/completions`）会自动去掉再拼接，避免 404；校验要求以 `http://`/`https://` 开头，并拒绝 Anthropic 端点（`/anthropic`，本项目只发 OpenAI 格式）。DeepSeek 官方写法 `https://api.deepseek.com` 与 `https://api.deepseek.com/v1` 实测都可用。
 - AI 刮削辅助优化：新增结果缓存（默认 24 小时，重跑不重复计费）、高分命中时自动跳过第二次 AI 选择（省一半调用）、对超时/429/5xx 最多重试 3 次并尊重 `Retry-After`、批量识别返回并显示 `ai_usage`（调用次数 / 缓存命中 / token）、新增 `ai_match_min_confidence` 最低采纳置信度（默认 0 不过滤）；思考模式改为三态 `ai_match_thinking_mode`（auto/disabled/enabled），旧布尔配置自动迁移。
 - DeepSeek 适配：AI 刮削辅助识别到 DeepSeek 端点（base_url 含 `deepseek` 或模型名以 `deepseek` 开头）时自动关闭思考模式（`thinking.type=disabled`），结构化抽取更快更省；该字段只在 DeepSeek 端点下发，不影响 OpenAI/Ollama 等其它端点；推荐模型 `deepseek-flash`（1M 上下文、支持 JSON Output，空闲时段半价）。

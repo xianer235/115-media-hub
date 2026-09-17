@@ -531,6 +531,172 @@ export async function testNotifyPush({
     if (typeof renderNotifyTestStatus === 'function') renderNotifyTestStatus();
 }
 
+function escapeAiMatchHtml(value) {
+    return String(value === null || value === undefined ? '' : value).replace(/[&<>"']/g, (ch) => (
+        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
+    ));
+}
+
+let _aiMatchUsageState = null;
+
+export function renderAiMatchTestStatus({ aiMatchTestState } = {}) {
+    const state = aiMatchTestState || {};
+    const btn = document.getElementById('ai-match-test-btn');
+    const statusEl = document.getElementById('ai-match-test-status');
+    if (btn) {
+        btn.disabled = !!state.loading;
+        btn.classList.toggle('btn-disabled', !!state.loading);
+        btn.textContent = state.loading ? '测试中...' : '测试 AI 可用性';
+    }
+    if (!statusEl) return;
+    if (state.loading) {
+        statusEl.className = 'tg-proxy-status tg-proxy-status--loading';
+        statusEl.innerHTML = `
+            <div class="tg-proxy-status-title">正在测试 AI 接口</div>
+            <div class="tg-proxy-status-meta">正在用一条实际样例请求验证地址 / Key / 模型 / JSON 输出，请稍候...</div>
+        `;
+        statusEl.classList.remove('hidden');
+        return;
+    }
+    if (state.ok === true) {
+        const usage = state.usage && typeof state.usage === 'object' ? state.usage : {};
+        statusEl.className = 'tg-proxy-status tg-proxy-status--success';
+        statusEl.innerHTML = `
+            <div class="tg-proxy-status-title">AI 可用 · 耗时 ${escapeAiMatchHtml(String(state.latency_ms || 0))} ms</div>
+            <div class="tg-proxy-status-meta">${escapeAiMatchHtml(state.base_url || '')} · 模型 ${escapeAiMatchHtml(state.model || '')}${state.thinking_disabled ? ' · 已关闭思考模式' : ''}</div>
+            <div class="tg-proxy-status-note">样例识别结果：关键词「${escapeAiMatchHtml(state.keyword || '--')}」 年份 ${escapeAiMatchHtml(state.year || '--')} 类型 ${escapeAiMatchHtml(state.media_type || '--')} · 本次 ${escapeAiMatchHtml(String(usage.total_tokens || 0))} tokens</div>
+        `;
+        statusEl.classList.remove('hidden');
+        return;
+    }
+    if (state.ok === false) {
+        statusEl.className = 'tg-proxy-status tg-proxy-status--error';
+        statusEl.innerHTML = `
+            <div class="tg-proxy-status-title">AI 测试失败</div>
+            <div class="tg-proxy-status-meta">${escapeAiMatchHtml(state.message || '未知错误')}</div>
+        `;
+        statusEl.classList.remove('hidden');
+        return;
+    }
+    statusEl.classList.add('hidden');
+    statusEl.textContent = '';
+}
+
+export async function testAiMatchConnection({
+    getCurrentAiMatchConfig,
+    getAiMatchTestState,
+    setAiMatchTestState,
+    renderAiMatchTestStatus,
+} = {}) {
+    const currentState = typeof getAiMatchTestState === 'function' ? getAiMatchTestState() : {};
+    if (currentState?.loading) return;
+    if (typeof setAiMatchTestState === 'function') {
+        setAiMatchTestState({
+            loading: true,
+            ok: null,
+            message: '',
+            latency_ms: 0,
+            base_url: '',
+            model: '',
+            keyword: '',
+            year: '',
+            media_type: '',
+            thinking_disabled: false,
+            usage: null,
+        });
+    }
+    if (typeof renderAiMatchTestStatus === 'function') renderAiMatchTestStatus();
+    try {
+        const data = await window.MediaHubApi.postJson(
+            '/settings/ai_match/test',
+            typeof getCurrentAiMatchConfig === 'function' ? getCurrentAiMatchConfig() : {}
+        );
+        if (typeof setAiMatchTestState === 'function') {
+            setAiMatchTestState({
+                loading: false,
+                ok: true,
+                message: '',
+                latency_ms: Number(data?.latency_ms || 0),
+                base_url: String(data?.base_url || ''),
+                model: String(data?.model || ''),
+                keyword: String(data?.keyword || ''),
+                year: String(data?.year || ''),
+                media_type: String(data?.media_type || ''),
+                thinking_disabled: !!data?.thinking_disabled,
+                usage: data?.usage || null,
+            });
+        }
+    } catch (e) {
+        const payload = e && typeof e === 'object' && e.payload && typeof e.payload === 'object' ? e.payload : {};
+        if (typeof setAiMatchTestState === 'function') {
+            setAiMatchTestState({
+                loading: false,
+                ok: false,
+                message: String(payload.msg || payload.error || (e instanceof Error ? e.message : e) || 'AI 测试失败'),
+                latency_ms: Number(payload.latency_ms || 0),
+                base_url: String(payload.base_url || ''),
+                model: String(payload.model || ''),
+                keyword: '',
+                year: '',
+                media_type: '',
+                thinking_disabled: false,
+                usage: payload.usage || null,
+            });
+        }
+    }
+    if (typeof renderAiMatchTestStatus === 'function') renderAiMatchTestStatus();
+    try {
+        await loadAiMatchUsage();
+    } catch (_) { /* 用量刷新失败不影响测试结论 */ }
+}
+
+export function renderAiMatchUsage(usage = _aiMatchUsageState) {
+    const el = document.getElementById('ai-match-usage');
+    if (!el) return;
+    el.className = 'tg-proxy-status';
+    const data = usage && typeof usage === 'object' ? usage : null;
+    if (!data) {
+        el.innerHTML = '<div class="tg-proxy-status-meta">暂无记录。跑一次批量识别或点上面的测试按钮后，这里会显示累计用量。</div>';
+        return;
+    }
+    const calls = Number(data.calls || 0);
+    const cacheHits = Number(data.cache_hits || 0);
+    const prompt = Number(data.prompt_tokens || 0);
+    const completion = Number(data.completion_tokens || 0);
+    const total = Number(data.total_tokens || 0);
+    const cacheHitTokens = Number(data.prompt_cache_hit_tokens || 0);
+    const lastCall = String(data.last_call_at || '').trim() || '--';
+    const lastError = String(data.last_error || '').trim();
+    el.innerHTML = `
+        <div class="tg-proxy-status-title">累计调用 ${escapeAiMatchHtml(String(calls))} 次（缓存命中 ${escapeAiMatchHtml(String(cacheHits))} 次）</div>
+        <div class="tg-proxy-status-meta">输入 ${escapeAiMatchHtml(String(prompt))} tokens（其中缓存命中 ${escapeAiMatchHtml(String(cacheHitTokens))}） · 输出 ${escapeAiMatchHtml(String(completion))} tokens · 合计 ${escapeAiMatchHtml(String(total))} tokens</div>
+        <div class="tg-proxy-status-note">最近调用：${escapeAiMatchHtml(lastCall)}${lastError ? ` · 最近错误：${escapeAiMatchHtml(lastError)}` : ''}</div>
+    `;
+}
+
+export async function loadAiMatchUsage() {
+    try {
+        const data = await window.MediaHubApi.getJson('/settings/ai_match/usage');
+        _aiMatchUsageState = data?.usage && typeof data.usage === 'object' ? data.usage : null;
+    } catch (_) {
+        _aiMatchUsageState = null;
+    }
+    renderAiMatchUsage(_aiMatchUsageState);
+}
+
+export async function resetAiMatchUsage({ showToast } = {}) {
+    try {
+        const data = await window.MediaHubApi.postJson('/settings/ai_match/usage/reset', {});
+        _aiMatchUsageState = data?.usage && typeof data.usage === 'object' ? data.usage : null;
+    } catch (_) {
+        _aiMatchUsageState = null;
+    }
+    renderAiMatchUsage(_aiMatchUsageState);
+    if (typeof showToast === 'function') {
+        showToast('AI 用量统计已重置', { tone: 'info', duration: 2200, placement: 'top-center' });
+    }
+}
+
 export async function refreshCookieHealthStatus({
     force = false,
     applyCookieHealthState,

@@ -199,6 +199,7 @@
         let appMountPoints = [];
         let tgProxyTestState = { loading: false, ok: null, message: '', latency_ms: 0, mode: '', proxy_url: '', target_url: '' };
         let pansouTestState = { loading: false, ok: null, message: '', latency_ms: 0, auth_enabled: false, auth_configured: false, auth_logged_in: false, plugin_count: 0, channels_count: 0 };
+        let aiMatchTestState = { loading: false, ok: null, message: '', latency_ms: 0, base_url: '', model: '', keyword: '', year: '', media_type: '', thinking_disabled: false, usage: null };
         let notifyTestState = { loading: false, ok: null, message: '', channel: '', target_desc: '', webhook_host: '', sent_at: '' };
         let resourceBoardHintText = '';
         let resourceActiveSearchRuntime = null;
@@ -3254,6 +3255,70 @@
                     renderNotifyTestStatus,
                 });
             }
+        }
+
+        function getCurrentAiMatchConfig() {
+            const num = (id, fallback) => {
+                const raw = parseFloat(document.getElementById(id)?.value || '');
+                return Number.isFinite(raw) ? raw : fallback;
+            };
+            return {
+                ai_match_enabled: !!document.getElementById('ai_match_enabled')?.checked,
+                ai_match_base_url: String(document.getElementById('ai_match_base_url')?.value || '').trim(),
+                ai_match_api_key: String(document.getElementById('ai_match_api_key')?.value || ''),
+                ai_match_model: String(document.getElementById('ai_match_model')?.value || '').trim(),
+                ai_match_timeout_seconds: num('ai_match_timeout_seconds', 20),
+                ai_match_temperature: num('ai_match_temperature', 0),
+                ai_match_max_concurrency: num('ai_match_max_concurrency', 3),
+                ai_match_thinking_mode: String(document.getElementById('ai_match_thinking_mode')?.value || 'auto'),
+                ai_match_min_confidence: num('ai_match_min_confidence', 0),
+                ai_match_cache_ttl_hours: num('ai_match_cache_ttl_hours', 24),
+            };
+        }
+
+        function renderAiMatchTestStatus() {
+            const settingsModule = tabRuntimeState.tabModuleCache.settings;
+            if (settingsModule?.renderAiMatchTestStatus) {
+                settingsModule.renderAiMatchTestStatus({ aiMatchTestState });
+                return;
+            }
+            void loadSettingsTabModule().then((mod) => {
+                mod?.renderAiMatchTestStatus?.({ aiMatchTestState });
+            });
+        }
+
+        async function testAiMatchConnection() {
+            const settingsModule = await loadSettingsTabModule();
+            if (settingsModule?.testAiMatchConnection) {
+                await settingsModule.testAiMatchConnection({
+                    getCurrentAiMatchConfig,
+                    getAiMatchTestState: () => aiMatchTestState,
+                    setAiMatchTestState: (nextValue) => {
+                        aiMatchTestState = { ...nextValue };
+                    },
+                    renderAiMatchTestStatus,
+                });
+                return;
+            }
+            showToast('AI 测试模块加载失败，请刷新页面后重试', { tone: 'error', duration: 3200, placement: 'top-center' });
+        }
+
+        async function loadAiMatchUsage() {
+            const settingsModule = await loadSettingsTabModule();
+            if (settingsModule?.loadAiMatchUsage) {
+                await settingsModule.loadAiMatchUsage();
+                return;
+            }
+            showToast('用量模块加载失败，请刷新页面后重试', { tone: 'error', duration: 3200, placement: 'top-center' });
+        }
+
+        async function resetAiMatchUsage() {
+            const settingsModule = await loadSettingsTabModule();
+            if (settingsModule?.resetAiMatchUsage) {
+                await settingsModule.resetAiMatchUsage({ showToast });
+                return;
+            }
+            showToast('用量模块加载失败，请刷新页面后重试', { tone: 'error', duration: 3200, placement: 'top-center' });
         }
 
         function setResourceTgHealthState(nextState = {}) {

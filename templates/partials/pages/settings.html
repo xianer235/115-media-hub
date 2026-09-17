@@ -220,6 +220,23 @@
                                 <option value="enabled">保持开启：不发送该参数，交给端点默认</option>
                             </select>
                         </label>
+                        <div class="flex flex-wrap items-center gap-3 pt-1">
+                            <button id="ai-match-test-btn" type="button" onclick="testAiMatchConnection()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">
+                                测试 AI 可用性
+                            </button>
+                            <div class="text-xs text-slate-500">
+                                用当前表单里的配置发一条最小样例，验证地址 / Key / 模型 / JSON 输出是否正常（不受「启用」开关限制，Key 留空则沿用已保存的）。
+                            </div>
+                        </div>
+                        <div id="ai-match-test-status" class="hidden rounded-xl border px-4 py-3 text-sm leading-6"></div>
+                        <div class="flex flex-wrap items-center justify-between gap-3 pt-1">
+                            <div class="text-sm font-medium">用量统计（本次进程累计）</div>
+                            <div class="flex items-center gap-2">
+                                <button type="button" onclick="loadAiMatchUsage()" class="px-3 py-2 rounded-lg bg-slate-700/60 hover:bg-slate-600/60 text-xs">刷新</button>
+                                <button type="button" onclick="resetAiMatchUsage()" class="px-3 py-2 rounded-lg bg-slate-700/60 hover:bg-slate-600/60 text-xs">重置</button>
+                            </div>
+                        </div>
+                        <div id="ai-match-usage" class="rounded-xl border px-4 py-3 text-sm leading-6"></div>
                         <div class="text-xs text-slate-500 leading-6">
                             兼容 DeepSeek / Qwen / OpenAI / 本地 Ollama 等任意 OpenAI 格式的 <code>/chat/completions</code> 接口（DeepSeek 填 <code>https://api.deepseek.com</code> 或 <code>https://api.deepseek.com/v1</code>；Ollama 填 <code>http://127.0.0.1:11434/v1</code>）。此处只支持 OpenAI 兼容端点，请不要填 Anthropic 端点（<code>/anthropic</code>）。开启后 AI 只会对未自动匹配的条目给出候选建议，仍需在批量整理里人工确认后才会改名，不会自动执行。
                         </div>

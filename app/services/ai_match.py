@@ -43,6 +43,11 @@ AI_MATCH_SAMPLE_FILE_LIMIT = 10
 AI_MATCH_OVERVIEW_CHARS = 200
 AI_MATCH_THINKING_MODES = ("auto", "disabled", "enabled")
 
+AI_MATCH_TEST_SAMPLE = (
+    "【高清剧集网发布 www.BBHDTV.com】女主？圣女？不，我是杂役女仆（自豪）！"
+    "[全12集][简繁英字幕].1080p.CR.WEB-DL.AAC2.0.H.264-BlackTV"
+)
+
 AI_MATCH_USAGE_KEYS = (
     "prompt_tokens",
     "completion_tokens",
@@ -54,6 +59,24 @@ AI_MATCH_USAGE_KEYS = (
 
 _AI_MATCH_CACHE_LOCK = threading.Lock()
 _AI_MATCH_CACHE: Dict[str, Dict[str, Any]] = {}
+
+_AI_MATCH_USAGE_LOCK = threading.Lock()
+
+
+def _now_text() -> str:
+    return time.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _new_usage_totals() -> Dict[str, Any]:
+    totals: Dict[str, Any] = {key: 0 for key in AI_MATCH_USAGE_KEYS}
+    totals["last_call_at"] = ""
+    totals["last_ok_at"] = ""
+    totals["last_error"] = ""
+    totals["last_latency_ms"] = 0
+    return totals
+
+
+_AI_MATCH_USAGE_TOTAL: Dict[str, Any] = _new_usage_totals()
 
 
 def _clamp_int(value: Any, fallback: int, min_value: int, max_value: int) -> int:
@@ -131,9 +154,12 @@ def build_ai_match_runtime_config(cfg: Optional[Dict[str, Any]] = None) -> Dict[
     }
 
 
-def validate_ai_match_runtime_config(cfg: Optional[Dict[str, Any]] = None) -> Optional[str]:
+def validate_ai_match_runtime_config(
+    cfg: Optional[Dict[str, Any]] = None,
+    require_enabled: bool = True,
+) -> Optional[str]:
     runtime = build_ai_match_runtime_config(cfg)
-    if not runtime["enabled"]:
+    if require_enabled and not runtime["enabled"]:
         return "AI 刮削辅助未启用"
     if not runtime["base_url"]:
         return "AI 接口地址（base_url）未填写"
@@ -187,6 +213,47 @@ def clear_ai_match_cache() -> int:
         size = len(_AI_MATCH_CACHE)
         _AI_MATCH_CACHE.clear()
     return size
+
+
+def record_ai_match_usage(
+    usage: Any,
+    *,
+    ok: bool,
+    error: str = "",
+    latency_ms: int = 0,
+) -> None:
+    """累计真实调用产生的用量（缓存命中不计 token，但要记 cache_hits）。"""
+    data = usage if isinstance(usage, dict) else {}
+    now = _now_text()
+    with _AI_MATCH_USAGE_LOCK:
+        for key in AI_MATCH_USAGE_KEYS:
+            try:
+                current = int(_AI_MATCH_USAGE_TOTAL.get(key, 0) or 0)
+                _AI_MATCH_USAGE_TOTAL[key] = current + max(0, int(data.get(key, 0) or 0))
+            except (TypeError, ValueError):
+                continue
+        try:
+            _AI_MATCH_USAGE_TOTAL["last_latency_ms"] = max(0, int(latency_ms or 0))
+        except (TypeError, ValueError):
+            _AI_MATCH_USAGE_TOTAL["last_latency_ms"] = 0
+        _AI_MATCH_USAGE_TOTAL["last_call_at"] = now
+        if ok:
+            _AI_MATCH_USAGE_TOTAL["last_ok_at"] = now
+            _AI_MATCH_USAGE_TOTAL["last_error"] = ""
+        else:
+            _AI_MATCH_USAGE_TOTAL["last_error"] = str(error or "")[:300]
+
+
+def get_ai_match_usage() -> Dict[str, Any]:
+    with _AI_MATCH_USAGE_LOCK:
+        return dict(_AI_MATCH_USAGE_TOTAL)
+
+
+def reset_ai_match_usage() -> Dict[str, Any]:
+    with _AI_MATCH_USAGE_LOCK:
+        _AI_MATCH_USAGE_TOTAL.clear()
+        _AI_MATCH_USAGE_TOTAL.update(_new_usage_totals())
+        return dict(_AI_MATCH_USAGE_TOTAL)
 
 
 def _item_cache_identity(item: Dict[str, Any]) -> str:
@@ -495,12 +562,22 @@ def ai_match_generate_query(
     if ttl_seconds > 0:
         cached = _cache_get(cache_key, ttl_seconds)
         if cached is not None:
-            return {**cached, "cached": True, "usage": _usage_with({}, cache_hits=1)}
+            hit_usage = _usage_with({}, cache_hits=1)
+            record_ai_match_usage(hit_usage, ok=True)
+            return {**cached, "cached": True, "usage": hit_usage}
     messages = [
         {"role": "system", "content": _QUERY_SYSTEM_PROMPT},
         {"role": "user", "content": _build_query_user_content(item)},
     ]
+    started_at = time.time()
     data, error, usage = _ai_chat_json(active_runtime, messages)
+    call_usage = _usage_with(usage, calls=1)
+    record_ai_match_usage(
+        call_usage,
+        ok=not error,
+        error=error,
+        latency_ms=int((time.time() - started_at) * 1000),
+    )
     if error:
         return {
             "ok": False,
@@ -509,7 +586,7 @@ def ai_match_generate_query(
             "media_type": "",
             "error": error,
             "cached": False,
-            "usage": _usage_with(usage, calls=1),
+            "usage": call_usage,
         }
     payload = data or {}
     keyword = str(payload.get("keyword") or "").strip()[:AI_MATCH_MAX_KEYWORD_CHARS]
@@ -523,12 +600,12 @@ def ai_match_generate_query(
             "media_type": "",
             "error": "AI 未给出有效关键词",
             "cached": False,
-            "usage": _usage_with(usage, calls=1),
+            "usage": call_usage,
         }
     result = {"ok": True, "keyword": keyword, "year": year, "media_type": media_type, "error": ""}
     if ttl_seconds > 0:
         _cache_set(cache_key, result)
-    return {**result, "cached": False, "usage": _usage_with(usage, calls=1)}
+    return {**result, "cached": False, "usage": call_usage}
 
 
 def ai_match_select_candidate(
@@ -552,14 +629,24 @@ def ai_match_select_candidate(
     if ttl_seconds > 0:
         cached = _cache_get(cache_key, ttl_seconds)
         if cached is not None:
-            return {**cached, "cached": True, "usage": _usage_with({}, cache_hits=1)}
+            hit_usage = _usage_with({}, cache_hits=1)
+            record_ai_match_usage(hit_usage, ok=True)
+            return {**cached, "cached": True, "usage": hit_usage}
     messages = [
         {"role": "system", "content": _SELECT_SYSTEM_PROMPT},
         {"role": "user", "content": _build_select_user_content(item, valid_candidates)},
     ]
+    started_at = time.time()
     data, error, usage = _ai_chat_json(active_runtime, messages)
+    call_usage = _usage_with(usage, calls=1)
+    record_ai_match_usage(
+        call_usage,
+        ok=not error,
+        error=error,
+        latency_ms=int((time.time() - started_at) * 1000),
+    )
     if error:
-        return {**empty_result, "error": error, "cached": False, "usage": _usage_with(usage, calls=1)}
+        return {**empty_result, "error": error, "cached": False, "usage": call_usage}
     payload = data or {}
     try:
         tmdb_id = int(payload.get("tmdb_id") or 0)
@@ -570,7 +657,7 @@ def ai_match_select_candidate(
             **empty_result,
             "error": "AI 未返回有效的 tmdb_id",
             "cached": False,
-            "usage": _usage_with(usage, calls=1),
+            "usage": call_usage,
         }
     wanted_type = normalize_tmdb_media_type(payload.get("media_type"), "")
     matched: Dict[str, Any] = {}
@@ -591,7 +678,7 @@ def ai_match_select_candidate(
             "tmdb_id": tmdb_id,
             "error": "AI 选择的条目不在候选列表中",
             "cached": False,
-            "usage": _usage_with(usage, calls=1),
+            "usage": call_usage,
         }
     confidence = _clamp_int(payload.get("confidence", 0), 0, 0, 100)
     reason = str(payload.get("reason") or "").strip()[:AI_MATCH_MAX_REASON_CHARS]
@@ -606,4 +693,38 @@ def ai_match_select_candidate(
     }
     if ttl_seconds > 0:
         _cache_set(cache_key, result)
-    return {**result, "cached": False, "usage": _usage_with(usage, calls=1)}
+    return {**result, "cached": False, "usage": call_usage}
+
+
+def ai_match_test_connection(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """用一条固定样例做一次真实调用，验证地址 / Key / 模型 / JSON 输出是否可用。
+
+    不受「启用」开关限制（方便先测再开）；测试调用会真实消耗 token，并计入用量统计。
+    """
+    active_cfg = cfg if isinstance(cfg, dict) else get_config()
+    runtime = build_ai_match_runtime_config(active_cfg)
+    config_error = validate_ai_match_runtime_config(active_cfg, require_enabled=False)
+    if config_error:
+        return {"ok": False, "error": config_error, "latency_ms": 0, "usage": _usage_with({})}
+    # 测试不能吃缓存，否则验证不到真实链路。
+    runtime = {**runtime, "cache_ttl_seconds": 0}
+    sample_item: Dict[str, Any] = {
+        "name": AI_MATCH_TEST_SAMPLE,
+        "entry": {"name": AI_MATCH_TEST_SAMPLE},
+        "files": [],
+    }
+    result = ai_match_generate_query(sample_item, runtime=runtime)
+    latency_ms = int(get_ai_match_usage().get("last_latency_ms", 0) or 0)
+    return {
+        "ok": bool(result.get("ok")),
+        "error": "" if result.get("ok") else str(result.get("error") or "AI 测试失败"),
+        "latency_ms": latency_ms,
+        "base_url": runtime["base_url"],
+        "model": runtime["model"],
+        "thinking_disabled": _should_send_thinking_disabled(runtime),
+        "sample": AI_MATCH_TEST_SAMPLE,
+        "keyword": str(result.get("keyword") or ""),
+        "year": str(result.get("year") or ""),
+        "media_type": str(result.get("media_type") or ""),
+        "usage": result.get("usage") or _usage_with({}),
+    }

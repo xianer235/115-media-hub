@@ -14687,6 +14687,14 @@
             font-size: 0.78rem;
         }
 
+        .scraper-ai-usage.is-warn {
+            color: #fcd34d;
+        }
+
+        .scraper-ai-usage.is-muted {
+            color: #94a3b8;
+        }
+
         .scraper-batch-badge.is-manual {
             color: #cbd5e1;
             background: rgba(100, 116, 139, 0.18);
@@ -15272,6 +15280,14 @@
 
         html.theme-day .scraper-ai-usage {
             color: #4338ca;
+        }
+
+        html.theme-day .scraper-ai-usage.is-warn {
+            color: #92400e;
+        }
+
+        html.theme-day .scraper-ai-usage.is-muted {
+            color: #64748b;
         }
 
         html.theme-day .scraper-batch-badge.is-manual {

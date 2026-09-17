@@ -205,6 +205,16 @@ class AiMatchRuntimeConfigTest(unittest.TestCase):
         scheme_message = ai_match.validate_ai_match_runtime_config(bad_scheme)
         self.assertIn("http", scheme_message)
 
+    def test_validate_can_skip_enabled_check(self):
+        cfg = {
+            "ai_match_enabled": False,
+            "ai_match_base_url": "https://api.deepseek.com",
+            "ai_match_api_key": "sk-test",
+            "ai_match_model": "deepseek-flash",
+        }
+        self.assertEqual(ai_match.validate_ai_match_runtime_config(cfg), "AI 刮削辅助未启用")
+        self.assertIsNone(ai_match.validate_ai_match_runtime_config(cfg, require_enabled=False))
+
 
 class AiMatchChatJsonTest(unittest.TestCase):
     def test_chat_json_ok(self):
@@ -390,6 +400,115 @@ class AiMatchCacheTest(unittest.TestCase):
         self.assertEqual(ai_match.clear_ai_match_cache(), 1)
 
 
+class AiMatchUsageTest(unittest.TestCase):
+    def setUp(self):
+        ai_match.reset_ai_match_usage()
+        ai_match.clear_ai_match_cache()
+
+    def tearDown(self):
+        ai_match.reset_ai_match_usage()
+        ai_match.clear_ai_match_cache()
+
+    def test_record_and_reset_usage(self):
+        ai_match.record_ai_match_usage(
+            {
+                "calls": 1,
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "total_tokens": 120,
+                "prompt_cache_hit_tokens": 60,
+            },
+            ok=True,
+            latency_ms=123,
+        )
+        ai_match.record_ai_match_usage({"calls": 1}, ok=False, error="boom", latency_ms=45)
+        usage = ai_match.get_ai_match_usage()
+        self.assertEqual(usage["calls"], 2)
+        self.assertEqual(usage["prompt_tokens"], 100)
+        self.assertEqual(usage["completion_tokens"], 20)
+        self.assertEqual(usage["total_tokens"], 120)
+        self.assertEqual(usage["prompt_cache_hit_tokens"], 60)
+        self.assertEqual(usage["last_latency_ms"], 45)
+        self.assertEqual(usage["last_error"], "boom")
+        self.assertTrue(usage["last_call_at"])
+        reset = ai_match.reset_ai_match_usage()
+        self.assertEqual(reset["calls"], 0)
+        self.assertEqual(reset["last_error"], "")
+        self.assertEqual(reset["total_tokens"], 0)
+
+    def test_real_call_is_counted(self):
+        response = _ok_response(usage={"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12})
+        with mock.patch.object(ai_match.requests, "post", return_value=response):
+            ai_match.ai_match_generate_query({"name": "片"}, runtime=_runtime())
+        usage = ai_match.get_ai_match_usage()
+        self.assertEqual(usage["calls"], 1)
+        self.assertEqual(usage["total_tokens"], 12)
+
+    def test_cache_hit_counted_as_cache_hit(self):
+        with mock.patch.object(ai_match.requests, "post", return_value=_ok_response()):
+            ai_match.ai_match_generate_query({"name": "片"}, runtime=_cached_runtime())
+            ai_match.ai_match_generate_query({"name": "片"}, runtime=_cached_runtime())
+        usage = ai_match.get_ai_match_usage()
+        self.assertEqual(usage["calls"], 1)
+        self.assertEqual(usage["cache_hits"], 1)
+
+
+class AiMatchTestConnectionTest(unittest.TestCase):
+    def setUp(self):
+        ai_match.reset_ai_match_usage()
+        ai_match.clear_ai_match_cache()
+
+    def tearDown(self):
+        ai_match.reset_ai_match_usage()
+        ai_match.clear_ai_match_cache()
+
+    def _cfg(self, **overrides):
+        cfg = {
+            # 刻意保持 enabled=False：测试连接不应受「启用」开关限制。
+            "ai_match_enabled": False,
+            "ai_match_base_url": "https://api.deepseek.com",
+            "ai_match_api_key": "sk-test",
+            "ai_match_model": "deepseek-flash",
+            "ai_match_cache_ttl_hours": 24,
+        }
+        cfg.update(overrides)
+        return cfg
+
+    def test_test_connection_ok(self):
+        content = '{"keyword": "杂役女仆", "year": "2026", "media_type": "tv"}'
+        with mock.patch.object(ai_match.requests, "post", return_value=_ok_response(content)) as post:
+            result = ai_match.ai_match_test_connection(self._cfg())
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["keyword"], "杂役女仆")
+        self.assertEqual(result["year"], "2026")
+        self.assertEqual(result["media_type"], "tv")
+        self.assertEqual(result["model"], "deepseek-flash")
+        self.assertTrue(result["thinking_disabled"])
+        self.assertEqual(post.call_args.args[0], "https://api.deepseek.com/chat/completions")
+        self.assertEqual(post.call_args.kwargs["json"]["thinking"], {"type": "disabled"})
+        self.assertIn("usage", result)
+
+    def test_test_connection_requires_fields(self):
+        result = ai_match.ai_match_test_connection(self._cfg(ai_match_api_key=""))
+        self.assertFalse(result["ok"])
+        self.assertIn("API Key", result["error"])
+        self.assertEqual(result["latency_ms"], 0)
+
+    def test_test_connection_reports_http_error(self):
+        with mock.patch.object(ai_match.requests, "post", return_value=_FakeResponse(401, text="unauthorized")), \
+                mock.patch.object(ai_match.time, "sleep"):
+            result = ai_match.ai_match_test_connection(self._cfg())
+        self.assertFalse(result["ok"])
+        self.assertIn("HTTP 401", result["error"])
+
+    def test_test_connection_does_not_use_cache(self):
+        content = '{"keyword": "杂役女仆", "year": "2026", "media_type": "tv"}'
+        with mock.patch.object(ai_match.requests, "post", return_value=_ok_response(content)) as post:
+            ai_match.ai_match_test_connection(self._cfg())
+            ai_match.ai_match_test_connection(self._cfg())
+        self.assertEqual(post.call_count, 2)
+
+
 class AiMatchGenerateQueryTest(unittest.TestCase):
     def test_generate_query_ok(self):
         with mock.patch.object(
@@ -543,7 +662,7 @@ class AiMatchFallbackIntegrationTest(unittest.TestCase):
             "app.services.ai_match.ai_match_select_candidate",
             return_value=_selected_ok(candidate),
         ), mock.patch.object(scraper, "_search_batch_tmdb_candidates", return_value=_low_score_candidates()):
-            usage = scraper._apply_ai_match_fallback(results, raw_items, {}, _fallback_cfg())
+            state = scraper._apply_ai_match_fallback(results, raw_items, {}, _fallback_cfg())
 
         target = results[0]
         self.assertEqual(target["status"], "suggest")
@@ -555,7 +674,9 @@ class AiMatchFallbackIntegrationTest(unittest.TestCase):
         self.assertNotIn("auto_pick", target)
         self.assertEqual(results[1]["status"], "auto")
         self.assertNotIn("ai_keyword", results[1])
-        self.assertEqual(usage["calls"], 2)
+        self.assertEqual(state["usage"]["calls"], 2)
+        self.assertTrue(state["requested"])
+        self.assertEqual(state["config_error"], "")
 
     def test_fallback_skips_select_for_single_candidate(self):
         results = [_manual_result(1)]
@@ -568,13 +689,13 @@ class AiMatchFallbackIntegrationTest(unittest.TestCase):
             "app.services.ai_match.ai_match_select_candidate",
             side_effect=AssertionError("不应调用二次选择"),
         ) as select, mock.patch.object(scraper, "_search_batch_tmdb_candidates", return_value=[candidate]):
-            usage = scraper._apply_ai_match_fallback(results, raw_items, {}, _fallback_cfg())
+            state = scraper._apply_ai_match_fallback(results, raw_items, {}, _fallback_cfg())
 
         select.assert_not_called()
         self.assertTrue(results[0]["ai_skipped_select"])
         self.assertEqual(results[0]["status"], "suggest")
         self.assertEqual(results[0]["ai_selected"]["id"], 603)
-        self.assertEqual(usage["calls"], 1)
+        self.assertEqual(state["usage"]["calls"], 1)
 
     def test_fallback_min_confidence_rejects_low_confidence(self):
         results = [_manual_result(1)]
@@ -612,26 +733,29 @@ class AiMatchFallbackIntegrationTest(unittest.TestCase):
             "app.services.ai_match.ai_match_select_candidate",
             return_value=_selected_ok(candidate, usage=select_usage),
         ), mock.patch.object(scraper, "_search_batch_tmdb_candidates", return_value=_low_score_candidates()):
-            usage = scraper._apply_ai_match_fallback(results, raw_items, {}, _fallback_cfg())
+            state = scraper._apply_ai_match_fallback(results, raw_items, {}, _fallback_cfg())
 
-        self.assertEqual(usage["calls"], 2)
-        self.assertEqual(usage["prompt_tokens"], 1800)
-        self.assertEqual(usage["total_tokens"], 1830)
-        self.assertEqual(usage["prompt_cache_hit_tokens"], 500)
+        self.assertEqual(state["usage"]["calls"], 2)
+        self.assertEqual(state["usage"]["prompt_tokens"], 1800)
+        self.assertEqual(state["usage"]["total_tokens"], 1830)
+        self.assertEqual(state["usage"]["prompt_cache_hit_tokens"], 500)
         self.assertEqual(results[0]["ai_usage"]["calls"], 2)
 
     def test_fallback_config_error_annotates_only_targets(self):
         results = [_manual_result(1), {**_manual_result(2), "status": "auto"}]
         raw_items = [_raw_item(1), _raw_item(2, name="Y")]
-        scraper._apply_ai_match_fallback(results, raw_items, {}, _fallback_cfg(ai_match_model=""))
+        state = scraper._apply_ai_match_fallback(results, raw_items, {}, _fallback_cfg(ai_match_model=""))
         self.assertIn("ai_error", results[0])
         self.assertNotIn("ai_error", results[1])
+        self.assertTrue(state["requested"])
+        self.assertTrue(state["config_error"])
+        self.assertEqual(state["usage"], {})
 
     def test_fallback_disabled_does_nothing(self):
         results = [_manual_result(1)]
         raw_items = [_raw_item(1)]
-        usage = scraper._apply_ai_match_fallback(results, raw_items, {}, {"ai_match_enabled": False})
-        self.assertEqual(usage, {})
+        state = scraper._apply_ai_match_fallback(results, raw_items, {}, {"ai_match_enabled": False})
+        self.assertEqual(state, {"requested": False, "config_error": "", "usage": {}})
         self.assertNotIn("ai_keyword", results[0])
         self.assertNotIn("ai_error", results[0])
 
@@ -701,7 +825,7 @@ class IdentifyBatchWiringTest(unittest.TestCase):
             seen["applied"] = True
             seen["results"] = results
             seen["raw_items"] = raw_items
-            return usage
+            return {"requested": True, "config_error": "", "usage": usage}
 
         with mock.patch.object(scraper, "get_config", return_value={"tmdb_enabled": True, "tmdb_api_key": "k"}), \
                 mock.patch.object(scraper, "validate_tmdb_runtime_config", return_value=None), \
@@ -714,6 +838,25 @@ class IdentifyBatchWiringTest(unittest.TestCase):
         self.assertEqual(seen["raw_items"], raw)
         self.assertEqual(output["results"][0]["item_index"], 1)
         self.assertEqual(output["ai_usage"], usage)
+        self.assertTrue(output["ai_enabled"])
+        self.assertNotIn("ai_config_error", output)
+
+    def test_batch_identify_reports_ai_config_error(self):
+        raw = [_raw_item(1)]
+        payload = {"provider": "115", "items": raw}
+
+        def fake_apply(results, raw_items, request_payload, cfg):
+            return {"requested": True, "config_error": "AI 模型名称未填写", "usage": {}}
+
+        with mock.patch.object(scraper, "get_config", return_value={"tmdb_enabled": True, "tmdb_api_key": "k"}), \
+                mock.patch.object(scraper, "validate_tmdb_runtime_config", return_value=None), \
+                mock.patch.object(scraper, "_identify_scraper_batch_item", return_value=_manual_result(1)), \
+                mock.patch.object(scraper, "_apply_ai_match_fallback", side_effect=fake_apply):
+            output = scraper.identify_scraper_batch_items(payload)
+
+        self.assertTrue(output["ai_enabled"])
+        self.assertEqual(output["ai_config_error"], "AI 模型名称未填写")
+        self.assertNotIn("ai_usage", output)
 
 
 if __name__ == "__main__":

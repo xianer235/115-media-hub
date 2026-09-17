@@ -122,7 +122,8 @@
                 }
                 // 复用带 asset_version 的 tab 模块加载器，避免浏览器命中旧 settings.js 缓存后覆盖新 UI。
                 try {
-                    await loadSettingsTabModule();
+                    const settingsMod = await loadSettingsTabModule();
+                    await settingsMod?.loadAiMatchUsage?.();
                 } catch (_) { /* settings module may load via other path */ }
                 const sensitiveMeta = normalizeSensitiveConfigMeta(cfg.sensitive_configured || {});
                 if (typeof renderProviderAuthBlocks === 'function') {

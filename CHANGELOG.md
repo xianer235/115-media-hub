@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.4] - 2026-09-18
+
+### AI 刮削辅助：可读性、可用性测试与用量统计
+
+- **不再"看不见 AI"**：批量整理条目卡上，AI 参与的建议用靛蓝「AI 建议」徽标并附「置信度 N · 理由」；本来就是确定性「建议」的条目，现在也会显示 AI 的报错或「置信度 N，低于门槛未采纳」——此前这两类提示只出现在「未匹配」条目上，导致 AI 被跳过时界面毫无提示。
+- **汇总栏显示 AI 状态**：有调用时显示「AI 调用 N 次（缓存命中 M）· X tokens」；AI 已启用但配置不全时显示「AI 未运行：<原因>」（后端错误响应会补 `msg` 字段，前端能显示具体原因）；AI 启用但本次没有可处理条目时给出弱提示。
+- **测试 AI 可用性**：设置页 6b 新增按钮，用当前表单里的配置（API Key 留空则沿用已保存的）发一条真实样例请求，验证地址 / Key / 模型 / JSON 输出，返回耗时、实际请求地址与模型、是否关闭思考模式，以及样例识别结果（关键词/年份/类型）和本次 token。测试不受「启用」开关限制，方便先测再开；测试会绕过结果缓存，确保真的打到接口。
+- **用量统计**：设置页 6b 新增累计统计，展示调用次数、缓存命中次数、输入/输出/总 token、缓存命中 token、最近调用时间与最近错误，支持「刷新」「重置」。缓存命中单独计数（不产生 token 费用）。统计为进程内存累计，容器重启归零。
+- 接口新增：`POST /settings/ai_match/test`、`GET /settings/ai_match/usage`、`POST /settings/ai_match/usage/reset`；`POST /scraper/batch/identify` 响应新增 `ai_enabled` / `ai_config_error`（`ai_usage` 保持原样）。
+
+### 验证
+
+- `tests/test_scraper_ai_match.py` 增至 63 项（新增用量累计/重置、缓存命中计数、测试连接成功与失败、`require_enabled=False` 校验等）；新增 `tests/test_ai_match_frontend.py`（8 项）锁定设置页按钮/用量面板、`index.js` 全局处理函数、批量建议分支显示 AI 状态、汇总栏 AI 状态与后端路由字段。完整 unittest 802 项通过，`compileall`、改动 JS `node --check`、`git diff --check` 均通过。
+
 ## [0.11.3] - 2026-09-18
 
 ### AI 接口地址容错与校验
