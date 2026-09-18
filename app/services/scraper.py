@@ -1046,6 +1046,7 @@ def move_scraper_entries(
     entries: Optional[List[Dict[str, Any]]] = None,
     target_parent_path: Optional[str] = None,
     request_id: str = "",
+    source_action: str = "",
 ) -> Dict[str, Any]:
     normalized = normalize_scraper_provider(provider)
     cookie = _require_provider_cookie(normalized)
@@ -1061,7 +1062,9 @@ def move_scraper_entries(
         normalized,
         "move",
         snapshots,
-        source_action="scraper:entry:move",
+        # 默认仍是用户直接移动；快捷导入等"系统自己搬的"传入 scraper-job: 前缀，
+        # 复用监控侧既有守卫，避免刚整理完又被目标监控任务二次自动刮削。
+        source_action=str(source_action or "").strip() or "scraper:entry:move",
         dedupe_key=_direct_monitor_change_key("move", request_id),
     )
     try:
@@ -5455,6 +5458,144 @@ def identify_scraper_batch_items(payload: Dict[str, Any]) -> Dict[str, Any]:
         if usage.get("calls") or usage.get("cache_hits"):
             response["ai_usage"] = usage
     return response
+
+
+def identify_scraper_batch_entries(
+    provider: str,
+    entries: Optional[List[Dict[str, Any]]] = None,
+    *,
+    base_cid: str = "0",
+    base_path: str = "",
+    use_ai: bool = True,
+) -> Dict[str, Any]:
+    """共享整理流程第一步：扫描条目 → 识别（TMDB + AI 兜底）→ 挑出可自动处理的候选。
+
+    监控目录的自动刮削与接收夹快捷导入都走这里，保证两边"什么算高置信度""用哪套命名选项"完全一致。
+    可自动处理的条目：TMDB 自动匹配（status == auto）或 AI 已采纳（受 ai_match_min_confidence 约束）。
+    """
+    normalized_provider = normalize_scraper_provider(provider) or "115"
+    normalized_base_cid = str(base_cid or "0").strip() or "0"
+    normalized_base_path = normalize_relative_path(str(base_path or "").strip())
+    scan = scan_scraper_batch_items(
+        normalized_provider,
+        normalized_base_cid,
+        normalized_base_path,
+        entries,
+    )
+    scan_items = scan.get("items", []) if isinstance(scan, dict) else []
+    if not scan_items:
+        return {
+            "ok": True,
+            "provider": normalized_provider,
+            "items": [],
+            "results": [],
+            "picked": {},
+            "plan": {},
+        }
+    identify_payload = {
+        "provider": normalized_provider,
+        "items": [
+            {
+                "item_index": max(0, parse_int(item.get("item_index", 0), 0)),
+                "name": item.get("name", ""),
+                "entry": item.get("entry", {}),
+                "files": (item.get("files") or [])[:40],
+            }
+            for item in scan_items
+        ],
+    }
+    identify = identify_scraper_batch_items(identify_payload)
+    results = identify.get("results", []) if isinstance(identify, dict) else []
+    picked: Dict[int, Dict[str, Any]] = {}
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        index = max(0, parse_int(result.get("item_index", 0), 0))
+        auto_pick = result.get("auto_pick")
+        if result.get("status") == "auto" and isinstance(auto_pick, dict) and auto_pick:
+            picked[index] = auto_pick
+            continue
+        ai_selected = result.get("ai_selected") if use_ai else None
+        if isinstance(ai_selected, dict) and ai_selected:
+            picked[index] = ai_selected
+    return {
+        "ok": True,
+        "provider": normalized_provider,
+        "items": scan_items,
+        "results": results,
+        "picked": picked,
+    }
+
+
+def build_scraper_plan_for_batch(
+    provider: str,
+    items: List[Dict[str, Any]],
+    picked: Dict[int, Dict[str, Any]],
+    options: Dict[str, Any],
+    *,
+    base_cid: str = "0",
+    base_path: str = "",
+    item_indexes: Optional[Set[int]] = None,
+) -> Dict[str, Any]:
+    """共享整理流程第二步：用识别结果生成批量计划（可选只取指定条目，便于按类型分组）。"""
+    normalized_provider = normalize_scraper_provider(provider) or "115"
+    allowed = set(item_indexes) if item_indexes else None
+    candidates = picked if isinstance(picked, dict) else {}
+    plan_items = []
+    for item in items or []:
+        index = max(0, parse_int(item.get("item_index", 0), 0))
+        if allowed is not None and index not in allowed:
+            continue
+        binding = candidates.get(index)
+        if not isinstance(binding, dict) or not binding:
+            continue
+        plan_items.append(
+            {
+                "item_index": index,
+                "name": item.get("name", ""),
+                "entry": item.get("entry", {}),
+                "tmdb": binding,
+            }
+        )
+    if not plan_items:
+        return {}
+    return build_scraper_batch_plan(
+        {
+            "provider": normalized_provider,
+            "base_cid": str(base_cid or "0").strip() or "0",
+            "base_path": normalize_relative_path(str(base_path or "").strip()),
+            "options": options if isinstance(options, dict) else {},
+            "items": plan_items,
+        }
+    )
+
+
+def build_scraper_organize_plan(
+    provider: str,
+    entries: Optional[List[Dict[str, Any]]],
+    options: Dict[str, Any],
+    *,
+    base_cid: str = "0",
+    base_path: str = "",
+    use_ai: bool = True,
+) -> Dict[str, Any]:
+    """监控自动刮削用的便捷封装：识别 + 生成计划一次完成。"""
+    identified = identify_scraper_batch_entries(
+        provider,
+        entries,
+        base_cid=base_cid,
+        base_path=base_path,
+        use_ai=use_ai,
+    )
+    plan = build_scraper_plan_for_batch(
+        provider,
+        identified.get("items") or [],
+        identified.get("picked") or {},
+        options,
+        base_cid=base_cid,
+        base_path=base_path,
+    )
+    return {**identified, "plan": plan}
 
 
 def _resolve_batch_tmdb_binding(tmdb: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, Any]:

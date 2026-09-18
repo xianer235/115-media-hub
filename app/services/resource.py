@@ -123,11 +123,12 @@ def _list_pending_offline_jobs_for_watch() -> List[Dict[str, Any]]:
             continue
         if not job.get("auto_refresh"):
             continue
-        if not str(job.get("monitor_task_name", "") or "").strip():
+        extra = job.get("extra") if isinstance(job.get("extra"), dict) else {}
+        has_monitor = bool(str(job.get("monitor_task_name", "") or "").strip())
+        if not has_monitor and not bool(extra.get("quick_import_inbox")):
             continue
         if str(job.get("last_triggered_at", "") or "").strip():
             continue
-        extra = job.get("extra") if isinstance(job.get("extra"), dict) else {}
         if extra.get("offline_skip_wait"):
             continue
         pending.append(job)
@@ -209,6 +210,28 @@ async def _apply_offline_task_state(job: Dict[str, Any], task: Dict[str, Any]) -
             )
         except Exception:
             offline_folder_hint = ""
+        job_extra = job.get("extra") if isinstance(job.get("extra"), dict) else {}
+        if bool(job_extra.get("quick_import_inbox")):
+            # 落点在接收夹：走快捷导入（整理 + 按类型分发），不再触发监控刷新。
+            from . import quick_import as quick_import_service
+
+            try:
+                await asyncio.to_thread(
+                    quick_import_service.run_quick_import,
+                    "offline",
+                    sub_path=offline_folder_hint,
+                )
+            except Exception as exc:
+                _mark_resource_job_failed(job_id, resource_id, f"115 已完成，但快捷导入失败：{exc}")
+                return
+            update_resource_job(
+                job_id,
+                status="completed",
+                status_detail="115 离线下载已完成，已执行接收夹快捷导入",
+                last_triggered_at=now_text(),
+                finished_at=now_text(),
+            )
+            return
         try:
             if offline_folder_hint:
                 await trigger_resource_job_refresh(
@@ -617,6 +640,19 @@ async def run_offline_resource_job_batch(
             _mark_resource_job_failed(job_id, resource_id, detail)
 
 
+async def _run_quick_import_after_delay(delay_seconds: int) -> None:
+    """按导入任务配置的延迟等待后再跑快捷导入（分享转存落盘需要一点时间时用）。"""
+    wait_seconds = max(0, int(delay_seconds or 0))
+    if wait_seconds > 0:
+        await asyncio.sleep(wait_seconds)
+    from . import quick_import as quick_import_service
+
+    try:
+        await asyncio.to_thread(quick_import_service.run_quick_import, "import")
+    except Exception as exc:
+        logging.warning("quick import after import finished failed: %s", exc)
+
+
 async def trigger_resource_job_refresh(
     job_id: int,
     reason: str = "manual",
@@ -948,7 +984,17 @@ async def run_resource_job(job_id: int) -> None:
                 update_resource_item_status(conn, resource_id, next_status)
                 conn.commit()
 
-        if (
+        job_extra_for_trigger = job.get("extra") if isinstance(job.get("extra"), dict) else {}
+        if bool(job_extra_for_trigger.get("quick_import_inbox")):
+            # 落点在接收夹：交给快捷导入（后台执行，不阻塞导入任务收尾）。
+            from . import quick_import as quick_import_service
+
+            delay_seconds = max(0, int(job.get("refresh_delay_seconds", 0) or 0))
+            if delay_seconds > 0:
+                submit_background(_run_quick_import_after_delay, delay_seconds, label="quick-import-delayed")
+            else:
+                submit_background(quick_import_service.run_quick_import, "import", label="quick-import")
+        elif (
             (not is_share_receive_link or bool(getattr(share_provider, "supports_monitor", False)))
             and bool(job.get("auto_refresh"))
             and str(job.get("monitor_task_name", "")).strip()

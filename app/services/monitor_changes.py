@@ -1862,6 +1862,20 @@ def _load_ready_events(
     return [sqlite_row_to_dict(row) for row in cursor.fetchall()]
 
 
+def _collect_event_new_media_items(event: Dict[str, Any], stats: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """只把「非刮削任务自己造成」的新增媒体计入自动刮削候选。
+
+    刮削任务（含接收夹快捷导入搬进去的条目）产生的变更 source_action 以 ``scraper-job:`` 开头，
+    这类条目已经被整理过，不能再被目标监控任务二次自动刮削。
+    """
+    new_media_items = (stats or {}).get("new_media_items", [])
+    if not isinstance(new_media_items, list):
+        return []
+    if str((event or {}).get("source_action", "") or "").strip().startswith("scraper-job:"):
+        return []
+    return new_media_items
+
+
 def _is_one_shot_scraper_sync(event: Dict[str, Any]) -> bool:
     return (
         str(event.get("source_action", "") or "").strip().startswith("scraper-job:")
@@ -1984,12 +1998,7 @@ async def process_monitor_change_events(
                     else:
                         strm_state[path] = "generated"
                         result["generated"] += 1
-                event_new = stats.get("new_media_items", [])
-                if (
-                    isinstance(event_new, list)
-                    and not str(event.get("source_action", "") or "").strip().startswith("scraper-job:")
-                ):
-                    result["new_media_items"].extend(event_new)
+                result["new_media_items"].extend(_collect_event_new_media_items(event, stats))
                 manual_path = str(stats.get("manual_required_path", "") or "").strip()
                 if manual_path and manual_path not in result["manual_required_paths"]:
                     result["manual_required_paths"].append(manual_path)

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from ..core import normalize_relative_path, parse_int
+from ..services import quick_import
 from ..services.scraper import (
     build_scraper_batch_plan,
     build_scraper_providers_payload,
@@ -374,5 +375,30 @@ async def rollback_scraper_job_endpoint(job_id: int) -> Dict[str, Any]:
     try:
         submit_scraper_rollback(normalized_job_id)
         return {"ok": True, "job_id": normalized_job_id}
+    except Exception as exc:
+        return _error_response(exc)
+
+
+@router.get("/scraper/quick-import/status")
+async def get_quick_import_status_endpoint() -> Dict[str, Any]:
+    try:
+        status = await asyncio.to_thread(quick_import.get_quick_import_status)
+        return {"ok": True, **status}
+    except Exception as exc:
+        return _error_response(exc)
+
+
+@router.post("/scraper/quick-import/run")
+async def run_quick_import_endpoint(request: Request) -> Dict[str, Any]:
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    payload = data if isinstance(data, dict) else {}
+    trigger = str(payload.get("trigger", "manual") or "manual").strip() or "manual"
+    sub_path = str(payload.get("sub_path", "") or "").strip()
+    try:
+        result = await asyncio.to_thread(quick_import.run_quick_import, trigger, sub_path=sub_path)
+        return {"ok": True, **result}
     except Exception as exc:
         return _error_response(exc)

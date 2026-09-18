@@ -29,6 +29,7 @@ from ..services.resource import (
     run_resource_job,
     trigger_resource_job_refresh,
 )
+from ..services.quick_import import is_quick_import_savepath
 from ..services.scraper import recommend_media_folder_name
 
 router = APIRouter()
@@ -1138,7 +1139,9 @@ async def create_resource_ed2k_batch_endpoint(request: Request) -> Dict[str, Any
 
     matched_monitor = match_monitor_task_for_savepath(cfg, savepath, provider=provider_name)
     monitor_task_name = str(matched_monitor.get("task_name", "") or "").strip()
-    auto_refresh = bool(data.get("auto_refresh", True)) and bool(monitor_task_name)
+    # 落点在接收夹时没有监控任务，但仍要等待离线完成后触发快捷导入。
+    quick_import_inbox = is_quick_import_savepath(cfg, savepath)
+    auto_refresh = bool(data.get("auto_refresh", True)) and bool(monitor_task_name or quick_import_inbox)
     refresh_delay_seconds = max(0, int(data.get("refresh_delay_seconds", 0) or 0))
     source_url = str(data.get("source_url", data.get("original_url", "")) or "").strip()
     resource_title = str(data.get("resource_title", "") or "").strip()
@@ -1171,6 +1174,7 @@ async def create_resource_ed2k_batch_endpoint(request: Request) -> Dict[str, Any
                         "auto_refresh": auto_refresh,
                         "extra": {
                             "job_source": "manual_import",
+                            "quick_import_inbox": 1 if quick_import_inbox else 0,
                             "offline_provider": provider_name,
                             "offline_provider_label": provider.label,
                             "source_url": source_url,
@@ -1200,6 +1204,7 @@ async def create_resource_ed2k_batch_endpoint(request: Request) -> Dict[str, Any
         "create_folder": create_folder,
         "monitor_task_name": monitor_task_name,
         "auto_refresh": auto_refresh,
+        "quick_import_inbox": quick_import_inbox,
         "monitor_scan_path": matched_monitor.get("full_path", ""),
     }
 
@@ -1307,6 +1312,8 @@ async def create_resource_job_endpoint(request: Request) -> Dict[str, Any]:
         elif share_provider and share_provider.supports_monitor:
             matched_monitor = match_monitor_task_for_savepath(cfg, savepath, provider=share_provider.name)
             monitor_task_name = matched_monitor.get("task_name", "")
+        # 落点在接收夹时没有监控任务，但仍要保留自动处理能力给快捷导入。
+        quick_import_inbox = is_quick_import_savepath(cfg, savepath)
         # 路径解析会访问网盘上游，远端容器网络慢时不应阻塞点击请求。
         # 这里仅记录用户意图，具体 folder_id 由后台导入任务解析并写回。
         folder_id = provided_folder_id
@@ -1317,9 +1324,10 @@ async def create_resource_job_endpoint(request: Request) -> Dict[str, Any]:
             "sharetitle": str(data.get("sharetitle", "") or "").strip(),
             "monitor_task_name": monitor_task_name,
             "refresh_delay_seconds": max(0, int(data.get("refresh_delay_seconds", 0) or 0)),
-            "auto_refresh": auto_refresh_requested and bool(monitor_task_name),
+            "auto_refresh": auto_refresh_requested and bool(monitor_task_name or quick_import_inbox),
             "extra": {
                 "job_source": "manual_import",
+                "quick_import_inbox": 1 if quick_import_inbox else 0,
                 "offline_provider": offline_provider_name,
                 "offline_provider_label": mp.label if is_offline_link and mp else "115",
                 "magnet_provider": offline_provider_name,
@@ -1338,6 +1346,7 @@ async def create_resource_job_endpoint(request: Request) -> Dict[str, Any]:
         "job_id": job_id,
         "monitor_task_name": monitor_task_name,
         "auto_refresh": payload["auto_refresh"],
+        "quick_import_inbox": quick_import_inbox,
         "monitor_scan_path": matched_monitor.get("full_path", ""),
     }
 

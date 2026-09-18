@@ -66,6 +66,15 @@
                         <input type="checkbox" id="monitor_auto_scrape_on_new" class="ui-checkbox" onchange="syncMonitorAutoScrapeOptions()">
                         <span>新增资源自动刮削整理（仅整理高置信度自动匹配的条目，失败仅记录日志）</span>
                     </label>
+                    <label class="block">
+                        <span class="text-xs text-slate-500">接收夹快捷导入目标</span>
+                        <select id="monitor_quick_import_target" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none">
+                            <option value="">不使用</option>
+                            <option value="movie">电影：接收夹识别为电影时搬到这里</option>
+                            <option value="tv">电视剧：接收夹识别为剧集时搬到这里</option>
+                        </select>
+                        <div class="text-[11px] text-slate-500 mt-1">接收夹快捷导入按识别结果分发时，会搬进标注了对应类型的监控任务的扫描路径；整理规则沿用本任务的自动整理选项。</div>
+                    </label>
                     <div id="monitor-auto-scrape-options" class="hidden space-y-3 rounded-xl border border-slate-700 bg-slate-900/60 p-3">
                         <div class="text-xs font-bold text-slate-300">自动整理选项</div>
                         <div class="space-y-2">

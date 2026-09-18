@@ -158,6 +158,7 @@ function collectSettingsPayload({
         'ai_match_thinking_mode',
         'ai_match_min_confidence',
         'ai_match_cache_ttl_hours',
+        'quick_import_inbox_path',
         'pansou_base_url',
         'pansou_username',
         'pansou_password',
@@ -186,6 +187,7 @@ function collectSettingsPayload({
     cfg.notify_monitor_enabled = !!document.getElementById('notify_monitor_enabled')?.checked;
     cfg.tmdb_enabled = !!document.getElementById('tmdb_enabled')?.checked;
     cfg.ai_match_enabled = !!document.getElementById('ai_match_enabled')?.checked;
+    cfg.quick_import_enabled = !!document.getElementById('quick_import_enabled')?.checked;
     cfg.pansou_enabled = !!document.getElementById('pansou_enabled')?.checked;
     cfg.resource_favorite_dirs = collectResourceFavoriteDirs();
     cfg.scraper_noise_phrases = parseKeywordLines(document.getElementById('scraper_noise_phrases')?.value);

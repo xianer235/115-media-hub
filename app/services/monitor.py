@@ -420,11 +420,9 @@ def _auto_scrape_new_media_items(
     from .scraper import (
         _normalize_scraper_batch_preferences,
         _walk_existing_folder,
-        build_scraper_batch_plan,
+        build_scraper_organize_plan,
         create_scraper_job_from_plan,
-        identify_scraper_batch_items,
         run_scraper_job,
-        scan_scraper_batch_items,
     )
 
     if not new_media_items:
@@ -486,59 +484,15 @@ def _auto_scrape_new_media_items(
                 "path": parent_rel,
             }
         )
-    scan = scan_scraper_batch_items("115", "0", "", entries)
-    scan_items = scan.get("items", []) if isinstance(scan, dict) else []
-    if not scan_items:
-        return "新增文件未形成可识别条目"
-    identify_payload = {
-        "provider": "115",
-        "items": [
-            {
-                "item_index": max(0, int(item.get("item_index", 0) or 0)),
-                "name": item.get("name", ""),
-                "entry": item.get("entry", {}),
-                "files": (item.get("files") or [])[:40],
-            }
-            for item in scan_items
-        ],
-    }
-    identify = identify_scraper_batch_items(identify_payload)
-    results = identify.get("results", []) if isinstance(identify, dict) else []
-    auto_results = [
-        result
-        for result in results
-        if isinstance(result, dict) and result.get("status") == "auto" and result.get("auto_pick")
-    ]
-    if not auto_results:
-        return "新增条目无高置信度自动匹配，已跳过（可在刮削页手动整理）"
-    auto_indexes = {max(0, int(result.get("item_index", 0) or 0)) for result in auto_results}
-    auto_by_index = {
-        max(0, int(result.get("item_index", 0) or 0)): result.get("auto_pick")
-        for result in auto_results
-    }
-    plan_items = [
-        {
-            "item_index": max(0, int(item.get("item_index", 0) or 0)),
-            "name": item.get("name", ""),
-            "entry": item.get("entry", {}),
-            "tmdb": auto_by_index.get(max(0, int(item.get("item_index", 0) or 0)), {}),
-        }
-        for item in scan_items
-        if max(0, int(item.get("item_index", 0) or 0)) in auto_indexes
-    ]
     raw_auto_options = task.get("auto_scrape_options") if isinstance(task.get("auto_scrape_options"), dict) else {}
     auto_options = {"title_language": "zh", "delete_ad_files": False}
     if raw_auto_options:
         auto_options.update(_normalize_scraper_batch_preferences(raw_auto_options))
-    plan = build_scraper_batch_plan(
-        {
-            "provider": "115",
-            "base_cid": "0",
-            "base_path": "",
-            "options": auto_options,
-            "items": plan_items,
-        }
-    )
+    # 与接收夹快捷导入共用同一套整理流程：识别口径、命名选项、置信度门槛完全一致。
+    outcome = build_scraper_organize_plan("115", entries, auto_options)
+    plan = outcome.get("plan") if isinstance(outcome.get("plan"), dict) else {}
+    if not plan:
+        return "新增条目无高置信度自动匹配，已跳过（可在刮削页手动整理）"
     ready_count = max(0, int(plan.get("ready_count", 0) or 0))
     if ready_count <= 0:
         return "高置信度条目无可执行动作"

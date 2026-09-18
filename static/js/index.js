@@ -79,6 +79,8 @@
         let resourceTargetPreviewLoading = false;
         let resourceTargetPreviewError = '';
         let monitorFolderTrail = [{ id: '0', name: '根目录' }];
+        // 文件夹选择弹窗当前要写回哪个输入框（监控扫描路径 / 快捷导入接收夹）。
+        let monitorFolderPickerTargetId = 'monitor_scan_path';
         let monitorFolderEntries = [];
         let monitorFolderSummary = { folder_count: 0, file_count: 0 };
         let monitorFolderLoading = false;
@@ -3321,6 +3323,135 @@
             showToast('用量模块加载失败，请刷新页面后重试', { tone: 'error', duration: 3200, placement: 'top-center' });
         }
 
+        let quickImportStatusCache = {};
+
+        function renderQuickImportStatus(status = {}) {
+            const statusEl = document.getElementById('quick-import-status');
+            if (!statusEl) return;
+            const data = status && typeof status === 'object' ? status : {};
+            const targetsEl = document.getElementById('quick-import-targets');
+            const enabledEl = document.getElementById('quick_import_enabled');
+            if (enabledEl && typeof data.enabled === 'boolean') enabledEl.checked = !!data.enabled;
+            const inboxEl = document.getElementById('quick_import_inbox_path');
+            if (inboxEl && !String(inboxEl.value || '').trim() && data.inbox_path) {
+                inboxEl.value = String(data.inbox_path || '');
+            }
+            const targets = data.targets && typeof data.targets === 'object' ? data.targets : {};
+            if (targetsEl) {
+                const movie = String((targets.movie || {}).task_name || '').trim();
+                const tv = String((targets.tv || {}).task_name || '').trim();
+                targetsEl.innerHTML = `电影 → ${movie ? escapeHtml(movie) : '未指定'} · 电视剧 → ${tv ? escapeHtml(tv) : '未指定'}`;
+            }
+            statusEl.className = 'mt-3 rounded-xl border px-4 py-3 text-sm leading-6';
+            if (data.running) {
+                statusEl.className += ' border-sky-500/30 bg-sky-500/10 text-sky-200';
+                statusEl.innerHTML = '<div class="font-bold">正在整理接收夹...</div>';
+                return;
+            }
+            if (!data.enabled) {
+                statusEl.className += ' border-slate-700 bg-slate-900/60 text-slate-400';
+                statusEl.innerHTML = '<div>快捷导入未启用。启用并选好接收文件夹后，导入完成的文件会自动识别、整理并按类型分发。</div>';
+                return;
+            }
+            const configError = String(data.config_error || '').trim();
+            if (configError) {
+                statusEl.className += ' border-amber-500/30 bg-amber-500/10 text-amber-200';
+                statusEl.innerHTML = `<div class="font-bold">配置未就绪</div><div>${escapeHtml(configError)}</div>`;
+                return;
+            }
+            const latest = data.latest && typeof data.latest === 'object' ? data.latest : {};
+            if (!latest.id) {
+                statusEl.className += ' border-slate-700 bg-slate-900/60 text-slate-400';
+                statusEl.innerHTML = '<div>还没有执行记录。</div>';
+                return;
+            }
+            const detail = data.latest_detail && typeof data.latest_detail === 'object' ? data.latest_detail : {};
+            const moved = Array.isArray(detail.moved) ? detail.moved : [];
+            const left = Array.isArray(detail.left) ? detail.left : [];
+            const movedHtml = moved.length
+                ? moved.slice(0, 8).map((item) => `<li>${escapeHtml(item.name || '--')} → ${escapeHtml(item.target || '--')}</li>`).join('')
+                : '<li>无</li>';
+            const leftHtml = left.length
+                ? left.slice(0, 8).map((item) => `<li>${escapeHtml(item.name || '--')}：${escapeHtml(item.reason || '')}</li>`).join('')
+                : '<li>无</li>';
+            statusEl.className += ' border-slate-700 bg-slate-900/60 text-slate-300';
+            statusEl.innerHTML = `
+                <div class="font-bold">最近一次：${escapeHtml(String(latest.summary || '--'))}</div>
+                <div class="text-xs text-slate-500 mt-1">${escapeHtml(String(latest.finished_at || latest.started_at || ''))} · 触发：${escapeHtml(String(latest.trigger || '--'))}</div>
+                <div class="mt-2 text-xs">已分发：<ul class="list-disc ml-5">${movedHtml}</ul></div>
+                <div class="mt-1 text-xs">留在接收夹：<ul class="list-disc ml-5">${leftHtml}</ul></div>
+            `;
+        }
+
+        async function refreshQuickImportStatus() {
+            try {
+                quickImportStatusCache = (await window.MediaHubApi.getJson('/scraper/quick-import/status')) || {};
+            } catch (e) {
+                quickImportStatusCache = quickImportStatusCache || {};
+            }
+            renderQuickImportStatus(quickImportStatusCache);
+        }
+
+        async function saveQuickImportSettings() {
+            const payload = {
+                quick_import_enabled: !!document.getElementById('quick_import_enabled')?.checked,
+                quick_import_inbox_path: String(document.getElementById('quick_import_inbox_path')?.value || '').trim(),
+            };
+            try {
+                await window.MediaHubApi.postJson('/save_settings', payload);
+                showToast('接收夹设置已保存', { tone: 'success', duration: 2200, placement: 'top-center' });
+            } catch (e) {
+                showToast(`保存失败：${(e && e.message) || e}`, { tone: 'error', duration: 3200, placement: 'top-center' });
+            }
+            await refreshQuickImportStatus();
+        }
+
+        function openQuickImportInboxPicker() {
+            void openMonitorFolderModal('quick_import_inbox_path');
+        }
+
+        async function runQuickImport() {
+            const btn = document.getElementById('quick-import-run-btn');
+            if (btn) {
+                btn.disabled = true;
+                btn.classList.add('btn-disabled');
+                btn.textContent = '整理中...';
+            }
+            renderQuickImportStatus({ ...quickImportStatusCache, running: true });
+            try {
+                await saveQuickImportSettingsPayloadOnly();
+                const data = await window.MediaHubApi.postJson('/scraper/quick-import/run', { trigger: 'manual' });
+                showToast(String((data && data.summary) || '快捷导入已完成'), {
+                    tone: 'success',
+                    duration: 3200,
+                    placement: 'top-center',
+                });
+            } catch (e) {
+                showToast(`快捷导入失败：${(e && e.message) || e}`, { tone: 'error', duration: 3600, placement: 'top-center' });
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.classList.remove('btn-disabled');
+                    btn.textContent = '立即整理并分发';
+                }
+                await refreshQuickImportStatus();
+            }
+        }
+
+        async function saveQuickImportSettingsPayloadOnly() {
+            // 运行前先把当前表单值存下来，避免用户改了接收夹但没保存就点运行。
+            try {
+                await window.MediaHubApi.postJson('/save_settings', {
+                    quick_import_enabled: !!document.getElementById('quick_import_enabled')?.checked,
+                    quick_import_inbox_path: String(document.getElementById('quick_import_inbox_path')?.value || '').trim(),
+                });
+            } catch (e) {
+                throw new Error(`保存接收夹设置失败：${(e && e.message) || e}`);
+            }
+        }
+
+        window.refreshQuickImportStatus = refreshQuickImportStatus;
+
         function setResourceTgHealthState(nextState = {}) {
             resourceTgHealthState = {
                 ...resourceTgHealthState,
@@ -3750,6 +3881,7 @@
                 strm_write_mode: document.getElementById('monitor_strm_write_mode')?.value || 'incremental',
                 sync_clean: document.getElementById('monitor_sync_clean').checked,
                 auto_scrape_on_new: document.getElementById('monitor_auto_scrape_on_new').checked,
+                quick_import_target: document.getElementById('monitor_quick_import_target')?.value || '',
                 auto_scrape_options: collectMonitorAutoScrapeOptions(),
                 incremental: !document.getElementById('monitor_sync_clean').checked,
                 retries: parseInt(document.getElementById('monitor_retries').value || '3', 10) || 3,
@@ -4003,7 +4135,8 @@
             return resolvedTrail;
         }
 
-        async function openMonitorFolderModal() {
+        async function openMonitorFolderModal(targetInputId = 'monitor_scan_path') {
+            monitorFolderPickerTargetId = String(targetInputId || 'monitor_scan_path');
             const hasConfiguredCookie = !!(resourceState.cookie_configured || sensitiveConfigMeta.cookie_115);
             if (!hasConfiguredCookie) {
                 showToast('请先在参数配置中填写 115 Cookie', {
@@ -4018,7 +4151,7 @@
             renderMonitorFolderList();
             try {
                 monitorFolderTrail = await resolveMonitorFolderTrailByPath(
-                    document.getElementById('monitor_scan_path')?.value || ''
+                    document.getElementById(monitorFolderPickerTargetId)?.value || ''
                 );
             } catch (e) {
                 monitorFolderTrail = [{ id: '0', name: '根目录' }];
@@ -4058,9 +4191,15 @@
 
         function selectCurrentMonitorFolder() {
             const scanPath = buildMonitorScanPathFromTrail(monitorFolderTrail);
-            const inputEl = document.getElementById('monitor_scan_path');
+            const targetInputId = monitorFolderPickerTargetId || 'monitor_scan_path';
+            const inputEl = document.getElementById(targetInputId);
             if (inputEl) inputEl.value = scanPath;
-            updateMonitorScanPathHint(scanPath);
+            if (targetInputId === 'monitor_scan_path') {
+                updateMonitorScanPathHint(scanPath);
+            } else {
+                void saveQuickImportSettings();
+            }
+            monitorFolderPickerTargetId = 'monitor_scan_path';
             closeMonitorFolderModal();
         }
 
@@ -4080,6 +4219,7 @@
             document.getElementById('monitor_strm_write_mode').value = 'incremental';
             document.getElementById('monitor_sync_clean').checked = true;
             document.getElementById('monitor_auto_scrape_on_new').checked = false;
+            document.getElementById('monitor_quick_import_target').value = '';
             resetMonitorAutoScrapeOptions();
             document.getElementById('monitor_retries').value = 3;
             document.getElementById('monitor_list_delay_ms').value = 250;
@@ -4219,6 +4359,7 @@
                 ? !!task.sync_clean
                 : !task.incremental;
             document.getElementById('monitor_auto_scrape_on_new').checked = !!task.auto_scrape_on_new;
+            document.getElementById('monitor_quick_import_target').value = String(task.quick_import_target || '');
             applyMonitorAutoScrapeOptions(task.auto_scrape_options);
             document.getElementById('monitor_retries').value = task.retries ?? 3;
             document.getElementById('monitor_list_delay_ms').value = task.list_delay_ms ?? 250;
@@ -4316,7 +4457,11 @@
                 ? `每 ${scheduleMinutes} 分钟自动执行一次，下次定时 ${String(nextRun || '计算中')}`
                 : '未开启定时，仅手动运行或通过 Webhook 触发';
             const webhookText = task?.webhook_enabled ? '已启用 Webhook 触发' : '未启用 Webhook';
-            return `状态：${statusText}。该任务会扫描 ${scanPath}，输出到 /strm/${targetPath}，写入模式为 ${writeModeText}，清理策略为 ${cleanupText}；${scheduleText}；${webhookText}。`;
+            const quickImportTarget = String(task?.quick_import_target || '').trim();
+            const quickImportText = quickImportTarget === 'movie'
+                ? '；已标注为接收夹快捷导入的「电影」目标'
+                : (quickImportTarget === 'tv' ? '；已标注为接收夹快捷导入的「电视剧」目标' : '');
+            return `状态：${statusText}。该任务会扫描 ${scanPath}，输出到 /strm/${targetPath}，写入模式为 ${writeModeText}，清理策略为 ${cleanupText}；${scheduleText}；${webhookText}${quickImportText}。`;
         }
 
         function toggleMonitorTaskIntro(taskName) {

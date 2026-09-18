@@ -923,6 +923,9 @@ _SETTINGS_CONFIG_KEY_ORDER_AFTER_AUTH: Tuple[str, ...] = (
     "ai_match_thinking_mode",
     "ai_match_min_confidence",
     "ai_match_cache_ttl_hours",
+    # 8c. 接收夹快捷导入
+    "quick_import_enabled",
+    "quick_import_inbox_path",
     # 9. 通知推送
     "notify_push_enabled",
     "notify_monitor_enabled",
@@ -1037,6 +1040,8 @@ def default_config() -> Dict[str, Any]:
         "ai_match_thinking_mode": "auto",
         "ai_match_min_confidence": 0,
         "ai_match_cache_ttl_hours": 24,
+        "quick_import_enabled": False,
+        "quick_import_inbox_path": "",
         "pansou_enabled": False,
         "pansou_base_url": "",
         "pansou_username": "",
@@ -1148,11 +1153,15 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         strm_write_mode = "incremental"
     raw_auto_scrape_options = task.get("auto_scrape_options")
     auto_scrape_options = raw_auto_scrape_options if isinstance(raw_auto_scrape_options, dict) else {}
+    quick_import_target = str(task.get("quick_import_target", "") or "").strip().lower()
+    if quick_import_target not in ("movie", "tv"):
+        quick_import_target = ""
     return {
         "name": name,
         "webhook_enabled": normalize_bool(task.get("webhook_enabled", False), default=False),
         "auto_scrape_on_new": normalize_bool(task.get("auto_scrape_on_new", False), default=False),
         "auto_scrape_options": auto_scrape_options,
+        "quick_import_target": quick_import_target,
         "scan_path": normalize_remote_path(task.get("scan_path", "")),
         "target_path": normalize_relative_path(task.get("target_path", "")),
         "skip_by_dir_mtime": normalize_bool(task.get("skip_by_dir_mtime", False), default=False),
@@ -2503,6 +2512,10 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         merged["ai_match_min_confidence"] = 0
     if "ai_match_cache_ttl_hours" not in merged:
         merged["ai_match_cache_ttl_hours"] = 24
+    if "quick_import_enabled" not in merged:
+        merged["quick_import_enabled"] = False
+    if "quick_import_inbox_path" not in merged:
+        merged["quick_import_inbox_path"] = ""
     if "pansou_enabled" not in merged:
         merged["pansou_enabled"] = False
     if "pansou_base_url" not in merged:
@@ -2680,6 +2693,12 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     except (TypeError, ValueError):
         ai_match_cache_ttl_hours = 24
     merged["ai_match_cache_ttl_hours"] = max(0, min(24 * 30, ai_match_cache_ttl_hours))
+    merged["quick_import_enabled"] = normalize_bool(merged.get("quick_import_enabled", False), default=False)
+    merged["quick_import_inbox_path"] = normalize_remote_path(
+        str(merged.get("quick_import_inbox_path", "") or "").strip()
+    )
+    if merged["quick_import_inbox_path"] in ("", "/"):
+        merged["quick_import_inbox_path"] = ""
     try:
         tg_channel_threads = int(merged.get("tg_channel_threads", TG_CHANNEL_THREADS_DEFAULT) or TG_CHANNEL_THREADS_DEFAULT)
     except (TypeError, ValueError):

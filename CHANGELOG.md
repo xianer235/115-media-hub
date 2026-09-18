@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.6] - 2026-09-18
+
+### 接收夹快捷导入（最小改动接入现有工作流）
+
+- **新增接收夹**：监控任务页顶部新增「接收夹快捷导入」区域——启用开关 + 接收文件夹（复用 115 文件夹选择器）+「立即整理并分发」+ 最近一次执行结果。推送到接收夹的文件会按识别结果自动整理，并按电影/剧集搬到对应监控目录，导入时不必再在导入阶段手选保存位置。
+- **整理流程统一**：把监控目录自动刮削里的「扫描 → 识别 → 过滤高置信度 → 生成计划 → 执行」抽成共享流程（`identify_scraper_batch_entries` + `build_scraper_plan_for_batch`），两条路径共用；整理选项**一律取自目标监控任务的 `auto_scrape_options`**，不会出现两边规则不一致来回改。监控侧自动刮削因此也获得 AI 兜底（同样受 `ai_match_min_confidence` 与自动档 ≥80 约束，AI 未启用时行为不变）。
+- **防重复（重点）**：给 `move_scraper_entries` 增加可选来源标记，快捷导入传入 `scraper-job:<job_id>:quick-import`，监控变更事件带 `scraper-job:` 前缀后由既有守卫跳过 `new_media_items` —— 搬到监控目录后目标监控任务只生成 STRM，不再二次自动刮削。守卫抽成 `_collect_event_new_media_items` 便于测试；UI 直接移动保持原有行为不变。
+- **分发规则**：监控任务新增 `quick_import_target`（不使用 / 电影 / 电视剧，默认不使用），目标目录直接取该任务的扫描路径；TMDB 自动匹配或 AI 已采纳的条目才自动搬，其余（未匹配 / 建议未达自动档 / AI 置信度不足 / 计划冲突 / 搬运失败）留在接收夹并在界面与 CLI 写明原因。
+- **触发**：磁力离线下载完成（`offline_completion_watcher` 收到 status==2）与分享转存完成时，若 savepath 落在接收夹内则触发快捷导入（该分支在既有 `trigger_resource_job_refresh` 之前，互不影响；导入任务的 `auto_refresh` 在接收夹场景下也会为真，离线完成才有人跟踪）；自己拖进去的文件用「立即整理并分发」按钮或 CLI。
+- **配置校验**：启用时要求填接收夹、至少有一个监控任务标注了目标类型；接收夹与任何监控任务扫描路径重叠时直接拒绝，避免两条流程同时管同一批文件。
+- **接口与 CLI**：新增 `GET /scraper/quick-import/status`、`POST /scraper/quick-import/run`；新增 `quick_import_runs` 表保存每次执行结果；CLI 新增 `monitor quick-import-status` / `monitor quick-import-run`。
+
+### 验证
+
+- 新增 `tests/test_quick_import.py`（26 项）：配置与目标映射、接收夹路径判断、重叠校验、留守原因、**防重复守卫（scraper-job 事件不计入自动刮削 / 直接移动仍计入 / 来源标记透传）**、共享整理流程（auto 与 AI 候选、`use_ai=False`、按条目过滤出计划）、搬运成功/目标缺失/计划冲突/搬运失败/落库记录。
+- 新增 `tests/test_quick_import_frontend.py`（9 项）：监控页区域与按钮、监控任务弹窗字段、`index.js` 全局函数与接口调用、文件夹选择器复用、设置页字段收集、启动加载状态、后端路由与导入钩子、CLI 动作。
+- 完整 unittest 840 项通过，`compileall`、`cli.py` 语法、改动 JS `node --check`、`git diff --check` 均通过。
+
 ## [0.11.5] - 2026-09-18
 
 ### 油猴脚本：任务选择弹窗新增「复制磁力链接」（脚本 `@version` 升至 2.7.0）

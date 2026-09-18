@@ -931,6 +931,36 @@ def cmd_monitor(args, c: Client):
             status = j.get("status", "?")
             print(f"  • {name}  [{status}]")
 
+    elif args.action == "quick-import-status":
+        data = c.json("GET", "/scraper/quick-import/status")
+        enabled = "已启用" if data.get("enabled") else "未启用"
+        print(f"接收夹快捷导入：{enabled}")
+        print(f"  接收文件夹：{data.get('inbox_path') or '(未设置)'}")
+        targets = data.get("targets") if isinstance(data.get("targets"), dict) else {}
+        for key, label in (("movie", "电影"), ("tv", "电视剧")):
+            task_name = str((targets.get(key) or {}).get("task_name", "") or "").strip()
+            scan_path = str((targets.get(key) or {}).get("scan_path", "") or "").strip()
+            print(f"  {label}目标：{task_name or '(未标注)'}{f'  {scan_path}' if scan_path else ''}")
+        config_error = str(data.get("config_error", "") or "").strip()
+        if config_error:
+            print(f"  ⚠️ {config_error}")
+        latest = data.get("latest") if isinstance(data.get("latest"), dict) else {}
+        if latest:
+            print(f"  最近一次：{latest.get('summary') or '--'}（{latest.get('finished_at') or latest.get('started_at') or '--'}）")
+            detail = data.get("latest_detail") if isinstance(data.get("latest_detail"), dict) else {}
+            for item in (detail.get("left") or [])[:10]:
+                print(f"    · 留接收夹：{item.get('name') or '--'}：{item.get('reason') or ''}")
+        else:
+            print("  尚未执行过")
+
+    elif args.action == "quick-import-run":
+        data = c.json("POST", "/scraper/quick-import/run", {"trigger": "cli"})
+        print(f"✅ {data.get('summary') or '快捷导入已完成'}")
+        for item in (data.get("moved") or [])[:20]:
+            print(f"  · 已分发：{item.get('name') or '--'} → {item.get('target') or '--'}")
+        for item in (data.get("left") or [])[:20]:
+            print(f"  · 留接收夹：{item.get('name') or '--'}：{item.get('reason') or ''}")
+
 
 def cmd_tree(args, c: Client):
     """目录树同步"""
@@ -2168,7 +2198,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # monitor
     sp_mon = sp.add_parser("monitor", help="文件夹监控管理")
-    sp_mon.add_argument("action", choices=["list", "status", "start", "stop", "logs", "logs-clear", "userscript-jobs", "add", "remove"])
+    sp_mon.add_argument("action", choices=["list", "status", "start", "stop", "logs", "logs-clear", "userscript-jobs", "add", "remove", "quick-import-status", "quick-import-run"])
     sp_mon.add_argument("name", nargs="?", default="", help="监控任务名称 (add/remove)")
     sp_mon.add_argument("--scan-path", default="/", help="扫描路径 (add)")
     sp_mon.add_argument("--cron-minutes", type=int, default=0, help="定时周期分钟数, 0=仅手动 (add)")

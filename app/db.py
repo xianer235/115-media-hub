@@ -445,6 +445,22 @@ def ensure_db() -> None:
                 )
                 """
             )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS quick_import_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    trigger TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT '',
+                    inbox_path TEXT NOT NULL DEFAULT '',
+                    started_at TEXT NOT NULL DEFAULT '',
+                    finished_at TEXT NOT NULL DEFAULT '',
+                    moved_count INTEGER NOT NULL DEFAULT 0,
+                    left_count INTEGER NOT NULL DEFAULT 0,
+                    summary TEXT NOT NULL DEFAULT '',
+                    detail_json TEXT NOT NULL DEFAULT ''
+                )
+                """
+            )
             cursor.execute("PRAGMA table_info(local_files)")
             local_file_columns = {str(row[1]) for row in cursor.fetchall()}
             if "scan_token" not in local_file_columns:
