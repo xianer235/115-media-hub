@@ -460,6 +460,7 @@
                             <div>必须先有一个开启 Webhook 的文件夹监控任务；油猴脚本里的“请求地址”填这个任务的 `/webhook/任务名`，脚本推送后就会绑定并触发该任务。</div>
                             <div>脚本里的“保存路径 savepath”是磁力离线下载到 115 的目标目录，也会映射到 115 挂载前缀后和监控任务的“扫描路径”匹配。只有保存路径落在扫描路径内，导入成功后才会自动刷新并生成 strm。</div>
                             <div>“延迟”只控制导入成功后等待多久再刷新，留 0 会使用监控任务自己的默认延迟；“名称”只方便在脚本里识别任务，不参与后台匹配。</div>
+                            <div>不想直接落到监控目录时，用「文件夹监控」页“接收夹快捷导入”卡片里给出的接收夹专用地址 `/webhook/quick-import`：磁力先落到接收夹，下载完成后自动识别整理再按类型搬进对应监控目录；该地址独立于任务，不受上面“保存路径必须在扫描路径内”的限制（保存路径填接收夹或留空）。</div>
                         </div>
                         <div class="flex items-center gap-2 flex-wrap">
                             <a href="/userscript/magnet-helper.user.js" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">

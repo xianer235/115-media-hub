@@ -1,0 +1,45 @@
+        <div id="quick-import-modal" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-[58] p-4">
+            <div class="w-full max-w-4xl mx-auto mt-[5vh] max-h-[90vh] overflow-y-auto group-card modal-card" role="dialog" aria-modal="true" aria-labelledby="quick-import-modal-title">
+                <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <div class="text-[11px] font-bold uppercase tracking-wide text-slate-500">接收夹</div>
+                        <h3 id="quick-import-modal-title" class="group-title mb-1">快捷导入设置</h3>
+                        <div class="text-xs text-slate-400 leading-6 max-w-2xl">推送到接收夹的文件会自动识别整理，并按类型搬到标注了「电影 / 电视剧」的监控目录；识别不准的留在接收夹并写明原因。</div>
+                    </div>
+                    <button type="button" class="resource-source-modal-close" onclick="closeQuickImportSettings()" aria-label="关闭快捷导入设置" title="关闭">✕</button>
+                </div>
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-5">
+                    <div class="space-y-4">
+                        <div>
+                            <div class="text-xs text-slate-400">接收文件夹（115 网盘内）</div>
+                            <div class="resource-save-path-grid mt-1">
+                                <input id="quick_import_inbox_path" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" placeholder="/115/接收" readonly>
+                                <button type="button" onclick="openQuickImportInboxPicker()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold whitespace-nowrap">选择文件夹</button>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="text-xs text-slate-400">分发目标（在监控任务里标注）</div>
+                            <div id="quick-import-targets" class="quick-import-targets">
+                                <span class="quick-import-chip quick-import-chip--muted">读取中...</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="quick-import-status" class="tg-proxy-status quick-import-result">
+                        <div class="tg-proxy-status-title">最近一次</div>
+                        <div class="tg-proxy-status-meta">正在读取执行记录...</div>
+                    </div>
+                </div>
+                <div class="mt-4">
+                    <div class="text-xs text-slate-400">接收夹专用 Webhook（磁力直推这里）</div>
+                    <div class="resource-save-path-grid mt-1">
+                        <input id="quick-import-webhook-url" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm font-mono" value="正在读取..." readonly>
+                        <button type="button" onclick="copyQuickImportWebhookUrl()" class="px-4 py-3 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold whitespace-nowrap">复制地址</button>
+                    </div>
+                    <div class="text-[11px] text-slate-400 leading-5 mt-2">在油猴脚本里新增一条任务：请求地址填这个地址，保存路径填接收夹（或留空，服务端按这里的配置），磁力下载完会自动识别整理并分发。</div>
+                </div>
+                <div class="flex flex-wrap items-center justify-end gap-3 mt-5">
+                    <button type="button" onclick="closeQuickImportSettings()" class="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold min-h-[42px]">关闭</button>
+                    <button type="button" id="quick-import-modal-run-btn" onclick="runQuickImport()" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold min-h-[42px]">立即整理并分发</button>
+                </div>
+            </div>
+        </div>

@@ -29,6 +29,11 @@ QUICK_IMPORT_PROVIDER = "115"
 QUICK_IMPORT_TARGET_KEYS = ("movie", "tv")
 QUICK_IMPORT_TARGET_LABELS = {"movie": "电影", "tv": "电视剧"}
 QUICK_IMPORT_SOURCE_ACTION_PREFIX = "quick-import"
+# 同名文件夹合并的最大层级：媒体文件夹只有 片名 (年份)/ 或 片名 (年份)/Season 01/ 两级，
+# 留一点余量防止异常结构把合并请求打成无限递归。
+QUICK_IMPORT_MERGE_MAX_DEPTH = 3
+# 合并前只列一次目标文件夹：一页最多 1000 条，剧集/电影文件夹远小于这个量级。
+QUICK_IMPORT_MERGE_LIST_LIMIT = 1000
 QUICK_IMPORT_JOB_WAIT_SECONDS = max(
     30,
     int(os.environ.get("QUICK_IMPORT_JOB_WAIT_SECONDS", 900) or 900),
@@ -301,6 +306,223 @@ def _left_reason_from_result(result: Dict[str, Any]) -> str:
     return "未达到自动整理条件"
 
 
+def _quick_import_source_action(job_id: int) -> str:
+    return f"scraper-job:{max(0, int(job_id or 0))}:{QUICK_IMPORT_SOURCE_ACTION_PREFIX}"
+
+
+def _folder_children_payload(folder_id: str, folder_rel: str) -> List[Dict[str, Any]]:
+    """列出整理结果文件夹的直接子项，并补上完整挂载路径（监控同步事件要用）。"""
+    payload = scraper_service.list_scraper_entries(QUICK_IMPORT_PROVIDER, folder_id, True)
+    children = payload.get("entries") if isinstance(payload, dict) else []
+    result: List[Dict[str, Any]] = []
+    for child in children or []:
+        if not isinstance(child, dict):
+            continue
+        name = str(child.get("name", "") or "").strip()
+        entry_id = str(child.get("id", "") or "").strip()
+        if not name or not entry_id:
+            continue
+        item = dict(child)
+        item["parent_id"] = folder_id
+        item["parent_path"] = folder_rel
+        item["path"] = normalize_relative_path(join_relative_path(folder_rel, name))
+        result.append(item)
+    return result
+
+
+def _folder_entry_names(folder_id: str, cache: Dict[str, Set[str]]) -> Set[str]:
+    """目标文件夹里已有的条目名（一个文件夹只列一次，合并时用来挡同名文件）。"""
+    normalized_id = str(folder_id or "").strip()
+    if not normalized_id:
+        return set()
+    if normalized_id not in cache:
+        payload = scraper_service.list_scraper_entries(
+            QUICK_IMPORT_PROVIDER,
+            normalized_id,
+            True,
+            limit=QUICK_IMPORT_MERGE_LIST_LIMIT,
+        )
+        entries = payload.get("entries") if isinstance(payload, dict) else []
+        cache[normalized_id] = {
+            str(entry.get("name", "") or "").strip()
+            for entry in (entries or [])
+            if isinstance(entry, dict) and str(entry.get("name", "") or "").strip()
+        }
+    return cache[normalized_id]
+
+
+def _move_entries_into_folder(
+    entries: List[Dict[str, Any]],
+    *,
+    source_cid: str,
+    target_cid: str,
+    target_rel: str,
+    job_id: int,
+) -> None:
+    entry_ids = [str(item.get("id", "") or "").strip() for item in entries if str(item.get("id", "") or "").strip()]
+    if not entry_ids:
+        return
+    scraper_service.move_scraper_entries(
+        QUICK_IMPORT_PROVIDER,
+        entry_ids,
+        target_cid,
+        source_cid=source_cid,
+        entries=entries,
+        target_parent_path=target_rel,
+        source_action=_quick_import_source_action(job_id),
+    )
+
+
+def _merge_organized_folder_into_existing(
+    source_folder: Dict[str, Any],
+    source_rel: str,
+    target_folder: Dict[str, Any],
+    target_rel: str,
+    *,
+    job_id: int,
+    name_cache: Dict[str, Set[str]],
+    depth: int = 0,
+) -> Dict[str, Any]:
+    """把整理结果文件夹的内容并入目标监控目录里已有的同名文件夹。
+
+    媒体文件夹层级很浅（``片名 (年份)/`` 或 ``片名 (年份)/Season 01/``），按同层递归合并：
+    子文件夹在目标里已有同名目录就继续并入那个目录，否则整体搬过去；文件直接搬进目标文件夹。
+    目标里已经存在同名文件时跳过并记录，避免 115 自动改出 ``xxx(1).mkv`` 这类重复文件。
+    """
+    if depth > QUICK_IMPORT_MERGE_MAX_DEPTH:
+        raise RuntimeError("目标文件夹层级过深，已停止合并")
+    source_id = str(source_folder.get("id", "") or "").strip()
+    target_id = str(target_folder.get("id", "") or "").strip()
+    if not source_id or not target_id:
+        raise RuntimeError("合并文件夹缺少目录 ID")
+    moved_count = 0
+    skipped: List[str] = []
+    pending_moves: List[Dict[str, Any]] = []
+    target_names = _folder_entry_names(target_id, name_cache)
+    for child in _folder_children_payload(source_id, source_rel):
+        child_id = str(child.get("id", "") or "").strip()
+        child_name = str(child.get("name", "") or "").strip()
+        if bool(child.get("is_dir")):
+            matched = scraper_service.find_scraper_media_folder(
+                QUICK_IMPORT_PROVIDER,
+                target_id,
+                child_name,
+            )
+            matched_id = str((matched or {}).get("id", "") or "").strip()
+            if matched_id and matched_id != child_id:
+                matched_name = str((matched or {}).get("name", "") or child_name).strip() or child_name
+                nested = _merge_organized_folder_into_existing(
+                    child,
+                    str(child.get("path", "") or ""),
+                    matched,
+                    normalize_relative_path(join_relative_path(target_rel, matched_name)),
+                    job_id=job_id,
+                    name_cache=name_cache,
+                    depth=depth + 1,
+                )
+                moved_count += int(nested.get("moved_count", 0) or 0)
+                skipped.extend(nested.get("skipped") or [])
+                if not nested.get("skipped"):
+                    scraper_service.delete_scraper_entries(
+                        QUICK_IMPORT_PROVIDER,
+                        [child_id],
+                        parent_id=source_id,
+                        entries=[child],
+                    )
+                continue
+        if child_name in target_names:
+            skipped.append(child_name)
+            continue
+        target_names.add(child_name)
+        pending_moves.append(child)
+    if pending_moves:
+        _move_entries_into_folder(
+            pending_moves,
+            source_cid=source_id,
+            target_cid=target_id,
+            target_rel=target_rel,
+            job_id=job_id,
+        )
+        moved_count += len(pending_moves)
+    return {"moved_count": moved_count, "skipped": skipped}
+
+
+def _dispatch_organized_entry(
+    entry: Dict[str, Any],
+    *,
+    source_cid: str,
+    source_rel: str,
+    target_cid: str,
+    target_rel: str,
+    job_id: int,
+    name_cache: Optional[Dict[str, Set[str]]] = None,
+) -> Dict[str, Any]:
+    """把整理好的条目分发到监控目录：目标已有同名文件夹时并进去。
+
+    以前是无条件把接收夹里整理出来的"片名 (年份)"文件夹整个搬过去，目标目录里已经存在
+    同一部剧的文件夹时，115 会把新搬来的文件夹自动改名成"片名 (年份)(1)"，于是一次导入
+    多个单集文件就散成好几个文件夹。现在先找目标目录里的现成文件夹，找到就把内容并进去。
+    """
+    entry_id = str(entry.get("id", "") or "").strip()
+    entry_name = str(entry.get("name", "") or "").strip()
+    is_dir = bool(entry.get("is_dir"))
+    if not entry_id or not entry_name:
+        raise RuntimeError("整理后的条目缺少 ID 或名称")
+    cache = name_cache if isinstance(name_cache, dict) else {}
+    lookup_name = entry_name if is_dir else os.path.splitext(entry_name)[0]
+    existing = scraper_service.find_scraper_media_folder(QUICK_IMPORT_PROVIDER, target_cid, lookup_name)
+    existing_id = str((existing or {}).get("id", "") or "").strip()
+    if not existing_id or existing_id == entry_id:
+        _move_entries_into_folder(
+            [entry],
+            source_cid=source_cid,
+            target_cid=target_cid,
+            target_rel=target_rel,
+            job_id=job_id,
+        )
+        return {"merged": False, "skipped": []}
+
+    existing_name = str((existing or {}).get("name", "") or entry_name).strip() or entry_name
+    merged_target_rel = normalize_relative_path(join_relative_path(target_rel, existing_name))
+    if not is_dir:
+        # 散文件（例如已经标准命名的电影）：直接放进已有文件夹，而不是再复制一份到目录里。
+        if entry_name in _folder_entry_names(existing_id, cache):
+            return {"merged": False, "skipped": [entry_name], "target_folder": existing_name}
+        _move_entries_into_folder(
+            [entry],
+            source_cid=source_cid,
+            target_cid=existing_id,
+            target_rel=merged_target_rel,
+            job_id=job_id,
+        )
+        return {"merged": True, "skipped": [], "target_folder": existing_name, "moved_count": 1}
+
+    outcome = _merge_organized_folder_into_existing(
+        entry,
+        normalize_relative_path(str(entry.get("path", "") or ""))
+        or normalize_relative_path(join_relative_path(source_rel, entry_name)),
+        existing,
+        merged_target_rel,
+        job_id=job_id,
+        name_cache=cache,
+    )
+    skipped = list(outcome.get("skipped") or [])
+    if not skipped:
+        # 内容已经全部并进目标文件夹，接收夹里那个空文件夹要清掉，否则会一直躺在接收夹里。
+        scraper_service.delete_scraper_entries(
+            QUICK_IMPORT_PROVIDER,
+            [entry_id],
+            parent_id=source_cid,
+            entries=[entry],
+        )
+    return {
+        "merged": True,
+        "skipped": skipped,
+        "target_folder": existing_name,
+        "moved_count": int(outcome.get("moved_count", 0) or 0),
+    }
+
+
 def run_quick_import(trigger: str = "manual", *, sub_path: str = "") -> Dict[str, Any]:
     """扫描接收夹，整理高置信度条目并按类型分发到标注过的监控目录。
 
@@ -323,6 +545,8 @@ def run_quick_import(trigger: str = "manual", *, sub_path: str = "") -> Dict[str
         run_id = _insert_quick_import_run(trigger, conf["inbox_path"], started_at)
         moved: List[Dict[str, Any]] = []
         left: List[Dict[str, Any]] = []
+        # 同一次导入里多个条目可能进同一个目标文件夹，文件夹列表列一次够用（避免重复请求）。
+        dispatch_name_cache: Dict[str, Set[str]] = {}
         try:
             base_cid = resolve_scraper_dest_folder_id(QUICK_IMPORT_PROVIDER, base_rel)
             identified = identify_scraper_batch_entries(
@@ -376,6 +600,36 @@ def run_quick_import(trigger: str = "manual", *, sub_path: str = "") -> Dict[str
                 # 接收夹里常常是"散文件"（没有独立文件夹），必须强制整理进 片名 (年份)/ 再搬运，
                 # 否则只会原地改名、搬过去还是散文件。
                 options["force_media_folder"] = True
+                try:
+                    target_cid = resolve_scraper_dest_folder_id(
+                        QUICK_IMPORT_PROVIDER,
+                        target["scan_rel"],
+                    )
+                except Exception as exc:
+                    left.append(
+                        {
+                            "name": str(item.get("name", "") or ""),
+                            "reason": f"目标监控目录不可用：{str(exc)[:120]}",
+                        }
+                    )
+                    continue
+                # 接收夹里的文件夹只是中转：目标监控目录里已经有这部剧/这部电影的文件夹时，
+                # 直接把内容并进去即可，不必先把接收夹文件夹改成规范名——同批多个同名文件夹
+                # 会互相撞成"当前目录中已有同名文件夹"，最后一个只能留在接收夹里。
+                source_entry = item.get("entry") if isinstance(item.get("entry"), dict) else {}
+                source_entry_name = str(source_entry.get("name", "") or "").strip()
+                if bool(source_entry.get("is_dir")) and source_entry_name:
+                    try:
+                        existing_target_folder = scraper_service.find_scraper_media_folder(
+                            QUICK_IMPORT_PROVIDER,
+                            target_cid,
+                            source_entry_name,
+                        )
+                    except Exception:
+                        # 查一下目标目录只是"能不能直接合并"的优化，失败就按老流程（改规范名再搬）走。
+                        existing_target_folder = {}
+                    if existing_target_folder:
+                        options["rename_selected_folders"] = False
                 plan = build_scraper_plan_for_batch(
                     QUICK_IMPORT_PROVIDER,
                     [item],
@@ -427,25 +681,37 @@ def run_quick_import(trigger: str = "manual", *, sub_path: str = "") -> Dict[str
                         }
                     )
                     continue
+                # 条目本身在接收夹里，补上接收夹下的完整路径：搬运/合并的监控同步事件要靠它算新旧路径。
+                entry_name = str(entry.get("name", "") or "").strip()
+                entry["parent_id"] = str(entry.get("parent_id", "") or base_cid).strip() or base_cid
+                entry["parent_path"] = base_rel
+                entry["path"] = normalize_relative_path(join_relative_path(base_rel, entry_name))
                 try:
-                    target_cid = resolve_scraper_dest_folder_id(
-                        QUICK_IMPORT_PROVIDER,
-                        target["scan_rel"],
-                    )
-                    scraper_service.move_scraper_entries(
-                        QUICK_IMPORT_PROVIDER,
-                        [entry_id],
-                        target_cid,
+                    dispatch = _dispatch_organized_entry(
+                        entry,
                         source_cid=base_cid,
-                        entries=[entry],
-                        target_parent_path=target["scan_rel"],
-                        source_action=f"scraper-job:{job_id}:{QUICK_IMPORT_SOURCE_ACTION_PREFIX}",
+                        source_rel=base_rel,
+                        target_cid=target_cid,
+                        target_rel=target["scan_rel"],
+                        job_id=job_id,
+                        name_cache=dispatch_name_cache,
                     )
                 except Exception as exc:
                     left.append(
                         {
                             "name": str(item.get("name", "") or ""),
                             "reason": f"搬运失败：{str(exc)[:120]}",
+                        }
+                    )
+                    continue
+                if dispatch.get("skipped"):
+                    left.append(
+                        {
+                            "name": str(item.get("name", "") or ""),
+                            "reason": (
+                                f"目标文件夹「{dispatch.get('target_folder', '')}」中已存在同名文件："
+                                f"{'、'.join(str(value) for value in dispatch.get('skipped') or [])[:120]}"
+                            ),
                         }
                     )
                     continue

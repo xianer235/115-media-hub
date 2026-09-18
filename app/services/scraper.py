@@ -2253,6 +2253,14 @@ def _build_scraper_target_path(
     tag_suffix = _build_tag_suffix(tags)
     subtitle_part = f" ({subtitle_index})" if subtitle_index > 1 else ""
     _, file_title, folder_title = _build_scraper_media_titles(tmdb, options, str(entry.get("name", "") or ""))
+    # 文件已经在「同名媒体文件夹」里时（监控自动刮削会把 片名 (年份)/Season 01 这类子目录当条目、
+    # 重复整理同一部片也会这样），就地在那个文件夹里规范化，不能再套一层同名文件夹，
+    # 否则会整理出 片名 (2026) [tmdbid-x]/片名 (2026) [tmdbid-x]/ 这种嵌套。
+    existing_media_root = _scraper_existing_media_folder_root(
+        str(entry.get("path", "") or ""),
+        folder_title,
+        str(options.get("base_path", "") or ""),
+    )
     if media_type == "tv":
         task = _build_task_from_tmdb(tmdb, options)
         resolved_episode_info = episode_info if isinstance(episode_info, dict) else {}
@@ -2305,6 +2313,8 @@ def _build_scraper_target_path(
         if keep_original_name and not season_folder_allowed and not force_media_folder:
             # 保持/清理模式下文件不移动：文件夹重命名由文件夹动作覆盖，文件留在原目录。
             organize_root = source_relative_parent_path
+        elif existing_media_root is not None:
+            organize_root = existing_media_root
         else:
             organize_root = (
                 source_relative_parent_path
@@ -2316,7 +2326,7 @@ def _build_scraper_target_path(
         source_parent_is_season = bool(source_relative_parent_path) and is_subscription_season_folder_name(
             os.path.basename(source_relative_parent_path.replace("\\", "/"))
         )
-        if organize_inside_source_folder and source_parent_is_season:
+        if organize_inside_source_folder and source_parent_is_season and existing_media_root is None:
             # 文件已在源目录的 Season 子目录内：原地重命名，不再嵌套一层 Season。
             return normalize_relative_path(join_relative_path(organize_root, file_name)), ""
         return normalize_relative_path(join_relative_path(organize_root, f"Season {season_no:02d}", file_name)), ""
@@ -2337,7 +2347,42 @@ def _build_scraper_target_path(
         if (force_media_folder or not (keep_original_name or organize_inside_source_folder))
         else source_relative_parent_path
     )
+    if existing_media_root is not None:
+        organize_root = existing_media_root
     return normalize_relative_path(join_relative_path(organize_root, file_name)), ""
+
+
+def _scraper_existing_media_folder_root(
+    entry_path: str,
+    folder_title: str,
+    base_path: str,
+) -> Optional[str]:
+    """文件目录链上已经有同名媒体文件夹时，返回它相对 base_path 的路径。
+
+    - 返回 ``None``：没找到同名媒体文件夹（按老逻辑整理）；
+    - 返回 ``""``：base_path 本身就是这个媒体文件夹（计划路径都是相对 base_path 的，
+      就地整理即可）。
+
+    按完整挂载路径从最外层开始匹配，避免已有的嵌套结构继续加深；也因为走完整路径，
+    即使调用方把 base_path 收缩到了剧集文件夹本身（`build_scraper_rename_plan` 会用
+    选中文件夹的父目录兜底 base_path），也不会漏判。
+    """
+    title_key = scraper_folder_name_key(folder_title)
+    normalized_path = normalize_relative_path(str(entry_path or "").strip())
+    if not title_key or not normalized_path:
+        return None
+    parent_path = normalize_relative_path(os.path.dirname(normalized_path.replace("\\", "/")))
+    normalized_base = normalize_relative_path(str(base_path or "").strip())
+    parts = [part for part in parent_path.split("/") if part]
+    prefix: List[str] = []
+    for part in parts:
+        prefix.append(part)
+        if scraper_folder_name_key(part) == title_key:
+            matched = "/".join(prefix)
+            if normalized_base and (matched == normalized_base or matched.startswith(f"{normalized_base}/")):
+                return matched[len(normalized_base):].lstrip("/")
+            return matched
+    return None
 
 
 def _scraper_folder_organize_root(folder_parent_path: str, options: Dict[str, Any], folder_title: str) -> str:
@@ -2438,6 +2483,96 @@ def _scraper_page_has_more(payload: Dict[str, Any], offset: int, page_size: int)
     return bool(entries) and (len(entries) >= page_size or (total and next_offset < total))
 
 
+# 115 建/搬同名文件夹时会自动追加 ``(1)``/``(2)``，旧版本写 TMDB ID 时还会追加 ``[tmdbid-123]``。
+# 这些只是命名装饰，不代表另一个作品；查找现有文件夹时必须忽略，否则同一部片每整理一次
+# 就会再建一个"新"文件夹（实测：一个剧集目录被拆成 片名/片名(1)/片名(2)/片名(3)）。
+_SCRAPER_FOLDER_TMDB_SUFFIX_RE = re.compile(r"\s*\[(?:tmdb|tmdbid)[^\]]*\]\s*$", re.IGNORECASE)
+_SCRAPER_FOLDER_AUTO_INDEX_RE = re.compile(r"\s*\(\d{1,2}\)\s*$")
+
+
+def scraper_folder_name_key(value: str) -> str:
+    """媒体文件夹名归一化键：忽略 ``[tmdbid-xxx]`` 与 115 自动追加的 ``(n)`` 后缀。"""
+    name = str(value or "").strip()
+    if not name:
+        return ""
+    while True:
+        stripped = _SCRAPER_FOLDER_TMDB_SUFFIX_RE.sub("", name).strip()
+        stripped = _SCRAPER_FOLDER_AUTO_INDEX_RE.sub("", stripped).strip()
+        if stripped == name:
+            break
+        name = stripped
+    return " ".join(name.split()).casefold()
+
+
+def _scraper_folder_name_rank(name: str) -> int:
+    """同名候选的装饰数量：0 = 干净名字，越大说明装饰越多（优先复用最干净的那个）。"""
+    text = str(name or "").strip()
+    return int(bool(_SCRAPER_FOLDER_TMDB_SUFFIX_RE.search(text))) + int(
+        bool(_SCRAPER_FOLDER_AUTO_INDEX_RE.search(text))
+    )
+
+
+def _match_scraper_folder_part(entries: List[Dict[str, Any]], part: str) -> Optional[Dict[str, Any]]:
+    """在目录条目里按名字找文件夹：精确同名优先，其次忽略 ``[tmdbid-xxx]``/``(n)`` 装饰。"""
+    target_name = str(part or "").strip()
+    if not target_name:
+        return None
+    target_key = scraper_folder_name_key(target_name)
+    best: Optional[Dict[str, Any]] = None
+    best_rank = 0
+    for item in entries or []:
+        if not isinstance(item, dict) or not item.get("is_dir"):
+            continue
+        name = str(item.get("name", "") or "").strip()
+        if not name:
+            continue
+        if name == target_name:
+            return item
+        if not target_key or scraper_folder_name_key(name) != target_key:
+            continue
+        rank = _scraper_folder_name_rank(name)
+        if best is None or rank < best_rank:
+            best = item
+            best_rank = rank
+    return best
+
+
+def _find_scraper_folder_part(
+    provider: str,
+    cookie: str,
+    parent_id: str,
+    part: str,
+    *,
+    entries_cache: Optional[Dict[Tuple[str, bool], Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """在 ``parent_id`` 下翻页查找文件夹条目（精确同名优先，其次忽略命名装饰）。"""
+    target_name = str(part or "").strip()
+    if not target_name:
+        return {}
+    page_offset = 0
+    for _page_index in range(SCRAPER_NAME_LOOKUP_MAX_PAGES):
+        payload = _get_scraper_entries_page(
+            provider,
+            cookie,
+            parent_id,
+            True,
+            page_offset,
+            SCRAPER_NAME_LOOKUP_PAGE_SIZE,
+            entries_cache,
+        )
+        entries = payload.get("entries", []) if isinstance(payload, dict) and isinstance(payload.get("entries"), list) else []
+        matched = _match_scraper_folder_part(entries, target_name)
+        if matched:
+            return matched
+        if not _scraper_page_has_more(payload, page_offset, SCRAPER_NAME_LOOKUP_PAGE_SIZE):
+            break
+        next_offset = max(0, parse_int(payload.get("next_offset"), default=page_offset + len(entries)))
+        if next_offset <= page_offset:
+            break
+        page_offset = next_offset
+    return {}
+
+
 def _walk_existing_folder(
     provider: str,
     cookie: str,
@@ -2454,35 +2589,13 @@ def _walk_existing_folder(
         return path_cache[path_cache_key]
     parts = [part for part in normalize_relative_path(folder_path).split("/") if part]
     for part in parts:
-        matched = None
-        page_offset = 0
-        for _page_index in range(SCRAPER_NAME_LOOKUP_MAX_PAGES):
-            payload = _get_scraper_entries_page(
-                provider,
-                cookie,
-                current,
-                True,
-                page_offset,
-                SCRAPER_NAME_LOOKUP_PAGE_SIZE,
-                entries_cache,
-            )
-            entries = payload.get("entries", []) if isinstance(payload, dict) and isinstance(payload.get("entries"), list) else []
-            matched = next(
-                (
-                    item
-                    for item in entries
-                    if item.get("is_dir") and str(item.get("name", "") or "").strip() == part
-                ),
-                None,
-            )
-            if matched:
-                break
-            if not _scraper_page_has_more(payload, page_offset, SCRAPER_NAME_LOOKUP_PAGE_SIZE):
-                break
-            next_offset = max(0, parse_int(payload.get("next_offset"), default=page_offset + len(entries)))
-            if next_offset <= page_offset:
-                break
-            page_offset = next_offset
+        matched = _find_scraper_folder_part(
+            provider,
+            cookie,
+            current,
+            part,
+            entries_cache=entries_cache,
+        )
         if not matched:
             if path_cache is not None:
                 path_cache[path_cache_key] = ("", False)
@@ -2497,41 +2610,25 @@ def _walk_existing_folder(
 def _ensure_folder_from_base(provider: str, cookie: str, base_cid: str, folder_path: str) -> str:
     current = str(base_cid or "0").strip() or "0"
     for part in [part for part in normalize_relative_path(folder_path).split("/") if part]:
-        matched = None
-        page_offset = 0
-        for _page_index in range(SCRAPER_NAME_LOOKUP_MAX_PAGES):
-            payload = _get_scraper_entries_page(
-                provider,
-                cookie,
-                current,
-                True,
-                page_offset,
-                SCRAPER_NAME_LOOKUP_PAGE_SIZE,
-                None,
-            )
-            entries = payload.get("entries", []) if isinstance(payload, dict) and isinstance(payload.get("entries"), list) else []
-            matched = next(
-                (
-                    item
-                    for item in entries
-                    if item.get("is_dir") and str(item.get("name", "") or "").strip() == part
-                ),
-                None,
-            )
-            if matched:
-                break
-            if not _scraper_page_has_more(payload, page_offset, SCRAPER_NAME_LOOKUP_PAGE_SIZE):
-                break
-            next_offset = max(0, parse_int(payload.get("next_offset"), default=page_offset + len(entries)))
-            if next_offset <= page_offset:
-                break
-            page_offset = next_offset
+        matched = _find_scraper_folder_part(provider, cookie, current, part)
         if matched:
             current = str(matched.get("id") or matched.get("cid") or "").strip() or current
             continue
         created = _create_provider_folder(provider, cookie, current, part)
         current = str(created.get("id", "") or "").strip() or current
     return current
+
+
+def find_scraper_media_folder(provider: str, parent_id: str, name: str) -> Dict[str, Any]:
+    """在指定目录下查找可复用的媒体文件夹（精确同名优先，其次忽略命名装饰）。
+
+    返回命中的目录条目（含 ``id``/``name``），找不到时返回空字典。
+    快捷导入分发前用它判断"目标监控目录里是否已经有这部剧/这部电影的文件夹"。
+    """
+    normalized = normalize_scraper_provider(provider)
+    cookie = _require_provider_cookie(normalized)
+    target_id = str(parent_id or "0").strip() or "0"
+    return _find_scraper_folder_part(normalized, cookie, target_id, name)
 
 
 def _target_name_exists(
@@ -2543,8 +2640,30 @@ def _target_name_exists(
     *,
     entries_cache: Optional[Dict[Tuple[str, bool], Dict[str, Any]]] = None,
 ) -> bool:
+    return bool(
+        _find_scraper_entry_by_name(
+            provider,
+            cookie,
+            parent_id,
+            target_name,
+            same_entry_id=same_entry_id,
+            entries_cache=entries_cache,
+        )
+    )
+
+
+def _find_scraper_entry_by_name(
+    provider: str,
+    cookie: str,
+    parent_id: str,
+    target_name: str,
+    same_entry_id: str = "",
+    *,
+    entries_cache: Optional[Dict[Tuple[str, bool], Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """在目录下按精确同名翻页查找条目（返回条目本身，跳过 ``same_entry_id`` 自己）。"""
     if not parent_id:
-        return False
+        return {}
     page_offset = 0
     for _page_index in range(SCRAPER_NAME_LOOKUP_MAX_PAGES):
         payload = _get_scraper_entries_page(
@@ -2562,14 +2681,45 @@ def _target_name_exists(
                 continue
             if same_entry_id and str(item.get("id", "") or "").strip() == same_entry_id:
                 continue
-            return True
+            return item
         if not _scraper_page_has_more(payload, page_offset, SCRAPER_NAME_LOOKUP_PAGE_SIZE):
             break
         next_offset = max(0, parse_int(payload.get("next_offset"), default=page_offset + len(entries)))
         if next_offset <= page_offset:
             break
         page_offset = next_offset
-    return False
+    return {}
+
+
+def _is_same_show_folder_conflict(
+    provider: str,
+    cookie: str,
+    parent_id: str,
+    old_name: str,
+    new_name: str,
+    entry_id: str,
+    entries_cache: Optional[Dict[Tuple[str, bool], Dict[str, Any]]] = None,
+) -> bool:
+    """撞名的那个同名文件夹是否只是"同一部剧的另一个名字"（``[tmdbid-…]``/``(n)`` 装饰）。
+
+    是的话就不该报"当前目录中已有同名文件夹"：改名本来就必然撞车，而两边都是这部剧——
+    就地整理文件、搬运/合并阶段再并成一个文件夹即可。
+    """
+    if scraper_folder_name_key(old_name) != scraper_folder_name_key(new_name):
+        return False
+    try:
+        conflicting = _find_scraper_entry_by_name(
+            provider,
+            cookie,
+            parent_id,
+            new_name,
+            same_entry_id=entry_id,
+            entries_cache=entries_cache,
+        )
+    except Exception:
+        # 查不到就退回老行为（照常报冲突），避免静默跳过用户期望的改名。
+        return False
+    return bool(conflicting) and bool(conflicting.get("is_dir"))
 
 
 def _is_scraper_folder_rename_affecting_path(folder_path: str, target_path: str) -> bool:
@@ -2741,9 +2891,15 @@ def build_scraper_rename_plan(
             if folder_path:
                 folder_anchors[folder_path] = normalize_relative_path(str(item.get("parent_path", "") or ""))
     if not folder_mode:
-        plan_options["include_tmdb_id"] = False
-        plan_options["use_season_subfolder"] = False
+        # 选中的是散文件（contents 模式）：不重命名外层文件夹。
         plan_options["rename_selected_folders"] = False
+        # 旧行为是"原地改名、不建媒体文件夹"，那种情况下不写 TMDB ID、不加 Season 子目录；
+        # 但被 force_media_folder 强制归档时（接收夹快捷导入、监控根目录散文件），要跟
+        # "选中文件夹"整理保持同一套命名形状，否则同一部剧会一半散在 片名 (年份)/、
+        # 一半在 片名 (年份) [tmdbid-x]/Season 01/，怎么整理都对不上。
+        if not force_media_folder:
+            plan_options["include_tmdb_id"] = False
+            plan_options["use_season_subfolder"] = False
     expanded_files, scan_issues = _expand_selected_scraper_entries(provider, cookie, selected)
     media_type = normalize_tmdb_media_type(tmdb.get("tmdb_media_type") or tmdb.get("media_type"), "movie")
     task = _build_task_from_tmdb(tmdb, plan_options) if media_type == "tv" else {}
@@ -2828,6 +2984,11 @@ def build_scraper_rename_plan(
                 same_entry_id=str(entry.get("id", "") or ""),
                 entries_cache=preview_entries_cache,
             ):
+                if _is_same_show_folder_conflict(provider, cookie, old_parent_id, old_name, new_name, str(entry.get("id", "") or ""), preview_entries_cache):
+                    # 同目录里已经有同一部剧的媒体文件夹（只是名字带 [tmdbid-…]/(n) 装饰）：
+                    # 改名一定撞车，但两边本来就是同一部剧——不改名，文件就地整理进自己的
+                    # Season 子目录，等搬运/合并阶段并进那个现成文件夹即可。
+                    continue
                 action_issue = "当前目录中已有同名文件夹"
             action = {
                 "action_index": action_index,

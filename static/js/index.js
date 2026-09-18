@@ -3325,11 +3325,95 @@
 
         let quickImportStatusCache = {};
 
+        function quickImportWebhookUrl() {
+            const origin = String(window.location?.origin || '').replace(/\/+$/, '');
+            return `${origin}/webhook/quick-import`;
+        }
+
+        function renderQuickImportWebhookUrl() {
+            const input = document.getElementById('quick-import-webhook-url');
+            if (!input) return;
+            input.value = quickImportWebhookUrl();
+        }
+
+        function renderQuickImportSummary(data = {}, targets = {}) {
+            const summaryEl = document.getElementById('quick-import-summary');
+            if (!summaryEl) return;
+            const inboxPath = String(
+                document.getElementById('quick_import_inbox_path')?.value || data.inbox_path || ''
+            ).trim();
+            const movie = String((targets.movie || {}).task_name || '').trim();
+            const tv = String((targets.tv || {}).task_name || '').trim();
+            const targetText = [
+                movie ? `电影 → ${movie}` : '电影 → 未指定',
+                tv ? `电视剧 → ${tv}` : '电视剧 → 未指定',
+            ].join(' · ');
+            const lines = [`接收夹：${inboxPath || '未设置'} · 分发目标：${targetText}`];
+            if (!data.enabled) {
+                lines.push('当前未启用：开启右侧「启用」后，导入完成的文件会自动识别整理并分发。');
+            } else if (String(data.config_error || '').trim()) {
+                lines.push(`配置未就绪：${String(data.config_error).trim()}（点「设置 / 推送地址」查看）`);
+            } else if (data.running) {
+                lines.push('正在整理接收夹…');
+            } else {
+                const latest = data.latest && typeof data.latest === 'object' ? data.latest : {};
+                if (latest.id) {
+                    const when = String(latest.finished_at || latest.started_at || '').trim();
+                    lines.push(`最近一次：${String(latest.summary || '--')}${when ? `（${when}）` : ''}`);
+                } else {
+                    lines.push('还没有执行记录：点「立即整理并分发」跑一次，或把磁力推到接收夹专用地址。');
+                }
+            }
+            summaryEl.innerHTML = lines.map((line) => `<div>${escapeHtml(line)}</div>`).join('');
+        }
+
+        function openQuickImportSettings() {
+            showLockedModal('quick-import-modal');
+            void refreshQuickImportStatus();
+        }
+
+        function closeQuickImportSettings() {
+            hideLockedModal('quick-import-modal');
+        }
+
+        async function copyQuickImportWebhookUrl() {
+            const url = quickImportWebhookUrl();
+            try {
+                if (!navigator.clipboard?.writeText) throw new Error('当前浏览器不支持剪贴板接口');
+                await navigator.clipboard.writeText(url);
+                showToast('已复制接收夹 Webhook 地址，粘贴到油猴脚本的“请求地址”即可', {
+                    tone: 'success',
+                    duration: 2600,
+                    placement: 'top-center',
+                });
+            } catch (e) {
+                if (typeof showAppPrompt === 'function') {
+                    showAppPrompt('复制失败，请手动复制接收夹 Webhook 地址：', url);
+                    return;
+                }
+                showToast(`复制失败：${(e && e.message) || e}`, { tone: 'error', duration: 3200, placement: 'top-center' });
+            }
+        }
+
+        function renderQuickImportTargets(targets = {}) {
+            const targetsEl = document.getElementById('quick-import-targets');
+            if (!targetsEl) return;
+            const chips = [
+                ['电影', (targets.movie || {}).task_name],
+                ['电视剧', (targets.tv || {}).task_name],
+            ].map(([label, rawName]) => {
+                const name = String(rawName || '').trim();
+                const muted = name ? '' : ' quick-import-chip--muted';
+                return `<span class="quick-import-chip${muted}">${escapeHtml(label)} → `
+                    + `<b>${escapeHtml(name || '未指定')}</b></span>`;
+            });
+            targetsEl.innerHTML = chips.join('');
+        }
+
         function renderQuickImportStatus(status = {}) {
             const statusEl = document.getElementById('quick-import-status');
             if (!statusEl) return;
             const data = status && typeof status === 'object' ? status : {};
-            const targetsEl = document.getElementById('quick-import-targets');
             const enabledEl = document.getElementById('quick_import_enabled');
             if (enabledEl && typeof data.enabled === 'boolean') enabledEl.checked = !!data.enabled;
             const inboxEl = document.getElementById('quick_import_inbox_path');
@@ -3337,32 +3421,52 @@
                 inboxEl.value = String(data.inbox_path || '');
             }
             const targets = data.targets && typeof data.targets === 'object' ? data.targets : {};
-            if (targetsEl) {
-                const movie = String((targets.movie || {}).task_name || '').trim();
-                const tv = String((targets.tv || {}).task_name || '').trim();
-                targetsEl.innerHTML = `电影 → ${movie ? escapeHtml(movie) : '未指定'} · 电视剧 → ${tv ? escapeHtml(tv) : '未指定'}`;
-            }
-            statusEl.className = 'mt-3 rounded-xl border px-4 py-3 text-sm leading-6';
+            renderQuickImportTargets(targets);
+            renderQuickImportWebhookUrl();
+            renderQuickImportSummary(data, targets);
+            // 与「AI 可用性测试 / 用量统计」等面板统一用 tg-proxy-status 一套样式，
+            // 自带日间模式配色；此前这里用一组行内 tailwind 色值，夜间正常、日间发灰。
+            const showQuickImportStatus = (modifier, html) => {
+                statusEl.className = modifier
+                    ? `tg-proxy-status quick-import-result ${modifier}`
+                    : 'tg-proxy-status quick-import-result';
+                statusEl.innerHTML = html;
+                statusEl.classList.remove('quick-import-result--enter');
+                void statusEl.offsetWidth;
+                statusEl.classList.add('quick-import-result--enter');
+            };
             if (data.running) {
-                statusEl.className += ' border-sky-500/30 bg-sky-500/10 text-sky-200';
-                statusEl.innerHTML = '<div class="font-bold">正在整理接收夹...</div>';
+                showQuickImportStatus(
+                    'tg-proxy-status--loading',
+                    '<div class="tg-proxy-status-title">正在整理接收夹</div>'
+                    + '<div class="tg-proxy-status-meta">正在识别、重命名并按类型分发，请稍候...</div>',
+                );
                 return;
             }
             if (!data.enabled) {
-                statusEl.className += ' border-slate-700 bg-slate-900/60 text-slate-400';
-                statusEl.innerHTML = '<div>快捷导入未启用。启用并选好接收文件夹后，导入完成的文件会自动识别、整理并按类型分发。</div>';
+                showQuickImportStatus(
+                    '',
+                    '<div class="tg-proxy-status-title">快捷导入未启用</div>'
+                    + '<div class="tg-proxy-status-meta">启用并选好接收文件夹后，导入完成的文件会自动识别、整理并按类型分发。</div>',
+                );
                 return;
             }
             const configError = String(data.config_error || '').trim();
             if (configError) {
-                statusEl.className += ' border-amber-500/30 bg-amber-500/10 text-amber-200';
-                statusEl.innerHTML = `<div class="font-bold">配置未就绪</div><div>${escapeHtml(configError)}</div>`;
+                showQuickImportStatus(
+                    'tg-proxy-status--error',
+                    '<div class="tg-proxy-status-title">配置未就绪</div>'
+                    + `<div class="tg-proxy-status-meta">${escapeHtml(configError)}</div>`,
+                );
                 return;
             }
             const latest = data.latest && typeof data.latest === 'object' ? data.latest : {};
             if (!latest.id) {
-                statusEl.className += ' border-slate-700 bg-slate-900/60 text-slate-400';
-                statusEl.innerHTML = '<div>还没有执行记录。</div>';
+                showQuickImportStatus(
+                    '',
+                    '<div class="tg-proxy-status-title">还没有执行记录</div>'
+                    + '<div class="tg-proxy-status-meta">跑一次「立即整理并分发」后，这里会显示最近一次的分发与留守结果。</div>',
+                );
                 return;
             }
             const detail = data.latest_detail && typeof data.latest_detail === 'object' ? data.latest_detail : {};
@@ -3374,13 +3478,15 @@
             const leftHtml = left.length
                 ? left.slice(0, 8).map((item) => `<li>${escapeHtml(item.name || '--')}：${escapeHtml(item.reason || '')}</li>`).join('')
                 : '<li>无</li>';
-            statusEl.className += ' border-slate-700 bg-slate-900/60 text-slate-300';
-            statusEl.innerHTML = `
-                <div class="font-bold">最近一次：${escapeHtml(String(latest.summary || '--'))}</div>
-                <div class="text-xs text-slate-500 mt-1">${escapeHtml(String(latest.finished_at || latest.started_at || ''))} · 触发：${escapeHtml(String(latest.trigger || '--'))}</div>
-                <div class="mt-2 text-xs">已分发：<ul class="list-disc ml-5">${movedHtml}</ul></div>
-                <div class="mt-1 text-xs">留在接收夹：<ul class="list-disc ml-5">${leftHtml}</ul></div>
-            `;
+            const failed = String(latest.status || '') === 'failed';
+            const triggerLabel = String(latest.trigger || '').trim() === 'manual' ? '手动' : (String(latest.trigger || '').trim() || '--');
+            showQuickImportStatus(
+                failed ? 'tg-proxy-status--error' : '',
+                `<div class="tg-proxy-status-title">最近一次：${escapeHtml(String(latest.summary || '--'))}</div>`
+                + `<div class="tg-proxy-status-meta">${escapeHtml(String(latest.finished_at || latest.started_at || ''))} · 触发：${escapeHtml(triggerLabel)}</div>`
+                + `<div class="tg-proxy-status-note">已分发：<ul class="list-disc ml-5">${movedHtml}</ul></div>`
+                + `<div class="tg-proxy-status-note">留在接收夹：<ul class="list-disc ml-5">${leftHtml}</ul></div>`,
+            );
         }
 
         async function refreshQuickImportStatus() {
@@ -3411,12 +3517,16 @@
         }
 
         async function runQuickImport() {
-            const btn = document.getElementById('quick-import-run-btn');
-            if (btn) {
+            // 卡片与二级弹窗里各有一个"立即整理并分发"，同时进入忙碌态。
+            const btns = [
+                document.getElementById('quick-import-run-btn'),
+                document.getElementById('quick-import-modal-run-btn'),
+            ].filter(Boolean);
+            btns.forEach((btn) => {
                 btn.disabled = true;
                 btn.classList.add('btn-disabled');
                 btn.textContent = '整理中...';
-            }
+            });
             renderQuickImportStatus({ ...quickImportStatusCache, running: true });
             try {
                 await saveQuickImportSettingsPayloadOnly();
@@ -3429,11 +3539,11 @@
             } catch (e) {
                 showToast(`快捷导入失败：${(e && e.message) || e}`, { tone: 'error', duration: 3600, placement: 'top-center' });
             } finally {
-                if (btn) {
+                btns.forEach((btn) => {
                     btn.disabled = false;
                     btn.classList.remove('btn-disabled');
                     btn.textContent = '立即整理并分发';
-                }
+                });
                 await refreshQuickImportStatus();
             }
         }
@@ -3451,6 +3561,9 @@
         }
 
         window.refreshQuickImportStatus = refreshQuickImportStatus;
+        window.copyQuickImportWebhookUrl = copyQuickImportWebhookUrl;
+        window.openQuickImportSettings = openQuickImportSettings;
+        window.closeQuickImportSettings = closeQuickImportSettings;
 
         function setResourceTgHealthState(nextState = {}) {
             resourceTgHealthState = {
