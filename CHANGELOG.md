@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.11.8] - 2026-09-18
+## [0.11.9] - 2026-09-18
 
 ### 调整：接收夹并入任务列表（统一任务 / 路径 / webhook 口径）
 
@@ -27,6 +27,14 @@ All notable changes to this project will be documented in this file. The format 
 - **接收夹卡片自动刷新**：任务卡片上的「最近接收 24 小时 N 个 · 最近整理：…」跟随页面既有状态轮询按 30 秒节流刷新，用油猴脚本推磁力后不用手动刷新页面。
 - **任务类型不可再修改**：编辑弹窗里的「任务类型」改成只读展示——内置接收夹不能被改成扫描任务，普通监控任务也不能被改成接收夹；「新增任务」一律是普通监控任务（接收夹是内置固定槽位，只调整它的接收目录 / 分发目标 / 开关）。服务端 `apply_task_type_constraints()` 按任务名强制沿用原类型、把新增的 inbox 类型降级成 scan，避免绕过前端直接调接口改类型；接收夹改名仍允许（会同时改变 webhook 地址，界面有提示）。
 - **把接收夹从"扫描链路"里彻底摘出去**：新增 `finalize_monitor_tasks_for_save()`（`/monitor/save` 与 `/save_settings` 共用，堵住换接口改类型的口子）；`match_monitor_tasks_for_paths()` 与变更事件的 `configured_names` 都排除 inbox（此前接收夹目录的刮削变更会被当成扫描任务生成变更事件）；`queue_monitor_job()` 对 inbox 任务直接返回 `inbox` 不入队，`run_monitor_task` / 变更同步执行器各加一道兜底拒绝；资源导入弹窗与成功提示改为识别接收夹（`data.quick_import_inbox`）并显示"保存完成后会由接收夹自动识别整理并分发"，任务数量统计也排除内置接收夹。
+
+### 验证
+
+- 完整 unittest 894 项、`compileall`、改动 JS `node --check`、`git diff --check`、`version.json` 解析、`npm run build:css` 重建样式全部通过；`tests/test_quick_import.py` 52 项、`tests/test_quick_import_frontend.py` 18 项、`tests/test_monitor_webhook_quick_import.py` 15 项。
+- 临时服务实测：旧全局配置启动后被迁移成内置接收夹任务；`115/接收` 这类带挂载前缀的 savepath 归一化后通过、越界 400 且提示怎么改；类型互换 / 新增 inbox 类型 / 漏传接收夹三种绕过都被顶回；停用任务 `resource` 触发返回 `disabled` 而 `manual` 仍可跑；接收夹整理日志形成 `('task','接收')` 独立分段。
+- 待部署复核：`docker compose up -d --build` 后在浏览器确认编辑弹窗类型只读、无签名密钥时「开启 webhook」不可勾、接收夹定时整理与日志分段、资源导入到接收夹目录的文案。
+
+## [0.11.8] - 2026-09-18
 
 ### 修复：同一部剧重复整理会新建文件夹、位置散乱、还有条目留在接收夹
 用户反馈：同一部剧的单集文件整理后散在 `片名 (2026)`、`片名 (2026) [tmdbid-328704]`、`片名 (2026)(1)/(2)/(3)` 五个文件夹里，其中一个还留在接收夹没搬过去。查运行库（`scraper_job_actions`）后定位到四个独立根因，逐个从根源修掉：
