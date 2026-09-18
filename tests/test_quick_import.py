@@ -4,6 +4,7 @@ import unittest
 from unittest import mock
 
 from app import core, db
+from app.services import monitor as monitor_service
 from app.services import monitor_changes, quick_import, scraper
 
 
@@ -162,6 +163,67 @@ class SharedOrganizeFlowTest(unittest.TestCase):
         self.assertEqual(outcome, {})
         build.assert_not_called()
 
+    def test_plan_forwards_group_entries(self):
+        item = _item(1, "剧集A")
+        item["entries"] = [{"id": "e1", "name": "剧集A.S01E01.mkv"}, {"id": "e2", "name": "剧集A.S01E02.mkv"}]
+        with mock.patch.object(scraper, "build_scraper_batch_plan", return_value={"ok": True}) as build:
+            scraper.build_scraper_plan_for_batch("115", [item], {1: {"id": 1, "media_type": "tv"}}, {})
+        payload = build.call_args.args[0]
+        self.assertEqual(len(payload["items"][0]["entries"]), 2)
+
+    def test_loose_file_forced_into_media_folder(self):
+        entry = {"name": "追杀51号(2025)-2160p.UHDBlu-rayRemux.mkv", "parent_path": "接收"}
+        tmdb = {
+            "tmdb_media_type": "movie",
+            "tmdb_title": "追杀51号",
+            "tmdb_localized_title": "追杀51号",
+            "tmdb_year": "2025",
+            "title": "追杀51号",
+            "year": "2025",
+        }
+        forced, issue = scraper._build_scraper_target_path(
+            entry,
+            tmdb,
+            {
+                "base_path": "接收",
+                "file_name_mode": "standard",
+                "title_language": "zh",
+                "organize_into_media_folder": True,
+                "preserve_source_parent_path": False,
+            },
+        )
+        self.assertEqual(issue, "")
+        self.assertTrue(forced.startswith("追杀51号 (2025)/"), forced)
+        # 「保持原名」模式下也要建出媒体文件夹（文件名可保持原样）
+        keep_folder, keep_issue = scraper._build_scraper_target_path(
+            entry,
+            tmdb,
+            {
+                "base_path": "接收",
+                "file_name_mode": "keep",
+                "title_language": "zh",
+                "organize_into_media_folder": True,
+                "preserve_source_parent_path": False,
+                "force_media_folder": True,
+            },
+        )
+        self.assertEqual(keep_issue, "")
+        self.assertTrue(keep_folder.startswith("追杀51号 (2025)/"), keep_folder)
+        self.assertIn("追杀51号(2025)-2160p.UHDBlu-rayRemux.mkv", keep_folder)
+        # 对照：不强制整理媒体文件夹时只会原地改名，不会新建文件夹
+        plain, _ = scraper._build_scraper_target_path(
+            entry,
+            tmdb,
+            {
+                "base_path": "接收",
+                "file_name_mode": "standard",
+                "title_language": "zh",
+                "organize_into_media_folder": False,
+                "preserve_source_parent_path": True,
+            },
+        )
+        self.assertNotIn("/", plain)
+
 
 class QuickImportNoDoubleScrapeGuardTest(unittest.TestCase):
     """防重复：刮削任务/快捷导入搬运产生的事件不能触发监控二次自动刮削。"""
@@ -210,6 +272,45 @@ class QuickImportNoDoubleScrapeGuardTest(unittest.TestCase):
                 mock.patch.object(scraper, "_finish_scraper_monitor_sync", return_value={}):
             scraper.move_scraper_entries("115", ["e1"], "target-cid", source_cid="inbox-cid")
         self.assertEqual(prepare.call_args.kwargs["source_action"], "scraper:entry:move")
+
+
+class MonitorAutoScrapeRootFileTest(unittest.TestCase):
+    """监控根目录下的散文件不能把监控目录本身当成条目去改名。"""
+
+    def _run(self, scan_path, new_items):
+        cfg = {"mount_points": [dict(item) for item in MOUNT_POINTS]}
+        task = {"name": "电影", "scan_path": scan_path, "auto_scrape_options": {}}
+        captured = {}
+
+        def fake_scan(provider, base_cid, base_path, entries, *args, **kwargs):
+            captured["entries"] = entries
+            return {"items": []}
+
+        with mock.patch.object(scraper, "_walk_existing_folder", return_value=("cid", True)), \
+                mock.patch.object(scraper, "scan_scraper_batch_items", side_effect=fake_scan):
+            monitor_service._auto_scrape_new_media_items(cfg, task, new_items)
+        return captured.get("entries") or []
+
+    def test_root_level_loose_file_becomes_file_entry(self):
+        entries = self._run(
+            "/115/115自存电影",
+            [{"id": "f1", "fid": "f1", "name": "追杀51号(2025).mkv", "remote_rel": "追杀51号(2025).mkv"}],
+        )
+        self.assertEqual(len(entries), 1)
+        self.assertFalse(entries[0]["is_dir"])
+        self.assertEqual(entries[0]["parent_path"], "115自存电影")
+        self.assertEqual(entries[0]["path"], "115自存电影/追杀51号(2025).mkv")
+        self.assertEqual(entries[0]["id"], "f1")
+
+    def test_subfolder_new_file_still_uses_folder_entry(self):
+        entries = self._run(
+            "/115/115自存电影",
+            [{"id": "f2", "fid": "f2", "name": "片名.mkv", "remote_rel": "某片/片名.mkv"}],
+        )
+        self.assertEqual(len(entries), 1)
+        self.assertTrue(entries[0]["is_dir"])
+        self.assertEqual(entries[0]["name"], "某片")
+        self.assertEqual(entries[0]["parent_path"], "115自存电影")
 
 
 class QuickImportRunTest(unittest.TestCase):
@@ -270,6 +371,8 @@ class QuickImportRunTest(unittest.TestCase):
         self.assertEqual(move_record[0]["source_action"], "scraper-job:11:quick-import")
         self.assertEqual(move_record[0]["target_parent_path"], "电影")
         self.assertEqual(seen_options[0]["file_name_mode"], "standard")
+        # 接收夹里可能是散文件，必须强制整理进媒体文件夹
+        self.assertTrue(seen_options[0]["force_media_folder"])
 
     def test_tv_uses_tv_task_options(self):
         cfg = _cfg()

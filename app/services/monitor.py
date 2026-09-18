@@ -430,6 +430,19 @@ def _auto_scrape_new_media_items(
     cookie = str(cfg.get("cookie_115", "") or "").strip()
     parent_cid_cache: Dict[str, str] = {}
     parent_items: Dict[str, List[Dict[str, Any]]] = {}
+    scan_rel = ""
+    try:
+        _scan_provider, scan_rel = resolve_provider_relative_path(
+            cfg,
+            normalize_remote_path(task.get("scan_path", "")),
+            expected_provider="115",
+        )
+        scan_rel = normalize_relative_path(scan_rel)
+    except Exception:
+        scan_rel = ""
+    # 直接躺在监控根目录下的散文件：不能把"监控目录本身"当成条目去改名，
+    # 而要按文件条目整理（后续按片名归档成文件夹）。
+    root_file_items: List[Dict[str, Any]] = []
     for item in new_media_items:
         fid = str(item.get("fid") or item.get("id") or "").strip()
         rel_path = normalize_relative_path(str(item.get("remote_rel", "") or ""))
@@ -448,6 +461,9 @@ def _auto_scrape_new_media_items(
         parent_rel = normalize_relative_path(os.path.dirname(mount_rel))
         if not parent_rel:
             continue
+        if scan_rel and parent_rel == scan_rel:
+            root_file_items.append({"item": item, "fid": fid, "mount_rel": mount_rel, "parent_rel": parent_rel})
+            continue
         parent_cid = parent_cid_cache.get(parent_rel, "")
         if not parent_cid:
             try:
@@ -458,9 +474,33 @@ def _auto_scrape_new_media_items(
         if not parent_cid:
             continue
         parent_items.setdefault(parent_rel, []).append(item)
-    if not parent_items:
+    if not parent_items and not root_file_items:
         return f"新增文件无法解析网盘路径，跳过 {len(new_media_items)} 项"
     entries: List[Dict[str, Any]] = []
+    for root_item in root_file_items:
+        item = root_item["item"] if isinstance(root_item.get("item"), dict) else {}
+        parent_rel = str(root_item.get("parent_rel", "") or "")
+        parent_cid = parent_cid_cache.get(parent_rel, "")
+        if not parent_cid:
+            try:
+                parent_cid, _exists = _walk_existing_folder("115", cookie, "0", parent_rel)
+            except Exception:
+                parent_cid = ""
+            parent_cid_cache[parent_rel] = parent_cid
+        if not parent_cid:
+            continue
+        mount_rel = str(root_item.get("mount_rel", "") or "")
+        entries.append(
+            {
+                "id": str(root_item.get("fid", "") or ""),
+                "cid": str(root_item.get("fid", "") or ""),
+                "name": str(item.get("name", "") or "").strip() or os.path.basename(mount_rel),
+                "is_dir": False,
+                "parent_id": parent_cid,
+                "parent_path": parent_rel,
+                "path": mount_rel,
+            }
+        )
     for parent_rel in sorted(parent_items):
         folder_name = os.path.basename(parent_rel)
         grandparent_rel = normalize_relative_path(os.path.dirname(parent_rel))
@@ -488,6 +528,8 @@ def _auto_scrape_new_media_items(
     auto_options = {"title_language": "zh", "delete_ad_files": False}
     if raw_auto_options:
         auto_options.update(_normalize_scraper_batch_preferences(raw_auto_options))
+    # 散文件（监控根目录下的文件）也要归档进「片名 (年份)/」，与接收夹快捷导入保持一致。
+    auto_options["force_media_folder"] = True
     # 与接收夹快捷导入共用同一套整理流程：识别口径、命名选项、置信度门槛完全一致。
     outcome = build_scraper_organize_plan("115", entries, auto_options)
     plan = outcome.get("plan") if isinstance(outcome.get("plan"), dict) else {}

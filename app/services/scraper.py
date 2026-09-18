@@ -2235,6 +2235,9 @@ def _build_scraper_target_path(
     use_season_subfolder = bool(options.get("use_season_subfolder", True))
     preserve_source_parent_path = bool(options.get("preserve_source_parent_path", False))
     organize_inside_source_folder = bool(options.get("organize_inside_source_folder", False))
+    # 强制归档进媒体文件夹（接收夹快捷导入 / 监控根目录散文件用）：
+    # 即使文件命名方式是"保持原名/仅清理"，也要建出「片名 (年份)/」目录，否则散文件进库后播放器认不出来。
+    force_media_folder = bool(options.get("force_media_folder", False))
     source_relative_parent_path = _relative_parent_path_from_base(
         str(entry.get("parent_path", "") or ""),
         str(options.get("base_path", "") or ""),
@@ -2299,13 +2302,13 @@ def _build_scraper_target_path(
             return normalize_relative_path(join_relative_path(source_relative_parent_path, file_name)), ""
         if not organize_into_media_folder:
             return file_name, ""
-        if keep_original_name and not season_folder_allowed:
+        if keep_original_name and not season_folder_allowed and not force_media_folder:
             # 保持/清理模式下文件不移动：文件夹重命名由文件夹动作覆盖，文件留在原目录。
             organize_root = source_relative_parent_path
         else:
             organize_root = (
                 source_relative_parent_path
-                if organize_inside_source_folder
+                if (organize_inside_source_folder and not force_media_folder)
                 else _scraper_folder_organize_root(folder_parent_path, options, folder_title)
             )
         if not season_folder_allowed:
@@ -2330,9 +2333,9 @@ def _build_scraper_target_path(
     if not organize_into_media_folder:
         return file_name, ""
     organize_root = (
-        source_relative_parent_path
-        if (keep_original_name or organize_inside_source_folder)
-        else _scraper_folder_organize_root(folder_parent_path, options, folder_title)
+        _scraper_folder_organize_root(folder_parent_path, options, folder_title)
+        if (force_media_folder or not (keep_original_name or organize_inside_source_folder))
+        else source_relative_parent_path
     )
     return normalize_relative_path(join_relative_path(organize_root, file_name)), ""
 
@@ -2703,10 +2706,14 @@ def build_scraper_rename_plan(
     plan_options["file_name_mode"] = _normalize_scraper_file_name_mode(plan_options.get("file_name_mode"))
     selection_mode = _resolve_scraper_selection_mode(selected, plan_options)
     folder_mode = selection_mode == "folder"
+    # 调用方可以强制"整理进媒体文件夹"：接收夹快捷导入面对的是散文件（选中的是文件而不是目录），
+    # 需要按「片名 (年份)/…」归档，而不是只在原地把文件改个名。
+    force_media_folder = bool(plan_options.get("force_media_folder", False))
+    organize_into_media_folder = folder_mode or force_media_folder
     plan_options["selection_mode"] = selection_mode
     plan_options["base_path"] = base_path
-    plan_options["organize_into_media_folder"] = folder_mode
-    plan_options["preserve_source_parent_path"] = not folder_mode
+    plan_options["organize_into_media_folder"] = organize_into_media_folder
+    plan_options["preserve_source_parent_path"] = not organize_into_media_folder
     # 选中的本身就是 Season 子目录时，不重命名目录（避免把 Season 01 改成片名），文件原地整理。
     selected_folder_names = [
         str(item.get("name", "") or "")
@@ -5549,14 +5556,18 @@ def build_scraper_plan_for_batch(
         binding = candidates.get(index)
         if not isinstance(binding, dict) or not binding:
             continue
-        plan_items.append(
-            {
-                "item_index": index,
-                "name": item.get("name", ""),
-                "entry": item.get("entry", {}),
-                "tmdb": binding,
-            }
-        )
+        plan_item = {
+            "item_index": index,
+            "name": item.get("name", ""),
+            "entry": item.get("entry", {}),
+            "tmdb": binding,
+        }
+        # 同剧集散文件会被扫描合并成一个条目，这里要把整组文件透传下去，
+        # 否则只有第一个文件会被整理。
+        group_entries = item.get("entries")
+        if isinstance(group_entries, list) and group_entries:
+            plan_item["entries"] = group_entries
+        plan_items.append(plan_item)
     if not plan_items:
         return {}
     return build_scraper_batch_plan(

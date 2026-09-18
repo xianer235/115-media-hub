@@ -373,6 +373,9 @@ def run_quick_import(trigger: str = "manual", *, sub_path: str = "") -> Dict[str
                     )
                     continue
                 options = _target_scrape_options(target)
+                # 接收夹里常常是"散文件"（没有独立文件夹），必须强制整理进 片名 (年份)/ 再搬运，
+                # 否则只会原地改名、搬过去还是散文件。
+                options["force_media_folder"] = True
                 plan = build_scraper_plan_for_batch(
                     QUICK_IMPORT_PROVIDER,
                     [item],
