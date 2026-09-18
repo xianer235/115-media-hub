@@ -524,9 +524,12 @@
                 if (!providerSupportsMonitor) {
                     hints.push(`${currentProviderLabel} 链路不会联动文件夹监控，也不会自动触发 strm 刷新。`);
                 } else {
-                    const taskCount = Array.isArray(resourceState.monitor_tasks) && resourceState.monitor_tasks.length
-                        ? resourceState.monitor_tasks.length
-                        : ((monitorState.tasks || []).length || 0);
+                    // 内置接收夹不算“文件夹监控任务”，否则全新安装会看不到这条提醒。
+                    const taskCount = (
+                        Array.isArray(resourceState.monitor_tasks) && resourceState.monitor_tasks.length
+                            ? resourceState.monitor_tasks
+                            : (monitorState.tasks || [])
+                    ).filter(task => String(task?.task_type || 'scan') !== 'inbox').length;
                     if (!taskCount) {
                         hints.push(`当前还没有配置文件夹监控任务。保存到 ${currentProviderLabel} 仍然可用，但不会自动生成 strm。`);
                     }
@@ -797,7 +800,9 @@
                     const targetPath = String(data.savepath || '').trim();
                     const monitorTail = data.monitor_task_name
                         ? (data.auto_refresh ? `，保存后会自动触发“${data.monitor_task_name}”` : `，已匹配“${data.monitor_task_name}”`)
-                        : '，当前目录不会自动生成 strm';
+                        : (data.quick_import_inbox
+                            ? '，保存完成后会由接收夹自动识别整理并分发'
+                            : '，当前目录不会自动生成 strm');
                     showToast(`已创建 ${taskCount} 个保存任务${targetPath ? `，目标：${targetPath}` : ''}${monitorTail}`, {
                         tone: 'success',
                         duration: 3800,
@@ -935,7 +940,9 @@
                     : (
                         matchedTaskName
                             ? (data.auto_refresh ? `，保存完成后会自动触发“${matchedTaskName}”` : `，已匹配“${matchedTaskName}”，可稍后手动触发刷新`)
-                            : '，当前目录不会自动生成 strm'
+                            : (data.quick_import_inbox
+                                ? '，保存完成后会由接收夹自动识别整理并分发'
+                                : '，当前目录不会自动生成 strm')
                     );
                 showToast(`已创建导入任务 #${data.job_id}${tail}`, { tone: 'success', duration: 3000, placement: 'top-center' });
             } finally {

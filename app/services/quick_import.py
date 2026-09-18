@@ -2,8 +2,10 @@
 
 最小改动接入现有工作流：
 
-- 全局只多两项配置：``quick_import_enabled`` / ``quick_import_inbox_path``；
-- 分发目标由监控任务自己声明（``monitor_tasks[].quick_import_target`` = movie / tv）；
+- 接收夹就是 ``monitor_tasks`` 里的一个 ``task_type='inbox'`` 任务，和扫描任务共用同一套
+  任务 / 路径 / webhook 口径（旧版的 ``quick_import_enabled`` / ``quick_import_inbox_path``
+  会在 ``normalize_config`` 里迁移成这个任务）；
+- 分发目标写在该任务的 ``distribute_targets``（movie / tv → 扫描任务名）；
 - 整理选项一律取自目标监控任务的 ``auto_scrape_options``，避免两边规则不一致来回改；
 - 搬运带 ``scraper-job:`` 来源标记，复用监控侧既有守卫——搬到监控目录后只生成 STRM，
   不会再被目标监控任务自动刮削一遍，同一条目一生只整理一次。
@@ -29,6 +31,11 @@ QUICK_IMPORT_PROVIDER = "115"
 QUICK_IMPORT_TARGET_KEYS = ("movie", "tv")
 QUICK_IMPORT_TARGET_LABELS = {"movie": "电影", "tv": "电视剧"}
 QUICK_IMPORT_SOURCE_ACTION_PREFIX = "quick-import"
+# 同名文件夹合并的最大层级：媒体文件夹只有 片名 (年份)/ 或 片名 (年份)/Season 01/ 两级，
+# 留一点余量防止异常结构把合并请求打成无限递归。
+QUICK_IMPORT_MERGE_MAX_DEPTH = 3
+# 合并前只列一次目标文件夹：一页最多 1000 条，剧集/电影文件夹远小于这个量级。
+QUICK_IMPORT_MERGE_LIST_LIMIT = 1000
 QUICK_IMPORT_JOB_WAIT_SECONDS = max(
     30,
     int(os.environ.get("QUICK_IMPORT_JOB_WAIT_SECONDS", 900) or 900),
@@ -43,7 +50,9 @@ _QUICK_IMPORT_RUN_LOCK = threading.Lock()
 
 
 def _inbox_remote_path(cfg: Dict[str, Any]) -> str:
-    return normalize_remote_path(str(cfg.get("quick_import_inbox_path", "") or "").strip())
+    task = get_inbox_task(cfg)
+    remote = normalize_remote_path(str(task.get("scan_path", "") or "").strip())
+    return "" if remote == "/" else remote
 
 
 def _inbox_rel_path(cfg: Dict[str, Any]) -> str:
@@ -77,13 +86,22 @@ def _task_rel_path(cfg: Dict[str, Any], scan_path: Any) -> str:
 
 
 def build_quick_import_config(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """接收夹配置：接收夹本身是 ``monitor_tasks`` 里的一个 inbox 任务，分发目标写在它的
+    ``distribute_targets`` 上，和扫描任务共用同一套任务/路径/webhook 口径。"""
     active_cfg = cfg if isinstance(cfg, dict) else get_config()
+    inbox = get_inbox_task(active_cfg)
     targets: Dict[str, Dict[str, Any]] = {key: {} for key in QUICK_IMPORT_TARGET_KEYS}
-    for task in active_cfg.get("monitor_tasks", []) or []:
-        if not isinstance(task, dict):
-            continue
-        key = str(task.get("quick_import_target", "") or "").strip().lower()
-        if key not in QUICK_IMPORT_TARGET_KEYS or targets[key]:
+    tasks_by_name = {
+        str(task.get("name", "") or "").strip(): task
+        for task in active_cfg.get("monitor_tasks", []) or []
+        if isinstance(task, dict) and str(task.get("name", "") or "").strip()
+    }
+    distribute_targets = (
+        inbox.get("distribute_targets") if isinstance(inbox.get("distribute_targets"), dict) else {}
+    )
+    for key in QUICK_IMPORT_TARGET_KEYS:
+        task = tasks_by_name.get(str(distribute_targets.get(key, "") or "").strip())
+        if not task:
             continue
         scan_path = normalize_remote_path(str(task.get("scan_path", "") or "").strip())
         rel_path = _task_rel_path(active_cfg, scan_path)
@@ -98,7 +116,8 @@ def build_quick_import_config(cfg: Optional[Dict[str, Any]] = None) -> Dict[str,
             ),
         }
     return {
-        "enabled": normalize_bool(active_cfg.get("quick_import_enabled", False), default=False),
+        "task_name": str(inbox.get("name", "") or "").strip(),
+        "enabled": bool(inbox.get("enabled")) if inbox else False,
         "inbox_path": _inbox_remote_path(active_cfg),
         "inbox_rel": _inbox_rel_path(active_cfg),
         "targets": targets,
@@ -122,17 +141,21 @@ def is_quick_import_savepath(cfg: Dict[str, Any], savepath: Any) -> bool:
 def validate_quick_import_config(cfg: Optional[Dict[str, Any]] = None) -> Optional[str]:
     active_cfg = cfg if isinstance(cfg, dict) else get_config()
     conf = build_quick_import_config(active_cfg)
+    if not conf["task_name"]:
+        return "还没有接收夹任务，请先新增一个「接收夹」任务"
     if not conf["enabled"]:
-        return "快捷导入未启用"
+        return f"接收夹任务「{conf['task_name']}」未启用"
     if not conf["inbox_path"]:
-        return "请先选择接收文件夹"
+        return f"请先给接收夹任务「{conf['task_name']}」选择文件夹"
     inbox_rel = str(conf.get("inbox_rel", "") or "").strip()
     if not inbox_rel:
         return "接收文件夹必须位于 115 网盘前缀下"
     if not any(conf["targets"].get(key) for key in QUICK_IMPORT_TARGET_KEYS):
-        return "还没有监控任务标注为「电影 / 电视剧」快捷导入目标"
+        return "还没有在接收夹任务里指定「电影 / 电视剧」分发目标"
     for task in active_cfg.get("monitor_tasks", []) or []:
         if not isinstance(task, dict):
+            continue
+        if normalize_task_type(task.get("task_type")) != MONITOR_TASK_TYPE_SCAN:
             continue
         scan_rel = _task_rel_path(active_cfg, task.get("scan_path", ""))
         if not scan_rel:
@@ -263,25 +286,79 @@ def list_quick_import_runs(limit: int = 20) -> List[Dict[str, Any]]:
     return retry_sqlite_locked(load)
 
 
+def list_inbox_recent_jobs(inbox_rel: str, limit: int = 3) -> List[Dict[str, Any]]:
+    """接收夹里最近落进来的离线导入任务（磁力 / 分享导入 finish 前都算“最近接收”）。"""
+    prefix = normalize_relative_path(str(inbox_rel or "").strip())
+    if not prefix:
+        return []
+    page_limit = max(1, min(int(limit or 3), 20))
+    ensure_db()
+
+    def load() -> List[Dict[str, Any]]:
+        with db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM resource_jobs
+                WHERE savepath = ? OR savepath LIKE ?
+                ORDER BY id DESC LIMIT ?
+                """,
+                (prefix, f"{prefix}/%", page_limit),
+            )
+            return [serialize_resource_job_row(row) for row in cursor.fetchall()]
+
+    return retry_sqlite_locked(load)
+
+
+def count_inbox_recent_jobs(inbox_rel: str, hours: int = 24) -> int:
+    prefix = normalize_relative_path(str(inbox_rel or "").strip())
+    if not prefix:
+        return 0
+    window_hours = max(1, min(int(hours or 24), 24 * 30))
+    cutoff = (datetime.now() - timedelta(hours=window_hours)).isoformat(timespec="seconds")
+    ensure_db()
+
+    def load() -> int:
+        with db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT COUNT(*) FROM resource_jobs
+                WHERE (savepath = ? OR savepath LIKE ?) AND created_at >= ?
+                """,
+                (prefix, f"{prefix}/%", cutoff),
+            )
+            row = cursor.fetchone()
+            return int(row[0] or 0) if row else 0
+
+    return int(retry_sqlite_locked(load) or 0)
+
+
 def get_quick_import_status() -> Dict[str, Any]:
     cfg = get_config()
+    conf = build_quick_import_config(cfg)
+    inbox_rel = str(conf.get("inbox_rel", "") or "").strip()
     runs = list_quick_import_runs(1)
     latest = runs[0] if runs else {}
     detail = safe_json_loads(latest.get("detail_json", "{}"), {}) if latest else {}
     return {
-        "enabled": build_quick_import_config(cfg)["enabled"],
-        "inbox_path": str(cfg.get("quick_import_inbox_path", "") or ""),
+        "task_name": conf["task_name"],
+        "task_path": conf["inbox_path"],
+        "enabled": conf["enabled"],
+        "inbox_path": conf["inbox_path"],
         "config_error": validate_quick_import_config(cfg) or "",
         "targets": {
             key: {
-                "task_name": (build_quick_import_config(cfg)["targets"].get(key) or {}).get("task_name", ""),
-                "scan_path": (build_quick_import_config(cfg)["targets"].get(key) or {}).get("scan_path", ""),
+                "task_name": (conf["targets"].get(key) or {}).get("task_name", ""),
+                "scan_path": (conf["targets"].get(key) or {}).get("scan_path", ""),
             }
             for key in QUICK_IMPORT_TARGET_KEYS
         },
         "running": _QUICK_IMPORT_RUN_LOCK.locked(),
         "latest": latest,
         "latest_detail": detail,
+        "recent_jobs": list_inbox_recent_jobs(inbox_rel, 3),
+        "recent_job_count_24h": count_inbox_recent_jobs(inbox_rel, 24),
     }
 
 
@@ -299,6 +376,223 @@ def _left_reason_from_result(result: Dict[str, Any]) -> str:
     if status == "manual":
         return "未匹配到 TMDB 条目"
     return "未达到自动整理条件"
+
+
+def _quick_import_source_action(job_id: int) -> str:
+    return f"scraper-job:{max(0, int(job_id or 0))}:{QUICK_IMPORT_SOURCE_ACTION_PREFIX}"
+
+
+def _folder_children_payload(folder_id: str, folder_rel: str) -> List[Dict[str, Any]]:
+    """列出整理结果文件夹的直接子项，并补上完整挂载路径（监控同步事件要用）。"""
+    payload = scraper_service.list_scraper_entries(QUICK_IMPORT_PROVIDER, folder_id, True)
+    children = payload.get("entries") if isinstance(payload, dict) else []
+    result: List[Dict[str, Any]] = []
+    for child in children or []:
+        if not isinstance(child, dict):
+            continue
+        name = str(child.get("name", "") or "").strip()
+        entry_id = str(child.get("id", "") or "").strip()
+        if not name or not entry_id:
+            continue
+        item = dict(child)
+        item["parent_id"] = folder_id
+        item["parent_path"] = folder_rel
+        item["path"] = normalize_relative_path(join_relative_path(folder_rel, name))
+        result.append(item)
+    return result
+
+
+def _folder_entry_names(folder_id: str, cache: Dict[str, Set[str]]) -> Set[str]:
+    """目标文件夹里已有的条目名（一个文件夹只列一次，合并时用来挡同名文件）。"""
+    normalized_id = str(folder_id or "").strip()
+    if not normalized_id:
+        return set()
+    if normalized_id not in cache:
+        payload = scraper_service.list_scraper_entries(
+            QUICK_IMPORT_PROVIDER,
+            normalized_id,
+            True,
+            limit=QUICK_IMPORT_MERGE_LIST_LIMIT,
+        )
+        entries = payload.get("entries") if isinstance(payload, dict) else []
+        cache[normalized_id] = {
+            str(entry.get("name", "") or "").strip()
+            for entry in (entries or [])
+            if isinstance(entry, dict) and str(entry.get("name", "") or "").strip()
+        }
+    return cache[normalized_id]
+
+
+def _move_entries_into_folder(
+    entries: List[Dict[str, Any]],
+    *,
+    source_cid: str,
+    target_cid: str,
+    target_rel: str,
+    job_id: int,
+) -> None:
+    entry_ids = [str(item.get("id", "") or "").strip() for item in entries if str(item.get("id", "") or "").strip()]
+    if not entry_ids:
+        return
+    scraper_service.move_scraper_entries(
+        QUICK_IMPORT_PROVIDER,
+        entry_ids,
+        target_cid,
+        source_cid=source_cid,
+        entries=entries,
+        target_parent_path=target_rel,
+        source_action=_quick_import_source_action(job_id),
+    )
+
+
+def _merge_organized_folder_into_existing(
+    source_folder: Dict[str, Any],
+    source_rel: str,
+    target_folder: Dict[str, Any],
+    target_rel: str,
+    *,
+    job_id: int,
+    name_cache: Dict[str, Set[str]],
+    depth: int = 0,
+) -> Dict[str, Any]:
+    """把整理结果文件夹的内容并入目标监控目录里已有的同名文件夹。
+
+    媒体文件夹层级很浅（``片名 (年份)/`` 或 ``片名 (年份)/Season 01/``），按同层递归合并：
+    子文件夹在目标里已有同名目录就继续并入那个目录，否则整体搬过去；文件直接搬进目标文件夹。
+    目标里已经存在同名文件时跳过并记录，避免 115 自动改出 ``xxx(1).mkv`` 这类重复文件。
+    """
+    if depth > QUICK_IMPORT_MERGE_MAX_DEPTH:
+        raise RuntimeError("目标文件夹层级过深，已停止合并")
+    source_id = str(source_folder.get("id", "") or "").strip()
+    target_id = str(target_folder.get("id", "") or "").strip()
+    if not source_id or not target_id:
+        raise RuntimeError("合并文件夹缺少目录 ID")
+    moved_count = 0
+    skipped: List[str] = []
+    pending_moves: List[Dict[str, Any]] = []
+    target_names = _folder_entry_names(target_id, name_cache)
+    for child in _folder_children_payload(source_id, source_rel):
+        child_id = str(child.get("id", "") or "").strip()
+        child_name = str(child.get("name", "") or "").strip()
+        if bool(child.get("is_dir")):
+            matched = scraper_service.find_scraper_media_folder(
+                QUICK_IMPORT_PROVIDER,
+                target_id,
+                child_name,
+            )
+            matched_id = str((matched or {}).get("id", "") or "").strip()
+            if matched_id and matched_id != child_id:
+                matched_name = str((matched or {}).get("name", "") or child_name).strip() or child_name
+                nested = _merge_organized_folder_into_existing(
+                    child,
+                    str(child.get("path", "") or ""),
+                    matched,
+                    normalize_relative_path(join_relative_path(target_rel, matched_name)),
+                    job_id=job_id,
+                    name_cache=name_cache,
+                    depth=depth + 1,
+                )
+                moved_count += int(nested.get("moved_count", 0) or 0)
+                skipped.extend(nested.get("skipped") or [])
+                if not nested.get("skipped"):
+                    scraper_service.delete_scraper_entries(
+                        QUICK_IMPORT_PROVIDER,
+                        [child_id],
+                        parent_id=source_id,
+                        entries=[child],
+                    )
+                continue
+        if child_name in target_names:
+            skipped.append(child_name)
+            continue
+        target_names.add(child_name)
+        pending_moves.append(child)
+    if pending_moves:
+        _move_entries_into_folder(
+            pending_moves,
+            source_cid=source_id,
+            target_cid=target_id,
+            target_rel=target_rel,
+            job_id=job_id,
+        )
+        moved_count += len(pending_moves)
+    return {"moved_count": moved_count, "skipped": skipped}
+
+
+def _dispatch_organized_entry(
+    entry: Dict[str, Any],
+    *,
+    source_cid: str,
+    source_rel: str,
+    target_cid: str,
+    target_rel: str,
+    job_id: int,
+    name_cache: Optional[Dict[str, Set[str]]] = None,
+) -> Dict[str, Any]:
+    """把整理好的条目分发到监控目录：目标已有同名文件夹时并进去。
+
+    以前是无条件把接收夹里整理出来的"片名 (年份)"文件夹整个搬过去，目标目录里已经存在
+    同一部剧的文件夹时，115 会把新搬来的文件夹自动改名成"片名 (年份)(1)"，于是一次导入
+    多个单集文件就散成好几个文件夹。现在先找目标目录里的现成文件夹，找到就把内容并进去。
+    """
+    entry_id = str(entry.get("id", "") or "").strip()
+    entry_name = str(entry.get("name", "") or "").strip()
+    is_dir = bool(entry.get("is_dir"))
+    if not entry_id or not entry_name:
+        raise RuntimeError("整理后的条目缺少 ID 或名称")
+    cache = name_cache if isinstance(name_cache, dict) else {}
+    lookup_name = entry_name if is_dir else os.path.splitext(entry_name)[0]
+    existing = scraper_service.find_scraper_media_folder(QUICK_IMPORT_PROVIDER, target_cid, lookup_name)
+    existing_id = str((existing or {}).get("id", "") or "").strip()
+    if not existing_id or existing_id == entry_id:
+        _move_entries_into_folder(
+            [entry],
+            source_cid=source_cid,
+            target_cid=target_cid,
+            target_rel=target_rel,
+            job_id=job_id,
+        )
+        return {"merged": False, "skipped": []}
+
+    existing_name = str((existing or {}).get("name", "") or entry_name).strip() or entry_name
+    merged_target_rel = normalize_relative_path(join_relative_path(target_rel, existing_name))
+    if not is_dir:
+        # 散文件（例如已经标准命名的电影）：直接放进已有文件夹，而不是再复制一份到目录里。
+        if entry_name in _folder_entry_names(existing_id, cache):
+            return {"merged": False, "skipped": [entry_name], "target_folder": existing_name}
+        _move_entries_into_folder(
+            [entry],
+            source_cid=source_cid,
+            target_cid=existing_id,
+            target_rel=merged_target_rel,
+            job_id=job_id,
+        )
+        return {"merged": True, "skipped": [], "target_folder": existing_name, "moved_count": 1}
+
+    outcome = _merge_organized_folder_into_existing(
+        entry,
+        normalize_relative_path(str(entry.get("path", "") or ""))
+        or normalize_relative_path(join_relative_path(source_rel, entry_name)),
+        existing,
+        merged_target_rel,
+        job_id=job_id,
+        name_cache=cache,
+    )
+    skipped = list(outcome.get("skipped") or [])
+    if not skipped:
+        # 内容已经全部并进目标文件夹，接收夹里那个空文件夹要清掉，否则会一直躺在接收夹里。
+        scraper_service.delete_scraper_entries(
+            QUICK_IMPORT_PROVIDER,
+            [entry_id],
+            parent_id=source_cid,
+            entries=[entry],
+        )
+    return {
+        "merged": True,
+        "skipped": skipped,
+        "target_folder": existing_name,
+        "moved_count": int(outcome.get("moved_count", 0) or 0),
+    }
 
 
 def run_quick_import(trigger: str = "manual", *, sub_path: str = "") -> Dict[str, Any]:
@@ -321,8 +615,40 @@ def run_quick_import(trigger: str = "manual", *, sub_path: str = "") -> Dict[str
         )
         started_at = now_text()
         run_id = _insert_quick_import_run(trigger, conf["inbox_path"], started_at)
+        task_label = str(conf.get("task_name") or "接收夹").strip() or "接收夹"
         moved: List[Dict[str, Any]] = []
         left: List[Dict[str, Any]] = []
+
+        def write_inbox_divider(kind: str, extra: str) -> None:
+            # 和扫描任务用同一套分隔行，这样接收夹整理在「监控日志」里也是独立的一个任务分段。
+            try:
+                write_monitor_log_sync(
+                    f"━━━━━━━━━━【{kind} | {task_label} | {extra}】━━━━━━━━━━",
+                    "task-divider",
+                )
+            except Exception:
+                pass
+
+        def finish_run(
+            status: str,
+            moved_count: int,
+            left_count: int,
+            summary: str,
+            detail: Dict[str, Any],
+        ) -> None:
+            """收尾时同时写运行记录和监控日志——接收夹日志要和扫描任务在同一个列表里。"""
+            _finish_quick_import_run(run_id, status, moved_count, left_count, summary, detail)
+            level = "error" if status == "failed" else ("success" if moved_count else "info")
+            try:
+                write_monitor_log_sync(f"{task_label} · {summary}", level)
+            except Exception:
+                # 日志落盘失败（例如非容器环境没有 /app/logs）不能影响整理结果。
+                pass
+            write_inbox_divider("任务结束", "完成" if status == "completed" else "失败")
+
+        # 同一次导入里多个条目可能进同一个目标文件夹，文件夹列表列一次够用（避免重复请求）。
+        dispatch_name_cache: Dict[str, Set[str]] = {}
+        write_inbox_divider("任务开始", format_monitor_trigger(trigger))
         try:
             base_cid = resolve_scraper_dest_folder_id(QUICK_IMPORT_PROVIDER, base_rel)
             identified = identify_scraper_batch_entries(
@@ -346,7 +672,7 @@ def run_quick_import(trigger: str = "manual", *, sub_path: str = "") -> Dict[str
             }
             if not items:
                 summary = "接收夹没有可整理的内容"
-                _finish_quick_import_run(run_id, "completed", 0, 0, summary, {"moved": [], "left": []})
+                finish_run("completed", 0, 0, summary, {"moved": [], "left": []})
                 return {"ok": True, "moved": [], "left": [], "summary": summary, "run_id": run_id}
 
             for index in sorted(picked):
@@ -376,6 +702,36 @@ def run_quick_import(trigger: str = "manual", *, sub_path: str = "") -> Dict[str
                 # 接收夹里常常是"散文件"（没有独立文件夹），必须强制整理进 片名 (年份)/ 再搬运，
                 # 否则只会原地改名、搬过去还是散文件。
                 options["force_media_folder"] = True
+                try:
+                    target_cid = resolve_scraper_dest_folder_id(
+                        QUICK_IMPORT_PROVIDER,
+                        target["scan_rel"],
+                    )
+                except Exception as exc:
+                    left.append(
+                        {
+                            "name": str(item.get("name", "") or ""),
+                            "reason": f"目标监控目录不可用：{str(exc)[:120]}",
+                        }
+                    )
+                    continue
+                # 接收夹里的文件夹只是中转：目标监控目录里已经有这部剧/这部电影的文件夹时，
+                # 直接把内容并进去即可，不必先把接收夹文件夹改成规范名——同批多个同名文件夹
+                # 会互相撞成"当前目录中已有同名文件夹"，最后一个只能留在接收夹里。
+                source_entry = item.get("entry") if isinstance(item.get("entry"), dict) else {}
+                source_entry_name = str(source_entry.get("name", "") or "").strip()
+                if bool(source_entry.get("is_dir")) and source_entry_name:
+                    try:
+                        existing_target_folder = scraper_service.find_scraper_media_folder(
+                            QUICK_IMPORT_PROVIDER,
+                            target_cid,
+                            source_entry_name,
+                        )
+                    except Exception:
+                        # 查一下目标目录只是"能不能直接合并"的优化，失败就按老流程（改规范名再搬）走。
+                        existing_target_folder = {}
+                    if existing_target_folder:
+                        options["rename_selected_folders"] = False
                 plan = build_scraper_plan_for_batch(
                     QUICK_IMPORT_PROVIDER,
                     [item],
@@ -427,25 +783,37 @@ def run_quick_import(trigger: str = "manual", *, sub_path: str = "") -> Dict[str
                         }
                     )
                     continue
+                # 条目本身在接收夹里，补上接收夹下的完整路径：搬运/合并的监控同步事件要靠它算新旧路径。
+                entry_name = str(entry.get("name", "") or "").strip()
+                entry["parent_id"] = str(entry.get("parent_id", "") or base_cid).strip() or base_cid
+                entry["parent_path"] = base_rel
+                entry["path"] = normalize_relative_path(join_relative_path(base_rel, entry_name))
                 try:
-                    target_cid = resolve_scraper_dest_folder_id(
-                        QUICK_IMPORT_PROVIDER,
-                        target["scan_rel"],
-                    )
-                    scraper_service.move_scraper_entries(
-                        QUICK_IMPORT_PROVIDER,
-                        [entry_id],
-                        target_cid,
+                    dispatch = _dispatch_organized_entry(
+                        entry,
                         source_cid=base_cid,
-                        entries=[entry],
-                        target_parent_path=target["scan_rel"],
-                        source_action=f"scraper-job:{job_id}:{QUICK_IMPORT_SOURCE_ACTION_PREFIX}",
+                        source_rel=base_rel,
+                        target_cid=target_cid,
+                        target_rel=target["scan_rel"],
+                        job_id=job_id,
+                        name_cache=dispatch_name_cache,
                     )
                 except Exception as exc:
                     left.append(
                         {
                             "name": str(item.get("name", "") or ""),
                             "reason": f"搬运失败：{str(exc)[:120]}",
+                        }
+                    )
+                    continue
+                if dispatch.get("skipped"):
+                    left.append(
+                        {
+                            "name": str(item.get("name", "") or ""),
+                            "reason": (
+                                f"目标文件夹「{dispatch.get('target_folder', '')}」中已存在同名文件："
+                                f"{'、'.join(str(value) for value in dispatch.get('skipped') or [])[:120]}"
+                            ),
                         }
                     )
                     continue
@@ -470,8 +838,7 @@ def run_quick_import(trigger: str = "manual", *, sub_path: str = "") -> Dict[str
                 )
 
             summary = f"已整理分发 {len(moved)} 项，留在接收夹 {len(left)} 项"
-            _finish_quick_import_run(
-                run_id,
+            finish_run(
                 "completed",
                 len(moved),
                 len(left),
@@ -486,8 +853,7 @@ def run_quick_import(trigger: str = "manual", *, sub_path: str = "") -> Dict[str
                 "summary": summary,
             }
         except Exception as exc:
-            _finish_quick_import_run(
-                run_id,
+            finish_run(
                 "failed",
                 len(moved),
                 len(left),

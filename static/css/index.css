@@ -4389,6 +4389,66 @@
         }
         .tg-proxy-status-meta { margin-top: 0.18rem; }
         .tg-proxy-status-note { margin-top: 0.14rem; }
+        /* 接收夹快捷导入：左侧配置、右侧最近一次结果；结果面板限高，长列表内部滚动 */
+        .quick-import-result {
+            max-height: 15rem;
+            overflow-y: auto;
+        }
+        .quick-import-result .tg-proxy-status-note + .tg-proxy-status-note { margin-top: 0.4rem; }
+        .quick-import-result--enter {
+            animation: quickImportResultIn 0.22s ease-out;
+        }
+        @keyframes quickImportResultIn {
+            from { opacity: 0; transform: translateY(3px); }
+            to { opacity: 1; transform: none; }
+        }
+        .quick-import-targets {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.4rem;
+            min-height: 2rem;
+            margin-top: 0.35rem;
+        }
+        .quick-import-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            padding: 0.22rem 0.55rem;
+            border-radius: 0.65rem;
+            border: 1px solid rgba(71, 85, 105, 0.42);
+            background: rgba(15, 23, 42, 0.55);
+            color: #cbd5e1;
+            font-size: 0.72rem;
+            line-height: 1.5;
+            transition: border-color 0.18s ease, background 0.18s ease;
+        }
+        .quick-import-chip:hover {
+            border-color: rgba(56, 189, 248, 0.45);
+            background: rgba(8, 47, 73, 0.5);
+        }
+        .quick-import-chip b {
+            font-weight: 700;
+            color: #e2e8f0;
+        }
+        .quick-import-chip--muted {
+            border-style: dashed;
+            color: var(--muted);
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .quick-import-result--enter { animation: none; }
+            .quick-import-chip { transition: none; }
+        }
+        html.theme-day .quick-import-chip {
+            border-color: rgba(203, 213, 225, 0.92);
+            background: rgba(248, 250, 252, 0.96);
+            color: #475569;
+        }
+        html.theme-day .quick-import-chip:hover {
+            border-color: rgba(14, 165, 233, 0.5);
+            background: rgba(240, 249, 255, 0.98);
+        }
+        html.theme-day .quick-import-chip b { color: #1e293b; }
         .resource-job-trigger {
             display: inline-flex;
             align-items: center;
@@ -9391,7 +9451,17 @@
         }
         html.theme-day .bg-slate-700,
         html.theme-day .bg-slate-700\/40,
-        html.theme-day .bg-slate-600 { background: var(--surface-soft) !important; }
+        html.theme-day .bg-slate-600 {
+            /* 这些深灰底色带上来的文字原本都是 text-white / text-slate-200，
+               日间翻转成浅底时必须同时给深色文字，否则会出现"浅底白字"看不见的情况。 */
+            background: var(--surface-soft) !important;
+            color: #334155 !important;
+        }
+        html.theme-day .hover\:bg-slate-600:hover,
+        html.theme-day .hover\:bg-slate-700:hover {
+            background: #cbd5e1 !important;
+            color: #1e293b !important;
+        }
         html.theme-day .resource-browser-hint-card {
             background: linear-gradient(180deg, rgba(248, 250, 252, 0.98), rgba(239, 246, 255, 0.94)) !important;
             border-color: rgba(148, 163, 184, 0.58) !important;

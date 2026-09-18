@@ -69,6 +69,11 @@ async def save_settings_endpoint(request: Request) -> Dict[str, Any]:
     merged_cfg["monitor_tasks"] = [
         normalize_task(task) for task in monitor_tasks_payload
     ]
+    # 和 /monitor/save 同一套收口：任务类型不可改，漏传内置接收夹时沿用当前配置。
+    merged_cfg["monitor_tasks"] = finalize_monitor_tasks_for_save(
+        current_cfg.get("monitor_tasks", []) or [],
+        merged_cfg["monitor_tasks"],
+    )
     merged_cfg["subscription_tasks"] = [
         normalize_subscription_task(task)
         for task in subscription_tasks_payload

@@ -299,6 +299,7 @@
                 'tmdb_api_key',
                 'ai_match_api_key',
                 'pansou_password',
+                'webhook_secret',
             ];
             const meta = window.providerMeta || [];
             meta.forEach(p => {
@@ -674,12 +675,46 @@
             focusMainTab('resource', 'auto');
         }
 
+        // 弹窗层级：模板里的 z-[N] 只当基线用，真正生效的层级在每次打开时按「当前可见弹窗的基线 + 1」
+        // 重新算。历史上各处 z 值是手写的，二级弹窗（「选择文件夹」这类）只要被 z 值更高的父弹窗打开
+        // 就会被盖住——统一在这里抬升，避免每个调用点各自记层级。
+        const MODAL_LAYER_FLOOR = 40;
+        const MODAL_LAYER_CEILING = 94; // 95 是盖住所有弹窗的应用对话框（showAppDialog）
+
+        function readModalLayerBase(modal) {
+            const cached = Number.parseInt(modal?.dataset?.modalLayer || '', 10);
+            if (Number.isFinite(cached) && cached > 0) return cached;
+            const computed = Number.parseInt(window.getComputedStyle(modal).zIndex || '', 10);
+            return Number.isFinite(computed) && computed > 0 ? computed : MODAL_LAYER_FLOOR;
+        }
+
+        function isModalOpen(modal) {
+            if (!modal || modal.classList.contains('hidden')) return false;
+            const style = window.getComputedStyle(modal);
+            return style.display !== 'none' && style.visibility !== 'hidden';
+        }
+
+        function stackModalLayer(modal) {
+            if (!modal) return;
+            const base = readModalLayerBase(modal);
+            // 登记基线：只有经过这里的弹窗才参与层序，其他直接改 class 的浮层（如帮助弹窗）维持原样。
+            modal.dataset.modalLayer = String(base);
+            let topBase = 0;
+            document.querySelectorAll('div[id$="-modal"]').forEach((candidate) => {
+                if (candidate === modal || !candidate.dataset.modalLayer || !isModalOpen(candidate)) return;
+                topBase = Math.max(topBase, readModalLayerBase(candidate));
+            });
+            const layer = Math.min(Math.max(base, topBase + 1, MODAL_LAYER_FLOOR), MODAL_LAYER_CEILING);
+            modal.style.zIndex = String(layer);
+        }
+
         function showLockedModal(modalId) {
             const modal = document.getElementById(modalId);
             if (!modal) return;
             const isHidden = modal.classList.contains('hidden');
             modal.classList.remove('hidden');
             if (isHidden) lockPageScroll();
+            stackModalLayer(modal);
         }
 
         function hideLockedModal(modalId) {
@@ -1642,6 +1677,7 @@
                     afterApply: (nextState) => {
                         resourceState.monitor_tasks = nextState.tasks || resourceState.monitor_tasks || [];
                         syncResourceMonitorTaskOptions(document.getElementById('resource_job_savepath')?.value || '');
+                        maybeRefreshInboxTaskStatus();
                     },
                 });
                 return;
@@ -1688,6 +1724,7 @@
             renderMonitorLogs();
             resourceState.monitor_tasks = monitorState.tasks || resourceState.monitor_tasks || [];
             syncResourceMonitorTaskOptions(document.getElementById('resource_job_savepath')?.value || '');
+            maybeRefreshInboxTaskStatus();
         }
 
         function startStatusFallbackPolling() {
@@ -3323,48 +3360,94 @@
             showToast('用量模块加载失败，请刷新页面后重试', { tone: 'error', duration: 3200, placement: 'top-center' });
         }
 
-        let quickImportStatusCache = {};
+        // 接收夹任务的状态缓存：任务卡片和编辑弹窗共用一份最近动态。
+        let inboxTaskStatusCache = {};
+        let inboxStatusFetchedAt = 0;
+        const INBOX_STATUS_REFRESH_INTERVAL_MS = 30000;
 
-        function renderQuickImportStatus(status = {}) {
-            const statusEl = document.getElementById('quick-import-status');
+        function monitorTaskWebhookUrl(taskName = '') {
+            const origin = String(window.location?.origin || '').replace(/\/+$/, '');
+            return `${origin}/webhook/${String(taskName || '').trim()}`;
+        }
+
+        function currentMonitorFormTaskName() {
+            return String(document.getElementById('monitor_name')?.value || '').trim();
+        }
+
+        function renderMonitorWebhookUrl() {
+            const input = document.getElementById('monitor_inbox_webhook_url');
+            if (!input) return;
+            const name = currentMonitorFormTaskName();
+            input.value = name ? monitorTaskWebhookUrl(name) : '填写任务名后生成';
+        }
+
+        async function copyMonitorWebhookUrl() {
+            const name = currentMonitorFormTaskName();
+            if (!name) {
+                showToast('请先填写任务名', { tone: 'warn', duration: 2600, placement: 'top-center' });
+                return;
+            }
+            const url = monitorTaskWebhookUrl(name);
+            try {
+                if (!navigator.clipboard?.writeText) throw new Error('当前浏览器不支持剪贴板接口');
+                await navigator.clipboard.writeText(url);
+                showToast('已复制 webhook 地址，粘贴到油猴脚本的“请求地址”即可', {
+                    tone: 'success',
+                    duration: 2600,
+                    placement: 'top-center',
+                });
+            } catch (e) {
+                if (typeof showAppPrompt === 'function') {
+                    showAppPrompt('复制失败，请手动复制 webhook 地址：', url);
+                    return;
+                }
+                showToast(`复制失败：${(e && e.message) || e}`, { tone: 'error', duration: 3200, placement: 'top-center' });
+            }
+        }
+
+        function formatInboxJobStatus(status = '') {
+            const key = String(status || '').trim().toLowerCase();
+            if (key === 'completed') return { icon: '✓', label: '已完成' };
+            if (key === 'failed') return { icon: '✗', label: '失败' };
+            if (key === 'pending' || key === 'running' || key === 'submitted') return { icon: '⏳', label: '下载中' };
+            return { icon: '•', label: key || '未知' };
+        }
+
+        function renderInboxTaskStatus(status = {}) {
+            const statusEl = document.getElementById('inbox-task-status');
             if (!statusEl) return;
             const data = status && typeof status === 'object' ? status : {};
-            const targetsEl = document.getElementById('quick-import-targets');
-            const enabledEl = document.getElementById('quick_import_enabled');
-            if (enabledEl && typeof data.enabled === 'boolean') enabledEl.checked = !!data.enabled;
-            const inboxEl = document.getElementById('quick_import_inbox_path');
-            if (inboxEl && !String(inboxEl.value || '').trim() && data.inbox_path) {
-                inboxEl.value = String(data.inbox_path || '');
-            }
-            const targets = data.targets && typeof data.targets === 'object' ? data.targets : {};
-            if (targetsEl) {
-                const movie = String((targets.movie || {}).task_name || '').trim();
-                const tv = String((targets.tv || {}).task_name || '').trim();
-                targetsEl.innerHTML = `电影 → ${movie ? escapeHtml(movie) : '未指定'} · 电视剧 → ${tv ? escapeHtml(tv) : '未指定'}`;
-            }
-            statusEl.className = 'mt-3 rounded-xl border px-4 py-3 text-sm leading-6';
+            const showStatus = (modifier, html) => {
+                statusEl.className = modifier
+                    ? `tg-proxy-status quick-import-result ${modifier}`
+                    : 'tg-proxy-status quick-import-result';
+                statusEl.innerHTML = html;
+                statusEl.classList.remove('quick-import-result--enter');
+                void statusEl.offsetWidth;
+                statusEl.classList.add('quick-import-result--enter');
+            };
             if (data.running) {
-                statusEl.className += ' border-sky-500/30 bg-sky-500/10 text-sky-200';
-                statusEl.innerHTML = '<div class="font-bold">正在整理接收夹...</div>';
+                showStatus(
+                    'tg-proxy-status--loading',
+                    '<div class="tg-proxy-status-title">正在整理接收夹</div>'
+                    + '<div class="tg-proxy-status-meta">正在识别、重命名并按类型分发，请稍候...</div>',
+                );
                 return;
             }
-            if (!data.enabled) {
-                statusEl.className += ' border-slate-700 bg-slate-900/60 text-slate-400';
-                statusEl.innerHTML = '<div>快捷导入未启用。启用并选好接收文件夹后，导入完成的文件会自动识别、整理并按类型分发。</div>';
-                return;
-            }
-            const configError = String(data.config_error || '').trim();
-            if (configError) {
-                statusEl.className += ' border-amber-500/30 bg-amber-500/10 text-amber-200';
-                statusEl.innerHTML = `<div class="font-bold">配置未就绪</div><div>${escapeHtml(configError)}</div>`;
-                return;
-            }
+
+            const recentJobs = Array.isArray(data.recent_jobs) ? data.recent_jobs : [];
+            const count24h = Math.max(0, Number(data.recent_job_count_24h || 0) || 0);
+            const recentHtml = recentJobs.length
+                ? recentJobs.slice(0, 3).map((job) => {
+                    const info = formatInboxJobStatus(job?.status);
+                    const title = String(job?.title || job?.savepath || '--').trim();
+                    const when = String(job?.updated_at || job?.created_at || '').trim();
+                    return `<div class="tg-proxy-status-note">${escapeHtml(info.icon)} ${escapeHtml(title)}`
+                        + ` · ${escapeHtml(info.label)}${when ? ` · ${escapeHtml(when)}` : ''}</div>`;
+                }).join('')
+                : '<div class="tg-proxy-status-note">最近 24 小时没有新的接收记录。</div>';
+
             const latest = data.latest && typeof data.latest === 'object' ? data.latest : {};
-            if (!latest.id) {
-                statusEl.className += ' border-slate-700 bg-slate-900/60 text-slate-400';
-                statusEl.innerHTML = '<div>还没有执行记录。</div>';
-                return;
-            }
             const detail = data.latest_detail && typeof data.latest_detail === 'object' ? data.latest_detail : {};
             const moved = Array.isArray(detail.moved) ? detail.moved : [];
             const left = Array.isArray(detail.left) ? detail.left : [];
@@ -3374,83 +3457,87 @@
             const leftHtml = left.length
                 ? left.slice(0, 8).map((item) => `<li>${escapeHtml(item.name || '--')}：${escapeHtml(item.reason || '')}</li>`).join('')
                 : '<li>无</li>';
-            statusEl.className += ' border-slate-700 bg-slate-900/60 text-slate-300';
-            statusEl.innerHTML = `
-                <div class="font-bold">最近一次：${escapeHtml(String(latest.summary || '--'))}</div>
-                <div class="text-xs text-slate-500 mt-1">${escapeHtml(String(latest.finished_at || latest.started_at || ''))} · 触发：${escapeHtml(String(latest.trigger || '--'))}</div>
-                <div class="mt-2 text-xs">已分发：<ul class="list-disc ml-5">${movedHtml}</ul></div>
-                <div class="mt-1 text-xs">留在接收夹：<ul class="list-disc ml-5">${leftHtml}</ul></div>
-            `;
+            const triggerLabel = String(latest.trigger || '').trim() === 'manual'
+                ? '手动'
+                : (String(latest.trigger || '').trim() || '--');
+            const latestHtml = latest.id
+                ? `<div class="tg-proxy-status-title">最近整理：${escapeHtml(String(latest.summary || '--'))}</div>`
+                    + `<div class="tg-proxy-status-meta">${escapeHtml(String(latest.finished_at || latest.started_at || ''))} · 触发：${escapeHtml(triggerLabel)}</div>`
+                    + `<div class="tg-proxy-status-note">已分发：<ul class="list-disc ml-5">${movedHtml}</ul></div>`
+                    + `<div class="tg-proxy-status-note">留在接收夹：<ul class="list-disc ml-5">${leftHtml}</ul></div>`
+                : '<div class="tg-proxy-status-title">还没有整理记录</div>'
+                    + '<div class="tg-proxy-status-meta">点「立即整理并分发」跑一次，或把磁力推到上面的地址。</div>';
+            const configError = String(data.config_error || '').trim();
+            showStatus(
+                configError ? 'tg-proxy-status--error' : '',
+                `<div class="tg-proxy-status-title">最近接收：24 小时 ${count24h} 个</div>`
+                + recentHtml
+                + latestHtml
+                + (configError ? `<div class="tg-proxy-status-meta">配置未就绪：${escapeHtml(configError)}</div>` : ''),
+            );
         }
 
-        async function refreshQuickImportStatus() {
+        async function refreshInboxTaskStatus() {
+            inboxStatusFetchedAt = Date.now();
             try {
-                quickImportStatusCache = (await window.MediaHubApi.getJson('/scraper/quick-import/status')) || {};
+                inboxTaskStatusCache = (await window.MediaHubApi.getJson('/scraper/quick-import/status')) || {};
             } catch (e) {
-                quickImportStatusCache = quickImportStatusCache || {};
+                inboxTaskStatusCache = inboxTaskStatusCache || {};
             }
-            renderQuickImportStatus(quickImportStatusCache);
+            renderInboxTaskStatus(inboxTaskStatusCache);
+            renderMonitorTasks();
         }
 
-        async function saveQuickImportSettings() {
-            const payload = {
-                quick_import_enabled: !!document.getElementById('quick_import_enabled')?.checked,
-                quick_import_inbox_path: String(document.getElementById('quick_import_inbox_path')?.value || '').trim(),
-            };
+        function maybeRefreshInboxTaskStatus() {
+            // 跟着页面既有的状态轮询（约 15s 一次）按 30s 节流刷新卡片上的最近接收 / 最近整理。
+            const now = Date.now();
+            if (inboxStatusFetchedAt && now - inboxStatusFetchedAt < INBOX_STATUS_REFRESH_INTERVAL_MS) return;
+            void refreshInboxTaskStatus();
+        }
+
+        function buildInboxActivityHtml() {
+            // 接收夹任务卡片上常驻一行：最近有没有收到文件、最近一次整理结果。
+            const status = inboxTaskStatusCache && typeof inboxTaskStatusCache === 'object' ? inboxTaskStatusCache : {};
+            const latest = status.latest && typeof status.latest === 'object' ? status.latest : {};
+            const count = Math.max(0, Number(status.recent_job_count_24h || 0) || 0);
+            const configError = String(status.config_error || '').trim();
+            if (!latest.id && !count && !configError) {
+                return '<div class="mt-1 text-xs text-slate-500">最近 24 小时没有接收记录，也还没有整理记录</div>';
+            }
+            const latestText = latest.id ? String(latest.summary || '--') : '还没有整理记录';
+            const when = latest.id ? String(latest.finished_at || latest.started_at || '').trim() : '';
+            const failed = String(latest.status || '') === 'failed';
+            const tone = failed ? 'text-red-400' : (configError ? 'text-amber-300' : 'text-slate-400');
+            const errorText = configError ? ` · 配置未就绪：${escapeHtml(configError)}` : '';
+            return `<div class="mt-1 text-xs ${tone}">最近接收 24 小时 ${count} 个 · 最近整理：${escapeHtml(latestText)}`
+                + `${when ? `（${escapeHtml(when)}）` : ''}${errorText}</div>`;
+        }
+
+        async function runInboxTaskNow() {
+            const name = currentMonitorFormTaskName();
+            if (!name || name !== String(editingMonitorName || '').trim()) {
+                showToast('请先保存接收夹任务，再点「立即整理并分发」', { tone: 'warn', duration: 2800, placement: 'top-center' });
+                return;
+            }
+            renderInboxTaskStatus({ ...inboxTaskStatusCache, running: true });
             try {
-                await window.MediaHubApi.postJson('/save_settings', payload);
-                showToast('接收夹设置已保存', { tone: 'success', duration: 2200, placement: 'top-center' });
-            } catch (e) {
-                showToast(`保存失败：${(e && e.message) || e}`, { tone: 'error', duration: 3200, placement: 'top-center' });
-            }
-            await refreshQuickImportStatus();
-        }
-
-        function openQuickImportInboxPicker() {
-            void openMonitorFolderModal('quick_import_inbox_path');
-        }
-
-        async function runQuickImport() {
-            const btn = document.getElementById('quick-import-run-btn');
-            if (btn) {
-                btn.disabled = true;
-                btn.classList.add('btn-disabled');
-                btn.textContent = '整理中...';
-            }
-            renderQuickImportStatus({ ...quickImportStatusCache, running: true });
-            try {
-                await saveQuickImportSettingsPayloadOnly();
-                const data = await window.MediaHubApi.postJson('/scraper/quick-import/run', { trigger: 'manual' });
-                showToast(String((data && data.summary) || '快捷导入已完成'), {
+                const data = await window.MediaHubApi.postJson('/monitor/start', { name });
+                showToast(String((data && (data.result?.summary || data.status)) || '接收夹整理完成'), {
                     tone: 'success',
                     duration: 3200,
                     placement: 'top-center',
                 });
             } catch (e) {
-                showToast(`快捷导入失败：${(e && e.message) || e}`, { tone: 'error', duration: 3600, placement: 'top-center' });
+                showToast(`整理失败：${(e && e.message) || e}`, { tone: 'error', duration: 3600, placement: 'top-center' });
             } finally {
-                if (btn) {
-                    btn.disabled = false;
-                    btn.classList.remove('btn-disabled');
-                    btn.textContent = '立即整理并分发';
-                }
-                await refreshQuickImportStatus();
+                await refreshInboxTaskStatus();
+                await refreshMonitorState();
             }
         }
 
-        async function saveQuickImportSettingsPayloadOnly() {
-            // 运行前先把当前表单值存下来，避免用户改了接收夹但没保存就点运行。
-            try {
-                await window.MediaHubApi.postJson('/save_settings', {
-                    quick_import_enabled: !!document.getElementById('quick_import_enabled')?.checked,
-                    quick_import_inbox_path: String(document.getElementById('quick_import_inbox_path')?.value || '').trim(),
-                });
-            } catch (e) {
-                throw new Error(`保存接收夹设置失败：${(e && e.message) || e}`);
-            }
-        }
-
-        window.refreshQuickImportStatus = refreshQuickImportStatus;
+        window.refreshInboxTaskStatus = refreshInboxTaskStatus;
+        window.copyMonitorWebhookUrl = copyMonitorWebhookUrl;
+        window.runInboxTaskNow = runInboxTaskNow;
 
         function setResourceTgHealthState(nextState = {}) {
             resourceTgHealthState = {
@@ -3872,8 +3959,19 @@
 
         function currentMonitorFormData() {
             const rawScanPath = document.getElementById('monitor_scan_path').value.trim();
+            const taskType = String(document.getElementById('monitor_task_type')?.value || 'scan').trim() === 'inbox'
+                ? 'inbox'
+                : 'scan';
             return {
                 name: document.getElementById('monitor_name').value.trim(),
+                task_type: taskType,
+                enabled: document.getElementById('monitor_enabled')?.checked !== false,
+                distribute_targets: taskType === 'inbox'
+                    ? {
+                        movie: String(document.getElementById('monitor_inbox_target_movie')?.value || '').trim(),
+                        tv: String(document.getElementById('monitor_inbox_target_tv')?.value || '').trim(),
+                    }
+                    : {},
                 webhook_enabled: document.getElementById('monitor_webhook_enabled').checked,
                 scan_path: rawScanPath ? normalizeRemotePathInput(rawScanPath) : '',
                 target_path: document.getElementById('monitor_target_path').value.trim(),
@@ -3881,7 +3979,7 @@
                 strm_write_mode: document.getElementById('monitor_strm_write_mode')?.value || 'incremental',
                 sync_clean: document.getElementById('monitor_sync_clean').checked,
                 auto_scrape_on_new: document.getElementById('monitor_auto_scrape_on_new').checked,
-                quick_import_target: document.getElementById('monitor_quick_import_target')?.value || '',
+                quick_import_target: '',
                 auto_scrape_options: collectMonitorAutoScrapeOptions(),
                 incremental: !document.getElementById('monitor_sync_clean').checked,
                 retries: parseInt(document.getElementById('monitor_retries').value || '3', 10) || 3,
@@ -4194,19 +4292,92 @@
             const targetInputId = monitorFolderPickerTargetId || 'monitor_scan_path';
             const inputEl = document.getElementById(targetInputId);
             if (inputEl) inputEl.value = scanPath;
-            if (targetInputId === 'monitor_scan_path') {
-                updateMonitorScanPathHint(scanPath);
-            } else {
-                void saveQuickImportSettings();
-            }
+            updateMonitorScanPathHint(scanPath);
             monitorFolderPickerTargetId = 'monitor_scan_path';
             closeMonitorFolderModal();
+        }
+
+        function monitorFormTaskType() {
+            return String(document.getElementById('monitor_task_type')?.value || 'scan').trim() === 'inbox' ? 'inbox' : 'scan';
+        }
+
+        function populateMonitorInboxTargetSelects(task = {}) {
+            const targets = task && typeof task.distribute_targets === 'object' && task.distribute_targets
+                ? task.distribute_targets
+                : {};
+            const currentName = String(task?.name || '').trim();
+            const scanTasks = (monitorState.tasks || []).filter((item) => {
+                const type = String(item?.task_type || 'scan').trim();
+                return type !== 'inbox' && String(item?.name || '').trim() !== currentName;
+            });
+            [['monitor_inbox_target_movie', 'movie'], ['monitor_inbox_target_tv', 'tv']].forEach(([elementId, key]) => {
+                const el = document.getElementById(elementId);
+                if (!el) return;
+                const selectedName = String(targets[key] || '').trim();
+                const options = ['<option value="">不分发</option>'].concat(scanTasks.map((item) => {
+                    const name = String(item?.name || '').trim();
+                    const suffix = item?.enabled === false ? '（已停用）' : '';
+                    return `<option value="${escapeHtml(name)}"${name === selectedName ? ' selected' : ''}>${escapeHtml(name)}${suffix}</option>`;
+                }));
+                el.innerHTML = options.join('');
+                el.value = selectedName;
+            });
+        }
+
+        function applyMonitorTaskTypeUI() {
+            const isInbox = monitorFormTaskType() === 'inbox';
+            document.getElementById('monitor-scan-fields')?.classList.toggle('hidden', isInbox);
+            document.getElementById('monitor-inbox-fields')?.classList.toggle('hidden', !isInbox);
+            document.getElementById('monitor-scan-path-label')?.classList.toggle('hidden', isInbox);
+            document.getElementById('monitor-inbox-path-label')?.classList.toggle('hidden', !isInbox);
+            const pathInput = document.getElementById('monitor_scan_path');
+            if (pathInput) {
+                pathInput.placeholder = isInbox ? '/115/接收' : '/115/自存影视/115自存电视剧';
+            }
+            renderMonitorWebhookUrl();
+            refreshWebhookHint();
+            syncWebhookToggleState();
+            if (isInbox) void refreshInboxTaskStatus();
+        }
+
+        function syncMonitorTaskTypeOptions() {
+            // 任务类型不可更改：新增的一律是普通监控任务，内置接收夹也不能改成别的类型。
+            const select = document.getElementById('monitor_task_type');
+            const hint = document.getElementById('monitor-task-type-hint');
+            if (!select) return;
+            const editingInbox = (monitorState.tasks || []).some((item) => (
+                String(item?.task_type || 'scan') === 'inbox' && item.name === editingMonitorName
+            ));
+            select.value = editingInbox ? 'inbox' : 'scan';
+            select.disabled = true;
+            if (hint) {
+                if (editingInbox) {
+                    hint.textContent = '接收夹是内置固定任务：类型不能改，只有接收目录、分发目标和开关可以调整。';
+                } else if (editingMonitorName) {
+                    hint.textContent = '任务类型不可更改；接收夹是内置固定任务，直接在任务列表里编辑它。';
+                } else {
+                    hint.textContent = '新增的任务都是普通监控任务；接收夹是内置固定任务，直接在任务列表里编辑它。';
+                }
+            }
+        }
+
+        function syncWebhookToggleState() {
+            // webhook 只在设置了签名密钥后才能开启，避免全新安装就暴露一个免鉴权的写入口。
+            const checkbox = document.getElementById('monitor_webhook_enabled');
+            const hint = document.getElementById('webhook-secret-hint');
+            if (!checkbox) return;
+            const hasSecret = !!sensitiveConfigMeta.webhook_secret;
+            checkbox.disabled = !hasSecret;
+            if (!hasSecret && checkbox.checked) checkbox.checked = false;
+            if (hint) hint.classList.toggle('hidden', hasSecret);
         }
 
         function resetMonitorForm() {
             editingMonitorName = null;
             document.getElementById('monitor-modal-title').innerText = '新增监控任务';
             document.getElementById('monitor_name').value = '';
+            document.getElementById('monitor_task_type').value = 'scan';
+            document.getElementById('monitor_enabled').checked = true;
             document.getElementById('monitor_webhook_enabled').checked = false;
             document.getElementById('monitor_scan_path').value = '';
             updateMonitorScanPathHint('');
@@ -4219,14 +4390,15 @@
             document.getElementById('monitor_strm_write_mode').value = 'incremental';
             document.getElementById('monitor_sync_clean').checked = true;
             document.getElementById('monitor_auto_scrape_on_new').checked = false;
-            document.getElementById('monitor_quick_import_target').value = '';
             resetMonitorAutoScrapeOptions();
             document.getElementById('monitor_retries').value = 3;
             document.getElementById('monitor_list_delay_ms').value = 250;
             document.getElementById('monitor_min_file_size_mb').value = 0;
             document.getElementById('monitor_delay_seconds').value = 0;
             document.getElementById('monitor_cron_minutes').value = 0;
-            refreshWebhookHint();
+            populateMonitorInboxTargetSelects({});
+            syncMonitorTaskTypeOptions();
+            applyMonitorTaskTypeUI();
         }
 
         function openNewMonitorTask() {
@@ -4293,15 +4465,29 @@
 
         function refreshWebhookHint() {
             const name = document.getElementById('monitor_name').value.trim() || '任务名';
-            document.getElementById('webhook-hint').innerHTML = [
-                `webhook 地址：IP:容器端口/webhook/${escapeHtml(name)}（任务名用于绑定这个监控任务）`,
-                '磁力导入必填：magnet 或 link_url + savepath',
-                'savepath 是 115 保存目录；必须落在本任务扫描路径内，导入后才会自动刷新 strm',
-                'delayTime 可选：本次导入成功后延迟几秒刷新；不传则使用任务默认延迟',
-                'title / sharetitle 可选：仅用于日志或局部刷新提示',
-                '签名校验（可选）：X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign 或 X-Webhook-Token',
-                '说明：签名密钥在「参数配置 -> 后台安全管理」里设置；为空时不校验'
-            ].join('<br>');
+            const isInbox = monitorFormTaskType() === 'inbox';
+            const lines = isInbox
+                ? [
+                    `webhook 地址：IP:容器端口/webhook/${escapeHtml(name)}（任务名用于绑定这个接收夹任务）`,
+                    '只接磁力：magnet 或 link_url；分享转存落到接收夹后同样会自动整理分发',
+                    'savepath 填 115 根目录下的相对路径（例如 接收 或 接收/子目录）；留空默认落到接收夹',
+                    '面板里的 /115/接收 这类路径照抄也能识别，推荐只写根目录相对路径',
+                    '整理规则沿用分发目标任务的自动整理选项；识别不准的留在接收夹并写明原因',
+                    '签名校验（可选）：X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign 或 X-Webhook-Token',
+                    '说明：签名密钥在「参数配置 -> 后台安全管理」里设置；为空时不校验',
+                ]
+                : [
+                    `webhook 地址：IP:容器端口/webhook/${escapeHtml(name)}（任务名用于绑定这个监控任务）`,
+                    '磁力导入必填：magnet 或 link_url + savepath',
+                    'savepath 填 115 根目录下的相对路径（例如 电影/新片）；必须落在本任务目录内，导入后才会自动刷新 strm',
+                    'delayTime 可选：本次导入成功后延迟几秒刷新；不传则使用任务默认延迟',
+                    'title / sharetitle 可选：仅用于日志或局部刷新提示',
+                    '签名校验（可选）：X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign 或 X-Webhook-Token',
+                    '说明：签名密钥在「参数配置 -> 后台安全管理」里设置；为空时不校验',
+                ];
+            lines.push('修改任务名会改变上面的 webhook 地址，记得同步油猴脚本里的“请求地址”');
+            document.getElementById('webhook-hint').innerHTML = lines.join('<br>');
+            renderMonitorWebhookUrl();
         }
 
         async function persistMonitorTasks(tasks) {
@@ -4311,12 +4497,26 @@
 
         async function saveMonitorTask() {
             const task = currentMonitorFormData();
+            const isInbox = task.task_type === 'inbox';
             if (!task.name) return showToast('任务名不能为空', { tone: 'warn', duration: 2600, placement: 'top-center' });
-            if (!task.scan_path) return showToast('扫描路径不能为空', { tone: 'warn', duration: 2600, placement: 'top-center' });
-            if (!task.target_path) return showToast('目标路径不能为空', { tone: 'warn', duration: 2600, placement: 'top-center' });
+            if (!task.scan_path) {
+                return showToast(isInbox ? '接收夹路径不能为空' : '扫描路径不能为空', { tone: 'warn', duration: 2600, placement: 'top-center' });
+            }
+            if (!isInbox && !task.target_path) return showToast('目标路径不能为空', { tone: 'warn', duration: 2600, placement: 'top-center' });
             const mountPrefix = getMonitorMountPrefix();
             if (task.scan_path !== mountPrefix && !task.scan_path.startsWith(`${mountPrefix}/`)) {
-                return showToast(`扫描路径必须位于 ${mountPrefix} 下`, { tone: 'warn', duration: 3200, placement: 'top-center' });
+                return showToast(`${isInbox ? '接收夹路径' : '扫描路径'}必须位于 ${mountPrefix} 下`, { tone: 'warn', duration: 3200, placement: 'top-center' });
+            }
+            if (isInbox) {
+                if (!task.distribute_targets.movie && !task.distribute_targets.tv) {
+                    return showToast('接收夹任务至少要指定一个电影 / 电视剧分发目标', { tone: 'warn', duration: 3200, placement: 'top-center' });
+                }
+                const otherInbox = (monitorState.tasks || []).find((item) => (
+                    item.name !== editingMonitorName && String(item.task_type || 'scan') === 'inbox'
+                ));
+                if (otherInbox) {
+                    return showToast('只保留一个接收夹任务，请直接编辑已有的那个', { tone: 'warn', duration: 3200, placement: 'top-center' });
+                }
             }
             if (task.retries < 1 || task.retries > 5) return showToast('读取失败尝试次数只能在 1 到 5 之间', { tone: 'warn', duration: 2600, placement: 'top-center' });
             if (task.cron_minutes < 0) return showToast('定时执行分钟不能小于 0', { tone: 'warn', duration: 2600, placement: 'top-center' });
@@ -4345,6 +4545,8 @@
             editingMonitorName = task.name;
             document.getElementById('monitor-modal-title').innerText = `编辑监控任务：${task.name}`;
             document.getElementById('monitor_name').value = task.name || '';
+            document.getElementById('monitor_task_type').value = String(task.task_type || 'scan') === 'inbox' ? 'inbox' : 'scan';
+            document.getElementById('monitor_enabled').checked = task.enabled !== false;
             document.getElementById('monitor_webhook_enabled').checked = !!task.webhook_enabled;
             document.getElementById('monitor_scan_path').value = task.scan_path || '';
             updateMonitorScanPathHint(task.scan_path || '');
@@ -4359,14 +4561,15 @@
                 ? !!task.sync_clean
                 : !task.incremental;
             document.getElementById('monitor_auto_scrape_on_new').checked = !!task.auto_scrape_on_new;
-            document.getElementById('monitor_quick_import_target').value = String(task.quick_import_target || '');
+            populateMonitorInboxTargetSelects(task);
             applyMonitorAutoScrapeOptions(task.auto_scrape_options);
             document.getElementById('monitor_retries').value = task.retries ?? 3;
             document.getElementById('monitor_list_delay_ms').value = task.list_delay_ms ?? 250;
             document.getElementById('monitor_min_file_size_mb').value = task.min_file_size_mb ?? 0;
             document.getElementById('monitor_delay_seconds').value = task.delay_seconds ?? 0;
             document.getElementById('monitor_cron_minutes').value = task.cron_minutes ?? 0;
-            refreshWebhookHint();
+            syncMonitorTaskTypeOptions();
+            applyMonitorTaskTypeUI();
             showLockedModal('monitor-modal');
             switchTab('monitor');
         }
@@ -4396,6 +4599,17 @@
             setMonitorActionLock('start', name, true);
             try {
                 const data = await window.MediaHubApi.postJson('/monitor/start', { name });
+                const targetTask = (monitorState.tasks || []).find((item) => item.name === name);
+                if (String(targetTask?.task_type || 'scan') === 'inbox') {
+                    // 接收夹任务没有“运行中/中断”语义：跑一次就是把接收夹整理分发一次。
+                    showToast(String((data && (data.result?.summary || data.status)) || '接收夹整理完成'), {
+                        tone: 'success',
+                        duration: 3200,
+                        placement: 'top-center',
+                    });
+                    await refreshInboxTaskStatus();
+                    return;
+                }
 
                 const queued = Array.isArray(monitorState.queued) ? [...monitorState.queued] : [];
                 if (data.status === 'queued') {
@@ -4445,6 +4659,24 @@
         }
 
         function buildMonitorTaskIntro(task, { running = false, queued = false, nextRun = '' } = {}) {
+            if (String(task?.task_type || 'scan') === 'inbox') {
+                const enabled = task?.enabled !== false;
+                const statusText = enabled ? (running ? '运行中' : '待命') : '未启用';
+                const inboxPath = String(task?.scan_path || '').trim() || '--';
+                const targets = task?.distribute_targets && typeof task.distribute_targets === 'object'
+                    ? task.distribute_targets
+                    : {};
+                const movie = String(targets.movie || '').trim() || '未指定';
+                const tv = String(targets.tv || '').trim() || '未指定';
+                const webhookText = task?.webhook_enabled ? '已启用 Webhook 触发' : '未启用 Webhook';
+                const status = inboxTaskStatusCache && typeof inboxTaskStatusCache === 'object' ? inboxTaskStatusCache : {};
+                const count24h = Math.max(0, Number(status.recent_job_count_24h || 0) || 0);
+                const latest = status.latest && typeof status.latest === 'object' ? status.latest : {};
+                const latestText = latest.id
+                    ? `最近整理：${String(latest.summary || '--')}`
+                    : '还没有整理记录';
+                return `状态：${statusText}。接收夹路径 ${inboxPath}，识别后分发：电影 → ${movie}，电视剧 → ${tv}；${webhookText}；最近接收：24 小时 ${count24h} 个；${latestText}。`;
+            }
             const statusText = running ? '运行中' : (queued ? '已排队' : '待命');
             const scanPath = String(task?.scan_path || '').trim() || '--';
             const targetPath = String(task?.target_path || '').trim() || '--';
@@ -4457,11 +4689,8 @@
                 ? `每 ${scheduleMinutes} 分钟自动执行一次，下次定时 ${String(nextRun || '计算中')}`
                 : '未开启定时，仅手动运行或通过 Webhook 触发';
             const webhookText = task?.webhook_enabled ? '已启用 Webhook 触发' : '未启用 Webhook';
-            const quickImportTarget = String(task?.quick_import_target || '').trim();
-            const quickImportText = quickImportTarget === 'movie'
-                ? '；已标注为接收夹快捷导入的「电影」目标'
-                : (quickImportTarget === 'tv' ? '；已标注为接收夹快捷导入的「电视剧」目标' : '');
-            return `状态：${statusText}。该任务会扫描 ${scanPath}，输出到 /strm/${targetPath}，写入模式为 ${writeModeText}，清理策略为 ${cleanupText}；${scheduleText}；${webhookText}${quickImportText}。`;
+            const enabledText = task?.enabled === false ? '本任务已停用，不会参与定时扫描；' : '';
+            return `状态：${statusText}。${enabledText}该任务会扫描 ${scanPath}，输出到 /strm/${targetPath}，写入模式为 ${writeModeText}，清理策略为 ${cleanupText}；${scheduleText}；${webhookText}。`;
         }
 
         function toggleMonitorTaskIntro(taskName) {
@@ -4522,6 +4751,7 @@
             container.innerHTML = tasks.map(task => {
                 const taskName = String(task?.name || '').trim();
                 const taskKey = encodeURIComponent(taskName);
+                const isInboxTask = String(task?.task_type || 'scan') === 'inbox';
                 const changeCount = monitorState.change_counts?.[taskName] || {};
                 const pendingChanges = Math.max(0, Number(changeCount.pending || 0) || 0);
                 const failedChanges = Math.max(0, Number(changeCount.failed || 0) || 0);
@@ -4555,13 +4785,17 @@
                 const nextRun = (monitorState.next_runs || {})[taskName];
                 const introExpanded = isTaskIntroExpanded(monitorTaskIntroExpanded, taskName);
                 const introText = buildMonitorTaskIntro(task, { running, queued, nextRun });
+                const taskTypeBadge = isInboxTask
+                    ? '<span class="quick-import-chip">接收夹</span>'
+                    : '';
+                const inboxActivityHtml = isInboxTask ? buildInboxActivityHtml() : '';
                 const toggleRunButton = buildMonitorTaskIconButton({
                     action: 'toggle-run',
                     taskName,
-                    label: toggleRunLabel,
+                    label: isInboxTask ? (starting ? '整理中' : '立即整理') : toggleRunLabel,
                     icon: toggleRunIcon,
                     tone: toggleRunTone,
-                    disabled: toggleRunDisabled,
+                    disabled: isInboxTask ? (starting || deleting) : toggleRunDisabled,
                     extraAttrs: `data-monitor-run-action="${escapeHtml(toggleRunAction)}"`,
                 });
                 const editButton = buildMonitorTaskIconButton({
@@ -4571,7 +4805,8 @@
                     icon: 'edit',
                     tone: 'edit',
                 });
-                const deleteButton = buildMonitorTaskIconButton({
+                // 接收夹是内置槽位，不给删除入口（服务端也会拒绝删除）。
+                const deleteButton = isInboxTask ? '' : buildMonitorTaskIconButton({
                     action: 'delete',
                     taskName,
                     label: deleting ? '删除中' : '删除',
@@ -4589,8 +4824,12 @@
                                     aria-expanded="${introExpanded ? 'true' : 'false'}"
                                     class="min-w-0 flex-1 text-left rounded-lg border border-transparent hover:border-slate-700/75 focus:outline-none focus:ring-2 focus:ring-sky-500/45 px-1 py-0.5"
                                 >
-                                    <div class="text-lg font-black text-white break-all leading-tight">${escapeHtml(taskName)}</div>
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <div class="text-lg font-black text-white break-all leading-tight">${escapeHtml(taskName)}</div>
+                                        ${taskTypeBadge}
+                                    </div>
                                     ${changeCountHtml}
+                                    ${inboxActivityHtml}
                                 </button>
                                 <button
                                     type="button"

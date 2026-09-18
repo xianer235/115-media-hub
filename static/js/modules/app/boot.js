@@ -126,8 +126,8 @@
                     await settingsMod?.loadAiMatchUsage?.();
                 } catch (_) { /* settings module may load via other path */ }
                 try {
-                    await window.refreshQuickImportStatus?.();
-                } catch (_) { /* 快捷导入状态读取失败不影响页面 */ }
+                    await window.refreshInboxTaskStatus?.();
+                } catch (_) { /* 接收夹任务状态读取失败不影响页面 */ }
                 const sensitiveMeta = normalizeSensitiveConfigMeta(cfg.sensitive_configured || {});
                 if (typeof renderProviderAuthBlocks === 'function') {
                     renderProviderAuthBlocks(cfg, sensitiveMeta);

@@ -558,6 +558,11 @@ async def run_monitor_task(
         await write_monitor_log(f"任务不存在: {task_name}", "error")
         await _finish_monitor_job(task_name, "monitor")
         return
+    if normalize_task_type(task.get("task_type")) == MONITOR_TASK_TYPE_INBOX:
+        # 兜底：接收夹任务不接受目录扫描触发（正常路径不会走到这里）。
+        await write_monitor_log(f"接收夹任务「{task_name}」不参与目录扫描，已忽略本次扫描触发", "warn")
+        await _finish_monitor_job(task_name, "monitor")
+        return
     config_error = validate_monitor_runtime_config(cfg, task)
     if config_error:
         await write_monitor_log(f"任务配置错误: {config_error}", "error")
@@ -1288,6 +1293,11 @@ async def run_monitor_change_task(
         await write_monitor_log(f"变更同步任务不存在: {task_name}", "error")
         await _finish_monitor_job(task_name, "monitor-change")
         return
+    if normalize_task_type(task.get("task_type")) == MONITOR_TASK_TYPE_INBOX:
+        # 兜底：接收夹任务不参与变更同步（正常路径不会走到这里）。
+        await write_monitor_log(f"接收夹任务「{task_name}」不参与变更同步，已忽略", "warn")
+        await _finish_monitor_job(task_name, "monitor-change")
+        return
     update_monitor_summary("准备同步变更", task_name)
     schedule_ui_state_push(0)
     try:
@@ -1616,6 +1626,23 @@ def queue_monitor_job(task_name: str, trigger: str, payload: Optional[Dict[str, 
         return "queued"
 
     normalized_trigger = str(trigger or "").strip().lower() or "manual"
+    try:
+        active_cfg = get_config()
+        matched_task = next(
+            (task for task in active_cfg.get("monitor_tasks", []) or [] if task.get("name") == normalized_task_name),
+            None,
+        )
+    except Exception:
+        matched_task = None
+    if matched_task:
+        if normalize_task_type(matched_task.get("task_type")) == MONITOR_TASK_TYPE_INBOX:
+            # 接收夹不是扫描目标：整理由接收夹流程负责，任何扫描触发都直接忽略。
+            schedule_ui_state_push(0)
+            return "inbox"
+        if normalized_trigger != "manual" and matched_task.get("enabled") is False:
+            # 「停用」= 不自动跑：定时 / 变更同步 / 资源导入完成 / webhook 都不入队，手动 start 仍可用。
+            schedule_ui_state_push(0)
+            return "disabled"
     normalized_payload = _normalize_monitor_queue_payload(payload)
     mode = str(normalized_payload.get("mode", "scan") or "scan")
 

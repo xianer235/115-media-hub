@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import time
 from datetime import datetime
@@ -40,6 +41,16 @@ def _run_prune_step(callback) -> Dict[str, Any]:
         return result if isinstance(result, dict) else {"removed": int(result or 0)}
     except Exception as exc:
         return {"error": str(exc)[:180]}
+
+
+async def _run_inbox_cron_import() -> None:
+    """接收夹定时整理：放到线程里跑，避免长时间整理把监控调度循环卡住。"""
+    try:
+        from .services.quick_import import run_quick_import
+
+        await asyncio.to_thread(run_quick_import, "cron")
+    except Exception:
+        logging.exception("接收夹定时整理失败")
 
 
 def prune_runtime_memory_caches() -> Dict[str, Any]:
@@ -119,16 +130,25 @@ async def startup() -> None:
                 cron_minutes = int(task.get("cron_minutes", 0) or 0)
                 if not name:
                     continue
+                if task.get("enabled") is False:
+                    # 任务被显式停用：不跑定时（手动运行仍然可用，方便排查）。
+                    monitor_next_run.pop(name, None)
+                    continue
                 if cron_minutes <= 0:
                     monitor_next_run.pop(name, None)
                     continue
+                is_inbox = normalize_task_type(task.get("task_type")) == MONITOR_TASK_TYPE_INBOX
 
                 if name not in monitor_last_run:
                     monitor_last_run[name] = now
                 next_ts = monitor_last_run[name] + (cron_minutes * 60)
                 monitor_next_run[name] = datetime.fromtimestamp(next_ts).strftime("%H:%M:%S")
                 if now >= next_ts:
-                    if pending_offline_counts.get(name, 0) > 0:
+                    if is_inbox:
+                        # 接收夹任务的“定时执行”= 周期整理并分发一次（手动拖进接收夹的文件也能被收拾）。
+                        monitor_last_run[name] = now
+                        asyncio.create_task(_run_inbox_cron_import())
+                    elif pending_offline_counts.get(name, 0) > 0:
                         monitor_last_run[name] = now
                         monitor_next_run[name] = datetime.fromtimestamp(
                             now + (cron_minutes * 60)

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from ..core import (
+    MONITOR_TASK_TYPE_INBOX,
     STRM_ROOT,
     build_strm_play_url,
     get_config,
@@ -11,6 +12,7 @@ from ..core import (
     is_subpath,
     list_remote_dir,
     normalize_task,
+    normalize_task_type,
     resolve_provider_relative_path,
     resolve_task_root,
 )
@@ -173,6 +175,9 @@ def match_monitor_tasks_for_paths(
         task = normalize_task(raw_task or {})
         task_name = str(task.get("name", "") or "").strip()
         if not task_name or task_name in seen:
+            continue
+        if normalize_task_type(task.get("task_type")) == MONITOR_TASK_TYPE_INBOX:
+            # 接收夹不是扫描目标：它的路径变更交给接收夹整理流程，不生成扫描变更事件。
             continue
         if any(_task_path_context(cfg, task, path) for path in normalized_paths):
             matched.append(task)
@@ -916,6 +921,17 @@ def _task_by_name(cfg: Dict[str, Any], task_name: str) -> Dict[str, Any]:
         if str(task.get("name", "") or "").strip() == str(task_name or "").strip():
             return task
     return {}
+
+
+def _scan_task_names(cfg: Dict[str, Any]) -> Set[str]:
+    """变更事件只归属扫描任务：接收夹不参与目录扫描，它的变更交给接收夹整理流程。"""
+    names: Set[str] = set()
+    for raw_task in cfg.get("monitor_tasks", []) or []:
+        task = normalize_task(raw_task or {})
+        name = str(task.get("name", "") or "").strip()
+        if name and normalize_task_type(task.get("task_type")) != MONITOR_TASK_TYPE_INBOX:
+            names.add(name)
+    return names
 
 
 def _provider_path_is_safe(path: str) -> bool:
@@ -2298,10 +2314,7 @@ def recover_monitor_change_events(*, cfg: Optional[Dict[str, Any]] = None, enque
             """,
             (MONITOR_CHANGE_MAX_RETRIES, time.time()),
         )
-        configured_names = {
-            str(normalize_task(task or {}).get("name", "") or "").strip()
-            for task in active_cfg.get("monitor_tasks", []) or []
-        }
+        configured_names = _scan_task_names(active_cfg)
         task_names = [
             str(row[0] or "")
             for row in cursor.fetchall()
@@ -2321,10 +2334,7 @@ def recover_monitor_change_events(*, cfg: Optional[Dict[str, Any]] = None, enque
 
 def queue_ready_monitor_change_tasks(*, cfg: Optional[Dict[str, Any]] = None) -> List[str]:
     active_cfg = cfg or get_config()
-    configured_names = {
-        str(normalize_task(task or {}).get("name", "") or "").strip()
-        for task in active_cfg.get("monitor_tasks", []) or []
-    }
+    configured_names = _scan_task_names(active_cfg)
     with db_connection() as conn:
         cursor = conn.execute(
             """

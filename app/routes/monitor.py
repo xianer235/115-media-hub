@@ -12,6 +12,11 @@ from ..background import submit_background
 from ..core import *  # noqa: F401,F403
 from ..db import retry_sqlite_locked
 from ..services.monitor import queue_monitor_dir_scan, queue_monitor_job
+from ..services.quick_import import (
+    build_quick_import_config,
+    is_quick_import_savepath,
+    validate_quick_import_config,
+)
 from ..services.resource import run_resource_job
 
 router = APIRouter()
@@ -81,6 +86,171 @@ def _extract_magnet_link(payload: Dict[str, Any]) -> str:
         if link and detect_resource_link_type(link) == "magnet":
             return link
     return ""
+
+
+def _monitor_task_relative_path(cfg: Dict[str, Any], task: Dict[str, Any]) -> str:
+    """任务路径（挂载前缀形式）转成 115 根目录相对路径，用于和脚本 savepath 对齐。"""
+    remote = normalize_remote_path(str(task.get("scan_path", "") or "").strip())
+    if not remote or remote == "/":
+        return ""
+    try:
+        _provider, relative = resolve_provider_relative_path(cfg, remote, expected_provider="115")
+    except Exception:
+        return ""
+    return normalize_relative_path(relative)
+
+
+async def _handle_inbox_webhook(
+    cfg: Dict[str, Any],
+    task: Dict[str, Any],
+    payload: Dict[str, Any],
+    *,
+    savepath: str,
+) -> JSONResponse:
+    """接收夹任务的 webhook：只接磁力，落点必须落在接收夹内（含其子目录）。"""
+    config_error = validate_quick_import_config(cfg)
+    if config_error:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "msg": f"接收夹任务不可用：{config_error}"},
+        )
+
+    conf = build_quick_import_config(cfg)
+    inbox_rel = str(conf.get("inbox_rel", "") or "").strip()
+    if savepath:
+        if not is_quick_import_savepath(cfg, savepath):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "ok": False,
+                    "msg": f"savepath 必须落在接收夹 {inbox_rel or '(未配置)'} 内，当前为 {savepath}；留空则默认落到接收夹",
+                },
+            )
+        target_savepath = savepath
+    else:
+        target_savepath = inbox_rel
+
+    task_name = str(task.get("name", "") or "").strip()
+    return await _create_userscript_magnet_job(
+        cfg,
+        payload,
+        savepath=target_savepath,
+        monitor_task_name="",
+        log_label=task_name or "接收夹",
+        task_delay_seconds=max(0, int(task.get("delay_seconds", 0) or 0)),
+        extra={
+            "webhook_task_name": task_name,
+            "webhook_target": "inbox",
+            "quick_import_inbox": 1,
+        },
+    )
+
+
+async def _create_userscript_magnet_job(
+    cfg: Dict[str, Any],
+    payload: Dict[str, Any],
+    *,
+    savepath: str,
+    monitor_task_name: str,
+    log_label: str,
+    task_delay_seconds: int = 0,
+    extra: Optional[Dict[str, Any]] = None,
+) -> JSONResponse:
+    """按用户脚本 webhook 的入参创建一个磁力离线任务。
+
+    ``/webhook/{task_name}``（绑定监控任务）与 ``/webhook/quick-import``（接收夹快捷导入）
+    共用这段逻辑：去重口径、延时、日志与响应结构都保持一致。
+    """
+    normalized_savepath = normalize_relative_path(savepath)
+    if not normalized_savepath:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "磁力任务缺少 savepath"})
+    cookie_115 = str(cfg.get("cookie_115", "")).strip()
+    if not cookie_115:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": "请先在参数配置中填写 115 Cookie"})
+
+    magnet_link = _extract_magnet_link(payload)
+    if not magnet_link:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "msg": "该地址只接受磁力链接（magnet:?xt=...）"},
+        )
+
+    title = str(payload.get("title", "") or "").strip()
+    sharetitle = normalize_relative_path(payload.get("sharetitle", ""))
+    refresh_target_type = str(payload.get("refresh_target_type", "") or "").strip() or "file"
+    parsed_delay = 0
+    try:
+        parsed_delay = max(0, int(payload.get("delayTime", 0) or 0))
+    except Exception:
+        parsed_delay = 0
+    refresh_delay_seconds = parsed_delay if parsed_delay > 0 else max(0, int(task_delay_seconds or 0))
+    resource_title = _resolve_magnet_title(payload, magnet_link)
+    resource = sanitize_resource_job_input(
+        {
+            "source_type": "webhook",
+            "source_name": "userscript",
+            "channel_name": "",
+            "title": resource_title,
+            "raw_text": f"{resource_title}\n{magnet_link}",
+            "link_url": magnet_link,
+            "link_type": "magnet",
+            "message_url": "",
+            "extra": {},
+        }
+    )
+    existing = find_existing_resource_job(resource, normalized_savepath)
+    if existing:
+        existing_status = str(existing.get("status", "")).strip().lower()
+        if existing_status == "completed":
+            msg = "该磁力已添加过。若需重新导入，请先清空“已完成导入记录”后再试。"
+        else:
+            msg = "该磁力已在处理中，请勿重复提交。"
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "msg": msg,
+                "job_id": existing.get("id", 0),
+                "status": existing_status,
+            },
+        )
+
+    job_extra: Dict[str, Any] = {
+        "job_source": USERSCRIPT_WEBHOOK_SOURCE,
+        "refresh_target_type": refresh_target_type,
+    }
+    if extra:
+        job_extra.update(extra)
+    job_id = create_resource_job(
+        resource,
+        {
+            "folder_id": "",
+            "savepath": normalized_savepath,
+            "sharetitle": sharetitle,
+            "monitor_task_name": monitor_task_name,
+            "refresh_delay_seconds": refresh_delay_seconds,
+            "auto_refresh": True,
+            "extra": job_extra,
+        },
+    )
+    submit_background(run_resource_job, job_id, label="resource-webhook-magnet")
+    await write_monitor_log(
+        f"Webhook 磁力任务已创建: {log_label} | job=#{job_id} | savepath={normalized_savepath} | delay={refresh_delay_seconds}s",
+        "info",
+    )
+    if title:
+        await write_monitor_log(f"Webhook 磁力标题：{title}", "info")
+    return JSONResponse(
+        content={
+            "ok": True,
+            "mode": "magnet",
+            "job_id": job_id,
+            "task_name": monitor_task_name,
+            "savepath": normalized_savepath,
+            "title": resource_title,
+            "auto_refresh": True,
+        }
+    )
 
 
 def _delete_monitor_runtime_records(task_name: str) -> None:
@@ -201,7 +371,8 @@ async def save_monitor_tasks(request: Request) -> Dict[str, Any]:
             return JSONResponse(status_code=400, content={"ok": False, "msg": f"任务名重复: {task['name']}"})
         names.add(task["name"])
         normalized.append(task)
-    cfg["monitor_tasks"] = normalized
+    # 类型不可改 + 漏传接收夹时沿用当前配置（与 /save_settings 共用同一套收口）。
+    cfg["monitor_tasks"] = finalize_monitor_tasks_for_save(cfg.get("monitor_tasks", []) or [], normalized)
     save_config(cfg)
     alive = {task["name"] for task in normalized}
     for dead_name in list(monitor_last_run.keys()):
@@ -217,8 +388,18 @@ async def start_monitor(request: Request) -> Dict[str, Any]:
     data = await request.json()
     task_name = str(data.get("name", "")).strip()
     cfg = get_config()
-    if not any(task["name"] == task_name for task in cfg["monitor_tasks"]):
+    task = next((task for task in cfg["monitor_tasks"] if task["name"] == task_name), None)
+    if not task:
         return JSONResponse(status_code=404, content={"ok": False, "msg": "任务不存在"})
+    if normalize_task_type(task.get("task_type")) == MONITOR_TASK_TYPE_INBOX:
+        # 接收夹任务没有“扫描”语义，运行时就是整理并分发一次。
+        from ..services.quick_import import run_quick_import
+
+        try:
+            result = await asyncio.to_thread(run_quick_import, "manual")
+        except Exception as exc:
+            return _error_response(exc)
+        return {"ok": True, "status": str(result.get("summary", "") or ""), "result": result}
     status = queue_monitor_job(task_name, "manual")
     return {"ok": True, "status": status}
 
@@ -267,6 +448,13 @@ async def delete_monitor(request: Request) -> Dict[str, Any]:
     data = await request.json()
     task_name = str(data.get("name", "")).strip()
     cfg = get_config()
+    target_task = next((task for task in cfg["monitor_tasks"] if task["name"] == task_name), None)
+    if target_task and normalize_task_type(target_task.get("task_type")) == MONITOR_TASK_TYPE_INBOX:
+        # 接收夹是内置的固定槽位：删了会被配置归一化立刻补回来，所以直接挡下来。
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "msg": "接收夹任务是内置的，不能删除；不想用时把「启用本任务」关掉即可"},
+        )
     before = len(cfg["monitor_tasks"])
     cfg["monitor_tasks"] = [task for task in cfg["monitor_tasks"] if task["name"] != task_name]
     if len(cfg["monitor_tasks"]) == before:
@@ -302,6 +490,11 @@ async def webhook(task_name: str, request: Request) -> JSONResponse:
         return JSONResponse(status_code=404, content={"ok": False, "msg": "未找到对应监控任务"})
     if not task.get("webhook_enabled"):
         return JSONResponse(status_code=400, content={"ok": False, "msg": "该任务未开启 webhook"})
+    if normalize_task_type(task.get("task_type")) == MONITOR_TASK_TYPE_SCAN and task.get("enabled") is False:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "msg": "该任务已停用：停用后不会由 webhook / 定时 / 变更自动触发，请先启用（或手动运行）"},
+        )
 
     verify_error = _verify_webhook_auth(request, cfg, body_text)
     if verify_error:
@@ -309,90 +502,40 @@ async def webhook(task_name: str, request: Request) -> JSONResponse:
         return JSONResponse(status_code=401, content={"ok": False, "msg": verify_error})
 
     title = str(payload.get("title", "") or "").strip()
-    savepath = normalize_relative_path(payload.get("savepath", ""))
+    # 脚本里的保存路径统一按「115 根目录相对路径」解析：照抄面板的 /115/xxx 也能对上。
+    savepath = normalize_userscript_savepath(cfg, payload.get("savepath", ""))
     sharetitle = normalize_relative_path(payload.get("sharetitle", ""))
     refresh_target_type = str(payload.get("refresh_target_type", "") or "").strip()
     magnet_link = _extract_magnet_link(payload)
 
-    if magnet_link:
-        if not refresh_target_type:
-            refresh_target_type = "file"
-        cookie_115 = str(cfg.get("cookie_115", "")).strip()
-        if not cookie_115:
-            return JSONResponse(status_code=400, content={"ok": False, "msg": "请先在参数配置中填写 115 Cookie"})
-        if not savepath:
-            return JSONResponse(status_code=400, content={"ok": False, "msg": "磁力任务缺少 savepath"})
+    if normalize_task_type(task.get("task_type")) == MONITOR_TASK_TYPE_INBOX:
+        return await _handle_inbox_webhook(cfg, task, payload, savepath=savepath)
 
-        parsed_delay = 0
-        try:
-            parsed_delay = max(0, int(payload.get("delayTime", 0) or 0))
-        except Exception:
-            parsed_delay = 0
-        refresh_delay_seconds = parsed_delay if parsed_delay > 0 else max(0, int(task.get("delay_seconds", 0) or 0))
-        resource_title = _resolve_magnet_title(payload, magnet_link)
-        resource = sanitize_resource_job_input(
-            {
-                "source_type": "webhook",
-                "source_name": "userscript",
-                "channel_name": "",
-                "title": resource_title,
-                "raw_text": f"{resource_title}\n{magnet_link}",
-                "link_url": magnet_link,
-                "link_type": "magnet",
-                "message_url": "",
-                "extra": {},
-            }
+    task_rel = _monitor_task_relative_path(cfg, task)
+    if savepath and task_rel and not is_relative_path_within(savepath, task_rel):
+        # 旧版对超出监控目录的 savepath 不报错，会静默下到别处；这里改成直接挡下来，并写清怎么改。
+        hint = (
+            "；磁力必须指定保存路径，请改成任务目录内的路径"
+            if magnet_link
+            else "；如果只是想触发刷新、不需要指定下载目录，可以不传 savepath"
         )
-        existing = find_existing_resource_job(resource, savepath)
-        if existing:
-            existing_status = str(existing.get("status", "")).strip().lower()
-            if existing_status == "completed":
-                msg = "该磁力已添加过。若需重新导入，请先清空“已完成导入记录”后再试。"
-            else:
-                msg = "该磁力已在处理中，请勿重复提交。"
-            return JSONResponse(
-                status_code=409,
-                content={
-                    "ok": False,
-                    "msg": msg,
-                    "job_id": existing.get("id", 0),
-                    "status": existing_status,
-                },
-            )
-
-        job_id = create_resource_job(
-            resource,
-            {
-                "folder_id": "",
-                "savepath": savepath,
-                "sharetitle": sharetitle,
-                "monitor_task_name": task_name,
-                "refresh_delay_seconds": refresh_delay_seconds,
-                "auto_refresh": True,
-                "extra": {
-                    "job_source": USERSCRIPT_WEBHOOK_SOURCE,
-                    "webhook_task_name": task_name,
-                    "refresh_target_type": refresh_target_type,
-                },
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "msg": f"savepath 必须落在任务「{task_name}」的目录 {task_rel} 内，当前为 {savepath}{hint}",
             },
         )
-        submit_background(run_resource_job, job_id, label="resource-webhook-magnet")
-        await write_monitor_log(
-            f"Webhook 磁力任务已创建: {task_name} | job=#{job_id} | savepath={savepath} | delay={refresh_delay_seconds}s",
-            "info",
-        )
-        if title:
-            await write_monitor_log(f"Webhook 磁力标题：{title}", "info")
-        return JSONResponse(
-            content={
-                "ok": True,
-                "mode": "magnet",
-                "job_id": job_id,
-                "task_name": task_name,
-                "savepath": savepath,
-                "title": resource_title,
-                "auto_refresh": True,
-            }
+
+    if magnet_link:
+        return await _create_userscript_magnet_job(
+            cfg,
+            payload,
+            savepath=savepath,
+            monitor_task_name=task_name,
+            log_label=task_name,
+            task_delay_seconds=max(0, int(task.get("delay_seconds", 0) or 0)),
+            extra={"webhook_task_name": task_name},
         )
 
     queue_monitor_job(task_name, "webhook", payload)

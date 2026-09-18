@@ -12,11 +12,29 @@
                         </span>
                         <input id="monitor_name" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：自存影视">
                     </label>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <label class="block">
+                            <span class="text-xs text-slate-500">任务类型</span>
+                            <select id="monitor_task_type" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none" onchange="applyMonitorTaskTypeUI()">
+                                <option value="scan">扫描任务：扫描目录生成 STRM</option>
+                                <option value="inbox">接收夹任务：接收导入后识别分发</option>
+                            </select>
+                            <div id="monitor-task-type-hint" class="text-[11px] text-slate-500 leading-5 mt-1"></div>
+                        </label>
+                        <label class="flex items-center gap-3 cursor-pointer text-sm md:mt-6">
+                            <input type="checkbox" id="monitor_enabled" class="ui-checkbox">
+                            <span>启用本任务</span>
+                            <button type="button" class="info-dot" onclick="showHelp('启用：按「定时执行」自动跑，也会被 webhook / 导入完成 / 刮削变更自动触发，仍可手动运行。\\n停用：定时和所有自动触发都停，只保留手动运行，用于排查或临时冻结。')">i</button>
+                        </label>
+                    </div>
                     <label class="flex items-center gap-3 cursor-pointer text-sm">
                         <input type="checkbox" id="monitor_webhook_enabled" class="ui-checkbox" onchange="refreshWebhookHint()">
                         开启 webhook
                         <button type="button" class="info-dot" onclick="showHelp('Webhook 参数说明：\\n1) 接口地址：/webhook/任务名，任务名用于匹配这个文件夹监控任务\\n2) 请求方式：POST + JSON\\n3) 磁力导入必填：magnet 或 link_url + savepath\\n4) savepath 是磁力保存目录；落在本任务扫描路径内时，导入成功后才会自动刷新并生成 strm\\n5) delayTime 可选，表示本次导入成功后延迟几秒刷新；不传则使用任务默认延迟\\n6) title / sharetitle 只用于日志或局部刷新提示\\n7) 签名校验可选：X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign，或 X-Webhook-Token。')">i</button>
                     </label>
+                    <div id="webhook-secret-hint" class="hidden text-xs text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-xl p-3 leading-5">
+                        还没有设置 Webhook 签名密钥：先去「参数配置 → 后台安全管理」设置密钥，才能开启 webhook。
+                    </div>
                     <div id="webhook-hint" class="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3 leading-5">
                         webhook 地址：IP:容器端口/webhook/任务名（任务名用于绑定这个监控任务）
                         <br>磁力导入必填：magnet 或 link_url + savepath
@@ -26,9 +44,13 @@
                         <br>签名校验（可选）：X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign 或 X-Webhook-Token
                     </div>
                     <label class="block">
-                        <span class="text-xs text-slate-500 inline-flex items-center gap-2">
+                        <span id="monitor-scan-path-label" class="text-xs text-slate-500 inline-flex items-center gap-2">
                             扫描路径 (115 网盘内监控的源路径)
                             <button type="button" class="info-dot" onclick="showHelp('手动运行会从该路径开始递归。Webhook 触发时会根据 savepath/path 自动定位这个路径下的变动子目录，优先局部刷新。')">i</button>
+                        </span>
+                        <span id="monitor-inbox-path-label" class="hidden text-xs text-slate-500 inline-flex items-center gap-2">
+                            接收夹路径 (115 网盘内接收磁力 / 分享导入的目录)
+                            <button type="button" class="info-dot" onclick="showHelp('磁力或分享导入落到这个目录后，服务端会识别整理，再按类型搬到分发目标任务的目录，并沿用目标任务的自动整理选项。')">i</button>
                         </span>
                         <div class="resource-save-path-grid mt-1">
                             <input id="monitor_scan_path" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" placeholder="/115/自存影视/115自存电视剧" readonly>
@@ -38,6 +60,7 @@
                             保存的是 115 路径字符串；即使 Cookie 暂时失效，路径也会保留，恢复后可继续使用。
                         </div>
                     </label>
+                    <div id="monitor-scan-fields" class="space-y-4">
                     <label class="block">
                         <span class="text-xs text-slate-500 inline-flex items-center gap-2">
                             目标路径 (追加到 /strm 下的父路径)
@@ -65,15 +88,6 @@
                     <label class="flex items-center gap-3 cursor-pointer text-sm">
                         <input type="checkbox" id="monitor_auto_scrape_on_new" class="ui-checkbox" onchange="syncMonitorAutoScrapeOptions()">
                         <span>新增资源自动刮削整理（仅整理高置信度自动匹配的条目，失败仅记录日志）</span>
-                    </label>
-                    <label class="block">
-                        <span class="text-xs text-slate-500">接收夹快捷导入目标</span>
-                        <select id="monitor_quick_import_target" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none">
-                            <option value="">不使用</option>
-                            <option value="movie">电影：接收夹识别为电影时搬到这里</option>
-                            <option value="tv">电视剧：接收夹识别为剧集时搬到这里</option>
-                        </select>
-                        <div class="text-[11px] text-slate-500 mt-1">接收夹快捷导入按识别结果分发时，会搬进标注了对应类型的监控任务的扫描路径；整理规则沿用本任务的自动整理选项。</div>
                     </label>
                     <div id="monitor-auto-scrape-options" class="hidden space-y-3 rounded-xl border border-slate-700 bg-slate-900/60 p-3">
                         <div class="text-xs font-bold text-slate-300">自动整理选项</div>
@@ -158,20 +172,56 @@
                             <input id="monitor_list_delay_ms" type="number" min="0" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="250">
                         </label>
                     </div>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <label class="block">
-                            <span class="text-xs text-slate-500">文件大小过滤 (MB)</span>
-                            <input id="monitor_min_file_size_mb" type="number" min="0" step="0.1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
-                        </label>
-                        <label class="block">
-                            <span class="text-xs text-slate-500">任务执行延时 (秒)</span>
-                            <input id="monitor_delay_seconds" type="number" min="0" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
-                        </label>
+                    <label class="block">
+                        <span class="text-xs text-slate-500">文件大小过滤 (MB)</span>
+                        <input id="monitor_min_file_size_mb" type="number" min="0" step="0.1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
+                    </label>
+                    </div>
+                    <div id="monitor-inbox-fields" class="hidden space-y-4">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <label class="block">
+                                <span class="text-xs text-slate-500">电影分发到</span>
+                                <select id="monitor_inbox_target_movie" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none">
+                                    <option value="">不分发</option>
+                                </select>
+                            </label>
+                            <label class="block">
+                                <span class="text-xs text-slate-500">电视剧分发到</span>
+                                <select id="monitor_inbox_target_tv" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none">
+                                    <option value="">不分发</option>
+                                </select>
+                            </label>
+                        </div>
+                        <div class="text-[11px] text-slate-500 leading-5">识别为电影 / 电视剧的条目会搬进所选扫描任务的目录，整理规则沿用那个任务的自动整理选项；识别不准的留在接收夹并写明原因。</div>
+                        <div class="rounded-xl border border-slate-700 bg-slate-900/60 p-3 space-y-3">
+                            <div class="flex flex-wrap items-center justify-between gap-2">
+                                <div class="text-xs font-bold text-slate-300">推送地址</div>
+                                <button type="button" onclick="runInboxTaskNow()" class="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold">立即整理并分发</button>
+                            </div>
+                            <div class="resource-save-path-grid">
+                                <input id="monitor_inbox_webhook_url" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-xs font-mono" readonly value="保存任务后生成">
+                                <button type="button" onclick="copyMonitorWebhookUrl()" class="px-3 py-3 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold whitespace-nowrap">复制地址</button>
+                            </div>
+                            <div class="text-[11px] text-slate-500 leading-5">
+                                油猴脚本“请求地址”填这个地址，“保存路径”填 115 根目录下的相对路径（例如 <span class="font-mono">接收</span>，不要带 <span class="font-mono">/115</span> 前缀），留空则默认落到接收夹。
+                            </div>
+                        </div>
+                        <div id="inbox-task-status" class="tg-proxy-status quick-import-result">
+                            <div class="tg-proxy-status-title">最近动态</div>
+                            <div class="tg-proxy-status-meta">打开任务后会自动读取最近的接收与整理记录。</div>
+                        </div>
                     </div>
                     <label class="block">
                         <span class="text-xs text-slate-500 inline-flex items-center gap-2">
+                            任务执行延时 (秒)
+                            <button type="button" class="info-dot" onclick="showHelp('导入完成后延迟几秒再自动刷新 / 整理。0 表示立即执行；脚本在 webhook 里单独传 delayTime 时优先用它。')">i</button>
+                        </span>
+                        <input id="monitor_delay_seconds" type="number" min="0" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
+                    </label>
+                    <label class="block">
+                        <span class="text-xs text-slate-500 inline-flex items-center gap-2">
                             定时执行 (分钟，0 为关闭)
-                            <button type="button" class="info-dot" onclick="showHelp('按分钟周期自动运行文件夹监控任务。0 表示不自动执行，仅手动或 webhook 触发。')">i</button>
+                            <button type="button" class="info-dot" onclick="showHelp('按分钟周期自动执行本任务：扫描任务会重新扫描生成 / 刷新 STRM，接收夹任务会识别并分发一次。0 表示关闭，仅手动或 webhook 触发。')">i</button>
                         </span>
                         <input id="monitor_cron_minutes" type="number" min="0" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
                     </label>

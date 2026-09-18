@@ -18,37 +18,6 @@
             </div>
 
             <div class="group-card">
-                <div class="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                        <h3 class="group-title mb-1">接收夹快捷导入</h3>
-                        <div class="text-xs text-slate-400 leading-6">推送到接收夹的文件会自动识别整理，并按类型搬到标注了「电影 / 电视剧」的监控目录；识别不准的留在接收夹并写明原因。整理规则直接沿用目标监控任务的自动整理选项。</div>
-                    </div>
-                    <label class="flex items-center gap-3 cursor-pointer text-sm">
-                        <input type="checkbox" id="quick_import_enabled" class="ui-checkbox" onchange="saveQuickImportSettings()">
-                        启用
-                    </label>
-                </div>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                    <label class="block">
-                        <span class="text-xs text-slate-500">接收文件夹（115 网盘内）</span>
-                        <div class="resource-save-path-grid mt-1">
-                            <input id="quick_import_inbox_path" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" placeholder="/115/接收" readonly>
-                            <button type="button" onclick="openQuickImportInboxPicker()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold whitespace-nowrap">选择文件夹</button>
-                        </div>
-                    </label>
-                    <div>
-                        <span class="text-xs text-slate-500">分发目标（在监控任务里标注）</span>
-                        <div id="quick-import-targets" class="text-xs text-slate-400 leading-6 mt-2">正在读取...</div>
-                    </div>
-                </div>
-                <div class="flex flex-wrap items-center gap-3 mt-4">
-                    <button id="quick-import-run-btn" type="button" onclick="runQuickImport()" class="px-4 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold">立即整理并分发</button>
-                    <div class="text-xs text-slate-500">自己拖进接收夹的文件不会自动触发，需要点这里跑一次；磁力/分享导入完成后会自动触发。</div>
-                </div>
-                <div id="quick-import-status" class="mt-3 rounded-xl border px-4 py-3 text-sm leading-6"></div>
-            </div>
-
-            <div class="group-card">
                 <div class="flex justify-between items-center mb-4">
                     <h3 class="group-title mb-0">监控日志</h3>
                     <div class="flex items-center gap-2 flex-wrap">

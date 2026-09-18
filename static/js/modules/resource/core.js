@@ -1889,11 +1889,17 @@
             const fullPath = normalizeRemotePathInput(joinRelativePathInput(mountPath, normalizedSavepath));
             let matchedTask = null;
             let bestDepth = -1;
+            let matchedInbox = null;
             tasks.forEach(task => {
                 const scanPath = normalizeRemotePathInput(task.scan_path || '');
                 if (!task?.name || !scanPath || scanPath === '/') return;
                 const matches = fullPath === scanPath || fullPath.startsWith(`${scanPath}/`);
                 if (!matches) return;
+                if (String(task.task_type || 'scan') === 'inbox') {
+                    // 接收夹不是监控任务：落到这里的资源由接收夹整理流程接管，不生成 STRM。
+                    matchedInbox = task;
+                    return;
+                }
                 const depth = scanPath.split('/').filter(Boolean).length;
                 if (depth > bestDepth) {
                     bestDepth = depth;
@@ -1906,6 +1912,9 @@
                 task: matchedTask,
                 taskName: matchedTask?.name || '',
                 scanPath: normalizeRemotePathInput(matchedTask?.scan_path || ''),
+                inboxTask: matchedInbox,
+                inboxTaskName: matchedInbox?.name || '',
+                isInbox: !matchedTask && !!matchedInbox,
             };
         }
 
@@ -2007,7 +2016,9 @@
             }
             const monitorHint = match.taskName
                 ? `当前保存路径会映射到 ${providerLabel} 路径 ${match.fullPath}，命中文件夹监控任务“${match.taskName}”，保存完成后会自动触发生成 strm。`
-                : `当前保存路径会映射到 ${providerLabel} 路径 ${match.fullPath}，未命中文件夹监控任务，保存后不会自动生成 strm。`;
+                : (match.isInbox
+                    ? `当前保存路径会映射到 ${providerLabel} 路径 ${match.fullPath}，命中接收夹“${match.inboxTaskName || '接收夹'}”，保存完成后会自动识别、整理并按类型分发到对应监控目录。`
+                    : `当前保存路径会映射到 ${providerLabel} 路径 ${match.fullPath}，未命中文件夹监控任务，保存后不会自动生成 strm。`);
             hintEl.innerText = `${selectionHint} ${monitorHint}`.trim();
         }
 
@@ -2057,6 +2068,8 @@
 
             if (match.taskName) {
                 displayInput.textContent = match.taskName;
+            } else if (match.isInbox) {
+                displayInput.textContent = `${match.inboxTaskName || '接收夹'}（导入后自动整理分发）`;
             } else {
                 displayInput.textContent = '当前目录不自动触发';
             }

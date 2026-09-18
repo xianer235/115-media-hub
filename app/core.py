@@ -923,9 +923,6 @@ _SETTINGS_CONFIG_KEY_ORDER_AFTER_AUTH: Tuple[str, ...] = (
     "ai_match_thinking_mode",
     "ai_match_min_confidence",
     "ai_match_cache_ttl_hours",
-    # 8c. 接收夹快捷导入
-    "quick_import_enabled",
-    "quick_import_inbox_path",
     # 9. 通知推送
     "notify_push_enabled",
     "notify_monitor_enabled",
@@ -1040,8 +1037,6 @@ def default_config() -> Dict[str, Any]:
         "ai_match_thinking_mode": "auto",
         "ai_match_min_confidence": 0,
         "ai_match_cache_ttl_hours": 24,
-        "quick_import_enabled": False,
-        "quick_import_inbox_path": "",
         "pansou_enabled": False,
         "pansou_base_url": "",
         "pansou_username": "",
@@ -1133,8 +1128,35 @@ def is_resource_source_search_enabled(source: Dict[str, Any]) -> bool:
     }
 
 
+# 监控任务类型：scan = 扫描目录生成 strm；inbox = 接收夹，负责接收后识别分发。
+MONITOR_TASK_TYPE_SCAN = "scan"
+MONITOR_TASK_TYPE_INBOX = "inbox"
+MONITOR_TASK_TYPES = (MONITOR_TASK_TYPE_SCAN, MONITOR_TASK_TYPE_INBOX)
+MONITOR_INBOX_DEFAULT_NAME = "接收"
+
+
+def normalize_task_type(value: Any) -> str:
+    key = str(value or "").strip().lower()
+    return key if key in MONITOR_TASK_TYPES else MONITOR_TASK_TYPE_SCAN
+
+
+def normalize_distribute_targets(value: Any) -> Dict[str, str]:
+    """接收夹任务的分发目标：``{"movie": 监控任务名, "tv": 监控任务名}``。"""
+    raw = value if isinstance(value, dict) else {}
+    targets: Dict[str, str] = {}
+    for key in ("movie", "tv"):
+        name = str(raw.get(key, "") or "").strip()
+        if name:
+            targets[key] = name
+    return targets
+
+
 def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
     name = str(task.get("name", "")).strip()
+    task_type = normalize_task_type(task.get("task_type"))
+    # 老配置没有 enabled：扫描任务默认开启，接收夹任务默认关闭（要靠用户在编辑弹窗里显式打开）。
+    enabled_default = task_type == MONITOR_TASK_TYPE_SCAN
+    enabled = normalize_bool(task.get("enabled", enabled_default), default=enabled_default)
     retries = int(task.get("retries", 3) or 3)
     retries = max(1, min(MAX_MONITOR_RETRIES, retries))
     raw_list_delay_ms = task.get("list_delay_ms", 250)
@@ -1158,6 +1180,9 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         quick_import_target = ""
     return {
         "name": name,
+        "task_type": task_type,
+        "enabled": enabled,
+        "distribute_targets": normalize_distribute_targets(task.get("distribute_targets")),
         "webhook_enabled": normalize_bool(task.get("webhook_enabled", False), default=False),
         "auto_scrape_on_new": normalize_bool(task.get("auto_scrape_on_new", False), default=False),
         "auto_scrape_options": auto_scrape_options,
@@ -1174,6 +1199,157 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         "delay_seconds": max(0, delay_seconds),
         "cron_minutes": max(0, cron_minutes),
     }
+
+
+def ensure_inbox_task(cfg: Dict[str, Any]) -> None:
+    """保证配置里始终有且只有一个接收夹任务，并顺带迁移旧版全局配置。
+
+    接收夹是内置的固定槽位（用户只需要配好它，不需要自己新建）：没有就补一个默认的
+    「接收」任务，有多个就收敛成一个，同时把旧版的 ``quick_import_enabled`` /
+    ``quick_import_inbox_path`` 与扫描任务上的 ``quick_import_target`` 迁移过来并删除旧字段。
+    """
+    tasks = cfg.get("monitor_tasks") if isinstance(cfg.get("monitor_tasks"), list) else []
+    legacy_keys_present = ("quick_import_enabled" in cfg) or ("quick_import_inbox_path" in cfg)
+
+    legacy_enabled = normalize_bool(cfg.get("quick_import_enabled", False), default=False)
+    legacy_inbox = normalize_remote_path(str(cfg.get("quick_import_inbox_path", "") or "").strip())
+    if legacy_inbox in ("", "/"):
+        legacy_inbox = ""
+    legacy_targets: Dict[str, str] = {}
+    for task in tasks:
+        if not isinstance(task, dict) or normalize_task_type(task.get("task_type")) != MONITOR_TASK_TYPE_SCAN:
+            continue
+        target = str(task.get("quick_import_target", "") or "").strip().lower()
+        if target in ("movie", "tv") and target not in legacy_targets:
+            legacy_targets[target] = str(task.get("name", "") or "").strip()
+
+    inbox_tasks = [
+        task
+        for task in tasks
+        if isinstance(task, dict) and normalize_task_type(task.get("task_type")) == MONITOR_TASK_TYPE_INBOX
+    ]
+    inbox = inbox_tasks[0] if inbox_tasks else None
+    if inbox is None:
+        name = MONITOR_INBOX_DEFAULT_NAME
+        used_names = {str(task.get("name", "") or "") for task in tasks if isinstance(task, dict)}
+        suffix = 2
+        while name in used_names:
+            name = f"{MONITOR_INBOX_DEFAULT_NAME}{suffix}"
+            suffix += 1
+        # 内置接收夹默认开启（配置不全时界面会直接提示缺什么），但 webhook 默认关闭：
+        # 只有用户在后台设置了签名密钥后才能手动打开，避免全新安装就暴露一个免鉴权写入口。
+        inbox = normalize_task(
+            {
+                "name": name,
+                "task_type": MONITOR_TASK_TYPE_INBOX,
+                "enabled": True,
+                "webhook_enabled": False,
+            }
+        )
+        tasks.append(inbox)
+
+    inbox_scan_path = str(inbox.get("scan_path", "") or "").strip()
+    if inbox_scan_path == "/":
+        inbox_scan_path = ""
+        # 空路径保持为空，界面才会提示“请先选择接收文件夹”，而不是显示成根目录。
+        inbox["scan_path"] = ""
+    if legacy_inbox and not inbox_scan_path:
+        inbox["scan_path"] = legacy_inbox
+    if legacy_enabled:
+        inbox["enabled"] = True
+    targets = normalize_distribute_targets(inbox.get("distribute_targets"))
+    for key, task_name in legacy_targets.items():
+        targets.setdefault(key, task_name)
+    inbox["distribute_targets"] = targets
+    if legacy_keys_present or legacy_targets:
+        # 旧接收夹入口本身常开，但迁移时遵循“有签名密钥才开 webhook”的新口径；
+        # 没有密钥就保持关闭，让用户在编辑弹窗里看到提示后自行开启。
+        inbox["webhook_enabled"] = bool(str(cfg.get("webhook_secret", "") or "").strip())
+    # 只保留一个接收夹任务：历史误建的多余接收夹会互相抢同一个路径，这里直接收敛掉。
+    cfg["monitor_tasks"] = [
+        task
+        for task in tasks
+        if task is inbox or normalize_task_type(task.get("task_type")) != MONITOR_TASK_TYPE_INBOX
+    ]
+
+    # 分发目标统一由接收夹任务声明，扫描任务上的旧标注清空，避免两处各说各话。
+    for task in cfg.get("monitor_tasks", []) or []:
+        if isinstance(task, dict):
+            task["quick_import_target"] = ""
+    cfg.pop("quick_import_enabled", None)
+    cfg.pop("quick_import_inbox_path", None)
+
+
+def get_inbox_task(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """取接收夹任务（``task_type='inbox'``），未配置时返回空字典。"""
+    active_cfg = cfg if isinstance(cfg, dict) else get_config()
+    for task in active_cfg.get("monitor_tasks", []) or []:
+        if isinstance(task, dict) and normalize_task_type(task.get("task_type")) == MONITOR_TASK_TYPE_INBOX:
+            return task
+    return {}
+
+
+def apply_task_type_constraints(
+    existing_tasks: List[Dict[str, Any]],
+    posted_tasks: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """任务类型不可更改：内置接收夹固定是接收夹，新增任务一律是普通扫描任务。
+
+    - 与现有任务同名：类型沿用现有类型（扫描任务不能变成接收夹，接收夹也不能变成扫描任务）；
+    - 提交里出现的新接收夹：只有「当前接收夹名字已从提交列表消失，且提交里恰好一个接收夹」
+      时才当作接收夹改名放行（改名会同时改变 webhook 地址，界面里有提示）；
+    - 其余新任务一律按扫描任务处理。
+    """
+    current_by_name = {
+        str(task.get("name", "") or "").strip(): task
+        for task in (existing_tasks or [])
+        if isinstance(task, dict) and str(task.get("name", "") or "").strip()
+    }
+    current_inbox_name = next(
+        (
+            name
+            for name, task in current_by_name.items()
+            if normalize_task_type(task.get("task_type")) == MONITOR_TASK_TYPE_INBOX
+        ),
+        "",
+    )
+    posted_names = {str(task.get("name", "") or "").strip() for task in (posted_tasks or [])}
+    inbox_candidates = [
+        str(task.get("name", "") or "").strip()
+        for task in (posted_tasks or [])
+        if normalize_task_type(task.get("task_type")) == MONITOR_TASK_TYPE_INBOX
+    ]
+    rename_candidate = ""
+    if current_inbox_name and current_inbox_name not in posted_names and len(inbox_candidates) == 1:
+        rename_candidate = inbox_candidates[0]
+
+    for task in posted_tasks or []:
+        name = str(task.get("name", "") or "").strip()
+        existing = current_by_name.get(name)
+        if existing is not None:
+            task["task_type"] = normalize_task_type(existing.get("task_type"))
+        elif normalize_task_type(task.get("task_type")) == MONITOR_TASK_TYPE_INBOX and name != rename_candidate:
+            task["task_type"] = MONITOR_TASK_TYPE_SCAN
+        if normalize_task_type(task.get("task_type")) != MONITOR_TASK_TYPE_INBOX:
+            task["distribute_targets"] = {}
+    return posted_tasks
+
+
+def finalize_monitor_tasks_for_save(
+    existing_tasks: List[Dict[str, Any]],
+    posted_tasks: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """保存监控任务前的统一收口：类型不可改；漏传内置接收夹时沿用当前配置。
+
+    ``/monitor/save`` 与 ``/save_settings`` 都走这里，避免两个入口的约束不一致
+    （否则可以绕过 ``/monitor/save`` 直接把内置接收夹改成扫描任务）。
+    """
+    tasks = apply_task_type_constraints(existing_tasks, posted_tasks)
+    if not any(normalize_task_type(task.get("task_type")) == MONITOR_TASK_TYPE_INBOX for task in tasks):
+        current_inbox = get_inbox_task({"monitor_tasks": existing_tasks})
+        if current_inbox:
+            tasks.append(current_inbox)
+    return tasks
 
 
 def normalize_subscription_quality_priority(value: Any) -> str:
@@ -2397,6 +2573,37 @@ def resolve_provider_relative_path(
     return provider, relative_path
 
 
+def normalize_userscript_savepath(cfg: Dict[str, Any], raw: Any) -> str:
+    """把油猴脚本里的「保存路径」统一成 115 根目录相对路径。
+
+    用户在脚本里既能填根目录相对路径（``接收``），也可能照抄面板上的挂载路径
+    （``/115/接收``）。这里统一剥掉挂载前缀，避免同一个目录在服务端被当成两个：
+    快捷导入会因为对不上接收夹而直接报错，扫描任务更糟——会静默去 115 根目录下
+    找/建一个叫 ``115`` 的文件夹。多带前缀做兼容，少带前缀才是唯一口径。
+    """
+    relative = normalize_relative_path(str(raw or "").strip())
+    if not relative:
+        return ""
+    try:
+        _provider, matched_rel = resolve_provider_relative_path(
+            cfg,
+            join_remote_path("/", relative),
+            expected_provider="115",
+        )
+    except Exception:
+        return relative
+    return normalize_relative_path(matched_rel)
+
+
+def is_relative_path_within(child: Any, parent: Any) -> bool:
+    """相对路径包含判断（``接收/子目录`` 落在 ``接收`` 内，但 ``接收2`` 不算）。"""
+    child_rel = normalize_relative_path(str(child or "").strip())
+    parent_rel = normalize_relative_path(str(parent or "").strip())
+    if not child_rel or not parent_rel:
+        return False
+    return child_rel == parent_rel or child_rel.startswith(parent_rel + "/")
+
+
 SCRAPER_NOISE_WORDS_MAX_ITEMS = 200
 SCRAPER_NOISE_WORD_MAX_LENGTH = 50
 
@@ -2512,10 +2719,6 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         merged["ai_match_min_confidence"] = 0
     if "ai_match_cache_ttl_hours" not in merged:
         merged["ai_match_cache_ttl_hours"] = 24
-    if "quick_import_enabled" not in merged:
-        merged["quick_import_enabled"] = False
-    if "quick_import_inbox_path" not in merged:
-        merged["quick_import_inbox_path"] = ""
     if "pansou_enabled" not in merged:
         merged["pansou_enabled"] = False
     if "pansou_base_url" not in merged:
@@ -2693,12 +2896,7 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     except (TypeError, ValueError):
         ai_match_cache_ttl_hours = 24
     merged["ai_match_cache_ttl_hours"] = max(0, min(24 * 30, ai_match_cache_ttl_hours))
-    merged["quick_import_enabled"] = normalize_bool(merged.get("quick_import_enabled", False), default=False)
-    merged["quick_import_inbox_path"] = normalize_remote_path(
-        str(merged.get("quick_import_inbox_path", "") or "").strip()
-    )
-    if merged["quick_import_inbox_path"] in ("", "/"):
-        merged["quick_import_inbox_path"] = ""
+    ensure_inbox_task(merged)
     try:
         tg_channel_threads = int(merged.get("tg_channel_threads", TG_CHANNEL_THREADS_DEFAULT) or TG_CHANNEL_THREADS_DEFAULT)
     except (TypeError, ValueError):
@@ -3829,6 +4027,9 @@ def match_monitor_task_for_savepath(cfg: Dict[str, Any], savepath: str, provider
     for raw_task in cfg.get("monitor_tasks", []) or []:
         task = normalize_task(raw_task or {})
         task_name = str(task.get("name", "") or "").strip()
+        if task.get("task_type") == MONITOR_TASK_TYPE_INBOX:
+            # 接收夹不是扫描目标：落点匹配到它时应当交给接收夹流程，而不是触发目录扫描。
+            continue
         scan_path = normalize_remote_path(task.get("scan_path", ""))
         if not task_name or not scan_path or scan_path == "/":
             continue
@@ -6584,14 +6785,23 @@ async def write_log(msg: str, level: Optional[str] = None) -> None:
     await asyncio.sleep(0)
 
 
-async def write_monitor_log(text: str, level: str = "info") -> None:
+_monitor_log_lock = threading.Lock()
+
+
+def write_monitor_log_sync(text: str, level: str = "info") -> None:
+    """同步写监控日志，给工作线程里的流程用（例如接收夹整理）。"""
     resolved_level = str(level or infer_log_level_from_text(text)).strip().lower() or "info"
     line = f"{format_log_time(True)} {text}"
     entry = {"text": line, "level": resolved_level}
-    _append_status_log_entry(monitor_status["logs"], entry)
-    _append_monitor_log_segment_entry(entry)
+    with _monitor_log_lock:
+        _append_status_log_entry(monitor_status["logs"], entry)
+        _append_monitor_log_segment_entry(entry)
     schedule_ui_state_push()
-    await asyncio.to_thread(append_log_file, MONITOR_LOG_PATH, line)
+    append_log_file(MONITOR_LOG_PATH, line)
+
+
+async def write_monitor_log(text: str, level: str = "info") -> None:
+    write_monitor_log_sync(text, level)
     await asyncio.sleep(0)
 
 
