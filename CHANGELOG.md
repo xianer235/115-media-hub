@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.10] - 2026-09-18
+
+### 新增：接收夹整理可以中断
+
+- **卡片上的运行按钮运行中变成黄色的「中断」**：接收夹整理跑在工作线程里，运行状态改由 `/scraper/quick-import/status` 的 `running` 驱动（此前只看监控扫描状态，所以按钮永远停在「立即整理」）；运行中卡片按钮切换成琥珀色方框（复用既有 `monitor-task-icon-btn-stop` 样式），点击走 `POST /monitor/stop` 的中断分支。
+- **中断语义**：`request_quick_import_cancel()` 置中断标记，整理循环在**下一条目开始前**生效——已经搬完的不会回滚，未处理的条目留在接收夹并记为「已中断，未整理」，运行记录写 `cancelled`，监控日志里的分段以「任务结束 | 接收 | 中断」收尾（warn 级）。
+- **顺手修掉手动运行卡住的问题**：`trigger=manual` 时不再等 300 秒的整理锁，已有整理在跑就直接返回「已有接收夹整理在执行，可在任务卡片上点「中断」后重试」；自动触发（导入完成 / 定时）仍保持排队等待。
+- **弹窗同一个开关**：「立即整理并分发」按钮运行中变成「中断整理」（琥珀色，取消中显示「正在中断…」），状态面板与卡片共用同一份 `/scraper/quick-import/status`；整理进行中时卡片状态刷新间隔从 30 秒缩短到 5 秒，`cancelling` 只在确实运行中才为真。
+
+### 验证
+
+- 新增用例：`tests/test_quick_import.py` 增加 2 项（空闲时中断请求返回 False、识别阶段请求中断后整理停住并写 `cancelled` 记录 + 未处理条目记为「已中断，未整理」）；`tests/test_quick_import_frontend.py` 增加 1 项（运行状态取自 quick-import 状态、`toggleInboxTaskRun`、5 秒运行中刷新、`/monitor/stop` 调用 `request_quick_import_cancel`）。完整 unittest 897 项、`compileall`、改动 JS `node --check`、`git diff --check`、`npm run build:css`（新增 `.bg-amber-500` / `.hover:bg-amber-400`）均通过。
+- 临时服务实测：`/scraper/quick-import/status` 返回 `running:false` + `cancelling:false`；空闲时 `POST /monitor/stop {"name":"接收"}` 返回 `{ok:false,status:idle}`；`POST /monitor/start` 行为不变。真实 115 长任务下的中断手感待部署后确认。
+
 ## [0.11.9] - 2026-09-18
 
 ### 调整：接收夹并入任务列表（统一任务 / 路径 / webhook 口径）

@@ -3364,6 +3364,7 @@
         let inboxTaskStatusCache = {};
         let inboxStatusFetchedAt = 0;
         const INBOX_STATUS_REFRESH_INTERVAL_MS = 30000;
+        const INBOX_STATUS_RUNNING_REFRESH_INTERVAL_MS = 5000;
 
         function monitorTaskWebhookUrl(taskName = '') {
             const origin = String(window.location?.origin || '').replace(/\/+$/, '');
@@ -3417,6 +3418,18 @@
             const statusEl = document.getElementById('inbox-task-status');
             if (!statusEl) return;
             const data = status && typeof status === 'object' ? status : {};
+            const runBtn = document.getElementById('inbox-task-run-btn');
+            if (runBtn) {
+                const busy = !!data.running;
+                const cancelling = !!data.cancelling;
+                runBtn.textContent = busy ? (cancelling ? '正在中断…' : '中断整理') : '立即整理并分发';
+                runBtn.disabled = cancelling;
+                runBtn.classList.toggle('btn-disabled', cancelling);
+                runBtn.classList.toggle('bg-amber-500', busy);
+                runBtn.classList.toggle('hover:bg-amber-400', busy);
+                runBtn.classList.toggle('bg-emerald-600', !busy);
+                runBtn.classList.toggle('hover:bg-emerald-500', !busy);
+            }
             const showStatus = (modifier, html) => {
                 statusEl.className = modifier
                     ? `tg-proxy-status quick-import-result ${modifier}`
@@ -3489,9 +3502,13 @@
         }
 
         function maybeRefreshInboxTaskStatus() {
-            // 跟着页面既有的状态轮询（约 15s 一次）按 30s 节流刷新卡片上的最近接收 / 最近整理。
+            // 跟着页面既有的状态轮询（约 15s 一次）刷新卡片上的最近接收 / 最近整理；
+            // 整理进行中时缩短到 5s，好让卡片及时出现「中断」按钮。
             const now = Date.now();
-            if (inboxStatusFetchedAt && now - inboxStatusFetchedAt < INBOX_STATUS_REFRESH_INTERVAL_MS) return;
+            const interval = inboxTaskStatusCache && inboxTaskStatusCache.running
+                ? INBOX_STATUS_RUNNING_REFRESH_INTERVAL_MS
+                : INBOX_STATUS_REFRESH_INTERVAL_MS;
+            if (inboxStatusFetchedAt && now - inboxStatusFetchedAt < interval) return;
             void refreshInboxTaskStatus();
         }
 
@@ -3535,9 +3552,23 @@
             }
         }
 
+        async function toggleInboxTaskRun() {
+            // 弹窗里的按钮是同一个开关：空闲时开始整理，整理中变成中断。
+            const running = !!(inboxTaskStatusCache && inboxTaskStatusCache.running);
+            if (!running) {
+                await runInboxTaskNow();
+                return;
+            }
+            const name = currentMonitorFormTaskName();
+            if (!name) return;
+            renderInboxTaskStatus({ ...inboxTaskStatusCache, running: true, cancelling: true });
+            await stopMonitorTask(name);
+        }
+
         window.refreshInboxTaskStatus = refreshInboxTaskStatus;
         window.copyMonitorWebhookUrl = copyMonitorWebhookUrl;
         window.runInboxTaskNow = runInboxTaskNow;
+        window.toggleInboxTaskRun = toggleInboxTaskRun;
 
         function setResourceTgHealthState(nextState = {}) {
             resourceTgHealthState = {
@@ -4641,6 +4672,16 @@
                     showToast('当前没有这个任务在运行', { tone: 'warn', duration: 2600, placement: 'top-center' });
                     return;
                 }
+                const stopTargetTask = (monitorState.tasks || []).find((item) => item.name === name);
+                if (String(stopTargetTask?.task_type || 'scan') === 'inbox') {
+                    showToast('已请求中断接收夹整理：正在处理的条目结束后生效，已整理完的不会回滚', {
+                        tone: 'warn',
+                        duration: 3600,
+                        placement: 'top-center',
+                    });
+                    await refreshInboxTaskStatus();
+                    return;
+                }
                 const clearedCount = Math.max(0, Number(data.cleared || 0));
                 let detailText = `${name} 已发送中断请求`;
                 if (data.status === 'cleared') {
@@ -4768,7 +4809,13 @@
                 const changeCountHtml = changeLabels.length
                     ? `<div class="mt-1 text-xs font-semibold ${failedChanges ? 'text-red-400' : 'text-amber-300'}">${changeLabels.join(' / ')}</div>`
                     : '';
-                const running = monitorState.running && monitorState.current_task === taskName;
+                // 接收夹整理跑在工作线程里，运行状态来自 /scraper/quick-import/status，而不是监控扫描状态。
+                const inboxStatus = isInboxTask && inboxTaskStatusCache && typeof inboxTaskStatusCache === 'object'
+                    ? inboxTaskStatusCache
+                    : {};
+                const running = isInboxTask
+                    ? !!inboxStatus.running
+                    : (monitorState.running && monitorState.current_task === taskName);
                 const queued = (monitorState.queued || []).includes(taskName);
                 const starting = isMonitorActionLocked('start', taskName);
                 const stopping = isMonitorActionLocked('stop', taskName);
@@ -4792,10 +4839,16 @@
                 const toggleRunButton = buildMonitorTaskIconButton({
                     action: 'toggle-run',
                     taskName,
-                    label: isInboxTask ? (starting ? '整理中' : '立即整理') : toggleRunLabel,
+                    label: isInboxTask
+                        ? (
+                            running
+                                ? (stopping || inboxStatus.cancelling ? '中断中' : '中断')
+                                : (starting ? '整理中' : '立即整理')
+                        )
+                        : toggleRunLabel,
                     icon: toggleRunIcon,
                     tone: toggleRunTone,
-                    disabled: isInboxTask ? (starting || deleting) : toggleRunDisabled,
+                    disabled: isInboxTask ? (starting || stopping || deleting) : toggleRunDisabled,
                     extraAttrs: `data-monitor-run-action="${escapeHtml(toggleRunAction)}"`,
                 });
                 const editButton = buildMonitorTaskIconButton({

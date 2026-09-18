@@ -196,7 +196,7 @@
                         <div class="rounded-xl border border-slate-700 bg-slate-900/60 p-3 space-y-3">
                             <div class="flex flex-wrap items-center justify-between gap-2">
                                 <div class="text-xs font-bold text-slate-300">推送地址</div>
-                                <button type="button" onclick="runInboxTaskNow()" class="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold">立即整理并分发</button>
+                                <button id="inbox-task-run-btn" type="button" onclick="toggleInboxTaskRun()" class="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold">立即整理并分发</button>
                             </div>
                             <div class="resource-save-path-grid">
                                 <input id="monitor_inbox_webhook_url" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-xs font-mono" readonly value="保存任务后生成">

@@ -47,6 +47,16 @@ QUICK_IMPORT_LOCK_WAIT_SECONDS = max(
 )
 
 _QUICK_IMPORT_RUN_LOCK = threading.Lock()
+# 中断标记：接收夹整理是长任务，用户点「中断」后在下一条目开始前生效（已搬完的不会回滚）。
+_QUICK_IMPORT_CANCEL = threading.Event()
+
+
+def request_quick_import_cancel() -> bool:
+    """请求中断当前接收夹整理；没有在跑时返回 False。"""
+    if not _QUICK_IMPORT_RUN_LOCK.locked():
+        return False
+    _QUICK_IMPORT_CANCEL.set()
+    return True
 
 
 def _inbox_remote_path(cfg: Dict[str, Any]) -> str:
@@ -355,6 +365,7 @@ def get_quick_import_status() -> Dict[str, Any]:
             for key in QUICK_IMPORT_TARGET_KEYS
         },
         "running": _QUICK_IMPORT_RUN_LOCK.locked(),
+        "cancelling": _QUICK_IMPORT_RUN_LOCK.locked() and _QUICK_IMPORT_CANCEL.is_set(),
         "latest": latest,
         "latest_detail": detail,
         "recent_jobs": list_inbox_recent_jobs(inbox_rel, 3),
@@ -600,8 +611,15 @@ def run_quick_import(trigger: str = "manual", *, sub_path: str = "") -> Dict[str
 
     低置信度 / 识别失败 / 计划冲突 / 搬运失败的条目都会留在接收夹，并记录具体原因。
     """
-    if not _QUICK_IMPORT_RUN_LOCK.acquire(timeout=QUICK_IMPORT_LOCK_WAIT_SECONDS):
-        return {"ok": True, "skipped": True, "summary": "已有快捷导入在执行，等待超时，本次跳过"}
+    # 手动点击时不卡住请求：已有整理在跑就直接返回（卡片上会显示黄色的「中断」按钮）。
+    lock_wait_seconds = 0 if str(trigger or "").strip().lower() == "manual" else QUICK_IMPORT_LOCK_WAIT_SECONDS
+    if not _QUICK_IMPORT_RUN_LOCK.acquire(timeout=lock_wait_seconds):
+        return {
+            "ok": True,
+            "skipped": True,
+            "summary": "已有接收夹整理在执行，可在任务卡片上点「中断」后重试",
+        }
+    _QUICK_IMPORT_CANCEL.clear()
     try:
         cfg = get_config()
         config_error = validate_quick_import_config(cfg)
@@ -638,13 +656,18 @@ def run_quick_import(trigger: str = "manual", *, sub_path: str = "") -> Dict[str
         ) -> None:
             """收尾时同时写运行记录和监控日志——接收夹日志要和扫描任务在同一个列表里。"""
             _finish_quick_import_run(run_id, status, moved_count, left_count, summary, detail)
-            level = "error" if status == "failed" else ("success" if moved_count else "info")
+            if status == "failed":
+                level = "error"
+            elif status == "cancelled":
+                level = "warn"
+            else:
+                level = "success" if moved_count else "info"
             try:
                 write_monitor_log_sync(f"{task_label} · {summary}", level)
             except Exception:
                 # 日志落盘失败（例如非容器环境没有 /app/logs）不能影响整理结果。
                 pass
-            write_inbox_divider("任务结束", "完成" if status == "completed" else "失败")
+            write_inbox_divider("任务结束", {"completed": "完成", "cancelled": "中断"}.get(status, "失败"))
 
         # 同一次导入里多个条目可能进同一个目标文件夹，文件夹列表列一次够用（避免重复请求）。
         dispatch_name_cache: Dict[str, Set[str]] = {}
@@ -675,7 +698,13 @@ def run_quick_import(trigger: str = "manual", *, sub_path: str = "") -> Dict[str
                 finish_run("completed", 0, 0, summary, {"moved": [], "left": []})
                 return {"ok": True, "moved": [], "left": [], "summary": summary, "run_id": run_id}
 
+            processed_indexes: List[int] = []
+            cancelled = False
             for index in sorted(picked):
+                if _QUICK_IMPORT_CANCEL.is_set():
+                    cancelled = True
+                    break
+                processed_indexes.append(index)
                 item = items_by_index.get(index)
                 candidate = picked.get(index) if isinstance(picked.get(index), dict) else {}
                 if not item or not candidate:
@@ -837,6 +866,35 @@ def run_quick_import(trigger: str = "manual", *, sub_path: str = "") -> Dict[str
                     }
                 )
 
+            if cancelled:
+                processed_set = set(processed_indexes)
+                for index in sorted(picked):
+                    if index in processed_set:
+                        continue
+                    pending_item = items_by_index.get(index) or {}
+                    left.append(
+                        {
+                            "name": str(pending_item.get("name", "") or ""),
+                            "reason": "已中断，未整理",
+                        }
+                    )
+                summary = f"已中断：已分发 {len(moved)} 项，留在接收夹 {len(left)} 项"
+                finish_run(
+                    "cancelled",
+                    len(moved),
+                    len(left),
+                    summary,
+                    {"moved": moved, "left": left, "cancelled": True},
+                )
+                return {
+                    "ok": True,
+                    "cancelled": True,
+                    "run_id": run_id,
+                    "moved": moved,
+                    "left": left,
+                    "summary": summary,
+                }
+
             summary = f"已整理分发 {len(moved)} 项，留在接收夹 {len(left)} 项"
             finish_run(
                 "completed",
@@ -862,4 +920,5 @@ def run_quick_import(trigger: str = "manual", *, sub_path: str = "") -> Dict[str
             )
             raise
     finally:
+        _QUICK_IMPORT_CANCEL.clear()
         _QUICK_IMPORT_RUN_LOCK.release()

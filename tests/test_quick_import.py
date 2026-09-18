@@ -914,6 +914,54 @@ class QuickImportRunTest(unittest.TestCase):
         self.assertEqual(runs[0]["status"], "completed")
 
 
+    def test_cancel_request_only_works_while_running(self):
+        self.assertFalse(quick_import.request_quick_import_cancel())
+        self.assertTrue(quick_import._QUICK_IMPORT_RUN_LOCK.acquire(timeout=0))
+        try:
+            self.assertTrue(quick_import.request_quick_import_cancel())
+            self.assertTrue(quick_import._QUICK_IMPORT_CANCEL.is_set())
+        finally:
+            quick_import._QUICK_IMPORT_CANCEL.clear()
+            quick_import._QUICK_IMPORT_RUN_LOCK.release()
+        self.assertFalse(quick_import.request_quick_import_cancel())
+
+    def test_run_stops_when_cancel_requested(self):
+        """点「中断」后：已整理完的保留，未处理的下一条目开始前停住并写 cancelled 记录。"""
+        cfg = _cfg()
+        identified = {
+            "items": [_item(1, "电影A"), _item(2, "剧集B")],
+            "picked": {
+                1: {"id": 603, "media_type": "movie"},
+                2: {"id": 1399, "media_type": "tv"},
+            },
+            "results": [
+                {"item_index": 1, "status": "auto"},
+                {"item_index": 2, "status": "auto"},
+            ],
+        }
+
+        def identify_then_cancel(*args, **kwargs):
+            # 模拟用户在识别阶段点了「中断」。
+            quick_import._QUICK_IMPORT_CANCEL.set()
+            return identified
+
+        with mock.patch.object(quick_import, "get_config", return_value=cfg), \
+                mock.patch.object(quick_import, "resolve_scraper_dest_folder_id", return_value="cid"), \
+                mock.patch.object(quick_import, "identify_scraper_batch_entries", side_effect=identify_then_cancel), \
+                mock.patch.object(quick_import, "build_scraper_plan_for_batch") as plan, \
+                mock.patch.object(quick_import, "write_monitor_log_sync"):
+            result = quick_import.run_quick_import("manual")
+
+        self.assertTrue(result.get("cancelled"))
+        plan.assert_not_called()
+        self.assertIn("已中断", result["summary"])
+        self.assertEqual(result["moved"], [])
+        self.assertEqual([item["reason"] for item in result["left"]], ["已中断，未整理"] * 2)
+        runs = quick_import.list_quick_import_runs(1)
+        self.assertEqual(runs[0]["status"], "cancelled")
+        self.assertFalse(quick_import._QUICK_IMPORT_CANCEL.is_set())
+
+
 class QuickImportMergeIntoExistingFolderTest(unittest.TestCase):
     """目标监控目录里已有同名文件夹时，整理好的内容要并进去，而不是再搬一个同名文件夹过去。
 

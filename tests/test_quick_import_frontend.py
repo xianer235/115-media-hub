@@ -37,7 +37,7 @@ class InboxTaskFrontendTest(unittest.TestCase):
         self.assertIn('id="monitor_inbox_target_tv"', modal)
         self.assertIn('id="monitor_inbox_webhook_url"', modal)
         self.assertIn('onclick="copyMonitorWebhookUrl()"', modal)
-        self.assertIn('onclick="runInboxTaskNow()"', modal)
+        self.assertIn('onclick="toggleInboxTaskRun()"', modal)
         self.assertIn('id="inbox-task-status"', modal)
 
         # 旧的二级弹窗整块删掉，配置回到任务编辑弹窗里。
@@ -144,6 +144,21 @@ class InboxTaskFrontendTest(unittest.TestCase):
         self.assertIn("data.quick_import_inbox", import_modal)
         self.assertIn("保存完成后会由接收夹自动识别整理并分发", import_modal)
         self.assertIn("String(task?.task_type || 'scan') !== 'inbox'", import_modal)
+
+    def test_inbox_run_button_can_be_interrupted(self):
+        """接收夹整理运行中，卡片按钮要变成黄色的「中断」，弹窗按钮同一个开关。"""
+        script = INDEX_SCRIPT_PATH.read_text(encoding="utf-8")
+        # 运行状态来自 /scraper/quick-import/status，而不是监控扫描状态。
+        self.assertIn("!!inboxStatus.running", script)
+        self.assertIn("INBOX_STATUS_RUNNING_REFRESH_INTERVAL_MS = 5000", script)
+        self.assertIn("async function toggleInboxTaskRun", script)
+        self.assertIn("window.toggleInboxTaskRun = toggleInboxTaskRun", script)
+        self.assertIn("已请求中断接收夹整理", script)
+        modal = MONITOR_MODAL_PATH.read_text(encoding="utf-8")
+        self.assertIn('id="inbox-task-run-btn"', modal)
+        self.assertIn('onclick="toggleInboxTaskRun()"', modal)
+        monitor_routes = MONITOR_ROUTES_PATH.read_text(encoding="utf-8")
+        self.assertIn("request_quick_import_cancel", monitor_routes)
 
     def test_webhook_hint_teaches_root_relative_savepath(self):
         """保存路径统一从 115 根目录开始填；面板的 /115/xxx 只是显示形式。"""

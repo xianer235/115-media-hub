@@ -424,6 +424,16 @@ async def scan_monitor_dir(request: Request) -> Dict[str, Any]:
 async def stop_monitor(request: Request) -> Dict[str, Any]:
     data = await request.json()
     task_name = str(data.get("name", "")).strip()
+    cfg = get_config()
+    target_task = next((task for task in cfg["monitor_tasks"] if task["name"] == task_name), None)
+    if target_task and normalize_task_type(target_task.get("task_type")) == MONITOR_TASK_TYPE_INBOX:
+        # 接收夹任务没有“中断扫描”的概念：这里请求中断当前整理（下一条目开始前生效）。
+        from ..services.quick_import import request_quick_import_cancel
+
+        if not request_quick_import_cancel():
+            return {"ok": False, "status": "idle", "cleared": 0}
+        await write_monitor_log(f"{task_name} · 已请求中断接收夹整理", "warn")
+        return {"ok": True, "status": "stopping", "cleared": 0}
     with monitor_queue_lock:
         queued_before = len(monitor_queue)
         monitor_queue[:] = [item for item in monitor_queue if item.get("task_name") != task_name]
