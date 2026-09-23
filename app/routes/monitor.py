@@ -11,13 +11,19 @@ from fastapi.responses import JSONResponse
 from ..background import submit_background
 from ..core import *  # noqa: F401,F403
 from ..db import retry_sqlite_locked
-from ..services.monitor import queue_monitor_dir_scan, queue_monitor_job
+from ..services.monitor import (
+    cancel_queued_monitor_run,
+    queue_monitor_dir_scan,
+    queue_monitor_job,
+    retry_monitor_run,
+)
 from ..services.quick_import import (
     build_quick_import_config,
     is_quick_import_savepath,
     validate_quick_import_config,
 )
 from ..services.resource import run_resource_job
+from ..services.monitor_runs import cleanup_runs, get_run_detail, list_runs
 
 router = APIRouter()
 webhook_router = APIRouter()
@@ -312,6 +318,77 @@ async def list_monitor_userscript_jobs(request: Request) -> Dict[str, Any]:
 async def get_monitor_status(request: Request) -> Dict[str, Any]:
     compact = request.query_params.get("compact") == "1"
     return build_monitor_status_payload(compact=compact)
+
+
+@router.get("/monitor/runs")
+async def get_monitor_runs(request: Request) -> Dict[str, Any]:
+    try:
+        return {
+            "ok": True,
+            **list_runs(
+                limit=max(1, min(100, int(request.query_params.get("limit", 10) or 10))),
+                cursor=str(request.query_params.get("cursor", "") or ""),
+                task_name=str(request.query_params.get("task_name", "") or ""),
+                source=str(request.query_params.get("source", "") or ""),
+                status=str(request.query_params.get("status", "") or ""),
+            ),
+        }
+    except Exception as exc:
+        return _error_response(exc)
+
+
+@router.get("/monitor/runs/{run_id}")
+async def get_monitor_run_detail(run_id: str, request: Request) -> Dict[str, Any]:
+    detail = get_run_detail(
+        run_id,
+        category=str(request.query_params.get("category", "") or ""),
+        offset=max(0, int(request.query_params.get("offset", 0) or 0)),
+        limit=max(1, min(100, int(request.query_params.get("limit", 50) or 50))),
+    )
+    if not detail:
+        return JSONResponse(status_code=404, content={"ok": False, "msg": "运行记录不存在"})
+    return {"ok": True, **detail}
+
+
+@router.post("/monitor/runs/{run_id}/retry")
+async def retry_monitor_run_endpoint(run_id: str) -> Dict[str, Any]:
+    result = await asyncio.to_thread(retry_monitor_run, run_id)
+    if not result.get("ok"):
+        return JSONResponse(status_code=400, content=result)
+    return result
+
+
+@router.post("/monitor/runs/{run_id}/cancel")
+async def cancel_monitor_run_endpoint(run_id: str) -> Dict[str, Any]:
+    result = await asyncio.to_thread(cancel_queued_monitor_run, run_id)
+    if not result.get("ok"):
+        return JSONResponse(status_code=400, content=result)
+    return result
+
+
+@router.post("/monitor/runs/retention")
+async def save_monitor_run_retention(request: Request) -> Dict[str, Any]:
+    data = await request.json()
+    mode = str(data.get("mode", "longterm") or "longterm").strip().lower()
+    try:
+        days = max(1, min(3650, int(data.get("days", 30) or 30)))
+    except (TypeError, ValueError):
+        days = 30
+    cfg = get_config()
+    cfg["monitor_run_retention"] = {"mode": "days" if mode == "days" else "longterm", "days": days}
+    save_config(cfg)
+    return {"ok": True, "retention": cfg["monitor_run_retention"]}
+
+
+@router.post("/monitor/runs/cleanup")
+async def cleanup_monitor_runs(request: Request) -> Dict[str, Any]:
+    data = await request.json()
+    preview = bool(data.get("preview", False))
+    try:
+        days = max(0, int(data.get("days", 0) or 0))
+    except (TypeError, ValueError):
+        days = 0
+    return {"ok": True, **cleanup_runs(days=days, preview=preview)}
 
 
 @router.get("/monitor/manual-required")

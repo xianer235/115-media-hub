@@ -363,7 +363,7 @@ class MonitorDirScanTest(unittest.TestCase):
         )
         self.assertEqual(queued[0]["payload"]["provider"], "115")
 
-    def test_queue_merge_savepaths_over_cap_falls_back_full_scan(self):
+    def test_queue_merge_savepaths_over_cap_keeps_all_requested_scopes(self):
         with ExitStack() as stack:
             queued = []
             stack.enter_context(patch.object(monitor, "monitor_queue", queued))
@@ -388,7 +388,10 @@ class MonitorDirScanTest(unittest.TestCase):
             )
 
         self.assertEqual(len(queued), 1)
-        self.assertEqual(queued[0]["payload"], {})
+        self.assertEqual(
+            queued[0]["payload"]["savepaths"],
+            [*[f"Library/A{i}" for i in range(40)], *[f"Library/B{i}" for i in range(20)]],
+        )
 
     def test_webhook_single_savepath_merge_regression(self):
         with ExitStack() as stack:
@@ -415,7 +418,7 @@ class MonitorDirScanTest(unittest.TestCase):
             )
 
         self.assertEqual(len(queued), 1)
-        self.assertEqual(queued[0]["payload"], {})
+        self.assertEqual(queued[0]["payload"]["savepaths"], ["Library/SeriesA", "Library/SeriesB"])
 
 
 if __name__ == "__main__":

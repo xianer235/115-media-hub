@@ -6,11 +6,79 @@ from ..db import retry_sqlite_locked
 from ..memory import release_process_memory
 from .notify import push_monitor_success_notification
 from .strm_files import delete_managed_strm_file, managed_strm_file_path, remove_empty_parent_dirs
+from .monitor_runs import add_source as add_monitor_run_source
+from .monitor_runs import create_run as create_monitor_run
+from .monitor_runs import finish_run as finish_monitor_run
+from .monitor_runs import get_run_detail as get_monitor_run_detail
+from .monitor_runs import link_runs as link_monitor_runs
+from .monitor_runs import record_event as record_monitor_run_event
+from .monitor_runs import start_run as start_monitor_run
+from .monitor_runs import update_run as update_monitor_run
+from .monitor_runs import set_parent_run as set_monitor_run_parent
 
 
 MONITOR_DIR_MISSING_RELEASE_CONFIRMATIONS = 2
 MONITOR_SCAN_SAVEPATHS_MAX = 50
 _monitor_dispatch_pending = False
+
+
+def _monitor_run_scope(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """A queue request has one explicit scope regardless of who triggered it."""
+    normalized = _normalize_monitor_queue_payload(payload)
+    paths = _monitor_savepath_scopes(normalized)
+    if paths:
+        return {"kind": "paths", "paths": paths}
+    sharetitle = normalize_relative_path(str(normalized.get("sharetitle", "") or ""))
+    return {"kind": "task", "hint": sharetitle} if sharetitle else {"kind": "task"}
+
+
+def _monitor_run_subject(task_name: str, start_paths: Optional[List[str]] = None) -> str:
+    paths = [normalize_remote_path(path) for path in (start_paths or []) if str(path or "").strip()]
+    if not paths:
+        return "全部目录"
+    labels = [os.path.basename(path.rstrip("/")) or path for path in paths]
+    if len(labels) == 1:
+        return labels[0]
+    return f"{'、'.join(labels[:2])} 等 {len(labels)} 个文件夹"
+
+
+def _monitor_run_change_detail(detail: Dict[str, Any]) -> Dict[str, Any]:
+    """Add stable, human-readable fields when persisting a change event.
+
+    ``monitor_changes`` deliberately keeps its result payload backwards
+    compatible for callers that compare it directly.  The run-record view can
+    still expose the useful old/new names without changing that lower-level
+    contract.
+    """
+    source = dict(detail) if isinstance(detail, dict) else {}
+    kind = str(source.get("kind", "") or "").strip().lower()
+    if kind == "folder":
+        old_path = str(source.get("old_path", "") or "").strip()
+        new_path = str(source.get("new_path", "") or "").strip()
+        source.setdefault("step", "网盘目录变更")
+        source.setdefault("old_name", os.path.basename(old_path.rstrip("/")) if old_path else "")
+        source.setdefault("new_name", os.path.basename(new_path.rstrip("/")) if new_path else "")
+        source.setdefault("operation_label", {
+            "rename": "网盘重命名",
+            "move": "网盘移动",
+            "delete": "网盘删除",
+            "create": "网盘新增",
+        }.get(str(source.get("operation", "") or "").lower(), "网盘目录操作"))
+        return source
+    if kind == "file":
+        changes = source.get("changes") if isinstance(source.get("changes"), list) else []
+        deleted = next((item for item in changes if isinstance(item, dict) and item.get("action") == "delete"), {})
+        generated = next((item for item in changes if isinstance(item, dict) and item.get("action") in {"generate", "write"}), {})
+        old_path = str(deleted.get("path", "") or "").strip()
+        new_path = str(generated.get("path", "") or "").strip()
+        source.setdefault("step", "STRM 文件变更")
+        source.setdefault("old_path", old_path)
+        source.setdefault("new_path", new_path)
+        source.setdefault("old_name", os.path.basename(old_path) if old_path else "")
+        source.setdefault("new_name", os.path.basename(new_path) if new_path else "")
+        source.setdefault("operation_label", "STRM 更新" if old_path and new_path else ("STRM 删除" if old_path else "STRM 新增"))
+        return source
+    return source
 
 
 def build_monitor_scope_line(
@@ -422,6 +490,7 @@ def _auto_scrape_new_media_items(
         _walk_existing_folder,
         build_scraper_organize_plan,
         create_scraper_job_from_plan,
+        get_scraper_jobs_state,
         run_scraper_job,
     )
 
@@ -541,6 +610,19 @@ def _auto_scrape_new_media_items(
     job = create_scraper_job_from_plan({"plan": plan})
     job_id = max(0, int(job.get("job_id", 0) or 0))
     run_scraper_job(job_id)
+    jobs = get_scraper_jobs_state(job_id=job_id).get("jobs", []) if job_id > 0 else []
+    actual = jobs[0] if isinstance(jobs, list) and jobs else {}
+    status = str(actual.get("status", "") or "").strip()
+    succeeded = max(0, int(actual.get("succeeded_actions", 0) or 0))
+    failed = max(0, int(actual.get("failed_actions", 0) or 0))
+    if status == "completed":
+        return f"已自动整理 {succeeded} 项（任务 #{job_id}）"
+    if status == "partial":
+        return f"自动整理部分完成：成功 {succeeded} 项，失败 {failed} 项（任务 #{job_id}）"
+    if status in {"failed", "rollback_failed"}:
+        return f"自动整理失败：{str(actual.get('status_detail', '') or '任务执行失败')[:120]}（任务 #{job_id}）"
+    # Mocks and older job stores may not expose the just-created job.  The
+    # production path always has a durable job row, so retain a useful result.
     return f"已自动整理 {ready_count} 项（任务 #{job_id}）"
 
 
@@ -549,23 +631,28 @@ async def run_monitor_task(
     trigger: str = "manual",
     payload: Optional[Dict[str, Any]] = None,
     merged_count: int = 0,
+    run_id: str = "",
 ) -> None:
+    run_id = str(run_id or "").strip()
     if not _claim_monitor_job(task_name):
         return
     cfg = get_config()
     task = next((t for t in cfg["monitor_tasks"] if t["name"] == task_name), None)
     if not task:
         await write_monitor_log(f"任务不存在: {task_name}", "error")
+        finish_monitor_run(run_id, status="failed", summary="监控任务不存在", result={"task_name": task_name})
         await _finish_monitor_job(task_name, "monitor")
         return
     if normalize_task_type(task.get("task_type")) == MONITOR_TASK_TYPE_INBOX:
         # 兜底：接收夹任务不接受目录扫描触发（正常路径不会走到这里）。
         await write_monitor_log(f"接收夹任务「{task_name}」不参与目录扫描，已忽略本次扫描触发", "warn")
+        finish_monitor_run(run_id, status="cancelled", summary="接收夹不参与目录扫描")
         await _finish_monitor_job(task_name, "monitor")
         return
     config_error = validate_monitor_runtime_config(cfg, task)
     if config_error:
         await write_monitor_log(f"任务配置错误: {config_error}", "error")
+        finish_monitor_run(run_id, status="failed", summary=config_error)
         update_monitor_summary("任务失败", config_error)
         await _finish_monitor_job(task_name, "monitor")
         return
@@ -600,6 +687,7 @@ async def run_monitor_task(
 
     try:
         await write_monitor_task_header(task, trigger, payload)
+        start_monitor_run(run_id, subject=_monitor_run_subject(task_name, _monitor_run_scope(payload).get("paths")))
         if int(merged_count or 0) > 0:
             merge_times = max(1, int(merged_count or 0))
             await write_monitor_log(
@@ -717,6 +805,11 @@ async def run_monitor_task(
             ),
             "info",
         )
+        update_monitor_run(
+            run_id,
+            subject=_monitor_run_subject(task_name, start_remote_paths),
+            result={"scope": {"kind": "paths" if start_remote_paths != [task_scan_path] else "task", "paths": start_remote_paths}},
+        )
 
         if refresh_source_label:
             parent_refresh_paths: List[str] = []
@@ -803,6 +896,14 @@ async def run_monitor_task(
                 ):
                     manual_required_failed_first_level_dirs.add(failed_first_level_dir)
                 await write_monitor_log(f"读取目录失败: {remote_dir} ({exc})", "error")
+                record_monitor_run_event(
+                    run_id,
+                    category="problem",
+                    operation="read_dir",
+                    status="failed",
+                    title=os.path.basename(remote_dir.rstrip("/")) or remote_dir,
+                    detail={"path": remote_dir, "error": str(exc)},
+                )
                 if (
                     refresh_source_label
                     and remote_dir in start_remote_paths
@@ -915,6 +1016,21 @@ async def run_monitor_task(
                     if generated_rel_path:
                         generated_strm_paths.append(generated_rel_path)
                     await write_monitor_log(f"生成: {target_file}", "success")
+                    record_monitor_run_event(
+                        run_id,
+                        category="strm",
+                        operation="write",
+                        status="completed",
+                        title=os.path.basename(target_file),
+                        detail={
+                            "step": "生成 STRM",
+                            "operation_label": "STRM 更新" if force_strm_rewrite else "STRM 新增",
+                            "path": target_file,
+                            "strm_path": target_file,
+                            "remote_path": item_remote_path,
+                            "rewrite": force_strm_rewrite,
+                        },
+                    )
                 else:
                     stats["skipped"] += 1
 
@@ -1035,6 +1151,19 @@ async def run_monitor_task(
                     stats["deleted_files"] += 1
                     stats["deleted_dirs"] += remove_empty_parent_dirs(
                         os.path.dirname(target_file), os.path.join(STRM_ROOT, task_root)
+                    )
+                    record_monitor_run_event(
+                        run_id,
+                        category="strm",
+                        operation="delete",
+                        status="completed",
+                        title=os.path.basename(target_file),
+                        detail={
+                            "step": "删除 STRM",
+                            "operation_label": "STRM 删除",
+                            "path": target_file,
+                            "strm_path": target_file,
+                        },
                     )
 
         def replace_monitor_file_index() -> None:
@@ -1170,6 +1299,13 @@ async def run_monitor_task(
         except Exception as notify_exc:
             await write_monitor_log(f"通知推送失败: {notify_exc}", "warn")
         await write_monitor_task_footer(task_name, "执行成功")
+        final_result = {
+            "generated": stats["generated"], "skipped": stats["skipped"],
+            "deleted": stats["deleted_files"], "failed_dirs": stats["failed_dirs"],
+            "auto_summary": auto_summary,
+        }
+        final_status = "partial" if stats["failed_dirs"] else ("no_change" if not stats["generated"] and not stats["deleted_files"] else "completed")
+        finish_monitor_run(run_id, status=final_status, summary=build_monitor_conclusion_line(stats, auto_summary), result=final_result)
         update_monitor_summary("任务完成", f"{task_name} 执行结束")
     except asyncio.CancelledError:
         try:
@@ -1187,6 +1323,7 @@ async def run_monitor_task(
             cleanup_enabled=bool(task.get("sync_clean", not task.get("incremental", False))) if "task" in locals() else None,
         )
         await write_monitor_task_footer(task_name, "已中断")
+        finish_monitor_run(run_id, status="cancelled", summary="监控扫描已中断", result=stats)
         update_monitor_summary("任务中断", task_name)
     except Exception as exc:
         try:
@@ -1205,6 +1342,8 @@ async def run_monitor_task(
         )
         await write_monitor_log(f"失败原因: {exc}", "error")
         await write_monitor_task_footer(task_name, "执行失败")
+        record_monitor_run_event(run_id, category="problem", operation="scan", status="failed", title="扫描失败", detail={"error": str(exc)})
+        finish_monitor_run(run_id, status="failed", summary=str(exc), result=stats)
         update_monitor_summary("任务失败", str(exc))
     finally:
         try:
@@ -1276,8 +1415,10 @@ async def run_monitor_change_task(
     task_name: str,
     trigger: str = "change",
     payload: Optional[Dict[str, Any]] = None,
+    run_id: str = "",
 ) -> None:
     """Consume persisted scraper mutations without entering the scan walker."""
+    run_id = str(run_id or "").strip()
     if not _claim_monitor_job(task_name):
         return
     cfg = get_config()
@@ -1291,23 +1432,35 @@ async def run_monitor_change_task(
     )
     if not task:
         await write_monitor_log(f"变更同步任务不存在: {task_name}", "error")
+        finish_monitor_run(run_id, status="failed", summary="变更同步任务不存在")
         await _finish_monitor_job(task_name, "monitor-change")
         return
     if normalize_task_type(task.get("task_type")) == MONITOR_TASK_TYPE_INBOX:
         # 兜底：接收夹任务不参与变更同步（正常路径不会走到这里）。
         await write_monitor_log(f"接收夹任务「{task_name}」不参与变更同步，已忽略", "warn")
+        finish_monitor_run(run_id, status="cancelled", summary="接收夹不参与变更同步")
         await _finish_monitor_job(task_name, "monitor-change")
         return
     update_monitor_summary("准备同步变更", task_name)
     schedule_ui_state_push(0)
     try:
         await write_monitor_task_header(task, "change", payload)
+        start_monitor_run(run_id, subject="文件变更", scope={"kind": "events"})
         await write_monitor_section("处理刮削变更")
         from .monitor_changes import process_monitor_change_events
 
         raw_event_ids = payload.get("event_ids", []) if isinstance(payload, dict) else []
         event_ids = raw_event_ids if isinstance(raw_event_ids, list) else None
         result = await process_monitor_change_events(task_name, cfg=cfg, event_ids=event_ids)
+        parent_run_ids = [
+            str(value or "").strip()
+            for value in (result.get("monitor_run_ids", []) if isinstance(result.get("monitor_run_ids"), list) else [])
+            if str(value or "").strip()
+        ]
+        if parent_run_ids:
+            set_monitor_run_parent(run_id, parent_run_ids[0])
+            for parent_run_id in parent_run_ids:
+                link_monitor_runs(parent_run_id, run_id, relation="downstream")
         if (
             max(0, int(result.get("completed", 0) or 0))
             + max(0, int(result.get("failed", 0) or 0))
@@ -1316,6 +1469,7 @@ async def run_monitor_change_task(
             await write_monitor_log("无待处理变更，本轮跳过", "info")
             status_text = "变更同步完成"
             await write_monitor_task_footer(task_name, status_text)
+            finish_monitor_run(run_id, status="no_change", summary="没有待处理变更")
             update_monitor_summary(status_text, task_name)
             return
         await _write_monitor_change_details(result.get("change_details"))
@@ -1339,6 +1493,45 @@ async def run_monitor_change_task(
             if failed == 0 and manual_required == 0
             else "warn",
         )
+        for detail in result.get("change_details", []) if isinstance(result.get("change_details"), list) else []:
+            if not isinstance(detail, dict):
+                continue
+            normalized_detail = _monitor_run_change_detail(detail)
+            if detail.get("kind") == "folder":
+                record_monitor_run_event(
+                    run_id,
+                    category="remote",
+                    operation=str(detail.get("operation", "change") or "change"),
+                    status="completed",
+                    title=str(detail.get("new_path") or detail.get("old_path") or "文件夹变更"),
+                    detail=normalized_detail,
+                )
+                if int(detail.get("deleted", 0) or 0) or int(detail.get("generated", 0) or 0):
+                    record_monitor_run_event(
+                        run_id,
+                        category="strm",
+                        operation="sync",
+                        status="completed",
+                        title="STRM 同步",
+                        detail={
+                            "step": "STRM 同步",
+                            "scope": str(detail.get("new_path") or detail.get("old_path") or ""),
+                            "deleted": int(detail.get("deleted", 0) or 0),
+                            "generated": int(detail.get("generated", 0) or 0),
+                        },
+                    )
+            else:
+                for item in detail.get("changes", []) if isinstance(detail.get("changes"), list) else []:
+                    if isinstance(item, dict):
+                        item_detail = _monitor_run_change_detail({"kind": "file", "changes": [item]})
+                        record_monitor_run_event(
+                            run_id,
+                            category="strm",
+                            operation=str(item.get("action", "change") or "change"),
+                            status="completed",
+                            title=os.path.basename(str(item.get("path", "") or "")),
+                            detail=item_detail,
+                        )
         new_media_items = result.get("new_media_items", [])
         if bool(task.get("auto_scrape_on_new")) and isinstance(new_media_items, list) and new_media_items:
             try:
@@ -1349,8 +1542,24 @@ async def run_monitor_change_task(
                     list(new_media_items),
                 )
                 await write_monitor_log(f"自动整理: {auto_message}", "success")
+                record_monitor_run_event(
+                    run_id,
+                    category="remote",
+                    operation="auto_organize",
+                    status="failed" if "失败" in auto_message else ("partial" if "部分完成" in auto_message else "completed"),
+                    title="自动整理",
+                    detail={"summary": auto_message},
+                )
             except Exception as exc:
                 await write_monitor_log(f"自动整理失败: {exc}", "error")
+                record_monitor_run_event(
+                    run_id,
+                    category="problem",
+                    operation="auto_organize",
+                    status="failed",
+                    title="自动整理失败",
+                    detail={"error": str(exc)},
+                )
         auto_rescan_queued = 0
         manual_paths = result.get("manual_required_paths", [])
         if int(result.get("manual_required", 0) or 0) > 0 and isinstance(manual_paths, list) and manual_paths:
@@ -1382,13 +1591,23 @@ async def run_monitor_change_task(
         else:
             status_text = "变更同步完成"
         await write_monitor_task_footer(task_name, status_text)
+        final_status = "partial" if failed or manual_required else ("no_change" if not generated and not deleted else "completed")
+        finish_monitor_run(
+            run_id,
+            status=final_status,
+            summary=summary_text,
+            result={"completed": completed, "failed": failed, "discarded": discarded, "generated": generated, "deleted": deleted, "manual_required": manual_required},
+        )
         update_monitor_summary(status_text, task_name)
     except asyncio.CancelledError:
         await write_monitor_task_footer(task_name, "变更同步已中断")
+        finish_monitor_run(run_id, status="cancelled", summary="变更同步已中断")
         update_monitor_summary("变更同步中断", task_name)
     except Exception as exc:
         await write_monitor_log(f"变更同步失败: {exc}", "error")
         await write_monitor_task_footer(task_name, "变更同步失败")
+        record_monitor_run_event(run_id, category="problem", operation="change", status="failed", title="变更同步失败", detail={"error": str(exc)})
+        finish_monitor_run(run_id, status="failed", summary=str(exc))
         update_monitor_summary("变更同步失败", str(exc))
     finally:
         await _finish_monitor_job(task_name, "monitor-change")
@@ -1412,6 +1631,7 @@ async def start_next_monitor_job() -> None:
             next_job["task_name"],
             trigger=next_job.get("trigger", "change"),
             payload=next_job.get("payload"),
+            run_id=str(next_job.get("run_id", "") or ""),
             label="monitor-change-job",
         )
     else:
@@ -1421,6 +1641,7 @@ async def start_next_monitor_job() -> None:
             trigger=next_job.get("trigger", "queued"),
             payload=next_job.get("payload"),
             merged_count=max(0, int(next_job.get("merge_count", 0) or 0)),
+            run_id=str(next_job.get("run_id", "") or ""),
             label="monitor-job",
         )
 
@@ -1446,7 +1667,9 @@ def _normalize_monitor_queue_payload(payload: Optional[Dict[str, Any]]) -> Dict[
         if savepath_item and savepath_item not in savepaths:
             savepaths.append(savepath_item)
     if savepaths:
-        normalized["savepaths"] = savepaths[:MONITOR_SCAN_SAVEPATHS_MAX]
+        # Do not silently truncate a user-selected scope.  The worker already
+        # handles multiple roots and the run record makes the full range visible.
+        normalized["savepaths"] = savepaths
 
     provider = str(raw_payload.get("provider", "") or "").strip()
     if provider:
@@ -1563,38 +1786,41 @@ def _merge_monitor_queue_payload(existing: Optional[Dict[str, Any]], incoming: O
         str(existing_payload.get("mode", "") or "").strip().lower() == "change"
         or str(incoming_payload.get("mode", "") or "").strip().lower() == "change"
     ) else "scan"
-    if existing_has_multi or incoming_has_multi:
+    # A request with no concrete path means the whole task.  It must never be
+    # narrowed by a later partial refresh while the task is waiting in queue.
+    existing_is_task_scope = not _monitor_savepath_scopes(existing_payload)
+    incoming_is_task_scope = not _monitor_savepath_scopes(incoming_payload)
+    if existing_is_task_scope or incoming_is_task_scope:
+        merged_payload: Dict[str, Any] = {"mode": "change"} if merged_mode == "change" else {}
+    elif existing_has_multi or incoming_has_multi:
         merged_savepaths: List[str] = []
         for scope in _monitor_savepath_scopes(existing_payload) + _monitor_savepath_scopes(incoming_payload):
             scope_rel = normalize_relative_path(scope.lstrip("/"))
             if scope_rel and scope_rel not in merged_savepaths:
                 merged_savepaths.append(scope_rel)
         merged_payload: Dict[str, Any] = {"mode": "change"} if merged_mode == "change" else {}
-        if merged_savepaths and len(merged_savepaths) <= MONITOR_SCAN_SAVEPATHS_MAX:
+        if merged_savepaths:
             merged_payload["savepaths"] = merged_savepaths
             provider = str(
                 existing_payload.get("provider", "") or incoming_payload.get("provider", "") or ""
             ).strip()
             if provider:
                 merged_payload["provider"] = provider
-        if merged_delay > 0:
-            merged_payload["delayTime"] = merged_delay
-        merged_payload.update(_merge_monitor_subscription_context(existing_payload, incoming_payload))
-        return merged_payload
-
-    merged_payload = {"mode": "change"} if merged_mode == "change" else {}
-    if not existing_scope or not incoming_scope:
-        merged_payload = {"mode": "change"} if merged_mode == "change" else {}
-    elif existing_scope == incoming_scope:
-        # 同目录短时间多次触发时，统一提升为父目录刷新，避免因 sharetitle 不同造成风暴排队。
-        merged_payload["savepath"] = normalize_relative_path(existing_scope.lstrip("/"))
-    elif is_subpath(existing_scope, incoming_scope):
-        merged_payload["savepath"] = normalize_relative_path(incoming_scope.lstrip("/"))
-    elif is_subpath(incoming_scope, existing_scope):
-        merged_payload["savepath"] = normalize_relative_path(existing_scope.lstrip("/"))
     else:
-        # 不同分支目录并发触发时，回退全任务刷新，保证不漏刷。
         merged_payload = {"mode": "change"} if merged_mode == "change" else {}
+        if existing_scope == incoming_scope:
+            merged_payload["savepath"] = normalize_relative_path(existing_scope.lstrip("/"))
+        elif is_subpath(existing_scope, incoming_scope):
+            merged_payload["savepath"] = normalize_relative_path(incoming_scope.lstrip("/"))
+        elif is_subpath(incoming_scope, existing_scope):
+            merged_payload["savepath"] = normalize_relative_path(existing_scope.lstrip("/"))
+        else:
+            # Different roots remain different roots.  Falling back to a full
+            # scan hides what happened and was the original range-loss bug.
+            merged_payload["savepaths"] = [
+                normalize_relative_path(existing_scope.lstrip("/")),
+                normalize_relative_path(incoming_scope.lstrip("/")),
+            ]
 
     if merged_delay > 0:
         merged_payload["delayTime"] = merged_delay
@@ -1618,7 +1844,15 @@ def _pick_monitor_trigger(existing_trigger: str, new_trigger: str) -> str:
     return existing
 
 
-def queue_monitor_job(task_name: str, trigger: str, payload: Optional[Dict[str, Any]] = None) -> str:
+def queue_monitor_job(
+    task_name: str,
+    trigger: str,
+    payload: Optional[Dict[str, Any]] = None,
+    *,
+    force_new: bool = False,
+    return_details: bool = False,
+) -> Any:
+    """Queue a monitor run, optionally keeping a retry separate from merged work."""
     global _monitor_dispatch_pending
     normalized_task_name = str(task_name or "").strip()
     if not normalized_task_name:
@@ -1645,29 +1879,70 @@ def queue_monitor_job(task_name: str, trigger: str, payload: Optional[Dict[str, 
             return "disabled"
     normalized_payload = _normalize_monitor_queue_payload(payload)
     mode = str(normalized_payload.get("mode", "scan") or "scan")
+    source_ref = str(
+        (payload or {}).get("source_ref", "")
+        or (payload or {}).get("resource_job_id", "")
+        or (payload or {}).get("subscription_run_id", "")
+    ).strip()
+    parent_run_id = str((payload or {}).get("parent_run_id", "") or "").strip()
+    retry_of_run_id = str((payload or {}).get("retry_of_run_id", "") or "").strip()
+    initial_scope = _monitor_run_scope(normalized_payload)
 
     should_dispatch = False
+    queued_run_id = ""
     with monitor_queue_lock:
         matched_item: Optional[Dict[str, Any]] = None
-        for queued_item in monitor_queue:
-            if str(queued_item.get("task_name", "")).strip() != normalized_task_name:
-                continue
-            if str(queued_item.get("mode", "scan") or "scan") != mode:
-                continue
-            matched_item = queued_item
-            break
+        if not force_new:
+            for queued_item in monitor_queue:
+                if str(queued_item.get("task_name", "")).strip() != normalized_task_name:
+                    continue
+                if str(queued_item.get("mode", "scan") or "scan") != mode:
+                    continue
+                matched_item = queued_item
+                break
         if matched_item is not None:
             matched_item["payload"] = _merge_monitor_queue_payload(matched_item.get("payload"), normalized_payload)
+            matched_run_id = str(matched_item.get("run_id", "") or "").strip()
+            if matched_run_id:
+                add_monitor_run_source(matched_run_id, normalized_trigger, source_ref)
+                merged_scope = _monitor_run_scope(matched_item["payload"])
+                update_monitor_run(
+                    matched_run_id,
+                    subject=_monitor_run_subject(normalized_task_name, merged_scope.get("paths")),
+                    result={"scope": merged_scope},
+                )
+            queued_run_id = matched_run_id
             matched_item["mode"] = mode
             matched_item["trigger"] = _pick_monitor_trigger(matched_item.get("trigger", "queued"), normalized_trigger)
             matched_item["merge_count"] = max(0, int(matched_item.get("merge_count", 0) or 0)) + 1
         else:
+            queued_run_id = create_monitor_run(
+                run_kind="change" if mode == "change" else "scan",
+                task_name=normalized_task_name,
+                source="retry" if retry_of_run_id else normalized_trigger,
+                scope=initial_scope,
+                subject=_monitor_run_subject(normalized_task_name, initial_scope.get("paths")),
+                parent_run_id=parent_run_id,
+                source_ref=source_ref,
+                task_snapshot=matched_task if isinstance(matched_task, dict) else {},
+            )
+            if retry_of_run_id:
+                link_monitor_runs(queued_run_id, retry_of_run_id, relation="retry_of")
+                record_monitor_run_event(
+                    queued_run_id,
+                    category="process",
+                    operation="retry",
+                    status="queued",
+                    title="重试失败范围",
+                    detail={"retry_of_run_id": retry_of_run_id},
+                )
             monitor_queue.append(
                 {
                     "task_name": normalized_task_name,
                     "trigger": normalized_trigger,
                     "payload": normalized_payload,
                     "mode": mode,
+                    "run_id": queued_run_id,
                     "merge_count": 0,
                 }
             )
@@ -1676,10 +1951,105 @@ def queue_monitor_job(task_name: str, trigger: str, payload: Optional[Dict[str, 
             should_dispatch = True
         monitor_status["queued"] = [item["task_name"] for item in monitor_queue]
     schedule_ui_state_push(0)
+    status = "queued"
     if should_dispatch:
         submit_background(start_next_monitor_job, label="monitor-next")
-        return "started"
-    return "queued"
+        status = "started"
+    if return_details:
+        return {"status": status, "run_id": queued_run_id}
+    return status
+
+
+def cancel_queued_monitor_run(run_id: str) -> Dict[str, Any]:
+    """Cancel only a run that is still present in the monitor queue."""
+    target_run_id = str(run_id or "").strip()
+    if not target_run_id:
+        return {"ok": False, "msg": "缺少运行记录 ID"}
+
+    removed: Optional[Dict[str, Any]] = None
+    with monitor_queue_lock:
+        for index, item in enumerate(monitor_queue):
+            if str(item.get("run_id", "") or "").strip() == target_run_id:
+                removed = monitor_queue.pop(index)
+                break
+        monitor_status["queued"] = [item["task_name"] for item in monitor_queue]
+
+    if removed is None:
+        detail = get_monitor_run_detail(target_run_id)
+        if not detail:
+            return {"ok": False, "msg": "运行记录不存在"}
+        status = str((detail.get("run") or {}).get("status", "") or "")
+        if status != "queued":
+            return {"ok": False, "msg": "该运行已经开始或已结束，不能取消未开始步骤"}
+        return {"ok": False, "msg": "该运行正在派发，不能取消未开始步骤"}
+
+    detail = get_monitor_run_detail(target_run_id)
+    previous_result = dict((detail.get("run") or {}).get("result") or {}) if detail else {}
+    previous_result["cancelled_before_start"] = True
+    finish_monitor_run(
+        target_run_id,
+        status="cancelled",
+        summary="已取消未开始的监控步骤",
+        result=previous_result,
+    )
+    schedule_ui_state_push(0)
+    return {
+        "ok": True,
+        "status": "cancelled",
+        "task_name": str(removed.get("task_name", "") or ""),
+        "run_id": target_run_id,
+    }
+
+
+def retry_monitor_run(run_id: str) -> Dict[str, Any]:
+    """Retry the persisted range of a failed or partially completed scan."""
+    target_run_id = str(run_id or "").strip()
+    detail = get_monitor_run_detail(target_run_id)
+    run = detail.get("run") if isinstance(detail, dict) else None
+    if not isinstance(run, dict):
+        return {"ok": False, "msg": "运行记录不存在"}
+    if str(run.get("status", "") or "") not in {"failed", "partial"}:
+        return {"ok": False, "msg": "只有失败或部分完成的运行可以重试"}
+    if str(run.get("run_kind", "") or "") != "scan":
+        return {"ok": False, "msg": "此记录没有可重试的失败范围"}
+
+    task_name = str(run.get("task_name", "") or "").strip()
+    cfg = get_config()
+    task = next(
+        (
+            item
+            for item in cfg.get("monitor_tasks", []) or []
+            if isinstance(item, dict) and str(item.get("name", "") or "").strip() == task_name
+        ),
+        None,
+    )
+    if not task or normalize_task_type(task.get("task_type")) == MONITOR_TASK_TYPE_INBOX:
+        return {"ok": False, "msg": "原监控任务已不存在或不支持重试"}
+
+    scope = run.get("scope") if isinstance(run.get("scope"), dict) else {}
+    payload: Dict[str, Any] = {"source_ref": target_run_id, "retry_of_run_id": target_run_id}
+    if str(scope.get("kind", "") or "") == "paths":
+        paths = []
+        for value in scope.get("paths", []) if isinstance(scope.get("paths"), list) else []:
+            path = normalize_relative_path(str(value or "").strip())
+            if path and path not in paths:
+                paths.append(path)
+        if not paths:
+            return {"ok": False, "msg": "此记录没有可重试的失败范围"}
+        payload["savepaths"] = paths
+    elif str(scope.get("kind", "") or "") != "task":
+        return {"ok": False, "msg": "此记录没有可重试的失败范围"}
+
+    queued = queue_monitor_job(
+        task_name,
+        "manual",
+        payload,
+        force_new=True,
+        return_details=True,
+    )
+    if not isinstance(queued, dict) or not str(queued.get("run_id", "") or "").strip():
+        return {"ok": False, "msg": "重试任务未能加入队列"}
+    return {"ok": True, **queued, "retry_of_run_id": target_run_id}
 
 
 def queue_monitor_dir_scan(cfg: Dict[str, Any], provider: str, paths: List[str]) -> Dict[str, Any]:

@@ -32,6 +32,7 @@ def _prepare_scraper_monitor_sync(
     *,
     source_action: str,
     dedupe_key: str,
+    monitor_run_id: str = "",
 ) -> Dict[str, Any]:
     """Create a durable monitor event before a 115 mutation.
 
@@ -46,6 +47,7 @@ def _prepare_scraper_monitor_sync(
         entries=entries,
         source_action=source_action,
         dedupe_key=dedupe_key,
+        monitor_run_id=monitor_run_id,
         cfg=get_config(),
     )
 
@@ -1047,6 +1049,7 @@ def move_scraper_entries(
     target_parent_path: Optional[str] = None,
     request_id: str = "",
     source_action: str = "",
+    monitor_run_id: str = "",
 ) -> Dict[str, Any]:
     normalized = normalize_scraper_provider(provider)
     cookie = _require_provider_cookie(normalized)
@@ -1066,6 +1069,7 @@ def move_scraper_entries(
         # 复用监控侧既有守卫，避免刚整理完又被目标监控任务二次自动刮削。
         source_action=str(source_action or "").strip() or "scraper:entry:move",
         dedupe_key=_direct_monitor_change_key("move", request_id),
+        monitor_run_id=str(monitor_run_id or "").strip(),
     )
     try:
         result = _move_provider_entries(normalized, cookie, entry_ids, target_cid, source_cid)

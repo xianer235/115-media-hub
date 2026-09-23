@@ -1,0 +1,111 @@
+- generic [ref=f1e2]:
+  - complementary [ref=f1e3]:
+    - generic [ref=f1e4]:
+      - generic [ref=f1e5]:
+        - generic "115 Media Hub" [ref=f1e6]
+        - generic [ref=f1e127]: 115-media-hub
+      - button "收起侧边栏" [expanded] [ref=f1e128] [cursor=pointer]
+    - navigation "主导航" [ref=f1e8]:
+      - button "资源中心" [ref=f1e9] [cursor=pointer]
+      - button "资源推荐" [ref=f1e14] [cursor=pointer]
+      - button "影视订阅" [ref=f1e18] [cursor=pointer]
+      - button "刮削管理" [ref=f1e23] [cursor=pointer]
+      - button "文件夹监控" [active] [ref=f1e29] [cursor=pointer]
+      - button "目录树同步" [ref=f1e34] [cursor=pointer]
+      - button "参数配置" [ref=f1e44] [cursor=pointer]
+  - generic [ref=f1e49]:
+    - banner [ref=f1e50]:
+      - generic [ref=f1e51]: 文件夹监控
+      - generic [ref=f1e53]:
+        - button "已签" [ref=f1e1258] [cursor=pointer]
+        - button "打开任务列表" [ref=f1e55] [cursor=pointer]:
+          - generic [ref=f1e139]: 任务
+        - button "当前为夜间模式，点击切换为日间模式" [ref=f1e140] [cursor=pointer]
+        - button "打开更多菜单" [ref=f1e58] [cursor=pointer]: 更多
+    - main [ref=f1e59]:
+      - generic [ref=f1e1259]:
+        - generic [ref=f1e1260]:
+          - generic [ref=f1e1261]:
+            - generic [ref=f1e1262]:
+              - heading "文件夹监控任务列表" [level=3] [ref=f1e1263]
+              - generic [ref=f1e1264]: "扫描 115 网盘目录，生成或刷新本地 `/strm` 文件；资源导入 / Webhook 命中 savepath 时会优先局部刷新。"
+            - generic [ref=f1e1265]:
+              - generic "当前状态：空闲 / 等待监控任务" [ref=f1e1266]:
+                - generic [ref=f1e1267]: 当前状态：
+                - generic [ref=f1e1268]: 空闲
+                - generic [ref=f1e1269]: /
+                - generic "等待监控任务" [ref=f1e1270]
+              - button "+ 新增任务" [ref=f1e1271] [cursor=pointer]
+          - generic [ref=f1e1272]:
+            - generic [ref=f1e1274]:
+              - generic [ref=f1e1275]:
+                - button "电影" [ref=f1e1276] [cursor=pointer]
+                - button "展开简介" [ref=f1e1279] [cursor=pointer]
+              - generic "文件夹监控任务操作" [ref=f1e1280]:
+                - button "运行" [ref=f1e1281] [cursor=pointer]
+                - button "编辑" [ref=f1e1282] [cursor=pointer]
+                - button "删除" [ref=f1e1283] [cursor=pointer]
+            - generic [ref=f1e1285]:
+              - generic [ref=f1e1286]:
+                - button "云下载" [ref=f1e1287] [cursor=pointer]
+                - button "展开简介" [ref=f1e1290] [cursor=pointer]
+              - generic "文件夹监控任务操作" [ref=f1e1291]:
+                - button "运行" [ref=f1e1292] [cursor=pointer]
+                - button "编辑" [ref=f1e1293] [cursor=pointer]
+                - button "删除" [ref=f1e1294] [cursor=pointer]
+            - generic [ref=f1e1296]:
+              - generic [ref=f1e1297]:
+                - button "电视剧" [ref=f1e1298] [cursor=pointer]
+                - button "展开简介" [ref=f1e1301] [cursor=pointer]
+              - generic "文件夹监控任务操作" [ref=f1e1302]:
+                - button "运行" [ref=f1e1303] [cursor=pointer]
+                - button "编辑" [ref=f1e1304] [cursor=pointer]
+                - button "删除" [ref=f1e1305] [cursor=pointer]
+            - generic [ref=f1e1307]:
+              - generic [ref=f1e1308]:
+                - button "接收 接收夹 最近接收 24 小时 0 个 · 最近整理：已整理分发 2 项，留在接收夹 1 项（2026-09-18T10:28:57）" [ref=f1e1309] [cursor=pointer]:
+                  - generic [ref=f1e1310]:
+                    - generic [ref=f1e1311]: 接收
+                    - generic [ref=f1e1312]: 接收夹
+                  - generic [ref=f1e1313]: 最近接收 24 小时 0 个 · 最近整理：已整理分发 2 项，留在接收夹 1 项（2026-09-18T10:28:57）
+                - button "展开简介" [ref=f1e1314] [cursor=pointer]
+              - generic "文件夹监控任务操作" [ref=f1e1315]:
+                - button "立即整理" [ref=f1e1316] [cursor=pointer]
+                - button "编辑" [ref=f1e1317] [cursor=pointer]
+        - generic [ref=f1e1318]:
+          - generic [ref=f1e1319]:
+            - generic [ref=f1e1320]:
+              - heading "运行记录" [level=3] [ref=f1e1321]
+              - generic [ref=f1e1322]: 暂无运行记录
+            - button "记录保留" [ref=f1e1324] [cursor=pointer]
+          - generic "运行记录筛选" [ref=f1e1325]:
+            - combobox [ref=f1e1326]:
+              - option "全部任务" [selected]
+              - option "电影"
+              - option "云下载"
+              - option "电视剧"
+              - option "接收"
+            - combobox [ref=f1e1327]:
+              - option "全部来源" [selected]
+              - option "手动触发"
+              - option "重试失败范围"
+              - option "定时触发"
+              - option "资源导入"
+              - option "Webhook"
+              - option "文件变更同步"
+            - combobox [ref=f1e1328]:
+              - option "全部状态" [selected]
+              - option "进行中"
+              - option "等待后续"
+              - option "已完成"
+              - option "无变化"
+              - option "部分完成"
+              - option "失败"
+          - generic [ref=f1e1329]: 尚无新的运行记录。后续扫描、导入、接收夹整理和 STRM 同步会显示在这里。
+          - button "查看历史文本日志" [ref=f1e1332] [cursor=pointer]
+    - contentinfo [ref=f1e122]:
+      - generic [ref=f1e123]:
+        - generic [ref=f1e124]: © 2026 由 GPT 与 仙儿 驱动
+        - generic [ref=f1e125]: 版本 V0.11.11
+        - link "GitHub 项目主页" [ref=f1e126] [cursor=pointer]:
+          - /url: https://github.com/xianer235/115-media-hub

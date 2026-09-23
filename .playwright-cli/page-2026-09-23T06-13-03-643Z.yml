@@ -1,0 +1,56 @@
+- generic [ref=f1e2]:
+  - complementary [ref=f1e3]:
+    - generic [ref=f1e4]:
+      - generic [ref=f1e5]:
+        - generic "115 Media Hub" [ref=f1e6]
+        - text: 115-media-hub
+      - button "展开侧边栏":
+        - generic [ref=f1e7] [cursor=pointer]
+    - navigation "主导航" [ref=f1e8]:
+      - button "资源中心" [ref=f1e9] [cursor=pointer]
+      - button "资源推荐" [ref=f1e14] [cursor=pointer]
+      - button "影视订阅" [ref=f1e18] [cursor=pointer]
+      - button "刮削管理" [ref=f1e23] [cursor=pointer]
+      - button "文件夹监控" [ref=f1e29] [cursor=pointer]
+      - button "目录树同步" [ref=f1e34] [cursor=pointer]
+      - button "参数配置" [ref=f1e44] [cursor=pointer]
+  - generic [ref=f1e49]:
+    - banner [ref=f1e50]:
+      - generic [ref=f1e51]: 资源中心
+      - generic [ref=f1e53]:
+        - button "签到" [ref=f1e54] [cursor=pointer]
+        - button "打开任务列表" [ref=f1e55] [cursor=pointer]: 任务
+        - button "切换夜间/日间模式"
+        - button "打开更多菜单" [ref=f1e58] [cursor=pointer]: 更多
+    - main [ref=f1e59]:
+      - generic [ref=f1e60]:
+        - generic [ref=f1e61]:
+          - generic [ref=f1e62]:
+            - textbox "搜索订阅频道，或粘贴 magnet / 常见网盘分享链接快速识别" [ref=f1e65]
+            - button "搜索" [ref=f1e66] [cursor=pointer]
+            - button "同步频道" [ref=f1e67] [cursor=pointer]
+          - generic "资源搜索筛选" [ref=f1e68]:
+            - group "搜索来源" [ref=f1e69]:
+              - button "频道搜索" [ref=f1e70] [cursor=pointer]
+              - button "盘搜" [ref=f1e71] [cursor=pointer]
+            - group "网盘类型" [ref=f1e72]:
+              - button "全部" [ref=f1e73] [cursor=pointer]
+              - button "离线" [ref=f1e74] [cursor=pointer]
+          - generic [ref=f1e76]:
+            - generic [ref=f1e77]: 同步源 0
+            - generic [ref=f1e78]: 缓存 0
+        - generic [ref=f1e79]: 正在加载首页配置，请稍候...
+    - navigation "移动主导航" [ref=f1e82]:
+      - button "资源" [ref=f1e83] [cursor=pointer]
+      - button "推荐" [ref=f1e88] [cursor=pointer]
+      - button "订阅" [ref=f1e92] [cursor=pointer]
+      - button "刮削" [ref=f1e97] [cursor=pointer]
+      - button "监控" [ref=f1e102] [cursor=pointer]
+      - button "同步" [ref=f1e107] [cursor=pointer]
+      - button "设置" [ref=f1e117] [cursor=pointer]
+    - contentinfo [ref=f1e122]:
+      - generic [ref=f1e123]:
+        - generic [ref=f1e124]: © 2026 由 GPT 与 仙儿 驱动
+        - generic [ref=f1e125]: 版本 --
+        - link "GitHub 项目主页" [ref=f1e126] [cursor=pointer]:
+          - /url: https://github.com/xianer235/115-media-hub

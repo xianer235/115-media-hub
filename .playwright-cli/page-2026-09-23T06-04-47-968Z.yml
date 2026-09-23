@@ -1,0 +1,17 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - heading "115 Media Hub" [level=1] [ref=e4]
+    - paragraph [ref=e5]: 请验证您的身份以继续
+  - generic [ref=e6]:
+    - generic [ref=e7]: 初始凭据
+    - generic [ref=e8]:
+      - text: 账号：
+      - code [ref=e9]: admin
+    - generic [ref=e10]:
+      - text: 密码：
+      - code [ref=e11]: admin123
+    - generic [ref=e12]: 登录后请务必在配置页面修改密码以保安全。
+  - generic [ref=e13]:
+    - textbox "管理账号" [ref=e14]
+    - textbox "访问密码" [ref=e15]
+    - button "进入管理后台" [ref=e16] [cursor=pointer]

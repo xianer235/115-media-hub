@@ -627,6 +627,40 @@
         document.getElementById('monitor-modal')?.addEventListener('click', (e) => {
             if (e.target.id === 'monitor-modal') closeMonitorModal();
         });
+        document.getElementById('monitor-run-modal')?.addEventListener('click', (e) => {
+            if (e.target.id === 'monitor-run-modal') closeMonitorRunModal();
+        });
+        for (const id of ['monitor-run-list', 'monitor-run-modal-body']) {
+            document.getElementById(id)?.addEventListener('click', (event) => {
+                const row = event.target.closest('[data-run-id]');
+                if (row) openMonitorRun(row.dataset.runId);
+            });
+        }
+        document.querySelector('.monitor-run-tabs')?.addEventListener('keydown', (event) => {
+            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+            const tabs = [...document.querySelectorAll('[data-monitor-run-category]')];
+            const index = tabs.indexOf(document.activeElement);
+            if (index < 0) return;
+            event.preventDefault();
+            const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
+                : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+            tabs[next].focus();
+            switchMonitorRunDetail(tabs[next].dataset.monitorRunCategory);
+        });
+        document.getElementById('monitor-run-modal')?.addEventListener('keydown', (event) => {
+            if (event.key !== 'Tab') return;
+            const focusable = [...event.currentTarget.querySelectorAll('button:not([disabled]), [tabindex="0"], summary')]
+                .filter(element => element.getClientRects().length && element.tabIndex >= 0);
+            const first = focusable[0], last = focusable[focusable.length - 1];
+            if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+            else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+        });
+        document.getElementById('monitor-run-retention-modal')?.addEventListener('click', (e) => {
+            if (e.target.id === 'monitor-run-retention-modal') closeMonitorRunRetention();
+        });
+        document.getElementById('monitor-legacy-log-modal')?.addEventListener('click', (e) => {
+            if (e.target.id === 'monitor-legacy-log-modal') closeLegacyMonitorLogs();
+        });
         document.getElementById('subscription-modal')?.addEventListener('click', (e) => {
             if (e.target.id === 'subscription-modal') closeSubscriptionModal();
         });
@@ -820,6 +854,21 @@
             }
             if (e.key === 'Escape' && resourceJobClearMenuOpen) {
                 closeResourceJobClearMenu();
+                return;
+            }
+            const monitorRunModal = document.getElementById('monitor-run-modal');
+            if (e.key === 'Escape' && monitorRunModal && !monitorRunModal.classList.contains('hidden')) {
+                closeMonitorRunModal();
+                return;
+            }
+            const monitorRunRetentionModal = document.getElementById('monitor-run-retention-modal');
+            if (e.key === 'Escape' && monitorRunRetentionModal && !monitorRunRetentionModal.classList.contains('hidden')) {
+                closeMonitorRunRetention();
+                return;
+            }
+            const legacyMonitorLogModal = document.getElementById('monitor-legacy-log-modal');
+            if (e.key === 'Escape' && legacyMonitorLogModal && !legacyMonitorLogModal.classList.contains('hidden')) {
+                closeLegacyMonitorLogs();
                 return;
             }
             const subscriptionEpisodeModal = document.getElementById('subscription-episode-modal');

@@ -1,5 +1,5 @@
         let isRunning = false;
-        let monitorState = { running: false, current_task: '', tasks: [], logs: [], log_segments: [], log_segment_total: 0, log_segment_has_more: false, summary: { step: '空闲', detail: '等待监控任务' }, queued: [], next_runs: {}, change_counts: {} };
+        let monitorState = { running: false, current_task: '', tasks: [], logs: [], log_segments: [], log_segment_total: 0, log_segment_has_more: false, runs: [], run_page: 1, run_has_more: false, run_next_cursor: '', run_retention: { mode: 'longterm', days: 30 }, summary: { step: '空闲', detail: '等待监控任务' }, queued: [], next_runs: {}, change_counts: {} };
         let subscriptionState = { running: false, current_task: '', tasks: [], logs: [], summary: { step: '空闲', detail: '等待订阅任务' }, queued: [], next_runs: {} };
         let sign115State = {
             enabled: false,
@@ -210,6 +210,18 @@
         let lastLogSignature = '';
         let lastMonitorLogSignature = '';
         let monitorLogLoadBusy = false;
+        let monitorRunLoadBusy = false;
+        let monitorRunActionBusy = false;
+        let monitorRunPage = 1;
+        let monitorRunPageCursors = [''];
+        let monitorRunPageHasMore = false;
+        let activeMonitorRunId = '';
+        let activeMonitorRunCategory = '';
+        let monitorRunRequestRevision = 0;
+        let monitorRunDetailRevision = 0;
+        let monitorRunDetailData = null;
+        let monitorRunDetailTimer = null;
+        let monitorRunReturnFocus = null;
         let lastSubscriptionLogSignature = '';
         let lastMonitorRenderKey = '';
         let lastSubscriptionRenderKey = '';
@@ -1654,6 +1666,14 @@
         }
 
         function applyMonitorState(data, { forceRender = false } = {}) {
+            if (data && (monitorState.run_filtered || monitorState.run_loading || monitorState.run_page > 1)) {
+                data = {
+                    ...data,
+                    runs: monitorState.runs,
+                    run_has_more: monitorState.run_has_more,
+                    run_next_cursor: monitorState.run_next_cursor,
+                };
+            }
             const monitorModule = tabRuntimeState.tabModuleCache.monitor;
             if (monitorModule?.applyMonitorState) {
                 monitorModule.applyMonitorState(data, {
@@ -1708,6 +1728,10 @@
                 log_segments: logSegments,
                 log_segment_total: Number(data.log_segment_total || monitorState.log_segment_total || logSegments.length) || logSegments.length,
                 log_segment_has_more: logSegments.length < (Number(data.log_segment_total || monitorState.log_segment_total || logSegments.length) || logSegments.length),
+                runs: monitorState.run_page > 1 ? (monitorState.runs || []) : (Array.isArray(data.runs) ? data.runs : (monitorState.runs || [])),
+                run_has_more: data.run_has_more !== undefined ? !!data.run_has_more : !!monitorState.run_has_more,
+                run_next_cursor: data.run_next_cursor ?? monitorState.run_next_cursor ?? '',
+                run_retention: data.run_retention || monitorState.run_retention || { mode: 'longterm', days: 30 },
                 queued: Array.isArray(data.queued) ? data.queued : (monitorState.queued || []),
                 next_runs: data.next_runs || monitorState.next_runs || {},
                 summary: data.summary || monitorState.summary || { step: '空闲', detail: '等待监控任务' }
@@ -4905,86 +4929,216 @@
             }).join('');
         }
 
-        function buildMonitorLogSignature() {
-            const segments = Array.isArray(monitorState.log_segments) && monitorState.log_segments.length
-                ? monitorState.log_segments
-                : [{ id: 'legacy', entries: monitorState.logs || [] }];
-            return buildLogSignature(segments, (segment) => {
-                const entries = Array.isArray(segment?.entries) ? segment.entries : [];
-                return `${segment?.id || ''}:${segment?.entry_count || entries.length}:${segment?.complete ? 1 : 0}:${entries.map((item) => `${item?.level || 'info'}:${item?.text || ''}`).join('||')}`;
+        const monitorRunStatusLabels = window.MonitorRunView.statuses;
+        function monitorRunTime(value) { return window.MonitorRunView.time(value); }
+        function monitorRunSources(run) { return window.MonitorRunView.sourceText(run); }
+
+        function renderMonitorRunFilters() {
+            const select = document.getElementById('monitor-run-task-filter');
+            if (!select) return;
+            const previous = select.value;
+            const names = [...new Set([...(monitorState.tasks || []).map(task => String(task?.name || '')), previous].filter(Boolean))];
+            select.innerHTML = `<option value="">全部任务</option>${names.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('')}`;
+            select.value = previous;
+        }
+
+        function updateMonitorRunSummary() {
+            const summary = document.getElementById('monitor-run-summary');
+            const previous = document.getElementById('monitor-run-prev');
+            const next = document.getElementById('monitor-run-next');
+            const pageLabel = document.getElementById('monitor-run-page-label');
+            const runs = Array.isArray(monitorState.runs) ? monitorState.runs : [];
+            if (summary) summary.innerText = monitorRunLoadBusy ? '正在加载运行记录...' : `按最近活动排序 · 本页 ${runs.length} 条`;
+            if (pageLabel) pageLabel.innerText = `第 ${monitorRunPage} 页`;
+            if (previous) previous.disabled = monitorRunLoadBusy || monitorRunPage <= 1;
+            if (next) next.disabled = monitorRunLoadBusy || !monitorRunPageHasMore;
+        }
+
+        function renderMonitorLogs() {
+            const box = document.getElementById('monitor-run-list');
+            if (!box) return;
+            renderMonitorRunFilters();
+            monitorRunPage = Number(monitorState.run_page || 1);
+            monitorRunPageHasMore = !!monitorState.run_has_more;
+            monitorRunPageCursors[monitorRunPage] = String(monitorState.run_next_cursor || '');
+            const runs = Array.isArray(monitorState.runs) ? monitorState.runs : [];
+            box.innerHTML = runs.length ? runs.map(window.MonitorRunView.listRow).join('')
+                : `<div class="monitor-run-empty">${monitorState.run_filtered ? '没有符合筛选条件的记录，可调整筛选后查看。' : '暂无运行记录。扫描或接收夹整理开始后，将在这里显示过程和结果。'}</div>`;
+            updateMonitorRunSummary();
+        }
+
+        function monitorRunFilterQuery() {
+            return {
+                task_name: document.getElementById('monitor-run-task-filter')?.value || '',
+                source: document.getElementById('monitor-run-source-filter')?.value || '',
+                status: document.getElementById('monitor-run-status-filter')?.value || '',
+            };
+        }
+
+        async function fetchMonitorRunPage(page, cursor = '') {
+            const revision = ++monitorRunRequestRevision;
+            const filters = monitorRunFilterQuery();
+            monitorRunLoadBusy = true;
+            monitorState = { ...monitorState, run_filtered: Object.values(filters).some(Boolean), run_loading: true };
+            updateMonitorRunSummary();
+            try {
+                const query = new URLSearchParams({ limit: '10', cursor, ...filters });
+                const data = await window.MediaHubApi.getJson(`/monitor/runs?${query.toString()}`);
+                if (revision !== monitorRunRequestRevision) return;
+                if (page === 1) monitorRunPageCursors = [''];
+                monitorState = {
+                    ...monitorState, runs: Array.isArray(data?.runs) ? data.runs : [], run_page: page,
+                    run_has_more: !!data?.has_more, run_next_cursor: String(data?.next_cursor || ''),
+                };
+                renderMonitorLogs();
+            } catch (e) {
+                if (revision === monitorRunRequestRevision) {
+                    document.getElementById('monitor-run-list').innerHTML = '<div class="monitor-run-empty" role="alert">运行记录加载失败，请点击刷新重试。</div>';
+                    showToast('运行记录加载失败，请重试。', { tone: 'error' });
+                }
+            } finally {
+                if (revision === monitorRunRequestRevision) {
+                    monitorRunLoadBusy = false;
+                    monitorState = { ...monitorState, run_loading: false };
+                    updateMonitorRunSummary();
+                }
+            }
+        }
+
+        async function refreshMonitorRuns() { return fetchMonitorRunPage(1); }
+
+        async function loadMonitorRunPage(direction) {
+            const nextPage = monitorRunPage + (Number(direction) < 0 ? -1 : 1);
+            if (monitorRunLoadBusy || nextPage < 1 || (Number(direction) > 0 && !monitorRunPageHasMore)) return;
+            return fetchMonitorRunPage(nextPage, monitorRunPageCursors[nextPage - 1] || '');
+        }
+
+        function renderMonitorRunDetail(detail) {
+            const run = detail?.run || {};
+            const body = document.getElementById('monitor-run-modal-body');
+            if (!body) return;
+            document.getElementById('monitor-run-modal-eyebrow').innerText = monitorRunSources(run);
+            document.getElementById('monitor-run-modal-title').innerText = `${run.task_name || '文件夹监控'} · ${run.subject || '全部目录'}`;
+            document.getElementById('monitor-run-modal-meta').innerText = `${run.started_at ? '开始' : '入队'} ${monitorRunTime(run.started_at || run.queued_at)}${run.finished_at ? ` · 结束 ${monitorRunTime(run.finished_at)}` : ''}`;
+            body.innerHTML = window.MonitorRunView.detailHtml(detail, activeMonitorRunCategory);
+            document.querySelectorAll('[data-monitor-run-category]').forEach(button => {
+                const category = String(button.dataset.monitorRunCategory || '');
+                const selected = category === activeMonitorRunCategory;
+                button.classList.toggle('is-active', selected);
+                button.setAttribute('aria-selected', String(selected));
+                button.tabIndex = selected ? 0 : -1;
+                const count = button.querySelector('.monitor-run-tab-count');
+                if (count) count.innerText = String(detail.counts?.[category || 'process'] || 0);
+                if (selected) body.setAttribute('aria-labelledby', button.id);
             });
         }
 
-        function updateMonitorLogSegmentSummary() {
-            const summary = document.getElementById('monitor-log-segment-summary');
-            const loadMoreBtn = document.getElementById('monitor-log-load-more');
-            if (summary) {
-                const total = Number(monitorState.log_segment_total || 0) || 0;
-                const visible = Array.isArray(monitorState.log_segments) && monitorState.log_segments.length
-                    ? monitorState.log_segments.filter(segment => String(segment?.kind || '') === 'task').length || monitorState.log_segments.length
-                    : (Array.isArray(monitorState.logs) ? 1 : 0);
-                summary.innerText = total > 0 ? `已显示最近 ${visible} / ${total} 条任务` : '暂无任务日志';
-            }
-            if (loadMoreBtn) {
-                const hasMore = !!monitorState.log_segment_has_more;
-                loadMoreBtn.classList.toggle('hidden', !hasMore);
-                loadMoreBtn.disabled = !hasMore || monitorLogLoadBusy;
-                loadMoreBtn.innerText = monitorLogLoadBusy ? '加载中...' : '加载更早 3 条';
-            }
+        async function openMonitorRun(runId) {
+            const modal = document.getElementById('monitor-run-modal');
+            if (!runId || !modal) return;
+            if (!activeMonitorRunId) monitorRunReturnFocus = document.activeElement;
+            activeMonitorRunId = String(runId);
+            activeMonitorRunCategory = '';
+            monitorRunDetailData = null;
+            showLockedModal('monitor-run-modal');
+            modal.querySelector('.monitor-run-close')?.focus();
+            await switchMonitorRunDetail('');
         }
 
-        function renderMonitorLogs({ preserveScroll = false } = {}) {
-            const box = document.getElementById('monitor-log-box');
-            const segments = Array.isArray(monitorState.log_segments) && monitorState.log_segments.length
-                ? monitorState.log_segments
-                : null;
-            const logSignature = buildMonitorLogSignature();
-            if (logSignature === lastMonitorLogSignature) {
-                updateMonitorLogSegmentSummary();
-                return;
+        async function switchMonitorRunDetail(category, { append = false, quiet = false } = {}) {
+            clearTimeout(monitorRunDetailTimer);
+            activeMonitorRunCategory = String(category || '');
+            const runId = activeMonitorRunId;
+            if (!runId) return;
+            const revision = ++monitorRunDetailRevision;
+            const body = document.getElementById('monitor-run-modal-body');
+            const scroll = body.scrollTop;
+            if (!quiet && !append) {
+                body.innerHTML = '<div class="monitor-run-empty" role="status">正在加载运行详情...</div>';
+                body.scrollTop = 0;
             }
-            const previousScrollTop = preserveScroll ? box.scrollTop : 0;
-            const previousScrollHeight = preserveScroll ? box.scrollHeight : 0;
-            const logs = segments
-                ? segments.flatMap(segment => Array.isArray(segment?.entries) ? segment.entries : [])
-                : (monitorState.logs || []);
-            box.innerHTML = logs.map(item => `<div class="${getLogEntryClass(item)}">${formatMonitorLogHtml(item)}</div>`).join('');
-            if (preserveScroll) {
-                box.scrollTop = Math.max(0, box.scrollHeight - previousScrollHeight + previousScrollTop);
-            } else {
-                box.scrollTop = box.scrollHeight;
-            }
-            lastMonitorLogSignature = logSignature;
-            updateMonitorLogSegmentSummary();
-        }
-
-        async function loadOlderMonitorLogs() {
-            if (monitorLogLoadBusy || !monitorState.log_segment_has_more) return;
-            monitorLogLoadBusy = true;
-            updateMonitorLogSegmentSummary();
+            body.setAttribute('aria-busy', 'true');
             try {
-                const offset = Array.isArray(monitorState.log_segments)
-                    ? monitorState.log_segments.filter(segment => String(segment?.kind || '') === 'task').length
-                    : 0;
-                const data = await window.MediaHubApi.getJson(`/monitor/logs/tasks?offset=${offset}&limit=3`);
-                const olderSegments = Array.isArray(data?.segments) ? data.segments : [];
-                const currentSegments = Array.isArray(monitorState.log_segments) ? monitorState.log_segments : [];
-                const existingIds = new Set(currentSegments.map(segment => String(segment?.id || '')).filter(Boolean));
-                const merged = [
-                    ...olderSegments.filter(segment => !existingIds.has(String(segment?.id || ''))),
-                    ...currentSegments,
-                ];
-                monitorState = {
-                    ...monitorState,
-                    log_segments: merged,
-                    log_segment_total: Number(data?.total || monitorState.log_segment_total || merged.length) || merged.length,
-                    log_segment_has_more: !!data?.has_more,
-                };
-                renderMonitorLogs({ preserveScroll: true });
-            } catch (e) {}
-            monitorLogLoadBusy = false;
-            updateMonitorLogSegmentSummary();
+                const query = new URLSearchParams({
+                    category: activeMonitorRunCategory || 'process',
+                    offset: String(append ? monitorRunDetailData?.next_offset || 0 : 0), limit: '50',
+                });
+                const data = await window.MediaHubApi.getJson(`/monitor/runs/${encodeURIComponent(runId)}?${query.toString()}`);
+                if (revision !== monitorRunDetailRevision || runId !== activeMonitorRunId) return;
+                if (append && monitorRunDetailData) data.events = [...monitorRunDetailData.events, ...(data.events || [])];
+                monitorRunDetailData = data;
+                renderMonitorRunDetail(data);
+                if (quiet || append) body.scrollTop = scroll;
+                if (['queued', 'running', 'waiting'].includes(data.run?.status) && !activeMonitorRunCategory && !data.has_more) {
+                    monitorRunDetailTimer = setTimeout(() => switchMonitorRunDetail('', { quiet: true }), 5000);
+                }
+            } catch (e) {
+                if (revision === monitorRunDetailRevision && runId === activeMonitorRunId) {
+                    if (append || quiet) showToast('更新详情失败，可点击刷新重试。', { tone: 'error' });
+                    else body.innerHTML = '<div class="monitor-run-empty" role="alert">无法加载运行详情。<button type="button" class="log-header-btn" onclick="switchMonitorRunDetail(activeMonitorRunCategory)">重新加载</button></div>';
+                }
+            } finally {
+                if (revision === monitorRunDetailRevision) body.setAttribute('aria-busy', 'false');
+            }
         }
+
+        async function loadMoreMonitorRunEvents() {
+            if (!monitorRunDetailData?.has_more) return;
+            await switchMonitorRunDetail(activeMonitorRunCategory, { append: true });
+        }
+
+        function closeMonitorRunModal() {
+            ++monitorRunDetailRevision;
+            clearTimeout(monitorRunDetailTimer);
+            hideLockedModal('monitor-run-modal');
+            activeMonitorRunId = '';
+            monitorRunDetailData = null;
+            monitorRunReturnFocus?.focus();
+        }
+
+        async function retryMonitorRun() {
+            if (!activeMonitorRunId || monitorRunActionBusy) return;
+            monitorRunActionBusy = true;
+            try {
+                const data = await window.MediaHubApi.postJson(`/monitor/runs/${encodeURIComponent(activeMonitorRunId)}/retry`, {});
+                const previousRunId = activeMonitorRunId;
+                showToast('已按原范围创建新的运行记录。', { tone: 'success', placement: 'top-center' });
+                await refreshMonitorRuns();
+                if (activeMonitorRunId === previousRunId) await openMonitorRun(data?.run_id || previousRunId);
+            } catch (e) {
+                showToast(`重试失败：${e?.message || '未知错误'}`, { tone: 'error', placement: 'top-center' });
+            } finally { monitorRunActionBusy = false; }
+        }
+
+        async function cancelMonitorRun() {
+            if (!activeMonitorRunId || monitorRunActionBusy) return;
+            monitorRunActionBusy = true;
+            try {
+                await window.MediaHubApi.postJson(`/monitor/runs/${encodeURIComponent(activeMonitorRunId)}/cancel`, {});
+                showToast('已取消尚未开始的运行。', { tone: 'success', placement: 'top-center' });
+                await refreshMonitorRuns();
+                await switchMonitorRunDetail(activeMonitorRunCategory);
+            } catch (e) {
+                showToast(`取消失败：${e?.message || '未知错误'}`, { tone: 'error', placement: 'top-center' });
+            } finally { monitorRunActionBusy = false; }
+        }
+        function openLegacyMonitorLogs() {
+            const modal = document.getElementById('monitor-legacy-log-modal');
+            const body = document.getElementById('monitor-legacy-log-body');
+            if (!modal || !body) return;
+            modal.classList.remove('hidden');
+            body.innerText = '正在加载...';
+            window.MediaHubApi.getJson('/monitor/logs/tasks?limit=10').then(data => {
+                body.innerText = (data?.segments || []).flatMap(segment => segment?.entries || []).map(item => item?.text || '').join('\n') || '暂无历史文本日志';
+            }).catch(() => { body.innerText = '无法加载历史文本日志。'; });
+        }
+        function closeLegacyMonitorLogs() { document.getElementById('monitor-legacy-log-modal')?.classList.add('hidden'); }
+        function openMonitorRunRetention() { const retention = monitorState.run_retention || { mode: 'longterm', days: 30 }; document.getElementById(`monitor-run-retention-${retention.mode === 'days' ? 'days' : 'longterm'}`).checked = true; document.getElementById('monitor-run-retention-days-input').value = Number(retention.days || 30); syncMonitorRunRetentionUI(); document.getElementById('monitor-run-retention-modal')?.classList.remove('hidden'); }
+        function closeMonitorRunRetention() { document.getElementById('monitor-run-retention-modal')?.classList.add('hidden'); }
+        function syncMonitorRunRetentionUI() { const enabled = !!document.getElementById('monitor-run-retention-days')?.checked; document.getElementById('monitor-run-retention-days-wrap')?.classList.toggle('is-disabled', !enabled); document.getElementById('monitor-run-retention-days-input').disabled = !enabled; }
+        async function saveMonitorRunRetention() { const mode = document.getElementById('monitor-run-retention-days')?.checked ? 'days' : 'longterm'; const days = Number(document.getElementById('monitor-run-retention-days-input')?.value || 30); const data = await window.MediaHubApi.postJson('/monitor/runs/retention', { mode, days }); monitorState = { ...monitorState, run_retention: data.retention || { mode, days } }; document.getElementById('monitor-run-retention-result').innerText = '保留设置已保存。'; }
+        async function previewMonitorRunCleanup() { const days = document.getElementById('monitor-run-retention-days')?.checked ? Number(document.getElementById('monitor-run-retention-days-input')?.value || 30) : 0; const data = await window.MediaHubApi.postJson('/monitor/runs/cleanup', { days, preview: true }); document.getElementById('monitor-run-retention-result').innerText = `预计清理 ${Number(data.count || 0)} 条已结束记录；进行中和等待后续的记录会保留。`; }
+        async function runMonitorRunCleanup() { const days = document.getElementById('monitor-run-retention-days')?.checked ? Number(document.getElementById('monitor-run-retention-days-input')?.value || 30) : 0; const preview = await window.MediaHubApi.postJson('/monitor/runs/cleanup', { days, preview: true }); const count = Number(preview.count || 0); if (!count || !window.confirm(`将清理 ${count} 条已结束运行记录，进行中和等待后续的记录会保留。是否继续？`)) return; const data = await window.MediaHubApi.postJson('/monitor/runs/cleanup', { days, preview: false }); document.getElementById('monitor-run-retention-result').innerText = `已清理 ${Number(data.deleted || 0)} 条运行记录。`; await refreshMonitorRuns(true); }
 
         async function refreshMainLogs({ compact = false } = {}) {
             const taskModule = await loadTaskTabModule();

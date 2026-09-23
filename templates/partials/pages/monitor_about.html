@@ -18,17 +18,73 @@
             </div>
 
             <div class="group-card">
-                <div class="flex justify-between items-center mb-4">
-                    <h3 class="group-title mb-0">监控日志</h3>
-                    <div class="flex items-center gap-2 flex-wrap">
-                        <div id="monitor-log-segment-summary" class="text-xs text-slate-400">暂无任务日志</div>
-                        <button id="monitor-log-load-more" type="button" onclick="loadOlderMonitorLogs()" class="log-header-btn hidden">加载更早 3 条</button>
-                        <button onclick="clearMonitorLogs()" class="log-header-btn">清空日志</button>
+                <div class="monitor-runs-head">
+                    <div>
+                        <h3 class="group-title mb-0">运行记录</h3>
+                        <div id="monitor-run-summary" class="text-xs text-slate-400 mt-2">暂无运行记录</div>
+                    </div>
+                    <div class="monitor-runs-actions">
+                        <button type="button" onclick="refreshMonitorRuns()" class="log-header-btn">刷新记录</button>
+                        <button type="button" onclick="openMonitorRunRetention()" class="log-header-btn">记录保留</button>
+                        <div class="monitor-run-pagination" aria-label="运行记录分页">
+                            <button id="monitor-run-prev" type="button" onclick="loadMonitorRunPage(-1)" class="log-header-btn" disabled>上一页</button>
+                            <span id="monitor-run-page-label" class="monitor-run-page-label">第 1 页</span>
+                            <button id="monitor-run-next" type="button" onclick="loadMonitorRunPage(1)" class="log-header-btn" disabled>下一页</button>
+                        </div>
                     </div>
                 </div>
-                <div class="bg-slate-950/80 rounded-3xl border border-slate-800 p-4 shadow-inner">
-                    <div id="monitor-log-box" class="overflow-y-auto font-mono text-[13px] p-2 scroll-smooth"></div>
+                <div class="monitor-run-filters" aria-label="运行记录筛选">
+                    <select id="monitor-run-task-filter" aria-label="按任务筛选" class="monitor-run-filter" onchange="refreshMonitorRuns()"><option value="">全部任务</option></select>
+                    <select id="monitor-run-source-filter" aria-label="按触发来源筛选" class="monitor-run-filter" onchange="refreshMonitorRuns()">
+                        <option value="">全部来源</option><option value="manual">手动触发</option><option value="retry">重新运行</option><option value="cron">定时触发</option><option value="resource">资源导入</option><option value="webhook">外部通知</option><option value="change">文件变更同步</option><option value="subscription">订阅任务</option><option value="auto_rescan">系统补扫</option><option value="offline">离线下载完成</option><option value="recovery">恢复任务</option>
+                    </select>
+                    <select id="monitor-run-status-filter" aria-label="按运行状态筛选" class="monitor-run-filter" onchange="refreshMonitorRuns()">
+                        <option value="">全部状态</option><option value="queued">排队中</option><option value="running">执行中</option><option value="waiting">等待后续同步</option><option value="completed">已完成</option><option value="no_change">无变化</option><option value="partial">部分完成</option><option value="failed">失败</option><option value="cancelled">已取消或中断</option>
+                    </select>
                 </div>
+                <div id="monitor-run-list" class="monitor-run-list" aria-live="polite"></div>
+                <div class="monitor-legacy-log-link"><button type="button" onclick="openLegacyMonitorLogs()">查看历史文本日志</button></div>
+            </div>
+        </div>
+
+        <div id="monitor-run-modal" class="app-dialog-modal hidden" role="dialog" aria-modal="true" aria-labelledby="monitor-run-modal-title">
+            <div class="app-dialog-shell monitor-run-modal-shell">
+                <div class="app-dialog-header">
+                    <div>
+                        <div id="monitor-run-modal-eyebrow" class="app-dialog-eyebrow">运行记录</div>
+                        <div id="monitor-run-modal-title" class="app-dialog-title">--</div>
+                        <div id="monitor-run-modal-meta" class="monitor-run-modal-meta"></div>
+                    </div>
+                    <button type="button" class="log-header-btn monitor-run-refresh" onclick="switchMonitorRunDetail(activeMonitorRunCategory)" aria-label="刷新运行详情">刷新</button>
+                    <button type="button" class="app-dialog-close monitor-run-close" onclick="closeMonitorRunModal()" aria-label="关闭运行详情" title="关闭运行详情">×</button>
+                </div>
+                <div class="monitor-run-tabs" role="tablist" aria-label="运行详情">
+                    <button id="monitor-run-tab-0" type="button" role="tab" aria-selected="true" aria-controls="monitor-run-modal-body" tabindex="0" data-monitor-run-category="" onclick="switchMonitorRunDetail('')">概览与过程 <span class="monitor-run-tab-count">0</span></button>
+                    <button id="monitor-run-tab-1" type="button" role="tab" aria-selected="false" aria-controls="monitor-run-modal-body" tabindex="-1" data-monitor-run-category="remote" onclick="switchMonitorRunDetail('remote')">网盘操作 <span class="monitor-run-tab-count">0</span></button>
+                    <button id="monitor-run-tab-2" type="button" role="tab" aria-selected="false" aria-controls="monitor-run-modal-body" tabindex="-1" data-monitor-run-category="strm" onclick="switchMonitorRunDetail('strm')">本地播放文件 <span class="monitor-run-tab-count">0</span></button>
+                    <button id="monitor-run-tab-3" type="button" role="tab" aria-selected="false" aria-controls="monitor-run-modal-body" tabindex="-1" data-monitor-run-category="problem" onclick="switchMonitorRunDetail('problem')">问题 <span class="monitor-run-tab-count">0</span></button>
+                </div>
+                <div id="monitor-run-modal-body" class="monitor-run-modal-body" role="tabpanel" tabindex="0" aria-labelledby="monitor-run-tab-0"></div>
+            </div>
+        </div>
+
+        <div id="monitor-run-retention-modal" class="app-dialog-modal hidden" role="dialog" aria-modal="true" aria-labelledby="monitor-run-retention-title">
+            <div class="app-dialog-shell monitor-run-retention-shell">
+                <div class="app-dialog-header"><div><div class="app-dialog-eyebrow">运行记录</div><div id="monitor-run-retention-title" class="app-dialog-title">记录保留</div></div><button type="button" class="app-dialog-close" onclick="closeMonitorRunRetention()">关闭</button></div>
+                <div class="monitor-run-retention-body">
+                    <label class="form-check"><input id="monitor-run-retention-longterm" class="form-check-input" type="radio" name="monitor-run-retention" value="longterm" onchange="syncMonitorRunRetentionUI()"><span class="form-check-label">长期保留</span></label>
+                    <label class="form-check"><input id="monitor-run-retention-days" class="form-check-input" type="radio" name="monitor-run-retention" value="days" onchange="syncMonitorRunRetentionUI()"><span class="form-check-label">定期清理</span></label>
+                    <label id="monitor-run-retention-days-wrap" class="monitor-run-days-label">保留最近 <input id="monitor-run-retention-days-input" type="number" min="1" max="3650" value="30"> 天的已结束记录</label>
+                    <div class="monitor-run-retention-actions"><button type="button" class="log-header-btn" onclick="saveMonitorRunRetention()">保存设置</button><button type="button" class="log-header-btn" onclick="previewMonitorRunCleanup()">预览清理</button><button type="button" class="log-header-btn" onclick="runMonitorRunCleanup()">立即清理</button></div>
+                    <div id="monitor-run-retention-result" class="monitor-run-retention-result" aria-live="polite"></div>
+                </div>
+            </div>
+        </div>
+
+        <div id="monitor-legacy-log-modal" class="app-dialog-modal hidden" role="dialog" aria-modal="true" aria-labelledby="monitor-legacy-log-title">
+            <div class="app-dialog-shell monitor-legacy-log-shell">
+                <div class="app-dialog-header"><div><div class="app-dialog-eyebrow">旧记录</div><div id="monitor-legacy-log-title" class="app-dialog-title">历史文本日志</div></div><button type="button" class="app-dialog-close" onclick="closeLegacyMonitorLogs()" aria-label="关闭历史文本日志">关闭</button></div>
+                <pre id="monitor-legacy-log-body" class="monitor-legacy-log-body">正在加载...</pre>
             </div>
         </div>
 

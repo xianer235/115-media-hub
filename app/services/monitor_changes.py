@@ -417,6 +417,7 @@ def prepare_monitor_change_events(
     entries: Sequence[Dict[str, Any]],
     source_action: str = "",
     dedupe_key: str = "",
+    monitor_run_id: str = "",
     cfg: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     normalized_provider = str(provider or "").strip().lower()
@@ -507,9 +508,9 @@ def prepare_monitor_change_events(
                     """
                     INSERT OR IGNORE INTO monitor_change_events(
                         dedupe_key, provider, operation, old_path, new_path,
-                        entry_snapshot_json, task_name, source_action, status,
+                        entry_snapshot_json, task_name, source_action, monitor_run_id, status,
                         created_at, updated_at
-                    ) VALUES (?, '115', ?, ?, ?, ?, ?, ?, 'prepared', ?, ?)
+                    ) VALUES (?, '115', ?, ?, ?, ?, ?, ?, ?, 'prepared', ?, ?)
                     """,
                     (
                         entry_key,
@@ -519,6 +520,7 @@ def prepare_monitor_change_events(
                         safe_json_dumps(enriched),
                         task_name,
                         str(source_action or "")[:200],
+                        str(monitor_run_id or "")[:64],
                         now,
                         now,
                     ),
@@ -1926,12 +1928,20 @@ async def process_monitor_change_events(
         "change_details": [],
         "new_media_items": [],
         "manual_required_paths": [],
+        "source_actions": [],
+        "monitor_run_ids": [],
     }
     strm_state: Dict[str, str] = {}
     with db_connection() as conn:
         events = _load_ready_events(conn, task_name=task_name, event_ids=event_ids)
         for event in events:
             event_id = int(event.get("id", 0) or 0)
+            source_action = str(event.get("source_action", "") or "").strip()
+            if source_action and source_action not in result["source_actions"]:
+                result["source_actions"].append(source_action)
+            monitor_run_id = str(event.get("monitor_run_id", "") or "").strip()
+            if monitor_run_id and monitor_run_id not in result["monitor_run_ids"]:
+                result["monitor_run_ids"].append(monitor_run_id)
             task = _task_by_name(active_cfg, str(event.get("task_name", "") or ""))
             file_journal: Dict[str, Optional[bytes]] = {}
             conn.execute(

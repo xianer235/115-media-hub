@@ -939,6 +939,7 @@ _SETTINGS_CONFIG_KEY_ORDER_AFTER_AUTH: Tuple[str, ...] = (
     # 其他页面维护的数据
     "mount_points",
     "monitor_tasks",
+    "monitor_run_retention",
     "subscription_tasks",
 )
 
@@ -1050,6 +1051,7 @@ def default_config() -> Dict[str, Any]:
         "sha1_skip": True,
         "sync_clean": True,
         "monitor_tasks": [],
+        "monitor_run_retention": {"mode": "longterm", "days": 30},
         "subscription_tasks": [],
         "resource_sources": [],
         "resource_quick_links": [],
@@ -2737,6 +2739,15 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         merged["mount_points"] = [dict(item) for item in DEFAULT_MOUNT_POINTS]
     if "monitor_tasks" not in merged or not isinstance(merged["monitor_tasks"], list):
         merged["monitor_tasks"] = []
+    retention = merged.get("monitor_run_retention")
+    if not isinstance(retention, dict):
+        retention = {}
+    mode = str(retention.get("mode", "longterm") or "longterm").strip().lower()
+    try:
+        days = max(1, min(3650, int(retention.get("days", 30) or 30)))
+    except (TypeError, ValueError):
+        days = 30
+    merged["monitor_run_retention"] = {"mode": "days" if mode == "days" else "longterm", "days": days}
     if "subscription_tasks" not in merged or not isinstance(merged["subscription_tasks"], list):
         merged["subscription_tasks"] = []
     if "resource_sources" not in merged or not isinstance(merged["resource_sources"], list):
@@ -5859,6 +5870,13 @@ def build_monitor_status_payload(
     logs = monitor_status.get("logs", [])
     tail_limit = min(log_limit, UI_STATUS_STREAM_LOG_TAIL_LIMIT) if compact else log_limit
     segment_page = build_monitor_log_segment_page(limit=MONITOR_UI_RECENT_TASK_LOG_LIMIT)
+    try:
+        from .services.monitor_runs import list_runs
+        # 运行记录页面固定按 10 条分页；状态推送也只携带第一页，避免把
+        # 实时状态刷新误当成完整列表，或让首屏一次渲染出两页记录。
+        run_page = list_runs(limit=10)
+    except Exception:
+        run_page = {"runs": [], "has_more": False, "next_cursor": ""}
     payload = {
         "running": bool(monitor_status["running"]),
         "current_task": str(monitor_status.get("current_task", "")),
@@ -5870,6 +5888,10 @@ def build_monitor_status_payload(
         "log_segment_total": segment_page["total"],
         "log_segment_limit": segment_page["limit"],
         "log_segment_has_more": segment_page["has_more"],
+        "runs": run_page["runs"],
+        "run_has_more": run_page["has_more"],
+        "run_next_cursor": run_page["next_cursor"],
+        "run_retention": clone_jsonable(cfg.get("monitor_run_retention", {"mode": "longterm", "days": 30})),
         "summary": clone_jsonable(monitor_status.get("summary", {})),
         "change_counts": clone_jsonable(change_counts),
         "webhook_base": "/webhook/",

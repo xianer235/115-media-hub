@@ -25,6 +25,12 @@ from .scraper import (
     resolve_scraper_dest_folder_id,
     submit_scraper_job,
 )
+from .monitor_runs import create_run as create_monitor_run
+from .monitor_runs import finish_run as finish_monitor_run
+from .monitor_runs import record_event as record_monitor_run_event
+from .monitor_runs import start_run as start_monitor_run
+from .monitor_runs import update_run as update_monitor_run
+from .monitor_runs import wait_run as wait_monitor_run
 
 
 QUICK_IMPORT_PROVIDER = "115"
@@ -389,7 +395,9 @@ def _left_reason_from_result(result: Dict[str, Any]) -> str:
     return "未达到自动整理条件"
 
 
-def _quick_import_source_action(job_id: int) -> str:
+def _quick_import_source_action(job_id: int, monitor_run_id: str = "") -> str:
+    # The existing reconciliation pipeline consumes this value.  Keep it
+    # stable and persist the lifecycle relation in monitor_run_id instead.
     return f"scraper-job:{max(0, int(job_id or 0))}:{QUICK_IMPORT_SOURCE_ACTION_PREFIX}"
 
 
@@ -441,18 +449,20 @@ def _move_entries_into_folder(
     target_cid: str,
     target_rel: str,
     job_id: int,
-) -> None:
+    monitor_run_id: str = "",
+) -> Dict[str, Any]:
     entry_ids = [str(item.get("id", "") or "").strip() for item in entries if str(item.get("id", "") or "").strip()]
     if not entry_ids:
-        return
-    scraper_service.move_scraper_entries(
+        return {"monitor_sync": {"event_count": 0}}
+    return scraper_service.move_scraper_entries(
         QUICK_IMPORT_PROVIDER,
         entry_ids,
         target_cid,
         source_cid=source_cid,
         entries=entries,
         target_parent_path=target_rel,
-        source_action=_quick_import_source_action(job_id),
+        source_action=_quick_import_source_action(job_id, monitor_run_id),
+        monitor_run_id=monitor_run_id,
     )
 
 
@@ -463,6 +473,7 @@ def _merge_organized_folder_into_existing(
     target_rel: str,
     *,
     job_id: int,
+    monitor_run_id: str = "",
     name_cache: Dict[str, Set[str]],
     depth: int = 0,
 ) -> Dict[str, Any]:
@@ -479,6 +490,7 @@ def _merge_organized_folder_into_existing(
     if not source_id or not target_id:
         raise RuntimeError("合并文件夹缺少目录 ID")
     moved_count = 0
+    monitor_sync_events = 0
     skipped: List[str] = []
     pending_moves: List[Dict[str, Any]] = []
     target_names = _folder_entry_names(target_id, name_cache)
@@ -500,10 +512,12 @@ def _merge_organized_folder_into_existing(
                     matched,
                     normalize_relative_path(join_relative_path(target_rel, matched_name)),
                     job_id=job_id,
+                    monitor_run_id=monitor_run_id,
                     name_cache=name_cache,
                     depth=depth + 1,
                 )
                 moved_count += int(nested.get("moved_count", 0) or 0)
+                monitor_sync_events += int(nested.get("monitor_sync_events", 0) or 0)
                 skipped.extend(nested.get("skipped") or [])
                 if not nested.get("skipped"):
                     scraper_service.delete_scraper_entries(
@@ -519,15 +533,17 @@ def _merge_organized_folder_into_existing(
         target_names.add(child_name)
         pending_moves.append(child)
     if pending_moves:
-        _move_entries_into_folder(
+        move_result = _move_entries_into_folder(
             pending_moves,
             source_cid=source_id,
             target_cid=target_id,
             target_rel=target_rel,
             job_id=job_id,
+            monitor_run_id=monitor_run_id,
         )
         moved_count += len(pending_moves)
-    return {"moved_count": moved_count, "skipped": skipped}
+        monitor_sync_events += max(0, int(((move_result.get("monitor_sync") or {}).get("event_count", 0) or 0)))
+    return {"moved_count": moved_count, "monitor_sync_events": monitor_sync_events, "skipped": skipped}
 
 
 def _dispatch_organized_entry(
@@ -538,6 +554,7 @@ def _dispatch_organized_entry(
     target_cid: str,
     target_rel: str,
     job_id: int,
+    monitor_run_id: str = "",
     name_cache: Optional[Dict[str, Set[str]]] = None,
 ) -> Dict[str, Any]:
     """把整理好的条目分发到监控目录：目标已有同名文件夹时并进去。
@@ -556,14 +573,15 @@ def _dispatch_organized_entry(
     existing = scraper_service.find_scraper_media_folder(QUICK_IMPORT_PROVIDER, target_cid, lookup_name)
     existing_id = str((existing or {}).get("id", "") or "").strip()
     if not existing_id or existing_id == entry_id:
-        _move_entries_into_folder(
+        move_result = _move_entries_into_folder(
             [entry],
             source_cid=source_cid,
             target_cid=target_cid,
             target_rel=target_rel,
             job_id=job_id,
+            monitor_run_id=monitor_run_id,
         )
-        return {"merged": False, "skipped": []}
+        return {"merged": False, "skipped": [], "monitor_sync_events": max(0, int(((move_result.get("monitor_sync") or {}).get("event_count", 0) or 0)))}
 
     existing_name = str((existing or {}).get("name", "") or entry_name).strip() or entry_name
     merged_target_rel = normalize_relative_path(join_relative_path(target_rel, existing_name))
@@ -571,14 +589,15 @@ def _dispatch_organized_entry(
         # 散文件（例如已经标准命名的电影）：直接放进已有文件夹，而不是再复制一份到目录里。
         if entry_name in _folder_entry_names(existing_id, cache):
             return {"merged": False, "skipped": [entry_name], "target_folder": existing_name}
-        _move_entries_into_folder(
+        move_result = _move_entries_into_folder(
             [entry],
             source_cid=source_cid,
             target_cid=existing_id,
             target_rel=merged_target_rel,
             job_id=job_id,
+            monitor_run_id=monitor_run_id,
         )
-        return {"merged": True, "skipped": [], "target_folder": existing_name, "moved_count": 1}
+        return {"merged": True, "skipped": [], "target_folder": existing_name, "moved_count": 1, "monitor_sync_events": max(0, int(((move_result.get("monitor_sync") or {}).get("event_count", 0) or 0)))}
 
     outcome = _merge_organized_folder_into_existing(
         entry,
@@ -587,6 +606,7 @@ def _dispatch_organized_entry(
         existing,
         merged_target_rel,
         job_id=job_id,
+        monitor_run_id=monitor_run_id,
         name_cache=cache,
     )
     skipped = list(outcome.get("skipped") or [])
@@ -603,10 +623,17 @@ def _dispatch_organized_entry(
         "skipped": skipped,
         "target_folder": existing_name,
         "moved_count": int(outcome.get("moved_count", 0) or 0),
+        "monitor_sync_events": int(outcome.get("monitor_sync_events", 0) or 0),
     }
 
 
-def run_quick_import(trigger: str = "manual", *, sub_path: str = "") -> Dict[str, Any]:
+def run_quick_import(
+    trigger: str = "manual",
+    *,
+    sub_path: str = "",
+    parent_run_id: str = "",
+    source_ref: str = "",
+) -> Dict[str, Any]:
     """扫描接收夹，整理高置信度条目并按类型分发到标注过的监控目录。
 
     低置信度 / 识别失败 / 计划冲突 / 搬运失败的条目都会留在接收夹，并记录具体原因。
@@ -634,6 +661,17 @@ def run_quick_import(trigger: str = "manual", *, sub_path: str = "") -> Dict[str
         started_at = now_text()
         run_id = _insert_quick_import_run(trigger, conf["inbox_path"], started_at)
         task_label = str(conf.get("task_name") or "接收夹").strip() or "接收夹"
+        monitor_run_id = create_monitor_run(
+            run_kind="inbox",
+            task_name=task_label,
+            source=trigger,
+            scope={"kind": "paths", "paths": [base_rel] if base_rel else []},
+            subject="识别中",
+            parent_run_id=parent_run_id,
+            source_ref=source_ref,
+            task_snapshot=get_inbox_task(cfg),
+        )
+        start_monitor_run(monitor_run_id, subject="识别中", scope={"kind": "paths", "paths": [base_rel] if base_rel else []})
         moved: List[Dict[str, Any]] = []
         left: List[Dict[str, Any]] = []
 
@@ -656,6 +694,16 @@ def run_quick_import(trigger: str = "manual", *, sub_path: str = "") -> Dict[str
         ) -> None:
             """收尾时同时写运行记录和监控日志——接收夹日志要和扫描任务在同一个列表里。"""
             _finish_quick_import_run(run_id, status, moved_count, left_count, summary, detail)
+            run_status = "failed" if status == "failed" else ("cancelled" if status == "cancelled" else ("partial" if left_count else ("no_change" if not moved_count else "completed")))
+            run_result = {"moved": moved_count, "left": left_count, **(detail if isinstance(detail, dict) else {})}
+            if (
+                moved_count > 0
+                and status == "completed"
+                and int(run_result.get("monitor_sync_events", 0) or 0) > 0
+            ):
+                wait_monitor_run(monitor_run_id, summary="已分发，等待目标监控任务完成 STRM 同步", result=run_result)
+            else:
+                finish_monitor_run(monitor_run_id, status=run_status, summary=summary, result=run_result)
             if status == "failed":
                 level = "error"
             elif status == "cancelled":
@@ -683,6 +731,19 @@ def run_quick_import(trigger: str = "manual", *, sub_path: str = "") -> Dict[str
             items = identified.get("items") or []
             results = identified.get("results") or []
             picked = identified.get("picked") or {}
+            subjects: List[str] = []
+            for candidate in picked.values() if isinstance(picked, dict) else []:
+                if not isinstance(candidate, dict):
+                    continue
+                title = str(candidate.get("title", "") or candidate.get("name", "") or "").strip()
+                year = str(candidate.get("year", "") or "").strip()
+                label = f"{title}（{year}）" if title and year else title
+                if label and label not in subjects:
+                    subjects.append(label)
+            if subjects:
+                display_subject = subjects[0] if len(subjects) == 1 else f"{'、'.join(subjects[:2])} 等 {len(subjects)} 部影视"
+                update_monitor_run(monitor_run_id, subject=display_subject)
+                record_monitor_run_event(monitor_run_id, category="process", operation="identified", status="completed", title="识别完成", detail={"subjects": subjects})
             items_by_index = {
                 max(0, parse_int(item.get("item_index", 0), 0)): item
                 for item in items
@@ -792,6 +853,40 @@ def run_quick_import(trigger: str = "manual", *, sub_path: str = "") -> Dict[str
                         job_id = max(0, parse_int(job.get("job_id", 0), 0))
                         if job_id > 0:
                             submit_scraper_job(job_id).result(timeout=QUICK_IMPORT_JOB_WAIT_SECONDS)
+                            state = scraper_service.get_scraper_jobs_state(job_id=job_id)
+                            jobs = state.get("jobs") if isinstance(state, dict) else []
+                            actual = jobs[0] if isinstance(jobs, list) and jobs else {}
+                            actual_status = str(actual.get("status", "") or "").strip()
+                            if actual_status in {"failed", "partial", "rollback_failed"}:
+                                detail = str(actual.get("status_detail", "") or "整理动作未全部完成")
+                                left.append(
+                                    {
+                                        "name": str(item.get("name", "") or ""),
+                                        "reason": f"整理{('部分完成' if actual_status == 'partial' else '失败')}：{detail[:120]}",
+                                    }
+                                )
+                                record_monitor_run_event(
+                                    monitor_run_id,
+                                    category="problem",
+                                    operation="organize",
+                                    status=actual_status,
+                                    title=str(item.get("name", "") or ""),
+                                    detail={"scraper_job_id": job_id, "status": actual_status, "detail": detail},
+                                )
+                                continue
+                            if actual_status == "completed":
+                                record_monitor_run_event(
+                                    monitor_run_id,
+                                    category="remote",
+                                    operation="organize",
+                                    status="completed",
+                                    title=str(item.get("name", "") or ""),
+                                    detail={
+                                        "scraper_job_id": job_id,
+                                        "succeeded_actions": int(actual.get("succeeded_actions", 0) or 0),
+                                        "failed_actions": int(actual.get("failed_actions", 0) or 0),
+                                    },
+                                )
                     except Exception as exc:
                         left.append(
                             {
@@ -826,6 +921,7 @@ def run_quick_import(trigger: str = "manual", *, sub_path: str = "") -> Dict[str
                         target_rel=target["scan_rel"],
                         job_id=job_id,
                         name_cache=dispatch_name_cache,
+                        monitor_run_id=monitor_run_id,
                     )
                 except Exception as exc:
                     left.append(
@@ -852,7 +948,30 @@ def run_quick_import(trigger: str = "manual", *, sub_path: str = "") -> Dict[str
                         "target": QUICK_IMPORT_TARGET_LABELS[media_type],
                         "task_name": str(target.get("task_name", "") or ""),
                         "job_id": job_id,
+                        "monitor_sync_events": int(dispatch.get("monitor_sync_events", 0) or 0),
                     }
+                )
+                record_monitor_run_event(
+                    monitor_run_id,
+                    category="remote",
+                    operation="merge" if dispatch.get("merged") else "move",
+                    status="completed",
+                    title=str(item.get("name", "") or ""),
+                    detail={
+                        "step": "接收夹分发",
+                        "operation_label": "网盘合并" if dispatch.get("merged") else "网盘移动",
+                        "old_name": entry_name,
+                        "new_name": str(dispatch.get("target_folder", "") or entry_name),
+                        "old_path": normalize_relative_path(str(entry.get("path", "") or join_relative_path(base_rel, entry_name))),
+                        "new_path": normalize_relative_path(join_relative_path(
+                            str(target.get("scan_rel", "") or ""),
+                            str(dispatch.get("target_folder", "") or entry_name),
+                        )),
+                        "target": target.get("scan_rel", ""),
+                        "task_name": target.get("task_name", ""),
+                        "scraper_job_id": job_id,
+                        "monitor_sync_events": int(dispatch.get("monitor_sync_events", 0) or 0),
+                    },
                 )
 
             handled_indexes = set(picked.keys())
@@ -865,6 +984,17 @@ def run_quick_import(trigger: str = "manual", *, sub_path: str = "") -> Dict[str
                         "reason": _left_reason_from_result(results_by_index.get(index) or {}),
                     }
                 )
+
+            for item in left:
+                if isinstance(item, dict):
+                    record_monitor_run_event(
+                        monitor_run_id,
+                        category="problem",
+                        operation="leave_in_inbox",
+                        status="pending",
+                        title=str(item.get("name", "") or "未处理项目"),
+                        detail={"reason": str(item.get("reason", "") or "")},
+                    )
 
             if cancelled:
                 processed_set = set(processed_indexes)
@@ -884,7 +1014,12 @@ def run_quick_import(trigger: str = "manual", *, sub_path: str = "") -> Dict[str
                     len(moved),
                     len(left),
                     summary,
-                    {"moved": moved, "left": left, "cancelled": True},
+                    {
+                        "moved": moved,
+                        "left": left,
+                        "monitor_sync_events": sum(int(item.get("monitor_sync_events", 0) or 0) for item in moved),
+                        "cancelled": True,
+                    },
                 )
                 return {
                     "ok": True,
@@ -901,7 +1036,11 @@ def run_quick_import(trigger: str = "manual", *, sub_path: str = "") -> Dict[str
                 len(moved),
                 len(left),
                 summary,
-                {"moved": moved, "left": left},
+                {
+                    "moved": moved,
+                    "left": left,
+                    "monitor_sync_events": sum(int(item.get("monitor_sync_events", 0) or 0) for item in moved),
+                },
             )
             return {
                 "ok": True,

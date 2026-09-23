@@ -220,6 +220,7 @@ async def _apply_offline_task_state(job: Dict[str, Any], task: Dict[str, Any]) -
                     quick_import_service.run_quick_import,
                     "offline",
                     sub_path=offline_folder_hint,
+                    source_ref=f"resource:{job_id}",
                 )
             except Exception as exc:
                 _mark_resource_job_failed(job_id, resource_id, f"115 已完成，但快捷导入失败：{exc}")
@@ -985,7 +986,7 @@ async def run_resource_job(job_id: int) -> None:
                 conn.commit()
 
         job_extra_for_trigger = job.get("extra") if isinstance(job.get("extra"), dict) else {}
-        if bool(job_extra_for_trigger.get("quick_import_inbox")):
+        if bool(job_extra_for_trigger.get("quick_import_inbox")) and not is_offline_link:
             # 落点在接收夹：交给快捷导入（后台执行，不阻塞导入任务收尾）。
             from . import quick_import as quick_import_service
 

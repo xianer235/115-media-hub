@@ -23,6 +23,7 @@ from .services.resource import (
 from .services.sign115 import refresh_sign115_status, run_sign115_job
 from .services.subscription import queue_subscription_job
 from .services.scraper import requeue_scraper_jobs_on_startup
+from .services.monitor_runs import cleanup_runs
 from .services.subscription_offline_cleanup import (
     run_subscription_offline_staging_cleanup_once,
     subscription_offline_staging_cleanup_watcher,
@@ -105,11 +106,22 @@ async def startup() -> None:
                 submit_background(schedule_resource_job_refresh, int(job["id"]), label="resource-refresh-recover")
     submit_background(refresh_sign115_status, force_remote=False, trigger="startup", label="sign115-startup-status")
 
+    last_monitor_run_cleanup_day = ""
+
     async def monitor_scheduler() -> None:
+        nonlocal last_monitor_run_cleanup_day
         await asyncio.sleep(5)
         while True:
             now = time.time()
             cfg = get_config()
+            retention = cfg.get("monitor_run_retention") if isinstance(cfg.get("monitor_run_retention"), dict) else {}
+            cleanup_day = datetime.now().date().isoformat()
+            if retention.get("mode") == "days" and cleanup_day != last_monitor_run_cleanup_day:
+                try:
+                    await asyncio.to_thread(cleanup_runs, days=max(1, int(retention.get("days", 30) or 30)))
+                except Exception:
+                    logging.exception("Failed to clean expired monitor runs")
+                last_monitor_run_cleanup_day = cleanup_day
             prev_next_runs = dict(monitor_next_run)
             tasks = cfg.get("monitor_tasks", [])
             active_names = {task.get("name", "") for task in tasks if task.get("name")}
