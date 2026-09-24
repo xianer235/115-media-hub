@@ -124,15 +124,30 @@ def _ancestor_ids(conn: Any, run_id: str, *, max_depth: int = MAX_RUN_LINK_DEPTH
 def _touch_ancestors(conn: Any, run_id: str, now: str) -> None:
     """把“最近活动”上溯到祖先运行。
 
-    运行记录按 `updated_at` 排序，而列表默认只显示工作单元的头（触发）记录。上游
-    时间跟着下游一起动，组头才始终排在自己的派生任务之前，分页游标也能继续用
-    `updated_at`，不必为分组写递归 CTE。
+    运行记录按 `updated_at` 倒序，触发记录（祖先）的活动时间跟着下游一起走，它才会
+    排在自己派生出来的任务之前，而不是夹在它们中间。分页游标仍然是 `updated_at`，
+    不需要为排序写递归查询。
+
+    时间戳只有秒精度，同秒内的下游会把祖先 `updated_at` 撑到完全相同的值；这里给
+    祖先加一个毫秒后缀，保证“触发记录先于它派生的记录”在同秒内也成立（`MAX` 保证
+    祖先自己后续写入的整秒时间不会把它拉回去）。
     """
     ancestors = _ancestor_ids(conn, run_id)
     if not ancestors:
         return
+    stamp = _ancestor_activity_time(now)
     marks = ",".join("?" for _ in ancestors)
-    conn.execute(f"UPDATE monitor_runs SET updated_at = ? WHERE id IN ({marks})", (now, *ancestors))
+    conn.execute(
+        f"UPDATE monitor_runs SET updated_at = MAX(updated_at, ?) WHERE id IN ({marks})",
+        (stamp, *ancestors),
+    )
+
+
+def _ancestor_activity_time(now: str) -> str:
+    text = _text(now)
+    if not text:
+        return text
+    return text if "." in text else f"{text}.999999"
 
 
 def _descendant_entries(conn: Any, run_id: str, *, max_depth: int = MAX_RUN_LINK_DEPTH) -> List[Dict[str, Any]]:
@@ -178,6 +193,19 @@ def _descendant_entries(conn: Any, run_id: str, *, max_depth: int = MAX_RUN_LINK
         item["group_id"] = origin
         item["group_depth"] = depth
         items.append(item)
+    # 只通过关联表挂上来的下游（例如接收夹分发出来的自动补扫）没有 parent_run_id，
+    # 但它在链路里的上一级是明确的：用它来排前序，别把两层压成同一层。
+    for child_id, parent_ids in _run_parent_ids(conn, list(depths)).items():
+        parent_id = next(
+            (value for value in parent_ids if value == origin or value in depths),
+            "",
+        )
+        if not parent_id:
+            continue
+        for item in items:
+            if _text(item.get("id")) == child_id:
+                item["link_parent_id"] = parent_id
+                break
     child_counts = _child_counts(conn, list(depths))
     for item in items:
         item["child_count"] = child_counts.get(_text(item.get("id")), 0)
@@ -221,7 +249,7 @@ def set_parent_run(run_id: str, parent_run_id: str) -> None:
         return
     now = now_text()
     with db_connection() as conn:
-        conn.execute("UPDATE monitor_runs SET parent_run_id = ?, updated_at = ? WHERE id = ?", (parent, now, run_id))
+        conn.execute("UPDATE monitor_runs SET parent_run_id = ?, updated_at = MAX(updated_at, ?) WHERE id = ?", (parent, now, run_id))
         conn.execute("INSERT OR IGNORE INTO monitor_run_links (run_id, related_run_id, relation, created_at) VALUES (?, ?, 'child', ?)", (parent, run_id, now))
         _touch_ancestors(conn, run_id, now)
         conn.commit()
@@ -241,7 +269,7 @@ def add_source(run_id: str, source: str, source_ref: str = "") -> None:
         if any(isinstance(entry, dict) and entry.get("source") == item["source"] and entry.get("ref") == item["ref"] for entry in sources):
             return
         sources.append(item)
-        conn.execute("UPDATE monitor_runs SET sources_json = ?, updated_at = ? WHERE id = ?", (safe_json_dumps(sources), now, run_id))
+        conn.execute("UPDATE monitor_runs SET sources_json = ?, updated_at = MAX(updated_at, ?) WHERE id = ?", (safe_json_dumps(sources), now, run_id))
         _insert_event(conn, run_id, "process", "merged", "queued", source_label(source), {"source_ref": item["ref"]}, now)
         _touch_ancestors(conn, run_id, now)
         conn.commit()
@@ -251,7 +279,7 @@ def start_run(run_id: str, *, subject: str = "", scope: Optional[Dict[str, Any]]
     run_id, now = _text(run_id), now_text()
     if not run_id:
         return
-    assignments, values = ["status = 'running'", "started_at = CASE WHEN started_at = '' THEN ? ELSE started_at END", "updated_at = ?"], [now, now]
+    assignments, values = ["status = 'running'", "started_at = CASE WHEN started_at = '' THEN ? ELSE started_at END", "updated_at = MAX(updated_at, ?)"], [now, now]
     if _text(subject):
         assignments.append("subject = ?")
         values.append(_text(subject))
@@ -270,7 +298,7 @@ def update_run(run_id: str, *, subject: Optional[str] = None, status: Optional[s
     run_id, now = _text(run_id), now_text()
     if not run_id:
         return
-    assignments, values = ["updated_at = ?"], [now]
+    assignments, values = ["updated_at = MAX(updated_at, ?)"], [now]
     if subject is not None:
         assignments.append("subject = ?"); values.append(_text(subject))
     if status is not None:
@@ -292,7 +320,7 @@ def wait_run(run_id: str, *, summary: str, result: Optional[Dict[str, Any]] = No
         return
     with db_connection() as conn:
         normalized_result = normalize_result(result)
-        conn.execute("UPDATE monitor_runs SET status = 'waiting', summary = ?, result_json = ?, updated_at = ? WHERE id = ?", (_text(summary), safe_json_dumps(normalized_result), now, run_id))
+        conn.execute("UPDATE monitor_runs SET status = 'waiting', summary = ?, result_json = ?, updated_at = MAX(updated_at, ?) WHERE id = ?", (_text(summary), safe_json_dumps(normalized_result), now, run_id))
         _insert_event(conn, run_id, "process", "waiting", "waiting", _text(summary), normalized_result, now)
         _touch_ancestors(conn, run_id, now)
         conn.commit()
@@ -401,7 +429,7 @@ def _reconcile_waiting_run(
     summary = _waiting_settle_summary(run_kind, result, reasons, len(descendants))
     updated = conn.execute(
         """UPDATE monitor_runs
-           SET status = ?, summary = ?, finished_at = ?, updated_at = ?
+           SET status = ?, summary = ?, finished_at = ?, updated_at = MAX(updated_at, ?)
            WHERE id = ? AND status = 'waiting'""",
         (final, summary, now, now, run_id),
     ).rowcount
@@ -472,7 +500,7 @@ def recover_interrupted_runs() -> Dict[str, int]:
             final = "failed" if previous == "running" else "cancelled"
             summary = "服务重启，上次运行已中断" if previous == "running" else "服务重启，上次排队任务未开始"
             conn.execute(
-                "UPDATE monitor_runs SET status = ?, summary = ?, finished_at = ?, updated_at = ? WHERE id = ?",
+                "UPDATE monitor_runs SET status = ?, summary = ?, finished_at = ?, updated_at = MAX(updated_at, ?) WHERE id = ?",
                 (final, summary, now, now, run_id),
             )
             _insert_event(conn, run_id, "process", "interrupted", final, summary, {"previous_status": previous}, now)
@@ -564,7 +592,7 @@ def _resettle_run(
     settled: Optional[List[str]] = None,
 ) -> None:
     conn.execute(
-        "UPDATE monitor_runs SET status = 'completed', summary = ?, updated_at = ? WHERE id = ?",
+        "UPDATE monitor_runs SET status = 'completed', summary = ?, updated_at = MAX(updated_at, ?) WHERE id = ?",
         (_text(summary), now, run_id),
     )
     _insert_event(conn, run_id, "process", "resettled", "completed", summary, detail, now)
@@ -679,7 +707,7 @@ def finish_run(run_id: str, *, status: str, summary: str, result: Optional[Dict[
         return
     with db_connection() as conn:
         normalized_result = normalize_result(result)
-        conn.execute("UPDATE monitor_runs SET status = ?, summary = ?, result_json = ?, finished_at = ?, updated_at = ? WHERE id = ?", (final, _text(summary), safe_json_dumps(normalized_result), now, now, run_id))
+        conn.execute("UPDATE monitor_runs SET status = ?, summary = ?, result_json = ?, finished_at = ?, updated_at = MAX(updated_at, ?) WHERE id = ?", (final, _text(summary), safe_json_dumps(normalized_result), now, now, run_id))
         _insert_event(conn, run_id, "process", "finished", final, _text(summary), normalized_result, now)
         _touch_ancestors(conn, run_id, now)
         for parent in _run_parent_ids(conn, [run_id]).get(run_id, []):
@@ -693,7 +721,7 @@ def record_event(run_id: str, *, category: str, operation: str, status: str, tit
         return
     with db_connection() as conn:
         _insert_event(conn, run_id, category, operation, status, title, detail, now)
-        conn.execute("UPDATE monitor_runs SET updated_at = ? WHERE id = ?", (now, run_id))
+        conn.execute("UPDATE monitor_runs SET updated_at = MAX(updated_at, ?) WHERE id = ?", (now, run_id))
         conn.commit()
 
 
@@ -703,10 +731,12 @@ _CHILD_IDS_SQL = """SELECT id FROM monitor_runs WHERE parent_run_id = ?
 
 
 def _add_parent_contexts(conn: Any, runs: List[Dict[str, Any]]) -> None:
-    """Expose the initiating inbox run when downstream runs are listed alone.
+    """把“来自接收夹整理”的上下文补到单独列出的下游运行上。
 
     列表每页都会渲染这一列，所以父运行只做固定两次批量查询；逐条查询会在
-    列表页产生 N+1，且同样落在状态推送的热路径上。
+    列表页产生 N+1，且同样落在状态推送的热路径上。只有父运行本身是接收夹整理
+    时才展示：接收夹二次分发出来的扫描/补扫是独立任务，不该显示成
+    “来自接收夹整理：电影 · 文件变更”这种内部步骤名。
     """
     run_ids = [_text(run.get("id")) for run in runs]
     parent_ids: Dict[str, str] = {
@@ -734,16 +764,16 @@ def _add_parent_contexts(conn: Any, runs: List[Dict[str, Any]]) -> None:
         return
     marks = ",".join("?" for _ in wanted)
     parents = {
-        _text(row[0]): (_text(row[1]), _text(row[2]))
+        _text(row[0]): (_text(row[1]), _text(row[2]), _text(row[3]))
         for row in conn.execute(
-            f"SELECT id, task_name, subject FROM monitor_runs WHERE id IN ({marks})",
+            f"SELECT id, task_name, subject, run_kind FROM monitor_runs WHERE id IN ({marks})",
             tuple(wanted),
         ).fetchall()
     }
     for run, run_id in zip(runs, run_ids):
         parent = parents.get(parent_ids.get(run_id, ""))
-        if parent:
-            run["parent_task_name"], run["parent_subject"] = parent
+        if parent and parent[2] == "inbox":
+            run["parent_task_name"], run["parent_subject"] = parent[0], parent[1]
 
 
 def _child_counts(conn: Any, run_ids: List[str]) -> Dict[str, int]:
@@ -770,14 +800,14 @@ def _child_counts(conn: Any, run_ids: List[str]) -> Dict[str, int]:
 
 
 def _order_group_entries(entries: List[Dict[str, Any]], head_id: str) -> List[Dict[str, Any]]:
-    """组内先按“先触发在前”排序，再把下游紧跟在自己的上游后面（前序遍历）。
+    """按“先触发在前”的前序遍历下游（详情里的链路展示用）。
 
     单纯按时间排序会让“自动补扫”排在它所属的“变更同步”之前，看起来像并列任务；
-    前序遍历能让组内层级一眼可读：接收 → 每条变更同步 → 它自己的自动补扫。
+    前序遍历能让链路一眼可读：变更同步 → 它自己的自动补扫。
     """
     children_of: Dict[str, List[Dict[str, Any]]] = {}
     for entry in entries:
-        parent_id = _text(entry.get("parent_run_id"))
+        parent_id = _text(entry.get("parent_run_id")) or _text(entry.get("link_parent_id"))
         children_of.setdefault(parent_id or head_id, []).append(entry)
     for values in children_of.values():
         values.sort(key=lambda item: (str(item.get("queued_at") or ""), str(item.get("id") or "")))
@@ -809,15 +839,11 @@ def list_runs(*, limit: int = 10, cursor: str = "", task_name: str = "", source:
     if normalized_kind not in {"scan", "inbox", "change"}:
         normalized_kind = ""
     include_downstream = bool(include_children or normalized_kind == "change")
-    # 默认视图只列“工作单元的头”：没有任何父运行的记录。每条下游运行都会写入
-    # `parent_run_id` 或 `monitor_run_links`，所以这一条过滤同时排除了孙子层级。
+    # 列表里每一条运行都是它自己的任务，只有“某条触发记录的直接子运行”不单独占一行
+    # （它就是触发记录详情里的“后续同步”，避免一次分发在列表里出现两遍）。
+    # 二次分发出来的扫描/自动补扫只挂在关联表上（没有 parent_run_id），照常各自成行。
     clauses, values = ([] if include_downstream else [
         "parent_run_id = ''",
-        """NOT EXISTS (
-            SELECT 1 FROM monitor_run_links AS parent_link
-             WHERE parent_link.related_run_id = monitor_runs.id
-               AND parent_link.relation IN ('child', 'downstream')
-        )""",
     ], [])
     for column, value in (("task_name", task_name), ("status", status)):
         if _text(value):
@@ -862,8 +888,8 @@ def list_runs(*, limit: int = 10, cursor: str = "", task_name: str = "", source:
                 "next_cursor": f"{runs[-1]['updated_at']}|{runs[-1]['id']}" if has_more and runs else "",
             }
 
-        # 默认视图只列“工作单元的头”（没有任何祖先的运行）；每个头的下游按组内前序
-        # 顺序取全，既不会因为翻页窗口截断丢记录，也不会让下游重复出现在列表里。
+        # 默认视图就是一条运行一行：接收夹整理排在最前（它的活动时间跟着下游上溯），
+        # 它派生出来的扫描/自动补扫紧接在后，各自是独立任务。
         rows = fetch(cursor, limit + 1)
         has_more, rows = len(rows) > limit, rows[:limit]
         runs = [_serialize_run(row) for row in rows]
@@ -871,14 +897,7 @@ def list_runs(*, limit: int = 10, cursor: str = "", task_name: str = "", source:
         child_counts = _child_counts(conn, [run["id"] for run in runs if run.get("id")])
         for run in runs:
             run_id = run.get("id")
-            run["group_id"] = run_id
-            run["group_depth"] = 0
             run["child_count"] = child_counts.get(run_id, 0)
-            entries = _descendant_entries(conn, run_id) if run_id else []
-            if entries:
-                run["group_runs"] = entries[:GROUP_RUNS_PREVIEW_LIMIT]
-                run["group_total"] = len(entries)
-                run["group_more"] = max(0, len(entries) - GROUP_RUNS_PREVIEW_LIMIT)
     return {
         "runs": runs,
         "has_more": has_more,

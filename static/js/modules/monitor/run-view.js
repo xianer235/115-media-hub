@@ -201,47 +201,17 @@
             </div></article>`;
     }
 
-    function listRow(run, options) {
-        const opts = options && typeof options === 'object' ? options : {};
+    function listRow(run) {
         const stats = metrics(run?.result);
         const parentContext = parentContextText(run);
-        const depth = opts.child ? Math.max(1, Math.min(4, Number(opts.depth || run?.group_depth || 1) || 1)) : 0;
-        const childText = depth
-            ? `<span class="monitor-run-group-mark">${depth > 1 ? '└' : '├'}</span>`
-            : '';
-        // 组内的下游已经直接显示在下面，不再重复“后续 N 项”；组头显示整个工作单元的规模。
-        const followUp = depth ? 0 : (count(run?.group_total) || count(run?.child_count));
-        return `<button type="button" class="monitor-run-row${depth ? ' is-group-child' : ''}" data-run-id="${escape(run?.id)}"${depth ? ` style="--run-depth:${depth}"` : ''}>
+        return `<button type="button" class="monitor-run-row" data-run-id="${escape(run?.id)}">
             <span class="monitor-run-main"><span class="monitor-run-title">${escape(run?.task_name || '文件夹监控')} <i>·</i> ${escape(run?.subject || '全部目录')}</span>
             <span class="monitor-run-meta">流程：${escape(runKindText(run))} · 启动：${escape(sourceText(run))} · ${escape(time(run?.queued_at || run?.started_at))}${duration(run) ? ` · 用时 ${escape(duration(run))}` : ''}</span>
             ${parentContext ? `<span class="monitor-run-meta">${escape(parentContext)}</span>` : ''}
-            <span class="monitor-run-result">${childText}${escape(summary(run))}</span>
+            <span class="monitor-run-result">${escape(summary(run))}</span>
             ${stats.length ? `<span class="monitor-run-inline-metrics">${stats.map(item => `<span${item.warning ? ' class="tone-warning"' : ''}>${item.label} <b>${item.value}</b></span>`).join('')}</span>` : ''}
             </span><span class="monitor-run-side">${badge(run?.status, run)}<span class="monitor-run-open">查看详情</span>
-            ${followUp ? `<span class="monitor-run-child-count">后续 ${followUp} 项</span>` : ''}</span></button>`;
-    }
-
-    // 一个工作单元 = 触发记录 + 它派生出来的下游（增量变更同步 → 自动补扫）。
-    // 组头永远在最前，下游缩进在组内，列表因此读起来就是“谁触发了什么”。
-    function listGroup(head) {
-        const rows = Array.isArray(head?.group_runs) ? head.group_runs : [];
-        const total = Math.max(count(head?.group_total), rows.length);
-        if (!rows.length || !total) return listRow(head);
-        const more = Math.max(0, count(head?.group_more) || (total - rows.length));
-        const groupId = escape(head?.id);
-        const expandedLabel = `收起 ${total} 项后续同步`;
-        const collapsedLabel = `展开 ${total} 项后续同步`;
-        return `<div class="monitor-run-group" data-group-id="${groupId}">
-            ${listRow(head)}
-            <button type="button" class="monitor-run-group-toggle" data-group-toggle="${groupId}" data-expanded-label="${escape(expandedLabel)}" data-collapsed-label="${escape(collapsedLabel)}" aria-expanded="true" onclick="toggleMonitorRunGroup('${escape(head?.id)}')">${escape(expandedLabel)}</button>
-            <div class="monitor-run-group-body" data-group-body="${groupId}">
-            ${rows.map(item => listRow(item, {child: true, depth: item?.group_depth || 1})).join('')}
-            ${more ? `<div class="monitor-run-group-more">还有 ${more} 项，打开详情查看。</div>` : ''}
-            </div></div>`;
-    }
-
-    function listHtml(runs) {
-        return (Array.isArray(runs) ? runs : []).map(run => listGroup(run)).join('');
+            ${count(run?.child_count) ? `<span class="monitor-run-child-count">后续 ${count(run.child_count)} 项</span>` : ''}</span></button>`;
     }
 
     function relations(items, title) {
@@ -287,6 +257,6 @@
 
     global.MonitorRunView = {
         statuses, sources, runKinds, escape, count, status, tone, time, sourceText, runKindText, parentContextText, scopeText,
-        duration, summary, metrics, detailRows, eventCard, listRow, listGroup, listHtml, detailHtml, derivedIssues, tabCount,
+        duration, summary, metrics, detailRows, eventCard, listRow, detailHtml, derivedIssues, tabCount,
     };
 })(window);

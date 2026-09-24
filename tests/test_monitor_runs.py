@@ -177,7 +177,7 @@ class MonitorRunStoreTest(unittest.TestCase):
             monitor_runs.start_run(change_run, subject="文件变更", scope={"kind": "events"})
             rescan = monitor_runs.create_run(
                 run_kind="scan", task_name=media_task, source="auto_rescan",
-                parent_run_id=change_run, subject=f"影视{index}",
+                subject=f"影视{index}",
             )
             monitor_runs.link_runs(change_run, rescan, relation="downstream")
             monitor_runs.wait_run(
@@ -293,29 +293,30 @@ class MonitorRunStoreTest(unittest.TestCase):
         self.assertEqual(monitor_runs.get_run_detail(parent)["run"]["status"], "partial")
         self.assertEqual(monitor_runs.get_run_detail(change_run)["run"]["status"], "failed")
 
-    def test_run_list_groups_head_with_its_downstream_runs(self):
+    def test_run_list_keeps_every_dispatched_run_as_its_own_row(self):
+        """列表是“一条任务一行”：接收夹整理在前，它分发生出来的每条扫描各自成行。"""
         parent, chain = self._dispatch_auto_rescan_batch(items=2)
         for item in chain:
-            monitor_changes.complete_manual_required_monitor_events(item["task_name"], [item["event_id"]])
             monitor_runs.finish_run(
                 item["rescan"], status="completed",
                 summary="新增或更新 1 个本地播放文件", result={"generated": 1},
             )
+            monitor_changes.complete_manual_required_monitor_events(item["task_name"], [item["event_id"]])
 
         page = monitor_runs.list_runs()
-        head = next(run for run in page["runs"] if run["id"] == parent)
         listed_ids = [run["id"] for run in page["runs"]]
-        group_ids = [item["id"] for item in head.get("group_runs") or []]
+        listed_by_id = {run["id"]: run for run in page["runs"]}
 
+        # 接收夹整理排在最前，紧跟着的是它分发出来的两条扫描任务。
+        self.assertEqual(listed_ids[0], parent)
+        self.assertEqual(set(listed_ids[1:3]), {item["rescan"] for item in chain})
+        for item in chain:
+            self.assertEqual(listed_by_id[item["rescan"]]["source"], "auto_rescan")
+            self.assertEqual(listed_by_id[item["rescan"]]["run_kind"], "scan")
+            self.assertNotIn("group_runs", listed_by_id[item["rescan"]])
+        # 触发记录的直接子运行（增量变更同步）不单独占一行，它属于这条触发记录的后续同步。
         self.assertNotIn(chain[0]["change"], listed_ids)
-        self.assertEqual(head["group_id"], parent)
-        self.assertEqual(head["group_depth"], 0)
-        self.assertEqual(head["group_total"], 4)
-        self.assertEqual(
-            [(item["run_kind"], item["group_depth"]) for item in head["group_runs"]],
-            [("change", 1), ("scan", 2), ("change", 1), ("scan", 2)],
-        )
-        self.assertIn(chain[1]["rescan"], group_ids)
+        self.assertEqual(listed_by_id[parent]["child_count"], 2)
 
         flat = monitor_runs.list_runs(run_kind="change")
         self.assertIn(chain[0]["change"], [run["id"] for run in flat["runs"]])
@@ -340,7 +341,11 @@ class MonitorRunStoreTest(unittest.TestCase):
             parent_updated = str(
                 conn.execute("SELECT updated_at FROM monitor_runs WHERE id = ?", (parent,)).fetchone()[0]
             )
-        self.assertGreaterEqual(parent_updated, monitor_runs.get_run_detail(item["rescan"])["run"]["updated_at"])
+        rescan_updated = str(monitor_runs.get_run_detail(item["rescan"])["run"]["updated_at"])
+        # 同秒内的下游也不能把触发记录挤到后面：祖先的活动时间要严格更新。
+        self.assertGreater(parent_updated, rescan_updated)
+        page = monitor_runs.list_runs()
+        self.assertEqual([run["id"] for run in page["runs"]][:2], [parent, item["rescan"]])
 
     def test_run_detail_exposes_downstream_chain_with_depth(self):
         parent, chain = self._dispatch_auto_rescan_batch(items=1)
@@ -524,15 +529,18 @@ class MonitorRunStoreTest(unittest.TestCase):
 
         self.assertEqual([item["id"] for item in page["runs"]], [run_id])
 
-    def test_default_list_hides_downstream_run_linked_without_parent_id(self):
+    def test_default_list_keeps_dispatched_run_linked_without_parent_id(self):
+        """分发出去的任务各自占一行；只有触发记录的直接子运行才不单独显示。"""
         parent = monitor_runs.create_run(run_kind="inbox", task_name="接收", source="manual")
-        child = monitor_runs.create_run(run_kind="change", task_name="电影", source="change")
-        monitor_runs.link_runs(parent, child, relation="downstream")
+        dispatched = monitor_runs.create_run(run_kind="scan", task_name="电影", source="auto_rescan")
+        monitor_runs.link_runs(parent, dispatched, relation="downstream")
+        child = monitor_runs.create_run(run_kind="change", task_name="电影", source="change", parent_run_id=parent)
 
         default_ids = {item["id"] for item in monitor_runs.list_runs()["runs"]}
         change_ids = {item["id"] for item in monitor_runs.list_runs(run_kind="change")["runs"]}
 
         self.assertIn(parent, default_ids)
+        self.assertIn(dispatched, default_ids)
         self.assertNotIn(child, default_ids)
         self.assertIn(child, change_ids)
 

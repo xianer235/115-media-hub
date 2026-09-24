@@ -212,8 +212,6 @@
         let monitorLogLoadBusy = false;
         let monitorRunLoadBusy = false;
         let monitorRunActionBusy = false;
-        // 运行记录的“工作单元”折叠状态：默认展开，翻页/刷新后保持用户的选择。
-        let monitorRunCollapsedGroups = new Set();
         let monitorRunPage = 1;
         let monitorRunPageCursors = [''];
         let monitorRunPageHasMore = false;
@@ -1439,9 +1437,6 @@
                 runs: (Array.isArray(state?.runs) ? state.runs : []).map(run => [
                     run?.id || '', run?.status || '', run?.summary || '', run?.subject || '',
                     run?.updated_at || run?.finished_at || '', Number(run?.child_count || 0),
-                    (Array.isArray(run?.group_runs) ? run.group_runs : []).map(
-                        item => [item?.id || '', item?.status || '', item?.summary || '', Number(item?.group_depth || 0)]
-                    ),
                 ]),
                 page: Number(state?.run_page || 1),
                 has_more: !!state?.run_has_more,
@@ -4983,12 +4978,7 @@
             const next = document.getElementById('monitor-run-next');
             const pageLabel = document.getElementById('monitor-run-page-label');
             const runs = Array.isArray(monitorState.runs) ? monitorState.runs : [];
-            if (summary) {
-                const groupCount = runs.reduce((total, run) => total + (Array.isArray(run?.group_runs) ? run.group_runs.length : 0), 0);
-                summary.innerText = monitorRunLoadBusy
-                    ? '正在加载运行记录...'
-                    : `按工作单元排序 · 组内先触发在前 · 本页 ${runs.length} 条${groupCount ? `（含 ${groupCount} 项后续同步）` : ''}`;
-            }
+            if (summary) summary.innerText = monitorRunLoadBusy ? '正在加载运行记录...' : `按最近活动排序 · 本页 ${runs.length} 条`;
             if (pageLabel) pageLabel.innerText = `第 ${monitorRunPage} 页`;
             if (previous) previous.disabled = monitorRunLoadBusy || monitorRunPage <= 1;
             if (next) next.disabled = monitorRunLoadBusy || !monitorRunPageHasMore;
@@ -5002,15 +4992,8 @@
             monitorRunPageHasMore = !!monitorState.run_has_more;
             monitorRunPageCursors[monitorRunPage] = String(monitorState.run_next_cursor || '');
             const runs = Array.isArray(monitorState.runs) ? monitorState.runs : [];
-            box.innerHTML = runs.length ? window.MonitorRunView.listHtml(runs)
+            box.innerHTML = runs.length ? runs.map(window.MonitorRunView.listRow).join('')
                 : `<div class="monitor-run-empty">${monitorState.run_filtered ? '没有符合筛选条件的记录，可调整筛选后查看。' : '暂无运行记录。扫描或接收夹整理开始后，将在这里显示过程和结果。'}</div>`;
-            box.querySelectorAll('.monitor-run-group').forEach(group => {
-                group.classList.toggle(
-                    'is-collapsed',
-                    monitorRunCollapsedGroups.has(String(group.dataset.groupId || '')),
-                );
-                syncMonitorRunGroupToggle(group);
-            });
             updateMonitorRunSummary();
             syncMonitorRunFilterReset();
             syncMonitorRunTaskClearButton();
@@ -5025,33 +5008,6 @@
                 status: document.getElementById('monitor-run-status-filter')?.value || '',
             };
         }
-
-        // 组头 + 它的下游读作一个工作单元：组头永远在最前，下游缩进在组内可折叠。
-        function syncMonitorRunGroupToggle(group) {
-            const toggle = group?.querySelector('.monitor-run-group-toggle');
-            if (!toggle) return;
-            const collapsed = group.classList.contains('is-collapsed');
-            const label = String(
-                (collapsed ? toggle.dataset.collapsedLabel : toggle.dataset.expandedLabel) || ''
-            ).trim();
-            if (label) toggle.textContent = label;
-            toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-        }
-
-        function toggleMonitorRunGroup(groupId) {
-            const wanted = String(groupId || '');
-            const box = document.getElementById('monitor-run-list');
-            if (!wanted || !box) return;
-            const group = [...box.querySelectorAll('.monitor-run-group')]
-                .find(item => String(item.dataset.groupId || '') === wanted);
-            if (!group) return;
-            const collapsed = !group.classList.contains('is-collapsed');
-            group.classList.toggle('is-collapsed', collapsed);
-            if (collapsed) monitorRunCollapsedGroups.add(wanted);
-            else monitorRunCollapsedGroups.delete(wanted);
-            syncMonitorRunGroupToggle(group);
-        }
-        window.toggleMonitorRunGroup = toggleMonitorRunGroup;
 
         function syncMonitorRunFilterReset() {
             const button = document.getElementById('monitor-run-filter-reset');

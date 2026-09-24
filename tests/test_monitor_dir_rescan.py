@@ -21,17 +21,12 @@ class AutoRescanQueueTest(unittest.TestCase):
             "queue_monitor_dir_scan",
             return_value={"ok": True, "tasks": [{"task_name": TASK_NAME, "run_id": "run-1"}]},
         ) as queue_scan:
-            queued = monitor._queue_auto_rescan_for_manual_required(
-                {},
-                ["Media/Copied", "Media/Copied"],
-                parent_run_id="change-run",
-            )
+            queued = monitor._queue_auto_rescan_for_manual_required({}, ["Media/Copied", "Media/Copied"])
         self.assertEqual(queued, {"count": 1, "run_ids": ["run-1"]})
         queue_scan.assert_called_once_with(
             {},
             "115",
             ["Media/Copied"],
-            parent_run_id="change-run",
             run_source="auto_rescan",
         )
 

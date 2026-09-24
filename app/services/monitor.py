@@ -1720,7 +1720,7 @@ async def run_monitor_change_task(
         auto_rescan_run_ids: List[str] = []
         manual_paths = result.get("manual_required_paths", [])
         if int(result.get("manual_required", 0) or 0) > 0 and isinstance(manual_paths, list) and manual_paths:
-            auto_rescan = _queue_auto_rescan_for_manual_required(cfg, manual_paths, parent_run_id=run_id)
+            auto_rescan = _queue_auto_rescan_for_manual_required(cfg, manual_paths)
             auto_rescan_run_ids = [
                 str(value or "").strip() for value in auto_rescan.get("run_ids", []) if str(value or "").strip()
             ]
@@ -2330,7 +2330,6 @@ def queue_monitor_dir_scan(
     provider: str,
     paths: List[str],
     *,
-    parent_run_id: str = "",
     run_source: str = "",
 ) -> Dict[str, Any]:
     scan_provider = normalize_mount_provider(provider) or "115"
@@ -2358,16 +2357,11 @@ def queue_monitor_dir_scan(
         raise ValueError("所选目录未匹配到任何监控任务")
 
     result_tasks: List[Dict[str, Any]] = []
-    parent = str(parent_run_id or "").strip()
     for task_name, entry in tasks.items():
         queued = queue_monitor_job(
             task_name,
             "manual",
-            {
-                "provider": scan_provider,
-                "savepaths": entry["savepaths"],
-                **({"parent_run_id": parent} if parent else {}),
-            },
+            {"provider": scan_provider, "savepaths": entry["savepaths"]},
             run_source=run_source,
             return_details=True,
         )
@@ -2382,13 +2376,13 @@ def queue_monitor_dir_scan(
 def _queue_auto_rescan_for_manual_required(
     cfg: Dict[str, Any],
     paths: Any,
-    *,
-    parent_run_id: str = "",
 ) -> Dict[str, Any]:
     """为变更同步未知清单的文件夹自动排队补扫。
 
-    返回入队的运行记录 ID：这条补扫是同一批工作的后续步骤，必须挂回发起它的变更同步
-    运行，父运行才能在补扫结束后拿到真实结论（而不是永远停在“部分完成”）。
+    返回入队的运行记录 ID：这条补扫是同一批工作的后续步骤，调用方要用
+    `downstream` 关联把它挂回发起它的变更同步运行，父运行才能在补扫结束后拿到真实
+    结论（而不是永远停在“部分完成”）。补扫本身在列表里是独立任务（它代表一个被分发
+    出去的影视条目），所以不写 `parent_run_id`。
     """
     normalized_paths: List[str] = []
     for raw_path in paths if isinstance(paths, list) else []:
@@ -2402,7 +2396,6 @@ def _queue_auto_rescan_for_manual_required(
             cfg,
             "115",
             normalized_paths,
-            parent_run_id=parent_run_id,
             run_source="auto_rescan",
         )
     except Exception:

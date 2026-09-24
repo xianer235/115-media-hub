@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.14] - 2026-09-24
+
+### 运行记录改回“一条任务一行”，只把时间顺序修正
+
+- **列表不再分组**：0.11.13 把一次接收夹分发显示成一个可折叠的“工作单元”，理解错了——接收夹整理是一条任务，它分发出去触发的每条扫描/补扫也各自是一条任务。现在恢复平铺列表：触发记录与它派生出来的每条任务各占一行，导航栏/任务筛选/状态筛选照常按运行自身生效，不再有缩进、折叠或 `group_runs` 字段。
+- **只修时间顺序**：触发记录的活动时间会从下游上溯，所以“最近接收”始终排在自己派生出来的任务之前，不再夹在 6 条任务中间；时间戳只有秒精度，同秒内给祖先加毫秒后缀（`updated_at` 用 `MAX(updated_at, ?)` 单向递增），保证同秒也成立。
+- **哪些运行会单独成行**：只有“触发记录的直接子运行”（一次分发的「增量变更同步」步骤）不单独占一行，它属于该触发记录的后续同步、在详情里按层级展示；二次分发出来的扫描/自动补扫只挂在关联表上，照常各自成行——这也让“按配置任务筛选”能正常筛出这些被分发的运行。
+- 0.11.13 的状态链路修复全部保留：自动补扫挂回变更同步运行并等它结束再定稿、接收夹整理只在真正未完成时显示「部分完成」、启动时重算历史误判记录、自动补扫标「系统补扫」。
+
+### 验证
+
+- 定向回归：`tests.test_monitor_runs` 67 项、`tests.test_monitor_dir_rescan` 28 项、`tests.test_monitor_run_frontend` 33 项；完整 `unittest discover -s tests` 1017 项零失败。
+- `compileall`、`static/js/index.js` 与 `static/js/modules/monitor/run-view.js` 的 `node --check`、`git diff --check`、`version.json` 解析通过。
+- 本地预览服务（数据/日志/STRM 全指向 `/tmp`）复核：本页 7 条 = 1 条「最近接收」（置顶，后续 6 项）+ 6 条「系统补扫」任务各占一行，`#monitor-run-list` 里没有分组节点。
+
 ## [0.11.13] - 2026-09-24
 
 ### 运行记录：工作单元分组 + 全链路状态结算
