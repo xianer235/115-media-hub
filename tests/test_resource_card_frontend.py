@@ -124,6 +124,13 @@ class ResourceCardFrontendTest(unittest.TestCase):
             css,
         )
 
+    def test_inbox_job_card_uses_inbox_processing_copy(self):
+        modal = JOB_MODAL_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("const isInboxImport = Boolean(job?.extra?.quick_import_inbox);", modal)
+        self.assertIn("'接收文件夹'", modal)
+        self.assertIn("`接收夹整理 · ${autoRefreshText}`", modal)
+
 
 if __name__ == "__main__":
     unittest.main()

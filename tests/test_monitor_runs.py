@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from unittest.mock import Mock, patch
 
 from app import db
@@ -47,18 +48,158 @@ class MonitorRunStoreTest(unittest.TestCase):
         self.assertEqual(detail["run"]["subject"], "三体 S01")
         self.assertTrue(any(item["category"] == "strm" for item in detail["events"]))
 
-        cleanup = monitor_runs.cleanup_runs()
+        cleanup = monitor_runs.cleanup_runs(scope="all_finished")
         self.assertEqual(cleanup["deleted"], 1)
         self.assertTrue(monitor_runs.get_run_detail(active))
 
     def test_waiting_inbox_parent_closes_after_child_and_keeps_partial_result(self):
         parent = monitor_runs.create_run(run_kind="inbox", task_name="接收", source="manual", subject="三体（2023）")
-        monitor_runs.wait_run(parent, summary="已分发，等待 STRM 同步", result={"moved": 1, "left": 1})
+        monitor_runs.wait_run(
+            parent,
+            summary="已分发，等待 STRM 同步",
+            result={"moved": 1, "left": 1, "monitor_sync_events": 1},
+        )
         child = monitor_runs.create_run(run_kind="change", task_name="电视剧", source="change", parent_run_id=parent, subject="文件变更")
         monitor_runs.start_run(child)
         monitor_runs.finish_run(child, status="completed", summary="生成 STRM 2", result={"generated": 2})
 
         self.assertEqual(monitor_runs.get_run_detail(parent)["run"]["status"], "partial")
+
+    def test_inbox_detail_keeps_dispatch_record_and_hides_duplicate_change_event(self):
+        parent = monitor_runs.create_run(run_kind="inbox", task_name="接收", source="manual", subject="示例剧")
+        monitor_runs.record_event(
+            parent,
+            category="remote",
+            operation="move",
+            status="completed",
+            title="示例剧 24 集",
+            detail={"step": "接收夹分发", "old_path": "最近接收/示例剧", "new_path": "电视剧/示例剧"},
+        )
+        with db.db_connection() as conn:
+            conn.execute(
+                """INSERT INTO monitor_change_events(
+                    dedupe_key, operation, old_path, new_path, task_name,
+                    source_action, monitor_run_id, status, created_at, updated_at
+                ) VALUES (?, 'move', ?, ?, ?, ?, ?, 'completed', ?, ?)""",
+                (
+                    "inbox-dispatch-event",
+                    "最近接收/示例剧",
+                    "电视剧/示例剧",
+                    "电视剧",
+                    "scraper-job:1:quick-import",
+                    parent,
+                    "2026-09-24 05:00:00",
+                    "2026-09-24 05:00:00",
+                ),
+            )
+            conn.commit()
+
+        detail = monitor_runs.get_run_detail(parent, category="remote")
+
+        self.assertEqual(detail["counts"]["remote"], 1)
+        self.assertEqual([event["title"] for event in detail["events"]], ["示例剧 24 集"])
+
+    def test_waiting_inbox_parent_with_left_items_stays_active_until_child_finishes(self):
+        parent = monitor_runs.create_run(run_kind="inbox", task_name="接收", source="manual", subject="混合结果")
+        monitor_runs.wait_run(
+            parent,
+            summary="已分发，等待 STRM 同步",
+            result={
+                "moved": [{"name": "已分发"}],
+                "left": [{"name": "未识别"}],
+                "monitor_sync_events": 1,
+            },
+        )
+        child = monitor_runs.create_run(
+            run_kind="change",
+            task_name="电影",
+            source="change",
+            parent_run_id=parent,
+            subject="文件变更",
+        )
+        monitor_runs.start_run(child)
+
+        self.assertEqual(monitor_runs.reconcile_waiting_inbox_runs(), 0)
+        self.assertEqual(monitor_runs.get_run_detail(parent)["run"]["status"], "waiting")
+        self.assertEqual(monitor_runs.cleanup_runs(scope="all_finished")["deleted"], 0)
+
+        monitor_runs.finish_run(child, status="completed", summary="生成 STRM 1")
+
+        detail = monitor_runs.get_run_detail(parent)["run"]
+        self.assertEqual(detail["status"], "partial")
+        self.assertTrue(detail["finished_at"])
+
+    def test_wait_run_reconciles_child_that_finished_before_parent_started_waiting(self):
+        parent = monitor_runs.create_run(run_kind="inbox", task_name="接收", source="manual", subject="电影A")
+        monitor_runs.start_run(parent)
+        child = monitor_runs.create_run(
+            run_kind="change",
+            task_name="电影",
+            source="change",
+            parent_run_id=parent,
+            subject="文件变更",
+        )
+        monitor_runs.start_run(child)
+        monitor_runs.finish_run(child, status="completed", summary="生成 STRM 1")
+
+        monitor_runs.wait_run(
+            parent,
+            summary="已分发，等待 STRM 同步",
+            result={"moved": 1, "left": 0, "monitor_sync_events": 1},
+        )
+
+        detail = monitor_runs.get_run_detail(parent)["run"]
+        self.assertEqual(detail["status"], "completed")
+        self.assertTrue(detail["finished_at"])
+
+    def test_waiting_inbox_parent_waits_for_every_child_and_keeps_downstream_failure(self):
+        parent = monitor_runs.create_run(run_kind="inbox", task_name="接收", source="manual")
+        child_one = monitor_runs.create_run(
+            run_kind="change",
+            task_name="电影",
+            source="change",
+            parent_run_id=parent,
+        )
+        child_two = monitor_runs.create_run(
+            run_kind="change",
+            task_name="电视剧",
+            source="change",
+            parent_run_id=parent,
+        )
+        monitor_runs.start_run(child_one)
+        monitor_runs.start_run(child_two)
+        monitor_runs.wait_run(
+            parent,
+            summary="已分发，等待 STRM 同步",
+            result={"moved": 2, "left": 0, "monitor_sync_events": 2},
+        )
+
+        monitor_runs.finish_run(child_one, status="completed", summary="生成 STRM 1")
+        self.assertEqual(monitor_runs.get_run_detail(parent)["run"]["status"], "waiting")
+
+        monitor_runs.finish_run(child_two, status="failed", summary="同步失败")
+        detail = monitor_runs.get_run_detail(parent)["run"]
+        self.assertEqual(detail["status"], "partial")
+        self.assertIn("未完成内容", detail["summary"])
+
+    def test_startup_recovery_closes_interrupted_runs_and_unblocks_terminal_parent(self):
+        parent = monitor_runs.create_run(run_kind="inbox", task_name="接收", source="manual")
+        monitor_runs.finish_run(parent, status="partial", summary="留在接收夹 1 项", result={"left": 1})
+        child = monitor_runs.create_run(
+            run_kind="change",
+            task_name="电影",
+            source="change",
+            parent_run_id=parent,
+        )
+        monitor_runs.start_run(child)
+        queued = monitor_runs.create_run(run_kind="scan", task_name="电视剧", source="cron")
+
+        recovered = monitor_runs.recover_interrupted_runs()
+
+        self.assertEqual(recovered, {"running": 1, "queued": 1})
+        self.assertEqual(monitor_runs.get_run_detail(child)["run"]["status"], "failed")
+        self.assertEqual(monitor_runs.get_run_detail(queued)["run"]["status"], "cancelled")
+        self.assertEqual(monitor_runs.cleanup_runs(scope="all_finished")["deleted"], 3)
 
     def test_cleanup_keeps_completed_parent_needed_by_active_child(self):
         parent = monitor_runs.create_run(run_kind="inbox", task_name="接收", source="manual", subject="三体（2023）")
@@ -71,8 +212,46 @@ class MonitorRunStoreTest(unittest.TestCase):
             subject="文件变更",
         )
 
-        self.assertEqual(monitor_runs.cleanup_runs()["deleted"], 0)
+        self.assertEqual(monitor_runs.cleanup_runs(scope="all_finished")["deleted"], 0)
         self.assertTrue(monitor_runs.get_run_detail(parent))
+
+    def test_cleanup_all_finished_deletes_terminal_runs_but_keeps_active_chain(self):
+        completed = monitor_runs.create_run(run_kind="scan", task_name="电影", source="manual")
+        failed = monitor_runs.create_run(run_kind="scan", task_name="电视剧", source="manual")
+        parent = monitor_runs.create_run(run_kind="inbox", task_name="接收", source="manual")
+        active = monitor_runs.create_run(run_kind="scan", task_name="电影", source="cron")
+        child = monitor_runs.create_run(run_kind="change", task_name="电视剧", source="change", parent_run_id=parent)
+        monitor_runs.finish_run(completed, status="completed", summary="完成")
+        monitor_runs.finish_run(failed, status="failed", summary="失败")
+        monitor_runs.finish_run(parent, status="completed", summary="等待后续同步")
+        monitor_runs.start_run(child)
+
+        preview = monitor_runs.cleanup_runs(scope="all_finished", preview=True)
+        self.assertEqual(preview, {"count": 2, "deleted": 0})
+        self.assertEqual(monitor_runs.cleanup_runs(scope="all_finished")["deleted"], 2)
+        self.assertFalse(monitor_runs.get_run_detail(completed))
+        self.assertFalse(monitor_runs.get_run_detail(failed))
+        self.assertTrue(monitor_runs.get_run_detail(parent))
+        self.assertTrue(monitor_runs.get_run_detail(active))
+        self.assertTrue(monitor_runs.get_run_detail(child))
+
+    def test_cleanup_expired_only_deletes_runs_older_than_retention_days(self):
+        expired = monitor_runs.create_run(run_kind="scan", task_name="电影", source="manual")
+        recent = monitor_runs.create_run(run_kind="scan", task_name="电视剧", source="manual")
+        monitor_runs.finish_run(expired, status="completed", summary="旧记录")
+        monitor_runs.finish_run(recent, status="failed", summary="新记录")
+        with db.db_connection() as conn:
+            conn.execute(
+                "UPDATE monitor_runs SET finished_at = ? WHERE id = ?",
+                ((datetime.now() - timedelta(days=31)).isoformat(timespec="seconds"), expired),
+            )
+            conn.commit()
+
+        preview = monitor_runs.cleanup_runs(scope="expired", days=30, preview=True)
+        self.assertEqual(preview, {"count": 1, "deleted": 0})
+        self.assertEqual(monitor_runs.cleanup_runs(scope="expired", days=30)["deleted"], 1)
+        self.assertFalse(monitor_runs.get_run_detail(expired))
+        self.assertTrue(monitor_runs.get_run_detail(recent))
 
     def test_list_runs_paginates_by_ten_and_returns_cursor(self):
         for index in range(11):
@@ -90,6 +269,48 @@ class MonitorRunStoreTest(unittest.TestCase):
         second = monitor_runs.list_runs(limit=10, cursor=first["next_cursor"])
         self.assertEqual(len(second["runs"]), 1)
         self.assertFalse(second["has_more"])
+
+    def test_list_runs_filters_by_workflow_and_exposes_downstream_context(self):
+        inbox = monitor_runs.create_run(
+            run_kind="inbox", task_name="接收", source="manual", subject="示例电影"
+        )
+        monitor_runs.finish_run(inbox, status="completed", summary="分发完成")
+        change = monitor_runs.create_run(
+            run_kind="change",
+            task_name="电影",
+            source="change",
+            parent_run_id=inbox,
+            subject="示例电影",
+        )
+        monitor_runs.finish_run(change, status="completed", summary="同步完成")
+
+        default_ids = {item["id"] for item in monitor_runs.list_runs()["runs"]}
+        change_page = monitor_runs.list_runs(run_kind="change")
+
+        self.assertIn(inbox, default_ids)
+        self.assertNotIn(change, default_ids)
+        self.assertEqual([item["id"] for item in change_page["runs"]], [change])
+        self.assertEqual(change_page["runs"][0]["parent_task_name"], "接收")
+        self.assertEqual(change_page["runs"][0]["parent_subject"], "示例电影")
+
+    def test_list_runs_ignores_unknown_workflow_filter(self):
+        run_id = monitor_runs.create_run(run_kind="scan", task_name="电影", source="manual")
+
+        page = monitor_runs.list_runs(run_kind="unexpected")
+
+        self.assertEqual([item["id"] for item in page["runs"]], [run_id])
+
+    def test_default_list_hides_downstream_run_linked_without_parent_id(self):
+        parent = monitor_runs.create_run(run_kind="inbox", task_name="接收", source="manual")
+        child = monitor_runs.create_run(run_kind="change", task_name="电影", source="change")
+        monitor_runs.link_runs(parent, child, relation="downstream")
+
+        default_ids = {item["id"] for item in monitor_runs.list_runs()["runs"]}
+        change_ids = {item["id"] for item in monitor_runs.list_runs(run_kind="change")["runs"]}
+
+        self.assertIn(parent, default_ids)
+        self.assertNotIn(child, default_ids)
+        self.assertIn(child, change_ids)
 
     def test_detail_includes_remote_change_paths(self):
         run_id = monitor_runs.create_run(run_kind="change", task_name="电视剧", source="change")

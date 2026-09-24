@@ -697,8 +697,7 @@ def run_quick_import(
             run_status = "failed" if status == "failed" else ("cancelled" if status == "cancelled" else ("partial" if left_count else ("no_change" if not moved_count else "completed")))
             run_result = {"moved": moved_count, "left": left_count, **(detail if isinstance(detail, dict) else {})}
             if (
-                moved_count > 0
-                and status == "completed"
+                status == "completed"
                 and int(run_result.get("monitor_sync_events", 0) or 0) > 0
             ):
                 wait_monitor_run(monitor_run_id, summary="已分发，等待目标监控任务完成 STRM 同步", result=run_result)
@@ -775,6 +774,7 @@ def run_quick_import(
                     left.append(
                         {
                             "name": str(item.get("name", "") or ""),
+                            "reason_code": "unrecognized",
                             "reason": "无法判断是电影还是电视剧",
                         }
                     )
@@ -784,6 +784,7 @@ def run_quick_import(
                     left.append(
                         {
                             "name": str(item.get("name", "") or ""),
+                            "reason_code": "target_unavailable",
                             "reason": f"没有监控任务标注为「{QUICK_IMPORT_TARGET_LABELS[media_type]}」快捷导入目标",
                         }
                     )
@@ -801,6 +802,7 @@ def run_quick_import(
                     left.append(
                         {
                             "name": str(item.get("name", "") or ""),
+                            "reason_code": "target_unavailable",
                             "reason": f"目标监控目录不可用：{str(exc)[:120]}",
                         }
                     )
@@ -841,6 +843,7 @@ def run_quick_import(
                     left.append(
                         {
                             "name": str(item.get("name", "") or ""),
+                            "reason_code": "plan_conflict",
                             "reason": f"整理计划有冲突：{issues[0][:120]}" if issues else "无法生成整理计划",
                         }
                     )
@@ -862,6 +865,7 @@ def run_quick_import(
                                 left.append(
                                     {
                                         "name": str(item.get("name", "") or ""),
+                                        "reason_code": "organize_failed",
                                         "reason": f"整理{('部分完成' if actual_status == 'partial' else '失败')}：{detail[:120]}",
                                     }
                                 )
@@ -891,6 +895,7 @@ def run_quick_import(
                         left.append(
                             {
                                 "name": str(item.get("name", "") or ""),
+                                "reason_code": "organize_failed",
                                 "reason": f"整理失败：{str(exc)[:120]}",
                             }
                         )
@@ -903,6 +908,7 @@ def run_quick_import(
                     left.append(
                         {
                             "name": str(item.get("name", "") or ""),
+                            "reason_code": "organize_failed",
                             "reason": "整理后未能在接收夹内定位到条目，请人工确认",
                         }
                     )
@@ -927,6 +933,7 @@ def run_quick_import(
                     left.append(
                         {
                             "name": str(item.get("name", "") or ""),
+                            "reason_code": "dispatch_failed",
                             "reason": f"搬运失败：{str(exc)[:120]}",
                         }
                     )
@@ -935,6 +942,7 @@ def run_quick_import(
                     left.append(
                         {
                             "name": str(item.get("name", "") or ""),
+                            "reason_code": "plan_conflict",
                             "reason": (
                                 f"目标文件夹「{dispatch.get('target_folder', '')}」中已存在同名文件："
                                 f"{'、'.join(str(value) for value in dispatch.get('skipped') or [])[:120]}"
@@ -981,6 +989,7 @@ def run_quick_import(
                 left.append(
                     {
                         "name": str(item.get("name", "") or ""),
+                        "reason_code": "unrecognized",
                         "reason": _left_reason_from_result(results_by_index.get(index) or {}),
                     }
                 )
@@ -991,9 +1000,12 @@ def run_quick_import(
                         monitor_run_id,
                         category="problem",
                         operation="leave_in_inbox",
-                        status="pending",
+                        status="skipped",
                         title=str(item.get("name", "") or "未处理项目"),
-                        detail={"reason": str(item.get("reason", "") or "")},
+                        detail={
+                            "reason_code": str(item.get("reason_code", "") or ""),
+                            "reason": str(item.get("reason", "") or ""),
+                        },
                     )
 
             if cancelled:
@@ -1005,6 +1017,7 @@ def run_quick_import(
                     left.append(
                         {
                             "name": str(pending_item.get("name", "") or ""),
+                            "reason_code": "cancelled",
                             "reason": "已中断，未整理",
                         }
                     )

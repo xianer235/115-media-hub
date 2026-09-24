@@ -190,6 +190,27 @@ class OfflineCompletionWatchTest(unittest.IsolatedAsyncioTestCase):
         extra = json.loads(extra_write.kwargs.get("extra_json", "{}"))
         self.assertEqual(extra["offline_status"], 2)
 
+    async def test_done_inbox_task_reports_inbox_processing_not_monitor_scan(self):
+        job = build_watch_job(
+            monitor_task_name="",
+            savepath="最近接收",
+            extra={"quick_import_inbox": 1},
+        )
+        task = {"name": "example", "status": 2, "percentDone": 100, "size": 1000}
+        with mock.patch.object(
+            resource_service, "update_resource_job"
+        ) as update_job, mock.patch.object(
+            resource_service, "resolve_offline_download_folder_hint", return_value=""
+        ), mock.patch("app.services.quick_import.run_quick_import", return_value={"ok": True}):
+            await resource_service._apply_offline_task_state(job, task)
+
+        progress_call = next(
+            call for call in update_job.call_args_list
+            if "offline_status" in str(call.kwargs.get("extra_json", ""))
+        )
+        self.assertIn("正在触发接收夹整理", progress_call.kwargs["status_detail"])
+        self.assertNotIn("文件夹监控", progress_call.kwargs["status_detail"])
+
     async def test_failed_task_marks_job_failed(self):
         provider = FakeOfflineWatchProvider(
             tasks=[
@@ -430,6 +451,43 @@ class OfflineSubmitFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(extra["offline_task_hash"], "AF33BD45B385B16A4BEF434C760E0182")
         self.assertEqual(extra["offline_skip_wait"], 0)
         self.assertIn("等待 115 离线下载完成后", final["status_detail"])
+        self.assertEqual(submit.call_args.args[0], resource_service.poll_offline_resource_jobs_once)
+
+    async def test_inbox_offline_submit_waits_for_download_then_triggers_inbox_import(self):
+        provider = self.SubmitProvider({"message": "已接收"})
+        job = {
+            "id": 83,
+            "resource_id": 0,
+            "title": "接收夹离线任务",
+            "link_url": MAGNET_LINK,
+            "link_type": "magnet",
+            "folder_id": "inbox-folder",
+            "savepath": "最近接收",
+            "monitor_task_name": "",
+            "refresh_delay_seconds": 0,
+            "auto_refresh": True,
+            "status": "pending",
+            "extra": {"offline_provider": "115", "quick_import_inbox": 1},
+            "extra_json": json.dumps({"offline_provider": "115", "quick_import_inbox": 1}),
+        }
+        updates = []
+        with mock.patch.object(resource_service, "get_resource_job", return_value=job), mock.patch.object(
+            resource_service, "get_resource_item", return_value={}
+        ), mock.patch.object(resource_service, "get_config", return_value={}), mock.patch.object(
+            resource_service, "get_provider_or_none", return_value=provider
+        ), mock.patch.object(
+            resource_service,
+            "update_resource_job",
+            side_effect=lambda job_id, **fields: updates.append((job_id, fields)),
+        ), mock.patch.object(resource_service, "submit_background") as submit, mock.patch.object(
+            resource_service, "release_process_memory"
+        ):
+            await resource_service.run_resource_job(83)
+
+        final = updates[-1][1]
+        self.assertEqual(final["status"], "submitted")
+        self.assertIn("等待 115 离线下载完成后触发接收夹整理与分发", final["status_detail"])
+        self.assertNotIn("不会自动生成 strm", final["status_detail"])
         self.assertEqual(submit.call_args.args[0], resource_service.poll_offline_resource_jobs_once)
 
 

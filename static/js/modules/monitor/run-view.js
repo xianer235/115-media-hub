@@ -4,15 +4,18 @@
     const statuses = {
         queued: '排队中', running: '执行中', waiting: '等待后续同步',
         completed: '已完成', no_change: '无变化', partial: '部分完成',
-        failed: '失败', cancelled: '已中断', pending: '等待处理',
+        failed: '失败', cancelled: '已中断', pending: '等待处理', skipped: '未处理',
         manual_required: '等待补扫', rollback_failed: '回退失败',
     };
     const sources = {
         manual: '手动触发', retry: '重新运行', cron: '定时触发',
         resource: '资源导入', subscription: '订阅任务', webhook: '外部通知',
-        change: '文件变更同步', auto_rescan: '系统补扫',
+        change: '检测到网盘变更', auto_rescan: '系统补扫',
         offline: '离线下载完成', recovery: '恢复任务', import: '资源导入',
         system: '系统触发',
+    };
+    const runKinds = {
+        scan: '目录扫描与 STRM', inbox: '接收夹整理与分发', change: '增量变更同步',
     };
     const operations = {
         queued: '已加入队列', merged: '已合并请求', started: '开始执行',
@@ -36,7 +39,7 @@
         succeeded_actions: '成功操作', failed_actions: '失败操作',
         completed: '已完成事件', failed: '失败事件', discarded: '已结束事件',
         manual_required: '待补扫事件', moved: '已分发', left: '留在接收夹',
-        moved_items: '分发明细', left_items: '待处理明细',
+        moved_items: '分发明细', left_items: '未处理明细',
         monitor_sync_events: '后续同步事件', children: '后续任务数', paths: '目录',
         cancelled: '已中断', cancelled_before_start: '执行前取消', requested: '请求数量',
     };
@@ -51,7 +54,7 @@
     };
     const tone = value => ['completed', 'no_change'].includes(value) ? 'success'
         : ['failed', 'rollback_failed'].includes(value) ? 'error'
-        : ['partial', 'pending', 'manual_required'].includes(value) ? 'warning'
+        : ['partial', 'pending', 'manual_required', 'skipped'].includes(value) ? 'warning'
         : ['queued', 'running', 'waiting'].includes(value) ? 'active' : 'muted';
     const time = value => String(value || '').replace('T', ' ') || '未记录时间';
 
@@ -59,6 +62,17 @@
         const entries = Array.isArray(run?.sources) && run.sources.length
             ? run.sources : [{source: run?.source || 'system'}];
         return [...new Set(entries.map(item => sources[item?.source] || '其他来源'))].join('、');
+    }
+
+    function runKindText(run) {
+        return runKinds[run?.run_kind] || '文件夹监控';
+    }
+
+    function parentContextText(run) {
+        const task = String(run?.parent_task_name || '').trim();
+        if (!task) return '';
+        const subject = String(run?.parent_subject || '').trim();
+        return `来自接收夹整理：${task}${subject ? ` · ${subject}` : ''}`;
     }
 
     function scopeText(scope, snapshot = {}) {
@@ -92,7 +106,7 @@
     function metrics(result = {}) {
         return [
             ['generated', '新增或更新'], ['deleted', '删除文件'], ['moved', '已分发'],
-            ['left', '待处理'], ['failed_dirs', '失败目录'], ['failed', '失败事件'],
+            ['left', '未处理'], ['failed_dirs', '失败目录'], ['failed', '失败事件'],
         ].filter(([key]) => count(result[key]) > 0).map(([key, label]) => ({
             label, value: count(result[key]), warning: ['left', 'failed_dirs', 'failed'].includes(key),
         }));
@@ -157,9 +171,11 @@
 
     function listRow(run) {
         const stats = metrics(run?.result);
+        const parentContext = parentContextText(run);
         return `<button type="button" class="monitor-run-row" data-run-id="${escape(run?.id)}">
             <span class="monitor-run-main"><span class="monitor-run-title">${escape(run?.task_name || '文件夹监控')} <i>·</i> ${escape(run?.subject || '全部目录')}</span>
-            <span class="monitor-run-meta">${escape(sourceText(run))} · ${escape(time(run?.queued_at || run?.started_at))}${duration(run) ? ` · 用时 ${escape(duration(run))}` : ''}</span>
+            <span class="monitor-run-meta">流程：${escape(runKindText(run))} · 启动：${escape(sourceText(run))} · ${escape(time(run?.queued_at || run?.started_at))}${duration(run) ? ` · 用时 ${escape(duration(run))}` : ''}</span>
+            ${parentContext ? `<span class="monitor-run-meta">${escape(parentContext)}</span>` : ''}
             <span class="monitor-run-result">${escape(summary(run))}</span>
             ${stats.length ? `<span class="monitor-run-inline-metrics">${stats.map(item => `<span${item.warning ? ' class="tone-warning"' : ''}>${item.label} <b>${item.value}</b></span>`).join('')}</span>` : ''}
             </span><span class="monitor-run-side">${badge(run?.status, run)}<span class="monitor-run-open">查看详情</span>
@@ -196,7 +212,7 @@
     }
 
     global.MonitorRunView = {
-        statuses, sources, escape, count, status, tone, time, sourceText, scopeText,
+        statuses, sources, runKinds, escape, count, status, tone, time, sourceText, runKindText, parentContextText, scopeText,
         duration, summary, metrics, detailRows, eventCard, listRow, detailHtml,
     };
 })(window);

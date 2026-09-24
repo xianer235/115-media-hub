@@ -4937,8 +4937,15 @@
             const select = document.getElementById('monitor-run-task-filter');
             if (!select) return;
             const previous = select.value;
-            const names = [...new Set([...(monitorState.tasks || []).map(task => String(task?.name || '')), previous].filter(Boolean))];
-            select.innerHTML = `<option value="">全部任务</option>${names.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('')}`;
+            const taskLabels = new Map();
+            (monitorState.tasks || []).forEach(task => {
+                const name = String(task?.name || '').trim();
+                if (!name) return;
+                const typeLabel = String(task?.task_type || 'scan') === 'inbox' ? '接收夹整理' : '目录监控';
+                taskLabels.set(name, `${name}（${typeLabel}）`);
+            });
+            if (previous && !taskLabels.has(previous)) taskLabels.set(previous, previous);
+            select.innerHTML = `<option value="">全部配置任务</option>${[...taskLabels.entries()].map(([name, label]) => `<option value="${escapeHtml(name)}">${escapeHtml(label)}</option>`).join('')}`;
             select.value = previous;
         }
 
@@ -4970,6 +4977,7 @@
         function monitorRunFilterQuery() {
             return {
                 task_name: document.getElementById('monitor-run-task-filter')?.value || '',
+                run_kind: document.getElementById('monitor-run-kind-filter')?.value || '',
                 source: document.getElementById('monitor-run-source-filter')?.value || '',
                 status: document.getElementById('monitor-run-status-filter')?.value || '',
             };
@@ -5133,12 +5141,80 @@
             }).catch(() => { body.innerText = '无法加载历史文本日志。'; });
         }
         function closeLegacyMonitorLogs() { document.getElementById('monitor-legacy-log-modal')?.classList.add('hidden'); }
-        function openMonitorRunRetention() { const retention = monitorState.run_retention || { mode: 'longterm', days: 30 }; document.getElementById(`monitor-run-retention-${retention.mode === 'days' ? 'days' : 'longterm'}`).checked = true; document.getElementById('monitor-run-retention-days-input').value = Number(retention.days || 30); syncMonitorRunRetentionUI(); document.getElementById('monitor-run-retention-modal')?.classList.remove('hidden'); }
+        function openMonitorRunRetention() {
+            const retention = monitorState.run_retention || { mode: 'longterm', days: 30 };
+            document.getElementById(`monitor-run-retention-${retention.mode === 'days' ? 'days' : 'longterm'}`).checked = true;
+            document.getElementById('monitor-run-retention-days-input').value = Number(retention.days || 30);
+            setMonitorRunRetentionResult('');
+            syncMonitorRunRetentionUI();
+            document.getElementById('monitor-run-retention-modal')?.classList.remove('hidden');
+        }
         function closeMonitorRunRetention() { document.getElementById('monitor-run-retention-modal')?.classList.add('hidden'); }
-        function syncMonitorRunRetentionUI() { const enabled = !!document.getElementById('monitor-run-retention-days')?.checked; document.getElementById('monitor-run-retention-days-wrap')?.classList.toggle('is-disabled', !enabled); document.getElementById('monitor-run-retention-days-input').disabled = !enabled; }
-        async function saveMonitorRunRetention() { const mode = document.getElementById('monitor-run-retention-days')?.checked ? 'days' : 'longterm'; const days = Number(document.getElementById('monitor-run-retention-days-input')?.value || 30); const data = await window.MediaHubApi.postJson('/monitor/runs/retention', { mode, days }); monitorState = { ...monitorState, run_retention: data.retention || { mode, days } }; document.getElementById('monitor-run-retention-result').innerText = '保留设置已保存。'; }
-        async function previewMonitorRunCleanup() { const days = document.getElementById('monitor-run-retention-days')?.checked ? Number(document.getElementById('monitor-run-retention-days-input')?.value || 30) : 0; const data = await window.MediaHubApi.postJson('/monitor/runs/cleanup', { days, preview: true }); document.getElementById('monitor-run-retention-result').innerText = `预计清理 ${Number(data.count || 0)} 条已结束记录；进行中和等待后续的记录会保留。`; }
-        async function runMonitorRunCleanup() { const days = document.getElementById('monitor-run-retention-days')?.checked ? Number(document.getElementById('monitor-run-retention-days-input')?.value || 30) : 0; const preview = await window.MediaHubApi.postJson('/monitor/runs/cleanup', { days, preview: true }); const count = Number(preview.count || 0); if (!count || !window.confirm(`将清理 ${count} 条已结束运行记录，进行中和等待后续的记录会保留。是否继续？`)) return; const data = await window.MediaHubApi.postJson('/monitor/runs/cleanup', { days, preview: false }); document.getElementById('monitor-run-retention-result').innerText = `已清理 ${Number(data.deleted || 0)} 条运行记录。`; await refreshMonitorRuns(true); }
+        function setMonitorRunRetentionResult(message, tone = 'info') { const result = document.getElementById('monitor-run-retention-result'); if (!result) return; result.innerText = message; result.classList.toggle('is-error', tone === 'error'); }
+        function monitorRunRetentionSettings() {
+            const mode = document.getElementById('monitor-run-retention-days')?.checked ? 'days' : 'longterm';
+            const days = Math.max(1, Number(document.getElementById('monitor-run-retention-days-input')?.value || 30));
+            return { mode, days };
+        }
+        function syncMonitorRunRetentionUI() {
+            const { mode } = monitorRunRetentionSettings();
+            const enabled = mode === 'days';
+            document.getElementById('monitor-run-retention-days-wrap')?.classList.toggle('is-disabled', !enabled);
+            document.getElementById('monitor-run-retention-days-input').disabled = !enabled;
+            ['monitor-run-preview-expired', 'monitor-run-cleanup-expired'].forEach(id => {
+                const button = document.getElementById(id);
+                if (button) button.disabled = !enabled;
+            });
+        }
+        async function saveMonitorRunRetention() {
+            const { mode, days } = monitorRunRetentionSettings();
+            try {
+                const data = await window.MediaHubApi.postJson('/monitor/runs/retention', { mode, days });
+                monitorState = { ...monitorState, run_retention: data.retention || { mode, days } };
+                setMonitorRunRetentionResult(mode === 'days' ? `已保存：保留最近 ${days} 天的已结束记录。` : '已保存：长期保留，不自动按时间清理。');
+            } catch (error) { setMonitorRunRetentionResult('保存保留策略失败，请稍后重试。', 'error'); }
+        }
+        async function requestMonitorRunCleanup(scope, { preview = false } = {}) {
+            const { mode, days } = monitorRunRetentionSettings();
+            if (scope === 'expired' && mode !== 'days') {
+                setMonitorRunRetentionResult('请先选择“保留最近 N 天”，再清理过期记录。', 'error');
+                return null;
+            }
+            return window.MediaHubApi.postJson('/monitor/runs/cleanup', { scope, days: scope === 'expired' ? days : 0, preview });
+        }
+        async function previewMonitorRunCleanup() {
+            const { days } = monitorRunRetentionSettings();
+            try {
+                const data = await requestMonitorRunCleanup('expired', { preview: true });
+                if (!data) return;
+                const count = Number(data.count || 0);
+                setMonitorRunRetentionResult(count ? `预计清理 ${count} 条早于 ${days} 天的已结束记录。` : `没有早于 ${days} 天的已结束记录，无需清理。`);
+            } catch (error) { setMonitorRunRetentionResult('预览过期记录失败，请稍后重试。', 'error'); }
+        }
+        async function runMonitorRunCleanup() {
+            const { days } = monitorRunRetentionSettings();
+            try {
+                const preview = await requestMonitorRunCleanup('expired', { preview: true });
+                if (!preview) return;
+                const count = Number(preview.count || 0);
+                if (!count) { setMonitorRunRetentionResult(`没有早于 ${days} 天的已结束记录，无需清理。`); return; }
+                if (!(await showAppConfirm(`将清理 ${count} 条早于 ${days} 天的已结束记录。运行中和等待后续同步的记录会保留。是否继续？`))) return;
+                const data = await requestMonitorRunCleanup('expired');
+                setMonitorRunRetentionResult(`已清理 ${Number(data.deleted || 0)} 条过期记录。`);
+                await refreshMonitorRuns(true);
+            } catch (error) { setMonitorRunRetentionResult('清理过期记录失败，请稍后重试。', 'error'); }
+        }
+        async function runMonitorRunCleanupAll() {
+            try {
+                const preview = await requestMonitorRunCleanup('all_finished', { preview: true });
+                const count = Number(preview?.count || 0);
+                if (!count) { setMonitorRunRetentionResult('没有可清除的已结束记录。'); return; }
+                if (!(await showAppConfirm(`将清除 ${count} 条已结束记录。运行中、排队中、等待后续同步及其依赖记录会保留。是否继续？`))) return;
+                const data = await requestMonitorRunCleanup('all_finished');
+                setMonitorRunRetentionResult(`已清除 ${Number(data.deleted || 0)} 条已结束记录。`);
+                await refreshMonitorRuns(true);
+            } catch (error) { setMonitorRunRetentionResult('清除全部已结束记录失败，请稍后重试。', 'error'); }
+        }
 
         async function refreshMainLogs({ compact = false } = {}) {
             const taskModule = await loadTaskTabModule();

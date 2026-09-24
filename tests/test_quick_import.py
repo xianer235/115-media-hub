@@ -5,7 +5,7 @@ from unittest import mock
 
 from app import core, db
 from app.services import monitor as monitor_service
-from app.services import monitor_changes, quick_import, scraper
+from app.services import monitor_changes, monitor_runs, quick_import, scraper
 
 
 MOUNT_POINTS = [{"provider": "115", "prefix": "/115"}]
@@ -801,6 +801,37 @@ class QuickImportRunTest(unittest.TestCase):
         # 接收夹里可能是散文件，必须强制整理进媒体文件夹
         self.assertTrue(seen_options[0]["force_media_folder"])
 
+    def test_mixed_result_waits_when_dispatched_item_needs_strm_sync(self):
+        cfg = _cfg()
+        identified = {
+            "items": [_item(1, "电影A"), _item(2, "无法识别")],
+            "picked": {1: {"id": 603, "media_type": "movie"}},
+            "results": [
+                {"item_index": 1, "status": "auto"},
+                {"item_index": 2, "status": "manual"},
+            ],
+        }
+
+        with mock.patch.object(quick_import, "get_config", return_value=cfg), \
+                mock.patch.object(quick_import, "resolve_scraper_dest_folder_id", side_effect=lambda provider, path: f"cid:{path}"), \
+                mock.patch.object(quick_import, "identify_scraper_batch_entries", return_value=identified), \
+                mock.patch.object(quick_import, "build_scraper_plan_for_batch", return_value={
+                    "ok": True,
+                    "items": [{"title": "电影A", "year": "2024"}],
+                    "issues": [],
+                    "ready_count": 1,
+                }), \
+                mock.patch.object(quick_import, "create_scraper_job_from_plan", return_value={"job_id": 11}), \
+                mock.patch.object(quick_import, "submit_scraper_job", return_value=self._Future()), \
+                mock.patch.object(quick_import, "_resolve_entry_after_organize", side_effect=lambda cid, summary, entry: entry), \
+                mock.patch.object(scraper, "find_scraper_media_folder", return_value={}), \
+                mock.patch.object(scraper, "move_scraper_entries", return_value={"monitor_sync": {"event_count": 1}}), \
+                mock.patch.object(quick_import, "wait_monitor_run", wraps=monitor_runs.wait_run) as wait_run:
+            result = quick_import.run_quick_import("test")
+
+        wait_run.assert_called_once()
+        self.assertEqual(result["left"][0]["reason_code"], "unrecognized")
+
     def test_tv_uses_tv_task_options(self):
         cfg = _cfg()
         identified = {
@@ -875,6 +906,7 @@ class QuickImportRunTest(unittest.TestCase):
         create.assert_not_called()
         move.assert_not_called()
         self.assertIn("整理计划有冲突", result["left"][0]["reason"])
+        self.assertEqual(result["left"][0]["reason_code"], "plan_conflict")
 
     def test_move_failure_keeps_item_and_records_reason(self):
         cfg = _cfg()
@@ -900,6 +932,7 @@ class QuickImportRunTest(unittest.TestCase):
 
         self.assertEqual(result["moved"], [])
         self.assertIn("搬运失败", result["left"][0]["reason"])
+        self.assertEqual(result["left"][0]["reason_code"], "dispatch_failed")
 
     def test_run_records_status_row(self):
         cfg = _cfg()

@@ -20,7 +20,7 @@ class LogHeaderButtonsFrontendTest(unittest.TestCase):
             log_buttons = [
                 line.strip()
                 for line in html.splitlines()
-                if "清空日志" in line or "加载更早" in line
+                if "<button" in line and "log-header-btn" in line
             ]
             self.assertTrue(log_buttons)
             for line in log_buttons:

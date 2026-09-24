@@ -315,7 +315,7 @@ class OfflineImportPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(move_call.args[2], "target-cid")
         queue_job.assert_called_once()
         self.assertEqual(queue_job.call_args.args[0], "监控电影")
-        self.assertEqual(queue_job.call_args.args[1], "resource")
+        self.assertEqual(queue_job.call_args.args[1], "subscription")
 
     async def test_pipeline_submit_failure_returns_failure(self):
         provider = self.build_provider()

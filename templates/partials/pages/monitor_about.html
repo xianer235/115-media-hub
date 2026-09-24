@@ -34,9 +34,12 @@
                     </div>
                 </div>
                 <div class="monitor-run-filters" aria-label="运行记录筛选">
-                    <select id="monitor-run-task-filter" aria-label="按任务筛选" class="monitor-run-filter" onchange="refreshMonitorRuns()"><option value="">全部任务</option></select>
-                    <select id="monitor-run-source-filter" aria-label="按触发来源筛选" class="monitor-run-filter" onchange="refreshMonitorRuns()">
-                        <option value="">全部来源</option><option value="manual">手动触发</option><option value="retry">重新运行</option><option value="cron">定时触发</option><option value="resource">资源导入</option><option value="webhook">外部通知</option><option value="change">文件变更同步</option><option value="subscription">订阅任务</option><option value="auto_rescan">系统补扫</option><option value="offline">离线下载完成</option><option value="recovery">恢复任务</option>
+                    <select id="monitor-run-task-filter" aria-label="按配置任务筛选" class="monitor-run-filter" onchange="refreshMonitorRuns()"><option value="">全部配置任务</option></select>
+                    <select id="monitor-run-kind-filter" aria-label="按运行流程筛选" class="monitor-run-filter" onchange="refreshMonitorRuns()">
+                        <option value="">全部流程</option><option value="scan">目录扫描与 STRM</option><option value="inbox">接收夹整理与分发</option><option value="change">增量变更同步</option>
+                    </select>
+                    <select id="monitor-run-source-filter" aria-label="按启动方式筛选" class="monitor-run-filter" onchange="refreshMonitorRuns()">
+                        <option value="">全部启动方式</option><option value="manual">手动触发</option><option value="retry">重新运行</option><option value="cron">定时触发</option><option value="resource">资源导入</option><option value="webhook">外部通知</option><option value="change">检测到网盘变更</option><option value="subscription">订阅任务</option><option value="auto_rescan">系统补扫</option><option value="offline">离线下载完成</option><option value="recovery">恢复任务</option>
                     </select>
                     <select id="monitor-run-status-filter" aria-label="按运行状态筛选" class="monitor-run-filter" onchange="refreshMonitorRuns()">
                         <option value="">全部状态</option><option value="queued">排队中</option><option value="running">执行中</option><option value="waiting">等待后续同步</option><option value="completed">已完成</option><option value="no_change">无变化</option><option value="partial">部分完成</option><option value="failed">失败</option><option value="cancelled">已取消或中断</option>
@@ -72,10 +75,17 @@
             <div class="app-dialog-shell monitor-run-retention-shell">
                 <div class="app-dialog-header"><div><div class="app-dialog-eyebrow">运行记录</div><div id="monitor-run-retention-title" class="app-dialog-title">记录保留</div></div><button type="button" class="app-dialog-close" onclick="closeMonitorRunRetention()">关闭</button></div>
                 <div class="monitor-run-retention-body">
-                    <label class="form-check"><input id="monitor-run-retention-longterm" class="form-check-input" type="radio" name="monitor-run-retention" value="longterm" onchange="syncMonitorRunRetentionUI()"><span class="form-check-label">长期保留</span></label>
-                    <label class="form-check"><input id="monitor-run-retention-days" class="form-check-input" type="radio" name="monitor-run-retention" value="days" onchange="syncMonitorRunRetentionUI()"><span class="form-check-label">定期清理</span></label>
-                    <label id="monitor-run-retention-days-wrap" class="monitor-run-days-label">保留最近 <input id="monitor-run-retention-days-input" type="number" min="1" max="3650" value="30"> 天的已结束记录</label>
-                    <div class="monitor-run-retention-actions"><button type="button" class="log-header-btn" onclick="saveMonitorRunRetention()">保存设置</button><button type="button" class="log-header-btn" onclick="previewMonitorRunCleanup()">预览清理</button><button type="button" class="log-header-btn" onclick="runMonitorRunCleanup()">立即清理</button></div>
+                    <section class="monitor-run-retention-section" aria-labelledby="monitor-run-retention-policy-title">
+                        <div class="monitor-run-retention-section-head"><h4 id="monitor-run-retention-policy-title">保留策略</h4><p>只影响系统每天自动清理的范围。</p></div>
+                        <label class="form-check"><input id="monitor-run-retention-longterm" class="form-check-input" type="radio" name="monitor-run-retention" value="longterm" onchange="syncMonitorRunRetentionUI()"><span class="form-check-label">长期保留（不自动清理）</span></label>
+                        <label class="form-check"><input id="monitor-run-retention-days" class="form-check-input" type="radio" name="monitor-run-retention" value="days" onchange="syncMonitorRunRetentionUI()"><span class="form-check-label">保留最近 N 天</span></label>
+                        <label id="monitor-run-retention-days-wrap" class="monitor-run-days-label">保留最近 <input id="monitor-run-retention-days-input" type="number" min="1" max="3650" value="30"> 天的已结束记录</label>
+                        <div class="monitor-run-retention-actions"><button type="button" class="log-header-btn" onclick="saveMonitorRunRetention()">保存保留策略</button></div>
+                    </section>
+                    <section class="monitor-run-retention-section monitor-run-retention-cleanup" aria-labelledby="monitor-run-retention-cleanup-title">
+                        <div class="monitor-run-retention-section-head"><h4 id="monitor-run-retention-cleanup-title">手动清理</h4><p>运行中、排队中、等待后续同步，以及仍被运行中后续步骤引用的记录都会保留。</p></div>
+                        <div class="monitor-run-retention-actions"><button id="monitor-run-preview-expired" type="button" class="log-header-btn" onclick="previewMonitorRunCleanup()">预览过期记录</button><button id="monitor-run-cleanup-expired" type="button" class="log-header-btn" onclick="runMonitorRunCleanup()">清理过期记录</button><button id="monitor-run-cleanup-all" type="button" class="log-header-btn monitor-run-cleanup-danger" onclick="runMonitorRunCleanupAll()">清除全部已结束记录</button></div>
+                    </section>
                     <div id="monitor-run-retention-result" class="monitor-run-retention-result" aria-live="polite"></div>
                 </div>
             </div>

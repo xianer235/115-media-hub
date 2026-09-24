@@ -331,6 +331,7 @@ async def get_monitor_runs(request: Request) -> Dict[str, Any]:
                 task_name=str(request.query_params.get("task_name", "") or ""),
                 source=str(request.query_params.get("source", "") or ""),
                 status=str(request.query_params.get("status", "") or ""),
+                run_kind=str(request.query_params.get("run_kind", "") or ""),
             ),
         }
     except Exception as exc:
@@ -384,11 +385,15 @@ async def save_monitor_run_retention(request: Request) -> Dict[str, Any]:
 async def cleanup_monitor_runs(request: Request) -> Dict[str, Any]:
     data = await request.json()
     preview = bool(data.get("preview", False))
+    scope = str(data.get("scope", "expired") or "expired").strip().lower()
     try:
         days = max(0, int(data.get("days", 0) or 0))
     except (TypeError, ValueError):
         days = 0
-    return {"ok": True, **cleanup_runs(days=days, preview=preview)}
+    try:
+        return {"ok": True, **cleanup_runs(scope=scope, days=days, preview=preview)}
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
 
 
 @router.get("/monitor/manual-required")

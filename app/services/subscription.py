@@ -302,7 +302,7 @@ def _recover_subscription_submitted_jobs(limit: int = 160) -> Dict[str, int]:
     for (monitor_task_name, savepath), grouped in grouped_jobs.items():
         queue_status = queue_monitor_job(
             monitor_task_name,
-            "resource",
+            "subscription",
             {
                 "savepath": savepath,
                 "title": "历史待刷新收口",
@@ -459,7 +459,7 @@ def _finalize_subscription_batch_refresh(
 
         queue_status = queue_monitor_job(
             monitor_task_name,
-            "resource",
+            "subscription",
             {
                 "savepath": savepath,
                 "title": f"订阅批次收口：{task_name}",

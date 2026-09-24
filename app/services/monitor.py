@@ -1,3 +1,4 @@
+import logging
 import re
 
 from ..background import submit_background
@@ -1411,6 +1412,22 @@ async def _write_monitor_change_details(details: Any) -> None:
         await write_monitor_log(f"{label}: {subject}（{counts}）", "info")
 
 
+def _best_effort_monitor_change_call(label: str, callback: Any, *args: Any, **kwargs: Any) -> Any:
+    try:
+        return callback(*args, **kwargs)
+    except Exception:
+        logging.exception(label)
+        return None
+
+
+async def _best_effort_monitor_change_await(label: str, callback: Any, *args: Any, **kwargs: Any) -> Any:
+    try:
+        return await callback(*args, **kwargs)
+    except Exception:
+        logging.exception(label)
+        return None
+
+
 async def run_monitor_change_task(
     task_name: str,
     trigger: str = "change",
@@ -1420,26 +1437,81 @@ async def run_monitor_change_task(
     """Consume persisted scraper mutations without entering the scan walker."""
     run_id = str(run_id or "").strip()
     if not _claim_monitor_job(task_name):
+        _best_effort_monitor_change_call(
+            "Failed to close unclaimed monitor change run",
+            finish_monitor_run,
+            run_id,
+            status="cancelled",
+            summary="任务未能开始，已退出本次排队",
+        )
         return
-    cfg = get_config()
-    task = next(
-        (
-            normalize_task(item)
-            for item in cfg.get("monitor_tasks", []) or []
-            if isinstance(item, dict) and str(item.get("name", "") or "") == str(task_name or "")
-        ),
-        None,
-    )
+    try:
+        cfg = get_config()
+        task = next(
+            (
+                normalize_task(item)
+                for item in cfg.get("monitor_tasks", []) or []
+                if isinstance(item, dict) and str(item.get("name", "") or "") == str(task_name or "")
+            ),
+            None,
+        )
+    except Exception as exc:
+        _best_effort_monitor_change_call(
+            "Failed to close monitor change run after setup error",
+            finish_monitor_run,
+            run_id,
+            status="failed",
+            summary=str(exc),
+        )
+        await _best_effort_monitor_change_await(
+            "Failed to release monitor change job after setup error",
+            _finish_monitor_job,
+            task_name,
+            "monitor-change",
+        )
+        return
     if not task:
-        await write_monitor_log(f"变更同步任务不存在: {task_name}", "error")
-        finish_monitor_run(run_id, status="failed", summary="变更同步任务不存在")
-        await _finish_monitor_job(task_name, "monitor-change")
+        _best_effort_monitor_change_call(
+            "Failed to close missing monitor change run",
+            finish_monitor_run,
+            run_id,
+            status="failed",
+            summary="变更同步任务不存在",
+        )
+        await _best_effort_monitor_change_await(
+            "Failed to write missing monitor task log",
+            write_monitor_log,
+            f"变更同步任务不存在: {task_name}",
+            "error",
+        )
+        await _best_effort_monitor_change_await(
+            "Failed to release missing monitor change job",
+            _finish_monitor_job,
+            task_name,
+            "monitor-change",
+        )
         return
     if normalize_task_type(task.get("task_type")) == MONITOR_TASK_TYPE_INBOX:
         # 兜底：接收夹任务不参与变更同步（正常路径不会走到这里）。
-        await write_monitor_log(f"接收夹任务「{task_name}」不参与变更同步，已忽略", "warn")
-        finish_monitor_run(run_id, status="cancelled", summary="接收夹不参与变更同步")
-        await _finish_monitor_job(task_name, "monitor-change")
+        _best_effort_monitor_change_call(
+            "Failed to close inbox monitor change run",
+            finish_monitor_run,
+            run_id,
+            status="cancelled",
+            summary="接收夹不参与变更同步",
+        )
+        await _best_effort_monitor_change_await(
+            "Failed to write inbox change rejection log",
+            write_monitor_log,
+            f"接收夹任务「{task_name}」不参与变更同步，已忽略",
+            "warn",
+        )
+        await _best_effort_monitor_change_await(
+            "Failed to release inbox monitor change job",
+            _finish_monitor_job,
+            task_name,
+            "monitor-change",
+        )
         return
     update_monitor_summary("准备同步变更", task_name)
     schedule_ui_state_push(0)
@@ -1447,10 +1519,10 @@ async def run_monitor_change_task(
         await write_monitor_task_header(task, "change", payload)
         start_monitor_run(run_id, subject="文件变更", scope={"kind": "events"})
         await write_monitor_section("处理刮削变更")
-        from .monitor_changes import process_monitor_change_events
+        from .monitor_changes import normalize_monitor_event_ids, process_monitor_change_events
 
         raw_event_ids = payload.get("event_ids", []) if isinstance(payload, dict) else []
-        event_ids = raw_event_ids if isinstance(raw_event_ids, list) else None
+        event_ids = normalize_monitor_event_ids(raw_event_ids)
         result = await process_monitor_change_events(task_name, cfg=cfg, event_ids=event_ids)
         parent_run_ids = [
             str(value or "").strip()
@@ -1468,9 +1540,19 @@ async def run_monitor_change_task(
         ) <= 0:
             await write_monitor_log("无待处理变更，本轮跳过", "info")
             status_text = "变更同步完成"
-            await write_monitor_task_footer(task_name, status_text)
             finish_monitor_run(run_id, status="no_change", summary="没有待处理变更")
-            update_monitor_summary(status_text, task_name)
+            await _best_effort_monitor_change_await(
+                "Failed to write empty monitor change footer",
+                write_monitor_task_footer,
+                task_name,
+                status_text,
+            )
+            _best_effort_monitor_change_call(
+                "Failed to update empty monitor change summary",
+                update_monitor_summary,
+                status_text,
+                task_name,
+            )
             return
         await _write_monitor_change_details(result.get("change_details"))
         completed = max(0, int(result.get("completed", 0) or 0))
@@ -1590,7 +1672,6 @@ async def run_monitor_change_task(
             status_text = "变更同步待自动补扫" if auto_rescan_queued > 0 else "变更同步待手动监控"
         else:
             status_text = "变更同步完成"
-        await write_monitor_task_footer(task_name, status_text)
         final_status = "partial" if failed or manual_required else ("no_change" if not generated and not deleted else "completed")
         finish_monitor_run(
             run_id,
@@ -1598,19 +1679,88 @@ async def run_monitor_change_task(
             summary=summary_text,
             result={"completed": completed, "failed": failed, "discarded": discarded, "generated": generated, "deleted": deleted, "manual_required": manual_required},
         )
-        update_monitor_summary(status_text, task_name)
+        await _best_effort_monitor_change_await(
+            "Failed to write completed monitor change footer",
+            write_monitor_task_footer,
+            task_name,
+            status_text,
+        )
+        _best_effort_monitor_change_call(
+            "Failed to update completed monitor change summary",
+            update_monitor_summary,
+            status_text,
+            task_name,
+        )
     except asyncio.CancelledError:
-        await write_monitor_task_footer(task_name, "变更同步已中断")
-        finish_monitor_run(run_id, status="cancelled", summary="变更同步已中断")
-        update_monitor_summary("变更同步中断", task_name)
+        _best_effort_monitor_change_call(
+            "Failed to close cancelled monitor change run",
+            finish_monitor_run,
+            run_id,
+            status="cancelled",
+            summary="变更同步已中断",
+        )
+        await _best_effort_monitor_change_await(
+            "Failed to write cancelled monitor change footer",
+            write_monitor_task_footer,
+            task_name,
+            "变更同步已中断",
+        )
+        _best_effort_monitor_change_call(
+            "Failed to update cancelled monitor change summary",
+            update_monitor_summary,
+            "变更同步中断",
+            task_name,
+        )
     except Exception as exc:
-        await write_monitor_log(f"变更同步失败: {exc}", "error")
-        await write_monitor_task_footer(task_name, "变更同步失败")
-        record_monitor_run_event(run_id, category="problem", operation="change", status="failed", title="变更同步失败", detail={"error": str(exc)})
-        finish_monitor_run(run_id, status="failed", summary=str(exc))
-        update_monitor_summary("变更同步失败", str(exc))
+        _best_effort_monitor_change_call(
+            "Failed to close failed monitor change run",
+            finish_monitor_run,
+            run_id,
+            status="failed",
+            summary=str(exc),
+        )
+        _best_effort_monitor_change_call(
+            "Failed to record monitor change error event",
+            record_monitor_run_event,
+            run_id,
+            category="problem",
+            operation="change",
+            status="failed",
+            title="变更同步失败",
+            detail={"error": str(exc)},
+        )
+        await _best_effort_monitor_change_await(
+            "Failed to write monitor change error log",
+            write_monitor_log,
+            f"变更同步失败: {exc}",
+            "error",
+        )
+        await _best_effort_monitor_change_await(
+            "Failed to write monitor change error footer",
+            write_monitor_task_footer,
+            task_name,
+            "变更同步失败",
+        )
+        _best_effort_monitor_change_call(
+            "Failed to update failed monitor change summary",
+            update_monitor_summary,
+            "变更同步失败",
+            str(exc),
+        )
     finally:
-        await _finish_monitor_job(task_name, "monitor-change")
+        try:
+            detail = get_monitor_run_detail(run_id)
+            current_status = str((detail.get("run") or {}).get("status", "") or "")
+            if current_status in {"queued", "running", "waiting"}:
+                finish_monitor_run(run_id, status="failed", summary="变更同步异常结束")
+        except Exception:
+            logging.exception("Failed to finalize active monitor change run")
+        await _best_effort_monitor_change_await(
+            "Failed to release monitor change job",
+            _finish_monitor_job,
+            task_name,
+            "monitor-change",
+        )
 
 
 async def start_next_monitor_job() -> None:

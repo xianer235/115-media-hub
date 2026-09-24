@@ -13,6 +13,7 @@ from app import db
 from app import core
 from app.services import monitor_changes
 from app.services import monitor
+from app.services import monitor_runs
 from app.services import scraper
 
 
@@ -2101,6 +2102,87 @@ class ScraperMonitorSyncTest(unittest.TestCase):
         log_texts = [str(call.args[0]) for call in logs.await_args_list]
         self.assertIn("无待处理变更，本轮跳过", log_texts)
         self.assertFalse(any("变更同步汇总" in text for text in log_texts))
+
+    def test_process_monitor_change_events_accepts_nested_event_ids(self):
+        result = asyncio.run(
+            monitor_changes.process_monitor_change_events(
+                cfg=self._cfg(),
+                event_ids=[[1, "2"], (3, None), "invalid"],
+            )
+        )
+
+        self.assertEqual(result["completed"], 0)
+        self.assertEqual(result["failed"], 0)
+
+    def test_monitor_change_task_finishes_failed_when_error_logging_also_fails(self):
+        cfg = self._cfg()
+        run_id = monitor_runs.create_run(
+            run_kind="change",
+            task_name="影视监控",
+            source="change",
+        )
+        with (
+            patch.object(monitor, "_claim_monitor_job", return_value=True),
+            patch.object(monitor, "get_config", return_value=cfg),
+            patch.object(monitor, "write_monitor_task_header", AsyncMock(side_effect=RuntimeError("header failed"))),
+            patch.object(monitor, "write_monitor_log", AsyncMock(side_effect=RuntimeError("log failed"))),
+            patch.object(monitor, "write_monitor_task_footer", AsyncMock(side_effect=RuntimeError("footer failed"))),
+            patch.object(monitor, "update_monitor_summary"),
+            patch.object(monitor, "schedule_ui_state_push"),
+            patch.object(monitor, "_finish_monitor_job", AsyncMock()),
+            patch.object(monitor.logging, "exception"),
+        ):
+            asyncio.run(monitor.run_monitor_change_task("影视监控", run_id=run_id))
+
+        detail = monitor_runs.get_run_detail(run_id)["run"]
+        self.assertEqual(detail["status"], "failed")
+        self.assertTrue(detail["finished_at"])
+
+    def test_monitor_change_task_keeps_success_when_success_footer_fails(self):
+        cfg = self._cfg()
+        run_id = monitor_runs.create_run(
+            run_kind="change",
+            task_name="影视监控",
+            source="change",
+        )
+        with (
+            patch.object(monitor, "_claim_monitor_job", return_value=True),
+            patch.object(monitor, "get_config", return_value=cfg),
+            patch.object(monitor, "write_monitor_task_header", AsyncMock()),
+            patch.object(monitor, "write_monitor_section", AsyncMock()),
+            patch.object(monitor, "write_monitor_log", AsyncMock()),
+            patch.object(monitor, "write_monitor_task_footer", AsyncMock(side_effect=RuntimeError("footer failed"))),
+            patch.object(monitor, "update_monitor_summary"),
+            patch.object(monitor, "schedule_ui_state_push"),
+            patch.object(monitor, "_finish_monitor_job", AsyncMock()),
+            patch.object(monitor.logging, "exception"),
+            patch.object(
+                monitor_changes,
+                "process_monitor_change_events",
+                AsyncMock(
+                    return_value={
+                        "completed": 1,
+                        "failed": 0,
+                        "discarded": 0,
+                        "generated": 1,
+                        "deleted": 0,
+                        "directory_count": 0,
+                        "file_count": 1,
+                        "manual_required": 0,
+                        "errors": [],
+                        "change_details": [],
+                        "new_media_items": [],
+                        "manual_required_paths": [],
+                        "monitor_run_ids": [],
+                    }
+                ),
+            ),
+        ):
+            asyncio.run(monitor.run_monitor_change_task("影视监控", run_id=run_id))
+
+        detail = monitor_runs.get_run_detail(run_id)["run"]
+        self.assertEqual(detail["status"], "completed")
+        self.assertEqual(detail["result"]["generated"], 1)
 
     def test_monitor_change_task_logs_one_shot_failure_without_retry_claim(self):
         cfg = self._cfg()

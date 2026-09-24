@@ -567,12 +567,8 @@ def update_monitor_change_event_snapshots(
     transaction keeps that locator available to a later change worker without
     ever substituting the source folder CID or walking a parent path.
     """
-    event_ids = sorted(
-        {
-            int(value or 0)
-            for value in (prepared.get("event_ids", []) if isinstance(prepared, dict) else [])
-            if int(value or 0) > 0
-        }
+    event_ids = normalize_monitor_event_ids(
+        prepared.get("event_ids", []) if isinstance(prepared, dict) else []
     )
     normalized_updates = [item for item in (updates or []) if isinstance(item, dict)]
     if not event_ids or not normalized_updates:
@@ -848,12 +844,8 @@ def confirm_monitor_change_events(
     enqueue: bool = True,
     error: str = "",
 ) -> Dict[str, Any]:
-    event_ids = sorted(
-        {
-            int(value or 0)
-            for value in (prepared.get("event_ids", []) if isinstance(prepared, dict) else [])
-            if int(value or 0) > 0
-        }
+    event_ids = normalize_monitor_event_ids(
+        prepared.get("event_ids", []) if isinstance(prepared, dict) else []
     )
     if not event_ids:
         return {
@@ -939,6 +931,26 @@ def _scan_task_names(cfg: Dict[str, Any]) -> Set[str]:
 def _provider_path_is_safe(path: str) -> bool:
     normalized = normalize_relative_path(path)
     return bool(normalized) and all(part not in {".", ".."} for part in normalized.split("/"))
+
+
+def normalize_monitor_event_ids(values: Any) -> List[int]:
+    """Flatten queue payload IDs and keep only unique positive integers."""
+    normalized: Set[int] = set()
+    pending = [values]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, (list, tuple, set)):
+            pending.extend(value)
+            continue
+        if isinstance(value, bool):
+            continue
+        try:
+            event_id = int(value or 0)
+        except (TypeError, ValueError):
+            continue
+        if event_id > 0:
+            normalized.add(event_id)
+    return sorted(normalized)
 
 
 def _build_event_change_plan(
@@ -1868,7 +1880,7 @@ def _load_ready_events(
     if normalized_task_name:
         clauses.append("task_name = ?")
         values.append(normalized_task_name)
-    normalized_ids = sorted({int(value or 0) for value in (event_ids or []) if int(value or 0) > 0})
+    normalized_ids = normalize_monitor_event_ids(event_ids)
     if normalized_ids:
         placeholders = ",".join("?" for _ in normalized_ids)
         clauses.append(f"id IN ({placeholders})")
@@ -2167,9 +2179,7 @@ def complete_manual_required_monitor_events(
     event_ids: Sequence[int],
 ) -> int:
     normalized_task_name = str(task_name or "").strip()
-    normalized_event_ids = sorted(
-        {int(value or 0) for value in (event_ids or []) if int(value or 0) > 0}
-    )
+    normalized_event_ids = normalize_monitor_event_ids(event_ids)
     if not normalized_task_name or not normalized_event_ids:
         return 0
     placeholders = ",".join("?" for _ in normalized_event_ids)

@@ -23,7 +23,7 @@ from .services.resource import (
 from .services.sign115 import refresh_sign115_status, run_sign115_job
 from .services.subscription import queue_subscription_job
 from .services.scraper import requeue_scraper_jobs_on_startup
-from .services.monitor_runs import cleanup_runs
+from .services.monitor_runs import cleanup_runs, reconcile_waiting_inbox_runs, recover_interrupted_runs
 from .services.subscription_offline_cleanup import (
     run_subscription_offline_staging_cleanup_once,
     subscription_offline_staging_cleanup_watcher,
@@ -83,6 +83,7 @@ async def startup() -> None:
     bind_ui_event_loop()
     start_background_runtime()
     ensure_db()
+    recover_interrupted_runs()
     try:
         if cleanup_legacy_tree_config_file():
             await write_log("已清理 settings.json 中的旧目录树配置字段（trees/sync_mode/check_hash/cron_hour/last_hash）", "info")
@@ -91,6 +92,7 @@ async def startup() -> None:
     # Reconcile mutations left between the remote operation and local STRM
     # processing before normal schedulers start issuing scans.
     recover_monitor_change_events(cfg=get_config())
+    reconcile_waiting_inbox_runs()
     try:
         requeue_scraper_jobs_on_startup()
     except Exception:
@@ -118,7 +120,7 @@ async def startup() -> None:
             cleanup_day = datetime.now().date().isoformat()
             if retention.get("mode") == "days" and cleanup_day != last_monitor_run_cleanup_day:
                 try:
-                    await asyncio.to_thread(cleanup_runs, days=max(1, int(retention.get("days", 30) or 30)))
+                    await asyncio.to_thread(cleanup_runs, scope="expired", days=max(1, int(retention.get("days", 30) or 30)))
                 except Exception:
                     logging.exception("Failed to clean expired monitor runs")
                 last_monitor_run_cleanup_day = cleanup_day

@@ -191,10 +191,15 @@ async def _apply_offline_task_state(job: Dict[str, Any], task: Dict[str, Any]) -
                 "offline_total": size,
             }
         )
+        completion_detail = (
+            "115 离线下载已完成，正在触发接收夹整理"
+            if bool(extra.get("quick_import_inbox"))
+            else "115 离线下载已完成，正在触发文件夹监控"
+        )
         update_resource_job(
             job_id,
             extra_json=safe_json_dumps(extra),
-            status_detail="115 离线下载已完成，正在触发文件夹监控",
+            status_detail=completion_detail,
         )
         offline_folder_hint = ""
         try:
@@ -945,6 +950,8 @@ async def run_resource_job(job_id: int) -> None:
         else:
             monitor_task_name = str(job.get("monitor_task_name", "") or "").strip()
             auto_refresh_enabled = bool(job.get("auto_refresh"))
+            job_extra = job.get("extra") if isinstance(job.get("extra"), dict) else {}
+            quick_import_inbox = bool(job_extra.get("quick_import_inbox"))
             if monitor_task_name:
                 delay_seconds = max(0, int(job.get("refresh_delay_seconds", 0) or 0))
                 if is_offline_link and duplicate_offline:
@@ -960,10 +967,21 @@ async def run_resource_job(job_id: int) -> None:
                 else:
                     refresh_text = "已命中文件夹监控任务，等待手动触发生成 strm"
                 detail = f"{detail}；{refresh_text}（{monitor_task_name}）"
+            elif quick_import_inbox:
+                if is_offline_link and auto_refresh_enabled:
+                    import_text = (
+                        "当前保存路径不触发文件夹监控；等待 115 离线下载完成后触发接收夹整理与分发，"
+                        "已分发内容再由目标监控任务同步本地播放文件"
+                    )
+                elif auto_refresh_enabled:
+                    import_text = "当前保存路径不触发文件夹监控；导入完成后触发接收夹整理与分发"
+                else:
+                    import_text = "当前保存路径命中接收夹，等待手动整理与分发"
+                detail = f"{detail}；{import_text}"
             else:
                 detail = f"{detail}；当前保存路径未纳入文件夹监控，导入成功后不会自动生成 strm"
 
-            next_status = "submitted" if monitor_task_name else "completed"
+            next_status = "submitted" if monitor_task_name or quick_import_inbox else "completed"
 
         update_fields = {
             "status": next_status,
@@ -998,7 +1016,10 @@ async def run_resource_job(job_id: int) -> None:
         elif (
             (not is_share_receive_link or bool(getattr(share_provider, "supports_monitor", False)))
             and bool(job.get("auto_refresh"))
-            and str(job.get("monitor_task_name", "")).strip()
+            and (
+                str(job.get("monitor_task_name", "")).strip()
+                or bool(job_extra_for_trigger.get("quick_import_inbox"))
+            )
         ):
             if is_offline_link and duplicate_offline:
                 pass

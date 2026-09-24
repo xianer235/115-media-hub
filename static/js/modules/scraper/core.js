@@ -2739,22 +2739,38 @@ function renderBatchItem(item) {
             </div>
         `
         : '';
+    const rebindHtml = actionsHtml || searchHtml
+        ? `
+            <section class="scraper-batch-rebind">
+                <div class="scraper-batch-section-label">改绑</div>
+                <div class="scraper-batch-actions">${actionsHtml}</div>
+                ${searchHtml}
+            </section>
+        `
+        : '';
     return `
         <div class="scraper-batch-row ${included ? 'is-included' : ''}">
             <label class="scraper-batch-check">
                 <input type="checkbox" class="ui-checkbox ui-checkbox-sm" data-batch-toggle="${escapeHtml(String(index))}" ${included ? 'checked' : ''}>
             </label>
             <div class="scraper-batch-main">
-                <div class="scraper-batch-head">
-                    <span class="scraper-plan-badge">${dirBadge}</span>
-                    <strong title="${escapeHtml(item.name || '')}">${escapeHtml(item.name || '--')}</strong>
-                    <span class="scraper-batch-count">${fileCount} 个媒体文件</span>
-                </div>
-                ${matchHtml}
-                <div class="scraper-batch-actions">${actionsHtml}</div>
-                ${searchHtml}
+                <section class="scraper-batch-source">
+                    <div class="scraper-batch-section-label">原始文件夹</div>
+                    <div class="scraper-batch-head">
+                        <span class="scraper-plan-badge">${dirBadge}</span>
+                        <strong title="${escapeHtml(item.name || '')}">${escapeHtml(item.name || '--')}</strong>
+                        <span class="scraper-batch-count">${fileCount} 个媒体文件</span>
+                    </div>
+                </section>
+                <section class="scraper-batch-recognition">
+                    <div class="scraper-batch-section-label">当前影视信息</div>
+                    <div class="scraper-batch-recognition-content">
+                        ${matchHtml}
+                        ${posterHtml}
+                    </div>
+                </section>
+                ${rebindHtml}
             </div>
-            ${posterHtml}
         </div>
     `;
 }

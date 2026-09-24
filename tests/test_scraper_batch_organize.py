@@ -2194,6 +2194,43 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         self.assertIn(".scraper-batch-title", css)
         self.assertIn("html.theme-day .scraper-batch-poster", css)
 
+    def test_batch_row_separates_source_binding_and_rebind_sections(self):
+        source = SCRAPER_CORE_PATH.read_text(encoding="utf-8")
+        render_batch_item_source = source[source.index("function renderBatchItem("):source.index("function renderBatch(")]
+        rendered_markup = render_batch_item_source[render_batch_item_source.index("return `"):]
+
+        self.assertIn('class="scraper-batch-rebind"', render_batch_item_source)
+        self.assertIn('class="scraper-batch-source"', rendered_markup)
+        self.assertIn('class="scraper-batch-recognition"', rendered_markup)
+        self.assertIn("${rebindHtml}", rendered_markup)
+        source_index = rendered_markup.index('class="scraper-batch-source"')
+        recognition_index = rendered_markup.index('class="scraper-batch-recognition"')
+        poster_index = rendered_markup.index("${posterHtml}")
+        rebind_index = rendered_markup.index("${rebindHtml}")
+        self.assertLess(source_index, recognition_index)
+        self.assertLess(recognition_index, rebind_index)
+        self.assertLess(recognition_index, poster_index)
+        self.assertLess(poster_index, rebind_index)
+
+        css = (ROOT / "static/css/index.css").read_text(encoding="utf-8")
+        self.assertIn(".scraper-batch-recognition-content", css)
+        self.assertIn("grid-template-columns: minmax(0, 1fr) auto;", css)
+
+    def test_batch_poster_does_not_narrow_path_selection_on_mobile(self):
+        css = (ROOT / "static/css/index.css").read_text(encoding="utf-8")
+        mobile_start = css.index("@media (max-width: 760px) {")
+        mobile_end = css.index("@media (max-width: 520px)", mobile_start)
+        mobile_css = css[mobile_start:mobile_end]
+
+        self.assertIn(
+            ".scraper-batch-row {\n                grid-template-columns: 26px minmax(0, 1fr);",
+            mobile_css,
+        )
+        self.assertIn(
+            ".scraper-batch-poster-col {\n                grid-column: 2;",
+            mobile_css,
+        )
+
     def test_batch_dialog_header_fixed_and_body_scrolls(self):
         html = (ROOT / "templates/partials/pages/scraper.html").read_text(encoding="utf-8")
         self.assertIn('class="scraper-batch-dialog-body"', html)

@@ -1335,7 +1335,7 @@ async def _run_subscription_manual_offline_import(
             if matched_name:
                 queue_monitor_job(
                     matched_name,
-                    "resource",
+                    "subscription",
                     {
                         "savepath": savepath,
                         "sharetitle": "",

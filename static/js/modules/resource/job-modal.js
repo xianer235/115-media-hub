@@ -456,6 +456,7 @@
 
             const rowsHtml = visibleJobs.map(job => {
                 const hasMonitorTask = !!String(job.monitor_task_name || '').trim();
+                const isInboxImport = Boolean(job?.extra?.quick_import_inbox);
                 const canManualRefresh = hasMonitorTask && !job.last_triggered_at && String(job.status || '').toLowerCase() === 'submitted';
                 const normalizedStatus = String(job.status || '').toLowerCase();
                 const canCancel = ['pending', 'running', 'submitted'].includes(normalizedStatus);
@@ -466,7 +467,17 @@
                 const retryLabel = canRetry ? '重试' : '不可重试';
                 const autoRefreshText = hasMonitorTask
                     ? (job.auto_refresh ? `自动刷新 ${escapeHtml(String(job.refresh_delay_seconds || 0))} 秒` : '手动刷新')
-                    : '未绑定监控';
+                    : (isInboxImport
+                        ? (job.auto_refresh ? '离线完成后自动整理' : '等待手动整理')
+                        : '未绑定监控');
+                const processingLabel = isInboxImport ? '接收文件夹' : '监控任务';
+                const processingValue = isInboxImport
+                    ? '下载完成后整理与分发'
+                    : (job.monitor_task_name || '当前目录未纳入文件夹监控');
+                const strategyLabel = isInboxImport ? '处理策略' : '刷新策略';
+                const strategyValue = isInboxImport
+                    ? `接收夹整理 · ${autoRefreshText}`
+                    : `${getResourceRefreshTargetLabel(job.refresh_target_type)} · ${autoRefreshText}`;
                 const linkTypeLabel = getResourceLinkTypeLabel(job.link_type || '');
                 const sourceLabel = getResourceJobSourceLabel(job.job_source || '');
                 return `
@@ -486,16 +497,16 @@
                                         <div class="resource-job-field-value">${escapeHtml(job.savepath || '--')}</div>
                                     </div>
                                     <div class="resource-job-field">
-                                        <div class="resource-job-field-label">监控任务</div>
-                                        <div class="resource-job-field-value">${escapeHtml(job.monitor_task_name || '当前目录未纳入文件夹监控')}</div>
+                                        <div class="resource-job-field-label">${processingLabel}</div>
+                                        <div class="resource-job-field-value">${escapeHtml(processingValue)}</div>
                                     </div>
                                     <div class="resource-job-field">
                                         <div class="resource-job-field-label">子目录 / 目标</div>
                                         <div class="resource-job-field-value">${escapeHtml(job.sharetitle || job.share_root_title || '--')}</div>
                                     </div>
                                     <div class="resource-job-field">
-                                        <div class="resource-job-field-label">刷新策略</div>
-                                        <div class="resource-job-field-value">${escapeHtml(getResourceRefreshTargetLabel(job.refresh_target_type))} · ${autoRefreshText}</div>
+                                        <div class="resource-job-field-label">${strategyLabel}</div>
+                                        <div class="resource-job-field-value">${escapeHtml(strategyValue)}</div>
                                     </div>
                                 </div>
                                 <div class="resource-job-status-note">${escapeHtml(job.status_detail || '--')}</div>

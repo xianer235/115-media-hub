@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 INDEX_PATH = ROOT / "static/js/index.js"
 CORE_PATH = ROOT / "static/js/modules/resource/core.js"
+MONITOR_RUN_VIEW_PATH = ROOT / "static/js/modules/monitor/run-view.js"
 
 
 def run_index(expression: str, search_input: str = ""):
@@ -22,6 +23,7 @@ const context = {{
   }},
 }};
 vm.createContext(context);
+vm.runInContext(fs.readFileSync({json.dumps(str(MONITOR_RUN_VIEW_PATH))}, 'utf8'), context);
 vm.runInContext(fs.readFileSync({json.dumps(str(INDEX_PATH))}, 'utf8'), context);
 const result = vm.runInContext({json.dumps(expression)}, context);
 process.stdout.write(JSON.stringify(result));
