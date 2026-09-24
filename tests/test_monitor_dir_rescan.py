@@ -4,7 +4,7 @@ import sqlite3
 import tempfile
 import unittest
 from contextlib import ExitStack
-from typing import Optional
+from typing import List, Optional
 from unittest.mock import AsyncMock, Mock, patch
 
 from app import db
@@ -77,7 +77,14 @@ class ChangeRunWaitsForAutoRescanTest(unittest.TestCase):
         db._DB_ENSURED = self.original_ensured
         self.tmpdir.cleanup()
 
-    def _run_change_task(self, inbox_run: str) -> str:
+    def _run_change_task(
+        self,
+        inbox_run: str,
+        *,
+        dispatched_item_paths: Optional[List[str]] = None,
+        manual_required: int = 1,
+        manual_required_paths: Optional[List[str]] = None,
+    ) -> str:
         from app.services import monitor_runs
 
         change_run = monitor_runs.create_run(
@@ -89,8 +96,9 @@ class ChangeRunWaitsForAutoRescanTest(unittest.TestCase):
             "discarded": 0,
             "generated": 0,
             "deleted": 0,
-            "manual_required": 1,
-            "manual_required_paths": ["Media/Copied"],
+            "manual_required": manual_required,
+            "manual_required_paths": ["Media/Copied"] if manual_required_paths is None else manual_required_paths,
+            "dispatched_item_paths": list(dispatched_item_paths or []),
             "errors": [],
             "change_details": [],
             "source_actions": [],
@@ -128,7 +136,7 @@ class ChangeRunWaitsForAutoRescanTest(unittest.TestCase):
         rescan_runs = [item for item in detail["descendants"] if item["run_kind"] == "scan"]
 
         self.assertEqual(detail["run"]["status"], "waiting")
-        self.assertIn("等待自动补扫", detail["run"]["summary"])
+        self.assertIn("等待 1 项条目同步", detail["run"]["summary"])
         self.assertEqual(len(rescan_runs), 1)
         self.assertEqual(rescan_runs[0]["source"], "auto_rescan")
         self.assertEqual(monitor_runs.get_run_detail(inbox)["run"]["status"], "waiting")
@@ -136,6 +144,54 @@ class ChangeRunWaitsForAutoRescanTest(unittest.TestCase):
         monitor_runs.finish_run(
             rescan_runs[0]["id"], status="completed",
             summary="新增或更新 1 个本地播放文件", result={"generated": 1},
+        )
+
+        self.assertEqual(monitor_runs.get_run_detail(change_run)["run"]["status"], "completed")
+        self.assertEqual(monitor_runs.get_run_detail(inbox)["run"]["status"], "completed")
+
+    def test_dispatched_item_gets_its_own_run_record(self):
+        """接收夹分发的每个条目都要有一条单条记录（清单已知时也要有）。"""
+        from app.services import monitor_runs
+
+        inbox = monitor_runs.create_run(
+            run_kind="inbox", task_name="最近接收", source="manual", subject="六部影视"
+        )
+        monitor_runs.start_run(inbox)
+        monitor_runs.wait_run(
+            inbox,
+            summary="已分发，等待 STRM 同步",
+            result={"moved": 1, "left": 0, "monitor_sync_events": 1},
+        )
+
+        change_run = self._run_change_task(
+            inbox,
+            dispatched_item_paths=["Media/Copied"],
+            manual_required=0,
+            manual_required_paths=[],
+        )
+        detail = monitor_runs.get_run_detail(change_run)
+        item_runs = [item for item in detail["descendants"] if item["source"] == "inbox_dispatch"]
+
+        self.assertEqual(len(item_runs), 1)
+        item = item_runs[0]
+        self.assertEqual(item["run_kind"], "scan")
+        self.assertEqual(item["task_name"], TASK_NAME)
+        self.assertEqual(item["subject"], "Copied")
+        self.assertEqual(item["scope"]["kind"], "paths")
+        self.assertEqual([path.lstrip("/") for path in item["scope"]["paths"]], ["Media/Copied"])
+        self.assertEqual(detail["run"]["status"], "waiting")
+        self.assertIn("等待 1 项条目同步", detail["run"]["summary"])
+
+        # 它是列表里的独立任务（没有 parent_run_id），并排在接收夹整理之后。
+        listed = {run["id"]: run for run in monitor_runs.list_runs()["runs"]}
+        self.assertIn(item["id"], listed)
+        self.assertEqual(listed[item["id"]]["source"], "inbox_dispatch")
+        self.assertEqual(listed[item["id"]]["parent_run_id"], "")
+        self.assertEqual(monitor_runs.list_runs()["runs"][0]["id"], inbox)
+
+        monitor_runs.finish_run(
+            item["id"], status="completed",
+            summary="检查完成：新增或更新 1 个本地播放文件。", result={"generated": 1},
         )
 
         self.assertEqual(monitor_runs.get_run_detail(change_run)["run"]["status"], "completed")

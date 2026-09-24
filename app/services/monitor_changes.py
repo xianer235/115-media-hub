@@ -1948,10 +1948,12 @@ async def process_monitor_change_events(
         "change_details": [],
         "new_media_items": [],
         "manual_required_paths": [],
+        "dispatched_item_paths": [],
         "source_actions": [],
         "monitor_run_ids": [],
     }
     strm_state: Dict[str, str] = {}
+    dispatched_candidates: List[Dict[str, str]] = []
     with db_connection() as conn:
         events = _load_ready_events(conn, task_name=task_name, event_ids=event_ids)
         for event in events:
@@ -2050,6 +2052,15 @@ async def process_monitor_change_events(
                 manual_path = str(stats.get("manual_required_path", "") or "").strip()
                 if manual_path and manual_path not in result["manual_required_paths"]:
                     result["manual_required_paths"].append(manual_path)
+                if monitor_run_id:
+                    # 这条变更来自接收夹分发：它代表“哪个影视被搬进了监控目录”，
+                    # 调用方要给每个条目单独留一条运行记录。
+                    dispatched_candidates.append(
+                        {
+                            "owner": monitor_run_id,
+                            "path": _dispatch_item_scope(event, stats),
+                        }
+                    )
             except Exception as exc:
                 conn.rollback()
                 restore_errors = _restore_strm_file_states(file_journal)
@@ -2097,7 +2108,56 @@ async def process_monitor_change_events(
                         "retryable": not discard,
                     }
                 )
+        result["dispatched_item_paths"] = _inbox_dispatched_paths(conn, dispatched_candidates)
     return result
+
+
+def _dispatch_item_scope(event: Dict[str, Any], stats: Dict[str, Any]) -> str:
+    """接收夹分发条目落在监控目录里的位置（扫描这一层就够）。
+
+    文件夹条目用它自己的新路径；文件条目（并进已有媒体文件夹、单集文件）用它的上级
+    目录——最终都指向“这个影视条目在监控任务里的媒体文件夹”。
+    """
+    snapshot = safe_json_loads(event.get("entry_snapshot_json", "{}"), {})
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+    change_detail = stats.get("change_detail") if isinstance(stats.get("change_detail"), dict) else {}
+    new_path = normalize_relative_path(str(event.get("new_path", "") or ""))
+    path = new_path or normalize_relative_path(str(event.get("old_path", "") or ""))
+    if not path:
+        return ""
+    is_dir = bool(snapshot.get("is_dir")) or str(change_detail.get("kind", "") or "") == "folder"
+    if is_dir:
+        return path
+    parent = normalize_relative_path(os.path.dirname(path))
+    return parent or path
+
+
+def _inbox_dispatched_paths(conn: Any, candidates: List[Dict[str, str]]) -> List[str]:
+    """只在事件归属的运行确实是接收夹整理时，才把它们当成“分发出来的条目”。"""
+    if not candidates:
+        return []
+    owner_ids = sorted({item["owner"] for item in candidates if item.get("owner")})
+    if not owner_ids:
+        return []
+    marks = ",".join("?" for _ in owner_ids)
+    inbox_ids = {
+        str(row[0] or "").strip()
+        for row in conn.execute(
+            f"SELECT id FROM monitor_runs WHERE id IN ({marks}) AND run_kind = 'inbox'",
+            tuple(owner_ids),
+        ).fetchall()
+        if str(row[0] or "").strip()
+    }
+    if not inbox_ids:
+        return []
+    paths: List[str] = []
+    for item in candidates:
+        path = str(item.get("path", "") or "").strip()
+        if not path or item.get("owner") not in inbox_ids or path in paths:
+            continue
+        paths.append(path)
+    return paths
 
 
 def get_monitor_change_counts() -> Dict[str, Dict[str, int]]:

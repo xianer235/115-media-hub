@@ -19,6 +19,7 @@ SOURCE_LABELS = {
     "manual": "手动触发", "cron": "定时触发", "resource": "资源导入",
     "subscription": "订阅任务", "webhook": "外部通知", "change": "检测到网盘变更",
     "auto_rescan": "系统补扫", "recovery": "恢复任务", "import": "资源导入",
+    "inbox_dispatch": "接收夹分发",
     "offline": "离线下载完成", "retry": "重新运行", "system": "系统触发",
 }
 

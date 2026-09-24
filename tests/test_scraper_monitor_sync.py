@@ -96,13 +96,14 @@ class ScraperMonitorSyncTest(unittest.TestCase):
             handle.write(content)
         return path
 
-    def _run_confirmed(self, cfg, operation, entries, *, source_action="direct", dedupe_key="case"):
+    def _run_confirmed(self, cfg, operation, entries, *, source_action="direct", dedupe_key="case", monitor_run_id=""):
         prepared = monitor_changes.prepare_monitor_change_events(
             provider="115",
             operation=operation,
             entries=entries,
             source_action=source_action,
             dedupe_key=dedupe_key,
+            monitor_run_id=monitor_run_id,
             cfg=cfg,
         )
         confirmed = monitor_changes.confirm_monitor_change_events(prepared, succeeded=True, enqueue=False)
@@ -822,6 +823,60 @@ class ScraperMonitorSyncTest(unittest.TestCase):
         self.assertEqual(result["completed"], 1)
         self.assertEqual(result["manual_required"], 1)
         self.assertEqual(result["manual_required_paths"], ["Media/Copied"])
+        # 不是接收夹分发（没有归属运行）的变更不该被当成“分发出的条目”。
+        self.assertEqual(result["dispatched_item_paths"], [])
+
+    def test_inbox_dispatch_move_reports_one_follow_up_scope_per_item(self):
+        cfg = self._cfg()
+        inbox_run = monitor_runs.create_run(run_kind="inbox", task_name="最近接收", source="manual")
+        with patch.object(
+            monitor_changes,
+            "list_remote_dir",
+            AsyncMock(side_effect=AssertionError("unknown folders must not list the target subtree")),
+        ):
+            _, _, result = self._run_confirmed(
+                cfg,
+                "move",
+                [
+                    {
+                        "id": "movie-dir",
+                        "name": "怪物 (2026)",
+                        "path": "最近接收/怪物 (2026)",
+                        "new_path": "Media/怪物 (2026)",
+                        "new_cid": "movie-cid",
+                        "is_dir": True,
+                    }
+                ],
+                dedupe_key="inbox-dispatch-move",
+                monitor_run_id=inbox_run,
+            )
+
+        # 接收夹分发出来的每个条目都要能对应一条单独的运行记录。
+        self.assertEqual(result["dispatched_item_paths"], ["Media/怪物 (2026)"])
+
+    def test_inbox_dispatch_file_move_maps_to_its_media_folder(self):
+        cfg = self._cfg()
+        inbox_run = monitor_runs.create_run(run_kind="inbox", task_name="最近接收", source="manual")
+        with patch.object(monitor_changes, "list_remote_dir", AsyncMock(return_value=("", []))):
+            _, _, result = self._run_confirmed(
+                cfg,
+                "move",
+                [
+                    {
+                        "id": "ep-file",
+                        "name": "Episode.mkv",
+                        "path": "最近接收/Episode.mkv",
+                        "new_path": "Media/怪物 (2026)/Episode.mkv",
+                        "new_cid": "movie-cid",
+                        "is_dir": False,
+                        "size": 1024,
+                    }
+                ],
+                dedupe_key="inbox-dispatch-file-move",
+                monitor_run_id=inbox_run,
+            )
+
+        self.assertEqual(result["dispatched_item_paths"], ["Media/怪物 (2026)"])
 
     def test_unknown_folder_copy_requires_manual_monitor_without_remote_listing(self):
         cfg = self._cfg()

@@ -1718,8 +1718,26 @@ async def run_monitor_change_task(
                     detail={"error": str(exc)},
                 )
         auto_rescan_run_ids: List[str] = []
-        manual_paths = result.get("manual_required_paths", [])
-        if int(result.get("manual_required", 0) or 0) > 0 and isinstance(manual_paths, list) and manual_paths:
+        # 接收夹分发过来的每个条目都单独排一次扫描，列表里就会有对应的单条记录
+        # （“电影 · 片名 / 电视剧 · 片名”），而不是只在清单未知时才补扫。
+        dispatch_paths = [
+            str(path or "").strip()
+            for path in (result.get("dispatched_item_paths") or [])
+            if str(path or "").strip()
+        ]
+        dispatch_run_ids = _queue_dispatch_item_scans(cfg, dispatch_paths)
+        if dispatch_run_ids:
+            await write_monitor_log(
+                f"接收夹分发条目已各自排队同步 {len(dispatch_run_ids)} 项（无需手动操作）",
+                "info",
+            )
+        manual_paths = [
+            path
+            for path in (result.get("manual_required_paths", []) or [])
+            # 已经被逐条扫描覆盖的目录不再重复补扫。
+            if not _path_covered_by_scopes(str(path or ""), dispatch_paths)
+        ]
+        if int(result.get("manual_required", 0) or 0) > 0 and manual_paths:
             auto_rescan = _queue_auto_rescan_for_manual_required(cfg, manual_paths)
             auto_rescan_run_ids = [
                 str(value or "").strip() for value in auto_rescan.get("run_ids", []) if str(value or "").strip()
@@ -1729,6 +1747,7 @@ async def run_monitor_change_task(
                 await write_monitor_log(f"已自动安排补扫目录：{path_preview}（无需手动操作）", "info")
             else:
                 await write_monitor_log("自动补扫排队失败，请手动触发扫描确认", "warn")
+        followup_run_ids = [*dispatch_run_ids, *auto_rescan_run_ids]
         for error_item in (result.get("errors", []) if isinstance(result.get("errors"), list) else [])[:10]:
             if not isinstance(error_item, dict):
                 continue
@@ -1764,7 +1783,9 @@ async def run_monitor_change_task(
         if int(result.get("failed", 0) or 0) > 0:
             status_text = "变更同步部分失败"
         elif int(result.get("manual_required", 0) or 0) > 0:
-            status_text = "变更同步待自动补扫" if auto_rescan_run_ids else "变更同步待手动监控"
+            status_text = "变更同步待自动补扫" if followup_run_ids else "变更同步待手动监控"
+        elif followup_run_ids:
+            status_text = "变更同步等待条目同步"
         else:
             status_text = "变更同步完成"
         final_status = "partial" if failed or manual_required else ("no_change" if not generated and not deleted else "completed")
@@ -1772,19 +1793,20 @@ async def run_monitor_change_task(
             "completed": completed, "failed": failed, "discarded": discarded,
             "generated": generated, "deleted": deleted, "manual_required": manual_required,
             "auto_rescan": len(auto_rescan_run_ids),
-            "waiting_children": len(auto_rescan_run_ids),
+            "dispatched_items": len(dispatch_run_ids),
+            "waiting_children": len(followup_run_ids),
         }
-        if auto_rescan_run_ids:
-            # 自动补扫是这次变更同步的后续步骤：挂成下游并等待，补扫结束后父运行
-            # 才能按真实结果收尾，而不是提前写成“部分完成”。
-            for child_run_id in auto_rescan_run_ids:
+        if followup_run_ids:
+            # 接收夹分发出来的条目同步 / 自动补扫都是这次变更同步的后续步骤：挂成下游
+            # 并等待，它们结束后父运行才能按真实结果收尾，而不是提前写成“部分完成”。
+            for child_run_id in followup_run_ids:
                 link_monitor_runs(run_id, child_run_id, relation="downstream")
             wait_monitor_run(
                 run_id,
-                summary=f"已同步 {completed} 条网盘变更，等待自动补扫 {len(auto_rescan_run_ids)} 个目录",
+                summary=f"已同步 {completed} 条网盘变更，等待 {len(followup_run_ids)} 项条目同步",
                 result=change_result,
             )
-            status_text = "变更同步等待自动补扫"
+            status_text = "变更同步等待条目同步"
         else:
             finish_monitor_run(
                 run_id,
@@ -2331,6 +2353,7 @@ def queue_monitor_dir_scan(
     paths: List[str],
     *,
     run_source: str = "",
+    force_new: bool = False,
 ) -> Dict[str, Any]:
     scan_provider = normalize_mount_provider(provider) or "115"
     scopes: List[str] = []
@@ -2363,6 +2386,7 @@ def queue_monitor_dir_scan(
             "manual",
             {"provider": scan_provider, "savepaths": entry["savepaths"]},
             run_source=run_source,
+            force_new=force_new,
             return_details=True,
         )
         status = str(queued.get("status", "") or "") if isinstance(queued, dict) else str(queued or "")
@@ -2407,3 +2431,50 @@ def _queue_auto_rescan_for_manual_required(
         if isinstance(task, dict) and str(task.get("run_id", "") or "").strip()
     ]
     return {"count": len(tasks), "run_ids": run_ids}
+
+
+def _queue_dispatch_item_scans(cfg: Dict[str, Any], paths: Any) -> List[str]:
+    """接收夹分发出去的每个条目各排一次目录扫描，并单独留下运行记录。
+
+    “接收文件夹推送到监控文件夹”本身就该是一条条可查的任务：以前只有清单未知的目录
+    才会触发补扫，清单已知的条目直接由变更同步处理，列表里看不到任何单条记录。这里
+    按条目逐个强制新开运行（`force_new`），subject 由 `_monitor_run_subject` 取名，
+    所以列表上就是“电影 · 片名 / 电视剧 · 片名”。这些运行只挂 `downstream` 关联
+    （不写 `parent_run_id`），所以它们是列表里的独立任务，同时链路结算仍能找到它们。
+    """
+    normalized_paths: List[str] = []
+    for raw_path in paths if isinstance(paths, list) else []:
+        path = normalize_relative_path(str(raw_path or "").strip())
+        if path and path not in normalized_paths:
+            normalized_paths.append(path)
+    run_ids: List[str] = []
+    for path in normalized_paths:
+        try:
+            result = queue_monitor_dir_scan(
+                cfg,
+                "115",
+                [path],
+                run_source="inbox_dispatch",
+                force_new=True,
+            )
+        except Exception:
+            continue
+        for task in result.get("tasks") if isinstance(result.get("tasks"), list) else []:
+            run_id = str(task.get("run_id", "") or "").strip()
+            if run_id:
+                run_ids.append(run_id)
+    return run_ids
+
+
+def _path_covered_by_scopes(path: str, scopes: List[str]) -> bool:
+    """目录是否已经被逐条扫描覆盖（避免同一次分发里重复扫两遍）。"""
+    normalized = normalize_relative_path(str(path or "").strip())
+    if not normalized:
+        return False
+    for scope in scopes:
+        candidate = normalize_relative_path(str(scope or "").strip())
+        if not candidate:
+            continue
+        if normalized == candidate or normalized.startswith(f"{candidate}/") or candidate.startswith(f"{normalized}/"):
+            return True
+    return False

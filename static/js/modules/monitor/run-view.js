@@ -12,6 +12,7 @@
         resource: '资源导入', subscription: '订阅任务', webhook: '外部通知',
         change: '检测到网盘变更', auto_rescan: '系统补扫',
         offline: '离线下载完成', recovery: '恢复任务', import: '资源导入',
+        inbox_dispatch: '接收夹分发',
         system: '系统触发',
     };
     const runKinds = {
