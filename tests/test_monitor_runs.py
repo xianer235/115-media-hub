@@ -516,3 +516,161 @@ class MonitorRunQueueOperationTest(MonitorRunStoreTest):
 
         self.assertFalse(result["ok"])
         self.assertIn("没有可重试的失败范围", result["msg"])
+
+    def _insert_change_event(self, *, run_id: str, operation: str, old_path: str, new_path: str, status: str = "completed") -> None:
+        with db.db_connection() as conn:
+            conn.execute(
+                """INSERT INTO monitor_change_events(
+                    dedupe_key, operation, old_path, new_path, task_name,
+                    source_action, monitor_run_id, status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    f"{operation}:{old_path}->{new_path}",
+                    operation,
+                    old_path,
+                    new_path,
+                    "电视剧",
+                    "scraper",
+                    run_id,
+                    status,
+                    "2026-09-24 05:54:05",
+                    "2026-09-24 05:54:05",
+                ),
+            )
+            conn.commit()
+
+    def test_change_run_detail_lists_claimed_network_changes(self):
+        """变更同步运行要能看到它实际改动的网盘内容，而不是只显示 STRM 明细。"""
+        run_id = monitor_runs.create_run(
+            run_kind="change",
+            task_name="电视剧",
+            source="change",
+            scope={"kind": "events"},
+            subject="文件变更",
+        )
+        monitor_runs.start_run(run_id, subject="文件变更", scope={"kind": "events"})
+        self._insert_change_event(
+            run_id=run_id,
+            operation="rename",
+            old_path="电视剧/飞到我心上/S01E01 [2160p].mkv",
+            new_path="电视剧/飞到我心上/S01E01.mkv",
+        )
+        monitor_runs.finish_run(run_id, status="completed", summary="已同步 1 条网盘变更", result={"completed": 1})
+
+        detail = monitor_runs.get_run_detail(run_id, category="remote")
+
+        self.assertEqual(detail["counts"]["remote"], 1)
+        self.assertEqual(detail["events"][0]["detail"]["operation_label"], "网盘重命名")
+        self.assertEqual(detail["events"][0]["detail"]["new_name"], "S01E01.mkv")
+
+    def test_manual_required_change_event_counts_as_problem(self):
+        """需补扫的网盘变更要出现在“问题”里，否则“部分完成”没有任何解释。"""
+        run_id = monitor_runs.create_run(
+            run_kind="change",
+            task_name="电视剧",
+            source="change",
+            scope={"kind": "events"},
+            subject="文件变更",
+        )
+        self._insert_change_event(
+            run_id=run_id,
+            operation="rename",
+            old_path="电视剧/飞到我心上 24集全",
+            new_path="电视剧/飞到我心上 (2026)",
+            status="manual_required",
+        )
+        monitor_runs.finish_run(
+            run_id,
+            status="partial",
+            summary="已同步 1 条网盘变更，1 个目录需要手动监控",
+            result={"completed": 1, "manual_required": 1},
+        )
+
+        detail = monitor_runs.get_run_detail(run_id, category="problem")
+
+        self.assertEqual(detail["counts"]["problem"], 1)
+        self.assertEqual(len(detail["events"]), 1)
+
+    def test_list_runs_counts_children_once_and_keeps_link_index(self):
+        parent = monitor_runs.create_run(run_kind="inbox", task_name="接收", source="manual", subject="示例剧")
+        direct_child = monitor_runs.create_run(
+            run_kind="change", task_name="电视剧", source="change", parent_run_id=parent, subject="文件变更"
+        )
+        linked_child = monitor_runs.create_run(
+            run_kind="change", task_name="电视剧", source="change", subject="文件变更"
+        )
+        monitor_runs.link_runs(parent, linked_child, relation="downstream")
+        for run_id in (direct_child, linked_child):
+            monitor_runs.finish_run(run_id, status="completed", summary="完成", result={})
+
+        page = monitor_runs.list_runs(include_children=True)
+        parent_row = next(run for run in page["runs"] if run["id"] == parent)
+
+        self.assertEqual(parent_row["child_count"], 2)
+        with db.db_connection() as conn:
+            indexes = {
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'monitor_run_links'"
+                ).fetchall()
+            }
+        self.assertIn("idx_monitor_run_links_related", indexes)
+
+    def test_repair_change_event_owners_only_attributes_unambiguous_events(self):
+        run_one = monitor_runs.create_run(run_kind="change", task_name="电视剧", source="change", subject="文件变更")
+        monitor_runs.start_run(run_one, subject="文件变更", scope={"kind": "events"})
+        run_two = monitor_runs.create_run(run_kind="change", task_name="电影", source="change", subject="文件变更")
+        monitor_runs.start_run(run_two, subject="文件变更", scope={"kind": "events"})
+        with db.db_connection() as conn:
+            started = conn.execute("SELECT started_at FROM monitor_runs WHERE id = ?", (run_one,)).fetchone()[0]
+        monitor_runs.finish_run(run_one, status="completed", summary="完成", result={"completed": 2})
+        monitor_runs.finish_run(run_two, status="completed", summary="完成", result={})
+        with db.db_connection() as conn:
+            finished = conn.execute("SELECT finished_at FROM monitor_runs WHERE id = ?", (run_one,)).fetchone()[0]
+            for index in range(2):
+                conn.execute(
+                    """INSERT INTO monitor_change_events(
+                        dedupe_key, operation, old_path, new_path, task_name,
+                        source_action, monitor_run_id, status, created_at, updated_at, completed_at
+                    ) VALUES (?, 'rename', ?, ?, '电视剧', 'scraper', '', 'completed', ?, ?, ?)""",
+                    (f"repair-{index}", f"电视剧/old{index}.mkv", f"电视剧/new{index}.mkv", started, finished, finished),
+                )
+            # 完成时间不在任何变更运行区间内：不能猜。
+            conn.execute(
+                """INSERT INTO monitor_change_events(
+                    dedupe_key, operation, old_path, new_path, task_name,
+                    source_action, monitor_run_id, status, created_at, updated_at, completed_at
+                ) VALUES ('repair-outside', 'rename', '电视剧/a.mkv', '电视剧/b.mkv', '电视剧',
+                          'scraper', '', 'completed', '2020-01-01 00:00:00', '2020-01-01 00:00:00', '2020-01-01 00:00:00')""",
+            )
+            conn.commit()
+
+        repaired = monitor_runs.repair_change_event_owners()
+
+        self.assertEqual(repaired, 2)
+        detail = monitor_runs.get_run_detail(run_one, category="remote")
+        self.assertEqual(detail["counts"]["remote"], 2)
+        with db.db_connection() as conn:
+            outside = conn.execute(
+                "SELECT monitor_run_id FROM monitor_change_events WHERE dedupe_key = 'repair-outside'"
+            ).fetchone()[0]
+            again = monitor_runs.repair_change_event_owners()
+        self.assertEqual(outside, "")
+        self.assertEqual(again, 0)
+
+    def test_cleanup_can_be_limited_to_the_selected_task(self):
+        """运行记录页的“清空该任务记录”只影响该任务的已结束记录。"""
+        other_task = monitor_runs.create_run(run_kind="scan", task_name="电影", source="cron", subject="全部目录")
+        monitor_runs.finish_run(other_task, status="completed", summary="完成", result={})
+        target_task = monitor_runs.create_run(run_kind="scan", task_name="电视剧", source="cron", subject="全部目录")
+        monitor_runs.finish_run(target_task, status="completed", summary="完成", result={})
+        active_task = monitor_runs.create_run(run_kind="scan", task_name="电视剧", source="manual", subject="全部目录")
+
+        preview = monitor_runs.cleanup_runs(scope="all_finished", task_name="电视剧", preview=True)
+        result = monitor_runs.cleanup_runs(scope="all_finished", task_name="电视剧")
+
+        self.assertEqual(preview["count"], 1)
+        self.assertEqual(result["deleted"], 1)
+        self.assertTrue(monitor_runs.get_run_detail(other_task))
+        self.assertTrue(monitor_runs.get_run_detail(active_task))
+        self.assertFalse(monitor_runs.get_run_detail(target_task))

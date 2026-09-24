@@ -224,6 +224,7 @@
         let monitorRunReturnFocus = null;
         let lastSubscriptionLogSignature = '';
         let lastMonitorRenderKey = '';
+        let lastMonitorRunRenderKey = '';
         let lastSubscriptionRenderKey = '';
         let monitorTaskIntroExpanded = {};
         let subscriptionTaskIntroExpanded = {};
@@ -1429,6 +1430,23 @@
             });
         }
 
+        // 运行记录列表在每次状态推送时都会重绘，重绘会打断键盘焦点和悬停；
+        // 这里只比较真正影响列表的字段，内容没变就跳过整块 innerHTML 重建。
+        function buildMonitorRunRenderKey(state) {
+            return JSON.stringify({
+                runs: (Array.isArray(state?.runs) ? state.runs : []).map(run => [
+                    run?.id || '', run?.status || '', run?.summary || '', run?.subject || '',
+                    run?.updated_at || run?.finished_at || '', Number(run?.child_count || 0),
+                ]),
+                page: Number(state?.run_page || 1),
+                has_more: !!state?.run_has_more,
+                filtered: !!state?.run_filtered,
+                loading: !!state?.run_loading,
+                tasks: (Array.isArray(state?.tasks) ? state.tasks : [])
+                    .map(task => [task?.name || '', task?.task_type || 'scan']),
+            });
+        }
+
         function pruneTaskIntroExpanded(expandedMap, tasks) {
             const validNames = new Set(
                 (Array.isArray(tasks) ? tasks : [])
@@ -1692,6 +1710,11 @@
                     setLastMonitorRenderKey: (nextValue) => {
                         lastMonitorRenderKey = String(nextValue || '');
                     },
+                    buildMonitorRunRenderKey,
+                    getLastMonitorRunRenderKey: () => lastMonitorRunRenderKey,
+                    setLastMonitorRunRenderKey: (nextValue) => {
+                        lastMonitorRunRenderKey = String(nextValue || '');
+                    },
                     renderMonitorTasks,
                     renderMonitorLogs,
                     afterApply: (nextState) => {
@@ -1745,7 +1768,8 @@
                 renderMonitorTasks();
                 lastMonitorRenderKey = renderKey;
             }
-            renderMonitorLogs();
+            const runRenderKey = buildMonitorRunRenderKey(monitorState);
+            if (forceRender || runRenderKey !== lastMonitorRunRenderKey) renderMonitorLogs();
             resourceState.monitor_tasks = monitorState.tasks || resourceState.monitor_tasks || [];
             syncResourceMonitorTaskOptions(document.getElementById('resource_job_savepath')?.value || '');
             maybeRefreshInboxTaskStatus();
@@ -3924,11 +3948,10 @@
                 });
                 return;
             }
-            try {
-                await window.MediaHubApi.postJson('/monitor/logs/clear');
-                lastMonitorLogSignature = '';
-                await refreshMonitorState();
-            } catch (e) {}
+            // 清空失败必须让调用方知道，否则界面会停留在一个看起来“已清空”的假象里。
+            await window.MediaHubApi.postJson('/monitor/logs/clear');
+            lastMonitorLogSignature = '';
+            await refreshMonitorState();
         }
 
         function syncMonitorAutoScrapeOptions() {
@@ -4972,6 +4995,9 @@
             box.innerHTML = runs.length ? runs.map(window.MonitorRunView.listRow).join('')
                 : `<div class="monitor-run-empty">${monitorState.run_filtered ? '没有符合筛选条件的记录，可调整筛选后查看。' : '暂无运行记录。扫描或接收夹整理开始后，将在这里显示过程和结果。'}</div>`;
             updateMonitorRunSummary();
+            syncMonitorRunFilterReset();
+            syncMonitorRunTaskClearButton();
+            lastMonitorRunRenderKey = buildMonitorRunRenderKey(monitorState);
         }
 
         function monitorRunFilterQuery() {
@@ -4981,6 +5007,41 @@
                 source: document.getElementById('monitor-run-source-filter')?.value || '',
                 status: document.getElementById('monitor-run-status-filter')?.value || '',
             };
+        }
+
+        function syncMonitorRunFilterReset() {
+            const button = document.getElementById('monitor-run-filter-reset');
+            if (!button) return;
+            button.classList.toggle('hidden', !Object.values(monitorRunFilterQuery()).some(Boolean));
+        }
+
+        // “清空”按当前所选任务生效：只有在任务筛选里选中了具体任务时才出现。
+        function monitorRunSelectedTaskName() {
+            return String(document.getElementById('monitor-run-task-filter')?.value || '').trim();
+        }
+
+        function syncMonitorRunTaskClearButton() {
+            const button = document.getElementById('monitor-run-clear-task');
+            if (!button) return;
+            const taskName = monitorRunSelectedTaskName();
+            button.classList.toggle('hidden', !taskName);
+            button.setAttribute(
+                'title',
+                taskName ? `清空「${taskName}」的已结束运行记录` : '请先在上方选择一个监控任务',
+            );
+        }
+
+        async function resetMonitorRunFilters() {
+            ['monitor-run-task-filter', 'monitor-run-kind-filter', 'monitor-run-source-filter', 'monitor-run-status-filter']
+                .forEach(id => {
+                    const control = document.getElementById(id);
+                    if (control) control.value = '';
+                });
+            // 立刻收起按钮并作废渲染键：即使随后的请求较慢或被状态推送打断，
+            // 下一次渲染也会按“无筛选”重画，不会停留在旧筛选结果上。
+            syncMonitorRunFilterReset();
+            lastMonitorRunRenderKey = '';
+            await refreshMonitorRuns();
         }
 
         async function fetchMonitorRunPage(page, cursor = '') {
@@ -5036,7 +5097,7 @@
                 button.setAttribute('aria-selected', String(selected));
                 button.tabIndex = selected ? 0 : -1;
                 const count = button.querySelector('.monitor-run-tab-count');
-                if (count) count.innerText = String(detail.counts?.[category || 'process'] || 0);
+                if (count) count.innerText = String(window.MonitorRunView.tabCount(detail, category));
                 if (selected) body.setAttribute('aria-labelledby', button.id);
             });
         }
@@ -5130,15 +5191,95 @@
                 showToast(`取消失败：${e?.message || '未知错误'}`, { tone: 'error', placement: 'top-center' });
             } finally { monitorRunActionBusy = false; }
         }
+        const LEGACY_MONITOR_LOG_LIMIT = 10;
+        let legacyMonitorLogClearBusy = false;
+        let legacyMonitorLogOffset = 0;
+        let legacyMonitorLogHasMore = false;
+        let legacyMonitorLogLoading = false;
+
+        function setLegacyMonitorLogStatus(message, tone = 'info') {
+            const status = document.getElementById('monitor-legacy-log-status');
+            if (!status) return;
+            status.innerText = String(message || '');
+            status.classList.toggle('is-error', String(tone) === 'error');
+        }
+
+        function updateLegacyMonitorLogMoreButton() {
+            const wrap = document.getElementById('monitor-legacy-log-more');
+            if (wrap) wrap.classList.toggle('hidden', !legacyMonitorLogHasMore);
+        }
+
+        async function loadLegacyMonitorLogs({ append = false } = {}) {
+            const body = document.getElementById('monitor-legacy-log-body');
+            if (!body || legacyMonitorLogLoading) return;
+            legacyMonitorLogLoading = true;
+            const offset = append ? legacyMonitorLogOffset : 0;
+            if (!append) body.innerText = '正在加载...';
+            else setLegacyMonitorLogStatus('正在加载更早的日志…');
+            try {
+                const data = await window.MediaHubApi.getJson(
+                    `/monitor/logs/tasks?limit=${LEGACY_MONITOR_LOG_LIMIT}&offset=${offset}`,
+                );
+                const text = (data?.segments || [])
+                    .flatMap(segment => segment?.entries || [])
+                    .map(item => item?.text || '')
+                    .join('\n');
+                if (append) {
+                    body.innerText = text ? `${text}\n${body.innerText}` : body.innerText;
+                    setLegacyMonitorLogStatus(text ? '' : '没有更早的日志了。');
+                } else {
+                    body.innerText = text || '暂无历史文本日志';
+                }
+                legacyMonitorLogOffset = Number(data?.next_offset || 0) || 0;
+                legacyMonitorLogHasMore = !!data?.has_more;
+            } catch (e) {
+                if (append) setLegacyMonitorLogStatus('加载更早的日志失败，请稍后重试。', 'error');
+                else body.innerText = '无法加载历史文本日志。';
+            } finally {
+                legacyMonitorLogLoading = false;
+                updateLegacyMonitorLogMoreButton();
+            }
+        }
+
+        function loadMoreLegacyMonitorLogs() {
+            if (legacyMonitorLogLoading || !legacyMonitorLogHasMore) return;
+            void loadLegacyMonitorLogs({ append: true });
+        }
+
         function openLegacyMonitorLogs() {
             const modal = document.getElementById('monitor-legacy-log-modal');
-            const body = document.getElementById('monitor-legacy-log-body');
-            if (!modal || !body) return;
+            if (!modal) return;
+            setLegacyMonitorLogStatus('');
+            legacyMonitorLogOffset = 0;
+            legacyMonitorLogHasMore = false;
+            updateLegacyMonitorLogMoreButton();
             modal.classList.remove('hidden');
-            body.innerText = '正在加载...';
-            window.MediaHubApi.getJson('/monitor/logs/tasks?limit=10').then(data => {
-                body.innerText = (data?.segments || []).flatMap(segment => segment?.entries || []).map(item => item?.text || '').join('\n') || '暂无历史文本日志';
-            }).catch(() => { body.innerText = '无法加载历史文本日志。'; });
+            void loadLegacyMonitorLogs();
+        }
+
+        async function clearLegacyMonitorLogs() {
+            if (legacyMonitorLogClearBusy) return;
+            const confirmed = await showAppConfirm('将删除全部历史文本日志（含轮转备份）。运行记录不受影响，可在“记录保留”里单独清理。是否继续？', {
+                title: '清空历史文本日志',
+                confirmText: '清空日志',
+                tone: 'warn',
+            });
+            if (!confirmed) return;
+            const button = document.getElementById('monitor-legacy-log-clear');
+            legacyMonitorLogClearBusy = true;
+            if (button) button.disabled = true;
+            setLegacyMonitorLogStatus('正在清空历史文本日志…');
+            try {
+                await clearMonitorLogs();
+                await loadLegacyMonitorLogs();
+                setLegacyMonitorLogStatus('已清空历史文本日志。运行记录未受影响。');
+                showToast('已清空历史文本日志', { tone: 'success', placement: 'top-center' });
+            } catch (error) {
+                setLegacyMonitorLogStatus(`清空失败：${error?.message || '未知错误'}，请稍后重试。`, 'error');
+            } finally {
+                legacyMonitorLogClearBusy = false;
+                if (button) button.disabled = false;
+            }
         }
         function closeLegacyMonitorLogs() { document.getElementById('monitor-legacy-log-modal')?.classList.add('hidden'); }
         function openMonitorRunRetention() {
@@ -5174,13 +5315,18 @@
                 setMonitorRunRetentionResult(mode === 'days' ? `已保存：保留最近 ${days} 天的已结束记录。` : '已保存：长期保留，不自动按时间清理。');
             } catch (error) { setMonitorRunRetentionResult('保存保留策略失败，请稍后重试。', 'error'); }
         }
-        async function requestMonitorRunCleanup(scope, { preview = false } = {}) {
+        async function requestMonitorRunCleanup(scope, { preview = false, taskName = '' } = {}) {
             const { mode, days } = monitorRunRetentionSettings();
             if (scope === 'expired' && mode !== 'days') {
                 setMonitorRunRetentionResult('请先选择“保留最近 N 天”，再清理过期记录。', 'error');
                 return null;
             }
-            return window.MediaHubApi.postJson('/monitor/runs/cleanup', { scope, days: scope === 'expired' ? days : 0, preview });
+            return window.MediaHubApi.postJson('/monitor/runs/cleanup', {
+                scope,
+                days: scope === 'expired' ? days : 0,
+                preview,
+                task_name: String(taskName || '').trim(),
+            });
         }
         async function previewMonitorRunCleanup() {
             const { days } = monitorRunRetentionSettings();
@@ -5214,6 +5360,38 @@
                 setMonitorRunRetentionResult(`已清除 ${Number(data.deleted || 0)} 条已结束记录。`);
                 await refreshMonitorRuns(true);
             } catch (error) { setMonitorRunRetentionResult('清除全部已结束记录失败，请稍后重试。', 'error'); }
+        }
+
+        async function clearMonitorRunTaskRecords() {
+            const taskName = monitorRunSelectedTaskName();
+            if (!taskName || monitorRunActionBusy) return;
+            monitorRunActionBusy = true;
+            const button = document.getElementById('monitor-run-clear-task');
+            if (button) button.disabled = true;
+            try {
+                const preview = await requestMonitorRunCleanup('all_finished', { preview: true, taskName });
+                const count = Number(preview?.count || 0);
+                if (!count) {
+                    showToast(`「${taskName}」没有可清除的已结束记录。`, { tone: 'info', placement: 'top-center' });
+                    return;
+                }
+                const confirmed = await showAppConfirm(
+                    `将清除「${taskName}」的 ${count} 条已结束运行记录。运行中、排队中、等待后续同步的记录会保留，网盘文件与本地播放文件不受影响。是否继续？`,
+                    { title: '清空该任务记录', confirmText: '清空记录', tone: 'warn' },
+                );
+                if (!confirmed) return;
+                const data = await requestMonitorRunCleanup('all_finished', { taskName });
+                showToast(`已清除「${taskName}」的 ${Number(data?.deleted || 0)} 条运行记录。`, {
+                    tone: 'success',
+                    placement: 'top-center',
+                });
+                await refreshMonitorRuns();
+            } catch (error) {
+                showToast(`清空该任务记录失败：${error?.message || '未知错误'}`, { tone: 'error', placement: 'top-center' });
+            } finally {
+                monitorRunActionBusy = false;
+                if (button) button.disabled = false;
+            }
         }
 
         async function refreshMainLogs({ compact = false } = {}) {

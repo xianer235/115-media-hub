@@ -67,6 +67,54 @@ class MonitorConclusionLineTest(unittest.TestCase):
         self.assertEqual(line, "结论: 新增/更新 0 | 跳过 0 | 自动整理 已执行 | 清理 0")
 
 
+class MonitorRunSummaryTextTest(unittest.TestCase):
+    """运行记录里的结论要是中文句子，不再直接搬运文本日志的汇总行。"""
+
+    def test_scan_summary_is_prose(self):
+        line = monitor.build_monitor_run_summary({"generated": 13, "skipped": 39, "deleted_files": 2})
+
+        self.assertEqual(line, "检查完成：新增或更新 13 个本地播放文件，清理 2 个。")
+        self.assertNotIn("|", line)
+
+    def test_scan_summary_without_changes(self):
+        line = monitor.build_monitor_run_summary({"generated": 0, "skipped": 0, "deleted_files": 0})
+
+        self.assertEqual(line, "检查完成，没有需要更新的内容。")
+
+    def test_scan_summary_explains_failed_dirs(self):
+        line = monitor.build_monitor_run_summary({"generated": 0, "deleted_files": 0, "failed_dirs": 1})
+
+        self.assertIn("1 个目录读取失败", line)
+        self.assertIn("未执行过期清理", line)
+
+    def test_scan_summary_mentions_auto_organize(self):
+        line = monitor.build_monitor_run_summary(
+            {"generated": 12, "skipped": 0, "deleted_files": 0},
+            "已自动整理 7 项（任务 #80）",
+        )
+
+        self.assertEqual(line, "检查完成：新增或更新 12 个本地播放文件，已自动整理 7 项。")
+
+    def test_change_summary_is_prose(self):
+        line = monitor.build_monitor_change_run_summary(
+            {"completed": 48, "failed": 0, "generated": 24, "deleted": 24}
+        )
+
+        self.assertEqual(line, "已同步 48 条网盘变更：新增或更新 24 个本地播放文件，清理 24 个。")
+        self.assertNotIn("|", line)
+
+    def test_change_summary_keeps_failure_and_manual_required_wording(self):
+        failed_line = monitor.build_monitor_change_run_summary(
+            {"completed": 3, "failed": 2, "discarded": 1, "deleted": 5}
+        )
+        manual_line = monitor.build_monitor_change_run_summary(
+            {"completed": 1, "failed": 0, "manual_required": 1}
+        )
+
+        self.assertIn("2 条处理失败并保留重试", failed_line)
+        self.assertIn("1 个目录需要手动监控", manual_line)
+
+
 class MonitorLogFrontendSourceTest(unittest.TestCase):
     def test_index_js_keeps_summary_decoration_without_icon_prefixes(self):
         source = INDEX_JS_PATH.read_text(encoding="utf-8")

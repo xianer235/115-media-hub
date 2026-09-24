@@ -51,6 +51,9 @@ export function applyMonitorState(data, {
     buildMonitorRenderKey,
     getLastMonitorRenderKey,
     setLastMonitorRenderKey,
+    buildMonitorRunRenderKey,
+    getLastMonitorRunRenderKey,
+    setLastMonitorRunRenderKey,
     renderMonitorTasks,
     renderMonitorLogs,
     afterApply,
@@ -98,7 +101,12 @@ export function applyMonitorState(data, {
         if (typeof renderMonitorTasks === 'function') renderMonitorTasks();
         if (typeof setLastMonitorRenderKey === 'function') setLastMonitorRenderKey(renderKey);
     }
-    if (typeof renderMonitorLogs === 'function') renderMonitorLogs();
+    // 运行记录列表只在内容真的变化时重绘，避免每次状态推送重建整块列表。
+    const runRenderKey = typeof buildMonitorRunRenderKey === 'function' ? buildMonitorRunRenderKey(nextState) : '';
+    const lastRunRenderKey = typeof getLastMonitorRunRenderKey === 'function' ? String(getLastMonitorRunRenderKey() || '') : '';
+    if (typeof renderMonitorLogs === 'function' && (forceRender || runRenderKey !== lastRunRenderKey)) {
+        renderMonitorLogs();
+    }
     if (typeof afterApply === 'function') afterApply(nextState);
 }
 

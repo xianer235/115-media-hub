@@ -571,6 +571,11 @@ def ensure_db() -> None:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_monitor_runs_list ON monitor_runs(parent_run_id, updated_at DESC)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_monitor_runs_task_status ON monitor_runs(task_name, status, updated_at DESC)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_monitor_run_events_run_category ON monitor_run_events(run_id, category, id)")
+            # `related_run_id` 不是 monitor_run_links 主键前缀，缺了它时列表查询会对每条
+            # 运行记录整表扫描一遍子运行关联（实测 1.7 万条记录从 0.9ms 变成 137ms）。
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_monitor_run_links_related ON monitor_run_links(related_run_id, relation)"
+            )
             cursor.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_resource_items_link ON resource_items(link_url) WHERE link_url <> ''"
             )

@@ -38,6 +38,16 @@ def _error_response(exc: Exception, status_code: int = 400) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"ok": False, "msg": message})
 
 
+def _query_int(request: Request, name: str, default: int, *, minimum: int = 0, maximum: Optional[int] = None) -> int:
+    """读取整型查询参数：非法值退回默认值，而不是让路由抛 500。"""
+    try:
+        value = int(str(request.query_params.get(name, default) or default))
+    except (TypeError, ValueError):
+        return default
+    value = max(minimum, value)
+    return min(maximum, value) if isinstance(maximum, int) else value
+
+
 def _cleanup_webhook_nonce_cache(now_ts: int) -> None:
     expire_before = now_ts - WEBHOOK_SIGNATURE_TTL_SECONDS
     for key in list(webhook_used_nonce_cache.keys()):
@@ -326,7 +336,7 @@ async def get_monitor_runs(request: Request) -> Dict[str, Any]:
         return {
             "ok": True,
             **list_runs(
-                limit=max(1, min(100, int(request.query_params.get("limit", 10) or 10))),
+                limit=_query_int(request, "limit", 10, minimum=1, maximum=100),
                 cursor=str(request.query_params.get("cursor", "") or ""),
                 task_name=str(request.query_params.get("task_name", "") or ""),
                 source=str(request.query_params.get("source", "") or ""),
@@ -340,12 +350,15 @@ async def get_monitor_runs(request: Request) -> Dict[str, Any]:
 
 @router.get("/monitor/runs/{run_id}")
 async def get_monitor_run_detail(run_id: str, request: Request) -> Dict[str, Any]:
-    detail = get_run_detail(
-        run_id,
-        category=str(request.query_params.get("category", "") or ""),
-        offset=max(0, int(request.query_params.get("offset", 0) or 0)),
-        limit=max(1, min(100, int(request.query_params.get("limit", 50) or 50))),
-    )
+    try:
+        detail = get_run_detail(
+            run_id,
+            category=str(request.query_params.get("category", "") or ""),
+            offset=_query_int(request, "offset", 0, minimum=0),
+            limit=_query_int(request, "limit", 50, minimum=1, maximum=100),
+        )
+    except Exception as exc:
+        return _error_response(exc)
     if not detail:
         return JSONResponse(status_code=404, content={"ok": False, "msg": "运行记录不存在"})
     return {"ok": True, **detail}
@@ -386,12 +399,13 @@ async def cleanup_monitor_runs(request: Request) -> Dict[str, Any]:
     data = await request.json()
     preview = bool(data.get("preview", False))
     scope = str(data.get("scope", "expired") or "expired").strip().lower()
+    task_name = str(data.get("task_name", "") or "").strip()
     try:
         days = max(0, int(data.get("days", 0) or 0))
     except (TypeError, ValueError):
         days = 0
     try:
-        return {"ok": True, **cleanup_runs(scope=scope, days=days, preview=preview)}
+        return {"ok": True, **cleanup_runs(scope=scope, days=days, preview=preview, task_name=task_name)}
     except ValueError as exc:
         return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
 

@@ -9,6 +9,7 @@ RUN_VIEW_PATH = ROOT / "static/js/modules/monitor/run-view.js"
 INDEX_CSS_PATH = ROOT / "static/css/index.css"
 INDEX_JS_PATH = ROOT / "static/js/index.js"
 MONITOR_PAGE_PATH = ROOT / "templates/partials/pages/monitor_about.html"
+MONITOR_TAB_MODULE_PATH = ROOT / "static/js/modules/tabs/monitor.js"
 
 
 def run_view(expression: str):
@@ -164,6 +165,25 @@ class MonitorRunViewTest(unittest.TestCase):
         self.assertIn("#monitor-run-modal .monitor-run-tabs { flex: 0 0 auto;", css)
         self.assertIn("#monitor-run-modal .monitor-run-modal-body { flex: 1 1 0;", css)
 
+    def test_dialog_header_pins_actions_to_the_right(self):
+        page = MONITOR_PAGE_PATH.read_text(encoding="utf-8")
+        css = INDEX_CSS_PATH.read_text(encoding="utf-8")
+        header_start = page.index('id="monitor-run-modal"')
+        header = page[header_start:page.index('class="monitor-run-tabs"', header_start)]
+
+        # 页头只允许“标题 + 右侧动作组”两种子元素：三个平级子元素时 space-between
+        # 会把中间的按钮挤到弹窗中间，并且随窗口宽度漂移。
+        actions_at = header.index('class="app-dialog-header-actions"')
+        title_div_at = header.index("<div>")
+        buttons = ("monitor-run-refresh", "monitor-run-close")
+        self.assertLess(title_div_at, actions_at)
+        for marker in buttons:
+            self.assertGreater(header.index(marker), actions_at)
+        self.assertLess(header.index(buttons[0]), header.index(buttons[1]))
+
+        self.assertIn(".app-dialog-header > :first-child { flex: 1 1 auto; min-width: 0; }", css)
+        self.assertIn("margin-left: auto;", css)
+
     def test_retention_dialog_uses_readable_day_theme_text(self):
         css = INDEX_CSS_PATH.read_text(encoding="utf-8")
 
@@ -171,6 +191,78 @@ class MonitorRunViewTest(unittest.TestCase):
         self.assertIn("color: var(--run-text);", css)
         self.assertIn("html.theme-day .monitor-run-retention-body", css)
         self.assertIn("html.theme-day .monitor-run-retention-body .form-check-label", css)
+
+    def test_legacy_log_dialog_exposes_a_clear_button(self):
+        page = MONITOR_PAGE_PATH.read_text(encoding="utf-8")
+        source = INDEX_JS_PATH.read_text(encoding="utf-8")
+        css = INDEX_CSS_PATH.read_text(encoding="utf-8")
+
+        self.assertIn('id="monitor-legacy-log-clear"', page)
+        self.assertIn('onclick="clearLegacyMonitorLogs()"', page)
+        self.assertIn('id="monitor-legacy-log-status"', page)
+        self.assertIn("async function clearLegacyMonitorLogs()", source)
+        # 旧文本日志要能跑“加载 -> 清空 -> 重新加载”这一条链路。
+        self.assertIn("async function loadLegacyMonitorLogs({ append = false } = {})", source)
+        self.assertIn("await clearMonitorLogs();", source)
+        self.assertIn("html.theme-day .monitor-legacy-log-status", css)
+
+    def test_legacy_log_clear_runs_after_confirmation(self):
+        calls = run_index_async(
+            """(async () => {
+                const calls = [];
+                showAppConfirm = async message => {
+                    calls.push(['confirm', message]);
+                    return true;
+                };
+                clearMonitorLogs = async () => calls.push(['clear']);
+                loadLegacyMonitorLogs = async () => calls.push(['reload']);
+                setLegacyMonitorLogStatus = (message, tone) => calls.push(['status', message, tone || 'info']);
+                showToast = () => calls.push(['toast']);
+                await clearLegacyMonitorLogs();
+                return calls;
+            })()"""
+        )
+
+        self.assertEqual([entry[0] for entry in calls], ["confirm", "status", "clear", "reload", "status", "toast"])
+        self.assertIn("历史文本日志", calls[0][1])
+        self.assertEqual(calls[2], ["clear"])
+        self.assertEqual(calls[3], ["reload"])
+        self.assertEqual(calls[4], ["status", "已清空历史文本日志。运行记录未受影响。", "info"])
+
+    def test_legacy_log_clear_keeps_logs_when_confirmation_is_rejected(self):
+        calls = run_index_async(
+            """(async () => {
+                const calls = [];
+                showAppConfirm = async message => {
+                    calls.push(['confirm', message]);
+                    return false;
+                };
+                clearMonitorLogs = async () => calls.push(['clear']);
+                loadLegacyMonitorLogs = async () => calls.push(['reload']);
+                await clearLegacyMonitorLogs();
+                return calls;
+            })()"""
+        )
+
+        self.assertEqual([entry[0] for entry in calls], ["confirm"])
+
+    def test_legacy_log_clear_reports_request_failure(self):
+        calls = run_index_async(
+            """(async () => {
+                const calls = [];
+                showAppConfirm = async () => true;
+                clearMonitorLogs = async () => { throw new Error('服务不可用'); };
+                loadLegacyMonitorLogs = async () => calls.push(['reload']);
+                setLegacyMonitorLogStatus = (message, tone) => calls.push(['status', message, tone || 'info']);
+                await clearLegacyMonitorLogs();
+                return calls;
+            })()"""
+        )
+
+        self.assertEqual([entry[0] for entry in calls], ["status", "status"])
+        self.assertEqual(calls[1][2], "error")
+        self.assertIn("清空失败", calls[1][1])
+        self.assertIn("服务不可用", calls[1][1])
 
     def test_cleanup_reports_empty_result_and_request_errors(self):
         source = INDEX_JS_PATH.read_text(encoding="utf-8")
@@ -192,7 +284,8 @@ class MonitorRunViewTest(unittest.TestCase):
         self.assertIn("清除全部已结束记录", page)
         self.assertIn("requestMonitorRunCleanup('expired'", source)
         self.assertIn("requestMonitorRunCleanup('all_finished'", source)
-        self.assertIn("{ scope, days: scope === 'expired' ? days : 0, preview }", source)
+        self.assertIn("days: scope === 'expired' ? days : 0,", source)
+        self.assertIn("task_name: String(taskName || '').trim(),", source)
         self.assertIn("monitor-run-cleanup-danger", css)
 
     def test_all_finished_cleanup_executes_after_app_confirmation(self):
@@ -247,6 +340,192 @@ class MonitorRunViewTest(unittest.TestCase):
         self.assertEqual(calls[2], ["cleanup", "expired", False])
         self.assertEqual(calls[3], ["result", "已清理 4 条过期记录。"])
         self.assertEqual(calls[4], ["refresh", True])
+
+    def test_partial_run_without_problem_events_explains_itself(self):
+        html = run_view(
+            "window.MonitorRunView.detailHtml({"
+            "run: {status: 'partial', run_kind: 'change', task_name: '电视剧', subject: '文件变更', "
+            "summary: '已同步 1 条网盘变更，1 个目录需要手动监控', result: {completed: 1, manual_required: 1}}, "
+            "events: [], counts: {process: 3, remote: 1, strm: 0, problem: 0}, total: 0, has_more: false"
+            "}, 'problem')"
+        )
+
+        self.assertIn("monitor-run-derived-issues", html)
+        self.assertIn("需要手动监控", html)
+        self.assertNotIn("暂无问题记录", html)
+
+    def test_completed_run_without_problem_events_keeps_empty_state(self):
+        html = run_view(
+            "window.MonitorRunView.detailHtml({"
+            "run: {status: 'completed', run_kind: 'change', summary: '已同步 3 条网盘变更', result: {completed: 3}}, "
+            "events: [], counts: {problem: 0}, total: 0, has_more: false"
+            "}, 'problem')"
+        )
+
+        self.assertIn("暂无问题记录", html)
+        self.assertNotIn("monitor-run-derived-issues", html)
+
+    def test_problem_tab_count_matches_derived_items(self):
+        detail = (
+            "{run: {status: 'partial', result: {manual_required: 1, left: 2}}, "
+            "counts: {process: 3, remote: 1, strm: 0, problem: 0}}"
+        )
+
+        self.assertEqual(run_view(f"window.MonitorRunView.tabCount({detail}, 'problem')"), 2)
+        self.assertEqual(run_view(f"window.MonitorRunView.tabCount({detail}, 'remote')"), 1)
+        self.assertEqual(
+            run_view(
+                "window.MonitorRunView.tabCount("
+                "{run: {status: 'completed', result: {}}, counts: {problem: 0}}, 'problem')"
+            ),
+            0,
+        )
+
+    def test_filter_reset_button_clears_every_filter(self):
+        page = MONITOR_PAGE_PATH.read_text(encoding="utf-8")
+        self.assertIn('id="monitor-run-filter-reset"', page)
+        self.assertIn("resetMonitorRunFilters()", page)
+
+        calls = run_index_async(
+            """(async () => {
+                const calls = [];
+                const values = {
+                    'monitor-run-task-filter': '电视剧',
+                    'monitor-run-kind-filter': 'change',
+                    'monitor-run-source-filter': 'cron',
+                    'monitor-run-status-filter': 'partial',
+                };
+                document.getElementById = id => (id in values ? { set value(next) { values[id] = next; }, get value() { return values[id]; } } : null);
+                refreshMonitorRuns = async () => calls.push(['refresh']);
+                await resetMonitorRunFilters();
+                calls.push(['values', { ...values }]);
+                return calls;
+            })()"""
+        )
+
+        self.assertEqual(calls[0], ["refresh"])
+        self.assertEqual(calls[1], ["values", {
+            "monitor-run-task-filter": "",
+            "monitor-run-kind-filter": "",
+            "monitor-run-source-filter": "",
+            "monitor-run-status-filter": "",
+        }])
+
+    def test_legacy_log_dialog_loads_older_entries(self):
+        page = MONITOR_PAGE_PATH.read_text(encoding="utf-8")
+        source = INDEX_JS_PATH.read_text(encoding="utf-8")
+        self.assertIn('id="monitor-legacy-log-more"', page)
+        self.assertIn("loadMoreLegacyMonitorLogs()", page)
+        self.assertIn("async function loadLegacyMonitorLogs({ append = false } = {})", source)
+        self.assertIn("offset=${offset}", source)
+
+        calls = run_index_async(
+            """(async () => {
+                const calls = [];
+                const body = { innerText: '旧的第二段' };
+                document.getElementById = id => (id === 'monitor-legacy-log-body' ? body : null);
+                window.MediaHubApi = {
+                    getJson: async url => {
+                        calls.push(['get', url]);
+                        return { segments: [{ entries: [{ text: '更早的第一段' }] }], has_more: false, next_offset: 20 };
+                    },
+                };
+                await loadLegacyMonitorLogs({ append: true });
+                calls.push(['body', body.innerText]);
+                return calls;
+            })()"""
+        )
+
+        self.assertIn("offset=0", calls[0][1])
+        self.assertEqual(calls[1], ["body", "更早的第一段\n旧的第二段"])
+
+    def test_run_list_skips_unchanged_rerenders(self):
+        source = INDEX_JS_PATH.read_text(encoding="utf-8")
+        module_source = MONITOR_TAB_MODULE_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("function buildMonitorRunRenderKey", source)
+        self.assertIn("if (forceRender || runRenderKey !== lastMonitorRunRenderKey) renderMonitorLogs();", source)
+        self.assertIn("runRenderKey !== lastRunRenderKey", module_source)
+
+        keys = run_index_async(
+            """(() => {
+                const base = { runs: [{ id: 'a', status: 'completed', summary: 'x', updated_at: 't' }], run_page: 1, tasks: [{ name: '电视剧', task_type: 'scan' }] };
+                return {
+                    stable: buildMonitorRunRenderKey(base) === buildMonitorRunRenderKey({ ...base }),
+                    statusChanged: buildMonitorRunRenderKey(base) === buildMonitorRunRenderKey({ ...base, runs: [{ id: 'a', status: 'running', summary: 'x', updated_at: 't' }] }),
+                    pageChanged: buildMonitorRunRenderKey(base) === buildMonitorRunRenderKey({ ...base, run_page: 2 }),
+                };
+            })()"""
+        )
+
+        self.assertTrue(keys["stable"])
+        self.assertFalse(keys["statusChanged"])
+        self.assertFalse(keys["pageChanged"])
+
+    def test_task_scoped_clear_only_runs_for_a_selected_task(self):
+        page = MONITOR_PAGE_PATH.read_text(encoding="utf-8")
+        source = INDEX_JS_PATH.read_text(encoding="utf-8")
+
+        self.assertIn('id="monitor-run-clear-task"', page)
+        self.assertIn("clearMonitorRunTaskRecords()", page)
+        self.assertIn("async function clearMonitorRunTaskRecords()", source)
+        self.assertIn("task_name: String(taskName || '').trim(),", source)
+        self.assertIn("syncMonitorRunTaskClearButton();", source)
+
+        # 没选任务时按钮不出现在页面上，函数也不会发请求。
+        none = run_index_async(
+            """(async () => {
+                const calls = [];
+                requestMonitorRunCleanup = async () => { calls.push(['cleanup']); return { count: 1 }; };
+                showAppConfirm = async () => { calls.push(['confirm']); return true; };
+                await clearMonitorRunTaskRecords();
+                return calls;
+            })()"""
+        )
+        self.assertEqual(none, [])
+
+        calls = run_index_async(
+            """(async () => {
+                const calls = [];
+                monitorRunSelectedTaskName = () => '电视剧';
+                requestMonitorRunCleanup = async (scope, options = {}) => {
+                    calls.push(['cleanup', scope, Boolean(options.preview), options.taskName || '']);
+                    return options.preview ? { count: 4 } : { deleted: 4 };
+                };
+                showAppConfirm = async message => { calls.push(['confirm', message]); return true; };
+                showToast = message => calls.push(['toast', message]);
+                refreshMonitorRuns = async () => calls.push(['refresh']);
+                await clearMonitorRunTaskRecords();
+                return calls;
+            })()"""
+        )
+
+        self.assertEqual(calls[0], ["cleanup", "all_finished", True, "电视剧"])
+        self.assertEqual(calls[1][0], "confirm")
+        self.assertIn("电视剧", calls[1][1])
+        self.assertIn("4 条已结束运行记录", calls[1][1])
+        self.assertEqual(calls[2], ["cleanup", "all_finished", False, "电视剧"])
+        self.assertIn("已清除", calls[3][1])
+        self.assertEqual(calls[4], ["refresh"])
+
+    def test_task_scoped_clear_keeps_records_when_confirmation_is_rejected(self):
+        calls = run_index_async(
+            """(async () => {
+                const calls = [];
+                monitorRunSelectedTaskName = () => '电影';
+                requestMonitorRunCleanup = async (scope, options = {}) => {
+                    calls.push(['cleanup', scope, Boolean(options.preview)]);
+                    return options.preview ? { count: 2 } : { deleted: 2 };
+                };
+                showAppConfirm = async () => { calls.push(['confirm']); return false; };
+                showToast = () => calls.push(['toast']);
+                refreshMonitorRuns = async () => calls.push(['refresh']);
+                await clearMonitorRunTaskRecords();
+                return calls;
+            })()"""
+        )
+
+        self.assertEqual([entry[0] for entry in calls], ["cleanup", "confirm"])
 
 
 if __name__ == "__main__":

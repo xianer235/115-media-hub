@@ -123,10 +123,24 @@ def append_log_file(path: str, line: str) -> None:
         f.write(line + "\n")
 
 
-def clear_log_file(path: str, first_line: str) -> None:
+def clear_log_file(path: str, first_line: str, backups: int = LOG_ROTATE_BACKUPS) -> None:
+    """清空日志文件本身，并删除轮转备份。
+
+    监控页的“历史文本日志”会把 `monitor.log` 与 `monitor.log.1`、`monitor.log.2`
+    一起读出来展示，如果只截断主文件，用户点“清空”之后旧内容仍会出现在弹窗里。
+    所以“清空日志”统一约定为：主文件只留一行占位说明，轮转备份全部删除。
+    """
     os.makedirs(LOG_DIR, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         f.write(first_line + "\n")
+    for index in range(1, max(0, int(backups or 0)) + 1):
+        try:
+            os.remove(f"{path}.{index}")
+        except FileNotFoundError:
+            continue
+        except Exception:
+            # 备份清理失败不应影响清空主日志这个主结果。
+            continue
 
 
 def read_log_tail(path: str, limit: int = 200) -> List[str]:

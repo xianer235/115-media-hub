@@ -23,7 +23,12 @@ from .services.resource import (
 from .services.sign115 import refresh_sign115_status, run_sign115_job
 from .services.subscription import queue_subscription_job
 from .services.scraper import requeue_scraper_jobs_on_startup
-from .services.monitor_runs import cleanup_runs, reconcile_waiting_inbox_runs, recover_interrupted_runs
+from .services.monitor_runs import (
+    cleanup_runs,
+    reconcile_waiting_inbox_runs,
+    recover_interrupted_runs,
+    repair_change_event_owners,
+)
 from .services.subscription_offline_cleanup import (
     run_subscription_offline_staging_cleanup_once,
     subscription_offline_staging_cleanup_watcher,
@@ -93,6 +98,12 @@ async def startup() -> None:
     # processing before normal schedulers start issuing scans.
     recover_monitor_change_events(cfg=get_config())
     reconcile_waiting_inbox_runs()
+    try:
+        repaired = repair_change_event_owners()
+        if repaired:
+            logging.info("Repaired %s monitor change events without a run owner", repaired)
+    except Exception:
+        logging.exception("Failed to repair monitor change event owners")
     try:
         requeue_scraper_jobs_on_startup()
     except Exception:

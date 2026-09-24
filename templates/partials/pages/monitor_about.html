@@ -25,6 +25,7 @@
                     </div>
                     <div class="monitor-runs-actions">
                         <button type="button" onclick="refreshMonitorRuns()" class="log-header-btn">刷新记录</button>
+                        <button id="monitor-run-clear-task" type="button" onclick="clearMonitorRunTaskRecords()" class="log-header-btn monitor-run-clear-task hidden">清空该任务记录</button>
                         <button type="button" onclick="openMonitorRunRetention()" class="log-header-btn">记录保留</button>
                         <div class="monitor-run-pagination" aria-label="运行记录分页">
                             <button id="monitor-run-prev" type="button" onclick="loadMonitorRunPage(-1)" class="log-header-btn" disabled>上一页</button>
@@ -44,6 +45,7 @@
                     <select id="monitor-run-status-filter" aria-label="按运行状态筛选" class="monitor-run-filter" onchange="refreshMonitorRuns()">
                         <option value="">全部状态</option><option value="queued">排队中</option><option value="running">执行中</option><option value="waiting">等待后续同步</option><option value="completed">已完成</option><option value="no_change">无变化</option><option value="partial">部分完成</option><option value="failed">失败</option><option value="cancelled">已取消或中断</option>
                     </select>
+                    <button id="monitor-run-filter-reset" type="button" class="log-header-btn monitor-run-filter-reset hidden" onclick="resetMonitorRunFilters()">重置筛选</button>
                 </div>
                 <div id="monitor-run-list" class="monitor-run-list" aria-live="polite"></div>
                 <div class="monitor-legacy-log-link"><button type="button" onclick="openLegacyMonitorLogs()">查看历史文本日志</button></div>
@@ -58,8 +60,10 @@
                         <div id="monitor-run-modal-title" class="app-dialog-title">--</div>
                         <div id="monitor-run-modal-meta" class="monitor-run-modal-meta"></div>
                     </div>
-                    <button type="button" class="log-header-btn monitor-run-refresh" onclick="switchMonitorRunDetail(activeMonitorRunCategory)" aria-label="刷新运行详情">刷新</button>
-                    <button type="button" class="app-dialog-close monitor-run-close" onclick="closeMonitorRunModal()" aria-label="关闭运行详情" title="关闭运行详情">×</button>
+                    <div class="app-dialog-header-actions">
+                        <button type="button" class="log-header-btn monitor-run-refresh" onclick="switchMonitorRunDetail(activeMonitorRunCategory)" aria-label="刷新运行详情">刷新</button>
+                        <button type="button" class="app-dialog-close monitor-run-close" onclick="closeMonitorRunModal()" aria-label="关闭运行详情" title="关闭运行详情">×</button>
+                    </div>
                 </div>
                 <div class="monitor-run-tabs" role="tablist" aria-label="运行详情">
                     <button id="monitor-run-tab-0" type="button" role="tab" aria-selected="true" aria-controls="monitor-run-modal-body" tabindex="0" data-monitor-run-category="" onclick="switchMonitorRunDetail('')">概览与过程 <span class="monitor-run-tab-count">0</span></button>
@@ -93,8 +97,11 @@
 
         <div id="monitor-legacy-log-modal" class="app-dialog-modal hidden" role="dialog" aria-modal="true" aria-labelledby="monitor-legacy-log-title">
             <div class="app-dialog-shell monitor-legacy-log-shell">
-                <div class="app-dialog-header"><div><div class="app-dialog-eyebrow">旧记录</div><div id="monitor-legacy-log-title" class="app-dialog-title">历史文本日志</div></div><button type="button" class="app-dialog-close" onclick="closeLegacyMonitorLogs()" aria-label="关闭历史文本日志">关闭</button></div>
+                <div class="app-dialog-header"><div><div class="app-dialog-eyebrow">旧记录</div><div id="monitor-legacy-log-title" class="app-dialog-title">历史文本日志</div></div><div class="app-dialog-header-actions"><button id="monitor-legacy-log-clear" type="button" class="log-header-btn" onclick="clearLegacyMonitorLogs()">清空日志</button><button type="button" class="app-dialog-close" onclick="closeLegacyMonitorLogs()" aria-label="关闭历史文本日志">关闭</button></div></div>
+                <div class="monitor-legacy-log-hint">文本日志（含轮转备份）用于排查历史问题，新运行仍会写入这里；查看运行结果请优先用下方“运行记录”。清空只删除文本日志，不影响“运行记录”。</div>
                 <pre id="monitor-legacy-log-body" class="monitor-legacy-log-body">正在加载...</pre>
+                <div id="monitor-legacy-log-more" class="monitor-legacy-log-more hidden"><button type="button" class="log-header-btn" onclick="loadMoreLegacyMonitorLogs()">加载更早的日志</button></div>
+                <div id="monitor-legacy-log-status" class="monitor-legacy-log-status" role="status" aria-live="polite"></div>
             </div>
         </div>
 

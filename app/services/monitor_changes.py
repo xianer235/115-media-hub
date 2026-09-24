@@ -1923,9 +1923,17 @@ async def process_monitor_change_events(
     *,
     cfg: Optional[Dict[str, Any]] = None,
     event_ids: Optional[Sequence[int]] = None,
+    monitor_run_id: str = "",
 ) -> Dict[str, Any]:
+    """Apply ready change events and remember which run applied each one.
+
+    ``monitor_run_id`` 用于把“这次运行实际改了哪些网盘内容”写回事件表，运行详情
+    的「网盘操作」才能列出重命名/移动。事件已经归属别的运行（例如接收夹分发写的
+    父运行）时保持原值，避免抢走接收夹的两阶段状态机关联。
+    """
     active_cfg = cfg or get_config()
     ensure_db()
+    run_owner = str(monitor_run_id or "").strip()
     result: Dict[str, Any] = {
         "completed": 0,
         "failed": 0,
@@ -1991,7 +1999,8 @@ async def process_monitor_change_events(
                     UPDATE monitor_change_events
                     SET status = ?, updated_at = ?, completed_at = ?,
                         last_error = ?, needs_reconcile = 0,
-                        directory_count = ?, file_count = ?
+                        directory_count = ?, file_count = ?,
+                        monitor_run_id = CASE WHEN monitor_run_id = '' THEN ? ELSE monitor_run_id END
                     WHERE id = ?
                     """,
                     (
@@ -2001,6 +2010,7 @@ async def process_monitor_change_events(
                         "需手动监控" if manual_required else "",
                         max(0, int(stats.get("directory_count", 0) or 0)),
                         max(0, int(stats.get("file_count", 0) or 0)),
+                        run_owner,
                         event_id,
                     ),
                 )

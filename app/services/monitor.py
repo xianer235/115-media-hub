@@ -132,6 +132,74 @@ def build_monitor_conclusion_line(stats: Dict[str, Any], auto_summary: Any = "")
     )
 
 
+def _auto_organize_phrase(auto_summary: Any) -> str:
+    auto_raw = str(auto_summary or "").strip()
+    if not auto_raw or auto_raw == "-":
+        return ""
+    matched = re.search(r"已自动整理\s*(\d+)\s*项", auto_raw)
+    return f"已自动整理 {matched.group(1)} 项" if matched else "已自动整理"
+
+
+def build_monitor_run_summary(stats: Dict[str, Any], auto_summary: Any = "") -> str:
+    """构建运行记录用的中文结论。
+
+    运行记录直接呈现这句话，所以不能再复用文本日志的 `结论: … | …` 行；数值交给
+    记录里的统计字段，句子只说明“发生了什么、有没有需要处理的内容”。
+    """
+    payload = stats if isinstance(stats, dict) else {}
+    generated = max(0, int(payload.get("generated", 0) or 0))
+    deleted = max(0, int(payload.get("deleted_files", 0) or 0))
+    failed_dirs = max(0, int(payload.get("failed_dirs", 0) or 0))
+    auto_phrase = _auto_organize_phrase(auto_summary)
+    changes = []
+    if generated:
+        changes.append(f"新增或更新 {generated} 个本地播放文件")
+    if deleted:
+        changes.append(f"清理 {deleted} 个")
+    if auto_phrase:
+        changes.append(auto_phrase)
+    detail = "，".join(changes)
+    if failed_dirs:
+        sentence = f"{failed_dirs} 个目录读取失败，本轮未完整检查"
+        if detail:
+            sentence += f"：{detail}"
+        # 扫描到读取失败时，执行器会主动跳过过期清理以避免误删。
+        sentence += "。为避免误删，本轮未执行过期清理。"
+        return sentence
+    if detail:
+        return f"检查完成：{detail}。"
+    return "检查完成，没有需要更新的内容。"
+
+
+def build_monitor_change_run_summary(result: Dict[str, Any]) -> str:
+    """构建「增量变更同步」运行记录用的中文结论（文本日志仍用汇总行）。"""
+    payload = result if isinstance(result, dict) else {}
+    completed = max(0, int(payload.get("completed", 0) or 0))
+    failed = max(0, int(payload.get("failed", 0) or 0))
+    discarded = max(0, int(payload.get("discarded", 0) or 0))
+    generated = max(0, int(payload.get("generated", 0) or 0))
+    deleted = max(0, int(payload.get("deleted", 0) or 0))
+    manual_required = max(0, int(payload.get("manual_required", 0) or 0))
+    events = completed + failed + discarded
+    if not events and not generated and not deleted:
+        return "检查完成，没有待处理的变更。"
+    changes = []
+    if generated:
+        changes.append(f"新增或更新 {generated} 个本地播放文件")
+    if deleted:
+        changes.append(f"清理 {deleted} 个")
+    detail = "，".join(changes)
+    if failed:
+        head = f"已同步 {completed} 条网盘变更，{failed} 条处理失败并保留重试"
+    elif manual_required:
+        head = f"已同步 {completed} 条网盘变更，{manual_required} 个目录需要手动监控"
+    else:
+        head = f"已同步 {completed} 条网盘变更"
+    if discarded:
+        head += f"，{discarded} 条已结束不再重试"
+    return f"{head}：{detail}。" if detail else f"{head}。"
+
+
 def _claim_monitor_job(task_name: str) -> bool:
     global _monitor_dispatch_pending
     with monitor_queue_lock:
@@ -1306,7 +1374,7 @@ async def run_monitor_task(
             "auto_summary": auto_summary,
         }
         final_status = "partial" if stats["failed_dirs"] else ("no_change" if not stats["generated"] and not stats["deleted_files"] else "completed")
-        finish_monitor_run(run_id, status=final_status, summary=build_monitor_conclusion_line(stats, auto_summary), result=final_result)
+        finish_monitor_run(run_id, status=final_status, summary=build_monitor_run_summary(stats, auto_summary), result=final_result)
         update_monitor_summary("任务完成", f"{task_name} 执行结束")
     except asyncio.CancelledError:
         try:
@@ -1523,7 +1591,12 @@ async def run_monitor_change_task(
 
         raw_event_ids = payload.get("event_ids", []) if isinstance(payload, dict) else []
         event_ids = normalize_monitor_event_ids(raw_event_ids)
-        result = await process_monitor_change_events(task_name, cfg=cfg, event_ids=event_ids)
+        result = await process_monitor_change_events(
+            task_name,
+            cfg=cfg,
+            event_ids=event_ids,
+            monitor_run_id=run_id,
+        )
         parent_run_ids = [
             str(value or "").strip()
             for value in (result.get("monitor_run_ids", []) if isinstance(result.get("monitor_run_ids"), list) else [])
@@ -1666,6 +1739,23 @@ async def run_monitor_change_task(
                 ),
                 "error",
             )
+        if failed > 0:
+            error_preview = [
+                f"#{max(0, int(item.get('event_id', 0) or 0))}: {str(item.get('error', '') or '未知错误')}"
+                for item in (result.get("errors", []) if isinstance(result.get("errors"), list) else [])[:3]
+                if isinstance(item, dict)
+            ]
+            record_monitor_run_event(
+                run_id,
+                category="problem",
+                operation="change_failed",
+                status="failed",
+                title=f"{failed} 条网盘变更处理失败",
+                detail={
+                    "failed": failed,
+                    "error": "；".join(error_preview) or "详情见文本日志",
+                },
+            )
         if int(result.get("failed", 0) or 0) > 0:
             status_text = "变更同步部分失败"
         elif int(result.get("manual_required", 0) or 0) > 0:
@@ -1676,7 +1766,7 @@ async def run_monitor_change_task(
         finish_monitor_run(
             run_id,
             status=final_status,
-            summary=summary_text,
+            summary=build_monitor_change_run_summary(result),
             result={"completed": completed, "failed": failed, "discarded": discarded, "generated": generated, "deleted": deleted, "manual_required": manual_required},
         )
         await _best_effort_monitor_change_await(

@@ -112,6 +112,38 @@
         }));
     }
 
+    // 早期记录只留下数量（没有逐条问题事件），这里把结果字段翻译成同样的“需要处理”提示，
+    // 免得界面显示“部分完成 / 失败”却告出“没有任何问题”。
+    function derivedIssues(run) {
+        if (!['partial', 'failed'].includes(String(run?.status || ''))) return [];
+        const result = run?.result || {};
+        return [
+            ['failed_dirs', '读取失败的目录', '个'],
+            ['manual_required', '需要手动监控', '处'],
+            ['left', '仍留在接收夹', '项'],
+            ['failed', '处理失败的变更', '条'],
+        ].filter(([key]) => count(result[key]) > 0)
+            .map(([key, label, unit]) => ({ label, value: `${count(result[key])} ${unit}` }));
+    }
+
+    function derivedIssueBlock(run) {
+        const items = derivedIssues(run);
+        if (!items.length) return '';
+        return `<div class="monitor-run-derived-issues">
+            <p>这次运行没有完整结束。以下数量来自运行结果，记录里没有对应的逐条明细：</p>
+            <dl class="monitor-run-detail-grid">${items.map(item => `<div class="monitor-run-detail-row"><dt>${escape(item.label)}</dt><dd>${escape(item.value)}</dd></div>`).join('')}</dl>
+            <p>建议按原范围重新运行，或在任务卡片上查看“需补扫 / 需手动监控”提示后再处理。</p></div>`;
+    }
+
+    // 标签上的数字要能对上页面内容：问题标签在没有逐条问题事件、但有未完成数量时，
+    // 也必须显示这些条目，而不是永远显示 0。
+    function tabCount(detail, category) {
+        const key = category || 'process';
+        const recorded = count((detail?.counts || {})[key]);
+        if (key !== 'problem') return recorded;
+        return Math.max(recorded, derivedIssues(detail?.run || {}).length);
+    }
+
     function valueHtml(key, value) {
         if (key === 'scope') return escape(scopeText(value));
         if (typeof value === 'boolean') return value ? '是' : '否';
@@ -195,6 +227,9 @@
         const retry = ['failed', 'partial'].includes(run.status) && run.run_kind === 'scan';
         const cancel = run.status === 'queued' && run.run_kind !== 'inbox';
         const overview = !category || category === 'process';
+        const problemCount = count(counts.problem);
+        const derived = derivedIssues(run);
+        const derivedOnly = category === 'problem' && !events.length && derived.length > 0;
         const title = ({remote: '网盘操作', strm: '本地播放文件', problem: '需要处理的问题'})[category] || '执行过程';
         return `<section class="monitor-run-detail-summary">
             <div class="monitor-run-outcome"><h4>运行结果</h4>${badge(run.status, run)}</div>
@@ -204,15 +239,15 @@
             ${duration(run) ? `<div><dt>执行用时</dt><dd>${escape(duration(run))}</dd></div>` : ''}</dl>
             ${retry || cancel ? `<div class="monitor-run-detail-actions">${retry ? '<button type="button" class="monitor-run-detail-action" onclick="retryMonitorRun()">按原范围重新运行</button><span class="monitor-run-action-note">会重新检查本次记录中的全部范围。</span>' : ''}${cancel ? '<button type="button" class="monitor-run-detail-action is-cancel" onclick="cancelMonitorRun()">取消排队</button>' : ''}</div>` : ''}
         </section>
-        ${overview && count(counts.problem) ? `<button class="monitor-run-problem-link" type="button" onclick="switchMonitorRunDetail('problem')">${count(counts.problem)} 条问题记录，查看原因与影响 <span aria-hidden="true">查看</span></button>` : ''}
+        ${overview && (problemCount || derived.length) ? `<button class="monitor-run-problem-link" type="button" onclick="switchMonitorRunDetail('problem')">${problemCount ? `${problemCount} 条问题记录` : `${derived.length} 项未完成内容`}，查看原因与影响 <span aria-hidden="true">查看</span></button>` : ''}
         ${overview ? relations(detail.children, '后续同步') + relations(detail.parents, '来源运行') + relations(detail.related, '原运行记录') : ''}
-        <section class="monitor-run-detail-section"><div class="monitor-run-section-head"><h4>${title}</h4><span>已显示 ${events.length} / ${count(detail.total ?? events.length)} 条</span></div>
-        ${events.length ? `<div class="monitor-run-timeline">${events.map((event, index) => eventCard(event, index)).join('')}</div>` : `<div class="monitor-run-empty">${category === 'problem' ? '暂无问题记录。' : '本次运行尚未记录此类操作。'}</div>`}
+        <section class="monitor-run-detail-section"><div class="monitor-run-section-head"><h4>${title}</h4><span>${derivedOnly ? '来自运行结果' : `已显示 ${events.length} / ${count(detail.total ?? events.length)} 条`}</span></div>
+        ${events.length ? `<div class="monitor-run-timeline">${events.map((event, index) => eventCard(event, index)).join('')}</div>` : (category === 'problem' ? (derived.length ? derivedIssueBlock(run) : '<div class="monitor-run-empty">暂无问题记录。</div>') : '<div class="monitor-run-empty">本次运行尚未记录此类操作。</div>')}
         ${detail.has_more ? '<button type="button" class="monitor-run-load-more log-header-btn" onclick="loadMoreMonitorRunEvents()">加载更多记录</button>' : ''}</section>`;
     }
 
     global.MonitorRunView = {
         statuses, sources, runKinds, escape, count, status, tone, time, sourceText, runKindText, parentContextText, scopeText,
-        duration, summary, metrics, detailRows, eventCard, listRow, detailHtml,
+        duration, summary, metrics, detailRows, eventCard, listRow, detailHtml, derivedIssues, tabCount,
     };
 })(window);

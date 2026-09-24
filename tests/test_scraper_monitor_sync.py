@@ -4470,6 +4470,85 @@ class ScraperMonitorSyncTest(unittest.TestCase):
             ).fetchone()[0]
         self.assertEqual(status, "manual_required")
 
+    def test_processed_change_events_are_claimed_by_the_change_run(self):
+        """变更同步运行要认领自己处理的事件，运行详情才能列出网盘重命名/移动。"""
+        cfg = self._cfg()
+        prepared = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="rename",
+            entries=[
+                {
+                    "id": "claim-1",
+                    "name": "Old.mkv",
+                    "path": "Media/Old.mkv",
+                    "new_path": "Media/New.mkv",
+                    "is_dir": False,
+                    "size": 1024,
+                    "modified_at": "2026-08-09 10:00:00",
+                }
+            ],
+            source_action="scraper",
+            dedupe_key="claim-1",
+            cfg=cfg,
+        )
+        monitor_changes.confirm_monitor_change_events(prepared, succeeded=True, enqueue=False)
+
+        with patch.object(monitor_changes, "STRM_ROOT", self.strm_root):
+            asyncio.run(
+                monitor_changes.process_monitor_change_events(
+                    cfg=cfg,
+                    event_ids=prepared["event_ids"],
+                    monitor_run_id="run-claim",
+                )
+            )
+
+        with sqlite3.connect(self.db_path) as conn:
+            owner, status = conn.execute(
+                "SELECT monitor_run_id, status FROM monitor_change_events WHERE id = ?",
+                (prepared["event_ids"][0],),
+            ).fetchone()
+        self.assertEqual((owner, status), ("run-claim", "completed"))
+
+    def test_change_run_does_not_steal_events_already_owned_by_inbox_run(self):
+        """接收夹分发已经写好的父运行归属不能被下游变更同步覆盖。"""
+        cfg = self._cfg()
+        prepared = monitor_changes.prepare_monitor_change_events(
+            provider="115",
+            operation="rename",
+            entries=[
+                {
+                    "id": "keep-owner",
+                    "name": "Old.mkv",
+                    "path": "Media/Old.mkv",
+                    "new_path": "Media/New.mkv",
+                    "is_dir": False,
+                    "size": 1024,
+                    "modified_at": "2026-08-09 10:00:00",
+                }
+            ],
+            source_action="scraper-job:1:quick-import",
+            dedupe_key="keep-owner",
+            monitor_run_id="inbox-run",
+            cfg=cfg,
+        )
+        monitor_changes.confirm_monitor_change_events(prepared, succeeded=True, enqueue=False)
+
+        with patch.object(monitor_changes, "STRM_ROOT", self.strm_root):
+            asyncio.run(
+                monitor_changes.process_monitor_change_events(
+                    cfg=cfg,
+                    event_ids=prepared["event_ids"],
+                    monitor_run_id="change-run",
+                )
+            )
+
+        with sqlite3.connect(self.db_path) as conn:
+            owner = conn.execute(
+                "SELECT monitor_run_id FROM monitor_change_events WHERE id = ?",
+                (prepared["event_ids"][0],),
+            ).fetchone()[0]
+        self.assertEqual(owner, "inbox-run")
+
 
 if __name__ == "__main__":
     unittest.main()

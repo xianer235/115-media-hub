@@ -330,6 +330,48 @@ def recover_interrupted_runs() -> Dict[str, int]:
     return counts
 
 
+def repair_change_event_owners() -> int:
+    """一次性补齐历史变更事件的运行归属，让旧记录的「网盘操作」也能列出改动。
+
+    只处理三方都明确的事件：事件未归属任何运行、任务名相同、完成时间落在**唯一**
+    一条变更同步运行的执行区间内。存在多种可能的运行时不猜测，保留现状交给文本日志
+    排查，避免把改动记到错误的运行上。返回修复条数。
+    """
+    repaired = 0
+    with db_connection() as conn:
+        pending = conn.execute(
+            """SELECT id, task_name, completed_at FROM monitor_change_events
+                WHERE monitor_run_id = '' AND completed_at <> ''
+                  AND status IN ('completed', 'manual_required')"""
+        ).fetchall()
+        if not pending:
+            return 0
+        windows: Dict[str, List[tuple]] = {}
+        for row in conn.execute(
+            """SELECT id, task_name, started_at, finished_at FROM monitor_runs
+                WHERE run_kind = 'change' AND started_at <> '' AND finished_at <> ''
+                ORDER BY started_at"""
+        ).fetchall():
+            windows.setdefault(_text(row[1]), []).append((_text(row[2]), _text(row[3]), _text(row[0])))
+        for event_id, task_name, completed_at in pending:
+            completed = _text(completed_at)
+            candidates = [
+                run_id
+                for started_at, finished_at, run_id in windows.get(_text(task_name), [])
+                if started_at <= completed <= finished_at
+            ]
+            if len(candidates) != 1:
+                continue
+            conn.execute(
+                "UPDATE monitor_change_events SET monitor_run_id = ? WHERE id = ? AND monitor_run_id = ''",
+                (candidates[0], event_id),
+            )
+            repaired += 1
+        if repaired:
+            conn.commit()
+    return repaired
+
+
 def finish_run(run_id: str, *, status: str, summary: str, result: Optional[Dict[str, Any]] = None) -> None:
     run_id, now, final = _text(run_id), now_text(), _text(status) or "completed"
     if not run_id:
@@ -369,26 +411,71 @@ _CHILD_IDS_SQL = """SELECT id FROM monitor_runs WHERE parent_run_id = ?
     WHERE run_id = ? AND relation = 'downstream'"""
 
 
-def _add_parent_context(conn: Any, run: Dict[str, Any]) -> None:
-    """Expose the initiating inbox run when a downstream run is listed alone."""
-    parent_id = _text(run.get("parent_run_id"))
-    if not parent_id:
-        row = conn.execute(
-            """SELECT run_id FROM monitor_run_links
-               WHERE related_run_id = ? AND relation IN ('child', 'downstream')
-               ORDER BY CASE relation WHEN 'child' THEN 0 ELSE 1 END, created_at, run_id
-               LIMIT 1""",
-            (_text(run.get("id")),),
-        ).fetchone()
-        parent_id = _text(row[0]) if row else ""
-    if not parent_id:
+def _add_parent_contexts(conn: Any, runs: List[Dict[str, Any]]) -> None:
+    """Expose the initiating inbox run when downstream runs are listed alone.
+
+    列表每页都会渲染这一列，所以父运行只做固定两次批量查询；逐条查询会在
+    列表页产生 N+1，且同样落在状态推送的热路径上。
+    """
+    run_ids = [_text(run.get("id")) for run in runs]
+    parent_ids: Dict[str, str] = {
+        run_id: _text(run.get("parent_run_id"))
+        for run_id, run in zip(run_ids, runs)
+        if run_id
+    }
+    missing = [run_id for run_id, parent_id in parent_ids.items() if not parent_id]
+    if missing:
+        marks = ",".join("?" for _ in missing)
+        linked = {
+            _text(row[0]): _text(row[1])
+            for row in conn.execute(
+                f"""SELECT related_run_id, run_id FROM monitor_run_links
+                     WHERE related_run_id IN ({marks}) AND relation IN ('child', 'downstream')
+                     ORDER BY CASE relation WHEN 'child' THEN 0 ELSE 1 END, created_at, run_id""",
+                tuple(missing),
+            ).fetchall()
+        }
+        for run_id in missing:
+            parent_ids[run_id] = linked.get(run_id, "")
+
+    wanted = sorted({parent_id for parent_id in parent_ids.values() if parent_id})
+    if not wanted:
         return
-    parent = conn.execute(
-        "SELECT task_name, subject FROM monitor_runs WHERE id = ?", (parent_id,)
-    ).fetchone()
-    if parent:
-        run["parent_task_name"] = _text(parent[0])
-        run["parent_subject"] = _text(parent[1])
+    marks = ",".join("?" for _ in wanted)
+    parents = {
+        _text(row[0]): (_text(row[1]), _text(row[2]))
+        for row in conn.execute(
+            f"SELECT id, task_name, subject FROM monitor_runs WHERE id IN ({marks})",
+            tuple(wanted),
+        ).fetchall()
+    }
+    for run, run_id in zip(runs, run_ids):
+        parent = parents.get(parent_ids.get(run_id, ""))
+        if parent:
+            run["parent_task_name"], run["parent_subject"] = parent
+
+
+def _child_counts(conn: Any, run_ids: List[str]) -> Dict[str, int]:
+    """统计每页运行记录的后续步骤数量，固定一次查询完成。"""
+    if not run_ids:
+        return {}
+    marks = ",".join("?" for _ in run_ids)
+    counts = {run_id: 0 for run_id in run_ids}
+    for row in conn.execute(
+        f"""SELECT relation.run_id, COUNT(DISTINCT relation.child_id) FROM (
+                SELECT parent_run_id AS run_id, id AS child_id
+                  FROM monitor_runs WHERE parent_run_id IN ({marks})
+                UNION ALL
+                SELECT link.run_id AS run_id, link.related_run_id AS child_id
+                  FROM monitor_run_links AS link
+                  JOIN monitor_runs AS child ON child.id = link.related_run_id
+                 WHERE link.run_id IN ({marks})
+                   AND link.relation IN ('child', 'downstream')
+            ) AS relation GROUP BY relation.run_id""",
+        tuple([*run_ids, *run_ids]),
+    ).fetchall():
+        counts[_text(row[0])] = int(row[1] or 0)
+    return counts
 
 
 def list_runs(*, limit: int = 10, cursor: str = "", task_name: str = "", source: str = "", status: str = "", run_kind: str = "", include_children: bool = False) -> Dict[str, Any]:
@@ -426,13 +513,11 @@ def list_runs(*, limit: int = 10, cursor: str = "", task_name: str = "", source:
         rows = conn.execute(f"SELECT * FROM monitor_runs {where} ORDER BY updated_at DESC, id DESC LIMIT ?", tuple([*values, limit + 1])).fetchall()
         has_more, rows = len(rows) > limit, rows[:limit]
         runs = [_serialize_run(row) for row in rows]
+        if include_downstream:
+            _add_parent_contexts(conn, runs)
+        child_counts = _child_counts(conn, [run["id"] for run in runs if run.get("id")])
         for run in runs:
-            if include_downstream:
-                _add_parent_context(conn, run)
-            run["child_count"] = int(conn.execute(
-                f"SELECT COUNT(*) FROM monitor_runs WHERE id IN ({_CHILD_IDS_SQL})",
-                (run["id"], run["id"]),
-            ).fetchone()[0] or 0)
+            run["child_count"] = child_counts.get(run["id"], 0)
     return {
         "runs": runs,
         "has_more": has_more,
@@ -532,11 +617,12 @@ def get_run_detail(run_id: str, *, category: str = "", offset: int = 0, limit: i
     }
 
 
-def cleanup_runs(*, scope: str, days: int = 0, preview: bool = False) -> Dict[str, Any]:
+def cleanup_runs(*, scope: str, days: int = 0, preview: bool = False, task_name: str = "") -> Dict[str, Any]:
     """Remove terminal runs within an explicit cleanup scope.
 
     ``expired`` is retention-driven and requires a positive day count;
     ``all_finished`` is the separately confirmed manual purge action.
+    ``task_name`` 可把范围收窄到某一个监控任务（运行记录页的“清空该任务记录”）。
     """
     normalized_scope = _text(scope).lower()
     if normalized_scope not in {"expired", "all_finished"}:
@@ -544,11 +630,15 @@ def cleanup_runs(*, scope: str, days: int = 0, preview: bool = False) -> Dict[st
     retention_days = max(0, int(days or 0))
     if normalized_scope == "expired" and retention_days < 1:
         raise ValueError("清理过期记录时必须指定保留天数")
+    normalized_task = _text(task_name)
     clauses, values = [
         "status NOT IN ('queued', 'running', 'waiting')",
         "NOT EXISTS (SELECT 1 FROM monitor_runs child WHERE child.parent_run_id = monitor_runs.id AND child.status IN ('queued', 'running', 'waiting'))",
         "NOT EXISTS (SELECT 1 FROM monitor_run_links link JOIN monitor_runs child ON child.id = link.related_run_id WHERE link.run_id = monitor_runs.id AND link.relation = 'downstream' AND child.status IN ('queued', 'running', 'waiting'))",
     ], []
+    if normalized_task:
+        clauses.append("task_name = ?")
+        values.append(normalized_task)
     if normalized_scope == "expired":
         clauses.append("finished_at != '' AND finished_at < ?")
         values.append((datetime.now() - timedelta(days=retention_days)).isoformat(timespec="seconds"))
