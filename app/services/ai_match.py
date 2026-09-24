@@ -147,7 +147,7 @@ def build_ai_match_runtime_config(cfg: Optional[Dict[str, Any]] = None) -> Dict[
             AI_MATCH_MAX_CONCURRENCY,
         ),
         "thinking_mode": _normalize_thinking_mode(active_cfg),
-        "min_confidence": _clamp_int(active_cfg.get("ai_match_min_confidence", 0), 0, 0, 100),
+        "min_confidence": _clamp_int(active_cfg.get("ai_match_min_confidence", 60), 60, 0, 100),
         "cache_ttl_hours": cache_ttl_hours,
         "cache_ttl_seconds": cache_ttl_hours * 3600,
         "max_candidates": AI_MATCH_MAX_CANDIDATES,

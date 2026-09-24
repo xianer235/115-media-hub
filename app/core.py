@@ -1036,7 +1036,7 @@ def default_config() -> Dict[str, Any]:
         "ai_match_temperature": 0,
         "ai_match_max_concurrency": 3,
         "ai_match_thinking_mode": "auto",
-        "ai_match_min_confidence": 0,
+        "ai_match_min_confidence": 60,
         "ai_match_cache_ttl_hours": 24,
         "pansou_enabled": False,
         "pansou_base_url": "",
@@ -2718,7 +2718,7 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     if "ai_match_thinking_mode" not in merged:
         merged["ai_match_thinking_mode"] = "auto"
     if "ai_match_min_confidence" not in merged:
-        merged["ai_match_min_confidence"] = 0
+        merged["ai_match_min_confidence"] = 60
     if "ai_match_cache_ttl_hours" not in merged:
         merged["ai_match_cache_ttl_hours"] = 24
     if "pansou_enabled" not in merged:
@@ -2898,9 +2898,12 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     merged["ai_match_thinking_mode"] = ai_thinking_mode
     merged.pop("ai_match_disable_thinking", None)
     try:
-        ai_match_min_confidence = int(merged.get("ai_match_min_confidence", 0) or 0)
+        ai_match_min_confidence = int(merged.get("ai_match_min_confidence", 60) or 0)
     except (TypeError, ValueError):
-        ai_match_min_confidence = 0
+        ai_match_min_confidence = 60
+    # 旧默认 0 = 不过滤，如今默认 60；把未显式配置过的旧默认一并升级，避免低置信度 AI 结果仍被直接采用。
+    if ai_match_min_confidence <= 0:
+        ai_match_min_confidence = 60
     merged["ai_match_min_confidence"] = max(0, min(100, ai_match_min_confidence))
     try:
         ai_match_cache_ttl_hours = int(merged.get("ai_match_cache_ttl_hours", 24) or 24)

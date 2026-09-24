@@ -1592,23 +1592,90 @@ def _legacy_extract_scraper_title_candidates(raw: str) -> List[str]:
     return candidates
 
 
+_SCRAPER_LEADING_BRACKET_RE = re.compile(r"^\s*(?:[\[\(（【][^\]\)）】]{1,80}[\]\)）】]\s*)+")
+_SCRAPER_SUBTITLE_MARKER_RE = re.compile(
+    r"(?:字幕|字幕组|字幕組|简繁|簡繁|简中|簡中|繁中|中英|國英|国英|国粤|國粵|"
+    r"双语|雙語|中字|英字|国语|國語|粤语|粵語|配音|音轨|音軌)"
+)
+# 目录/占位用的结构性中文词，不应被当成片名（如“文件夹A”“新建文件夹”）。
+_SCRAPER_STRUCTURAL_CJK_TITLES = frozenset({
+    "文件夹", "新建文件夹", "未命名", "未命名文件夹", "根目录",
+    "未整理", "待整理", "已整理", "未处理", "待处理", "已处理",
+    "临时", "临时文件", "回收站", "其他", "其它", "杂项",
+})
+
+
+def _extract_scraper_leading_cjk_titles(raw: str) -> List[str]:
+    """提取文件名开头括号里的中文片名候选。
+
+    发布名常把中文片名放在开头方括号里（如 ``[朱弦玉磐2024]``），而通用解析会把这些
+    括号整体当成噪声丢弃，导致中文片名丢失。这里把每个开头括号的内容去掉年份后清洗，
+    只保留仍是中文、且不是字幕/字幕组/版本等噪声的片段，作为高优先级候选。
+    """
+    text = unicodedata.normalize("NFKC", str(raw or "")).strip()
+    match = _SCRAPER_LEADING_BRACKET_RE.match(text)
+    if not match:
+        return []
+    contents = re.findall(r"[\[\(（【]([^\]\)）】]{1,80})[\]\)）】]", match.group(0))
+    titles: List[str] = []
+    for content in contents:
+        stripped = re.sub(r"(?:19|20)\d{2}", " ", content)
+        if _SCRAPER_SUBTITLE_MARKER_RE.search(stripped):
+            continue
+        cleaned = _clean_search_title(stripped)
+        if not cleaned or not _contains_cjk(cleaned):
+            continue
+        if _is_scraper_noise_keyword(cleaned):
+            continue
+        common_re, _, _ = _get_scraper_noise_rules()
+        if not common_re.sub(" ", cleaned).strip():
+            continue
+        titles.append(cleaned)
+    return titles
+
+
 def _extract_scraper_title_candidates(raw: str, preserve_colon: bool = False) -> List[str]:
     """按发布名结构提取候选标题（guessit 主解析 + 手写解析兜底合并）。
 
     guessit 擅长处理站点前缀、父目录路径、季集结构与发布组；手写解析补充多部曲
-    与中英混排等场景。两者按关键字去重合并，保证查询顺序稳定；
+    与中英混排等场景。开头括号里的中文片名也作为高优先级候选，避免被当作噪声丢弃。
+    三者按关键字去重合并，保证查询顺序稳定；
     中英混排候选拆成独立关键词，避免把两个名称合并成一条搜不出结果。
     """
     text = unicodedata.normalize("NFKC", str(raw or "")).strip()
     if not text:
         return []
+    leading_cjk = _extract_scraper_leading_cjk_titles(text)
     candidates = _scraper_guessit_candidates(text)
-    candidates = _merge_scraper_title_candidates(candidates + _legacy_extract_scraper_title_candidates(text))
+    candidates = _merge_scraper_title_candidates(
+        leading_cjk + candidates + _legacy_extract_scraper_title_candidates(text)
+    )
     split_candidates: List[str] = []
     for candidate in candidates:
         split_candidates.extend(_split_scraper_mixed_language_title(candidate, preserve_colon=preserve_colon))
     candidates = _merge_scraper_title_candidates(split_candidates + candidates)
     return candidates
+
+
+def _extract_scraper_filename_cjk_title(raw: str) -> str:
+    """从原始文件名里取最可能的中文片名，用于文件夹命名优先（没有则返回空串）。"""
+    text = unicodedata.normalize("NFKC", str(raw or "")).strip()
+    if not text:
+        return ""
+    candidates: List[str] = list(_extract_scraper_leading_cjk_titles(text))
+    head = re.sub(r"^[\s.\-_\[\]【】()（）]+", "", text)
+    matched = re.match(r"([\u4e00-\u9fff][\u4e00-\u9fff0-9·]*)", head)
+    if matched:
+        head_candidate = re.sub(r"(?:19|20)\d{2}$", "", matched.group(1)).strip(" -_·")
+        if head_candidate and _contains_cjk(head_candidate):
+            candidates.append(head_candidate)
+    for candidate in candidates:
+        if candidate in _SCRAPER_STRUCTURAL_CJK_TITLES:
+            continue
+        if _is_scraper_noise_keyword(candidate):
+            continue
+        return candidate
+    return ""
 
 
 def _scraper_query_degradations(query: str) -> List[str]:
@@ -2006,6 +2073,13 @@ def choose_scraper_title(tmdb: Dict[str, Any], language: str = "zh", fallback: s
     if normalized_language in ("", "auto", "default", "config"):
         cfg_language = str((get_config() or {}).get("tmdb_language", "zh-CN") or "zh-CN").strip().lower()
         normalized_language = "en" if cfg_language.startswith("en") else "zh"
+    # 电影条目名就是片名，文件名里已带中文片名时优先用它（比 TMDB 中文名更贴合发布名）；
+    # 剧集条目的名字多为单集文件名，中文片段容易是占位词，仍以 TMDB 名称为准。
+    media_type = normalize_tmdb_media_type(payload.get("tmdb_media_type") or payload.get("media_type"), "")
+    if normalized_language != "en" and media_type == "movie":
+        filename_cjk = _extract_scraper_filename_cjk_title(fallback)
+        if filename_cjk:
+            return sanitize_scraper_name(filename_cjk)
     localized = str(payload.get("tmdb_localized_title") or payload.get("tmdb_title") or payload.get("title") or "").strip()
     english = str(payload.get("tmdb_english_title") or "").strip()
     original = str(payload.get("tmdb_original_title") or payload.get("original_title") or "").strip()
@@ -5456,7 +5530,8 @@ def _ai_match_one_item(
         return
 
     media_type = ai_media_type or str(result.get("media_type") or "").strip()
-    year = ai_year or str(result.get("year") or "").strip()
+    # 文件名里确定性提取的年份比 AI 给出的年份更可靠：优先用它，防止 AI 把 2024 误判成 2023。
+    year = str(result.get("year") or "").strip() or ai_year
     try:
         found = _search_batch_tmdb_candidates(keyword, media_type, year, cfg)
     except Exception as exc:  # noqa: BLE001
@@ -5505,6 +5580,14 @@ def _ai_match_one_item(
         chosen = selection.get("candidate") if isinstance(selection.get("candidate"), dict) else {}
         confidence = max(0, min(100, int(selection.get("confidence", 0) or 0)))
         reason = str(selection.get("reason") or "").strip()
+        chosen_year = str(chosen.get("year") or "").strip()
+        if year and chosen_year and chosen_year != year:
+            # 已知条目年份时，AI 选中年份不一致直接不采纳，避免同名异年错配。
+            result["ai_year_conflict"] = True
+            result["ai_confidence"] = confidence
+            result["ai_reason"] = f"AI 选中年份 {chosen_year} 与条目年份 {year} 不一致"
+            result["ai_usage"] = usage
+            return
         if min_confidence > 0 and confidence < min_confidence:
             # 模型自己都没把握，不当作建议，避免干扰人工判断。
             result["ai_low_confidence"] = confidence

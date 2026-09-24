@@ -217,7 +217,7 @@ function collectSettingsPayload({
     const rawAiConcurrency = parseInt(document.getElementById('ai_match_max_concurrency')?.value || '', 10);
     cfg.ai_match_max_concurrency = Math.min(8, Math.max(1, Number.isFinite(rawAiConcurrency) ? rawAiConcurrency : 3));
     const rawAiMinConfidence = parseInt(document.getElementById('ai_match_min_confidence')?.value || '', 10);
-    cfg.ai_match_min_confidence = Math.min(100, Math.max(0, Number.isFinite(rawAiMinConfidence) ? rawAiMinConfidence : 0));
+    cfg.ai_match_min_confidence = Math.min(100, Math.max(0, Number.isFinite(rawAiMinConfidence) ? rawAiMinConfidence : 60));
     const rawAiCacheTtl = parseInt(document.getElementById('ai_match_cache_ttl_hours')?.value || '', 10);
     cfg.ai_match_cache_ttl_hours = Math.min(720, Math.max(0, Number.isFinite(rawAiCacheTtl) ? rawAiCacheTtl : 24));
 

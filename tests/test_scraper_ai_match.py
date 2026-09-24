@@ -120,8 +120,13 @@ class AiMatchRuntimeConfigTest(unittest.TestCase):
         self.assertEqual(cfg["ai_match_temperature"], 0)
         self.assertEqual(cfg["ai_match_max_concurrency"], 3)
         self.assertEqual(cfg["ai_match_thinking_mode"], "auto")
-        self.assertEqual(cfg["ai_match_min_confidence"], 0)
+        self.assertEqual(cfg["ai_match_min_confidence"], 60)
         self.assertEqual(cfg["ai_match_cache_ttl_hours"], 24)
+
+    def test_min_confidence_legacy_default_upgraded(self):
+        # 旧默认 0（不过滤）会在归一化时升级为 60；显式设置的非 0 值保持不变。
+        self.assertEqual(core.normalize_config({"ai_match_min_confidence": 0})["ai_match_min_confidence"], 60)
+        self.assertEqual(core.normalize_config({"ai_match_min_confidence": 80})["ai_match_min_confidence"], 80)
 
     def test_normalize_config_clamps(self):
         cfg = core.normalize_config(
@@ -162,7 +167,7 @@ class AiMatchRuntimeConfigTest(unittest.TestCase):
 
     def test_runtime_cache_and_confidence_defaults(self):
         runtime = ai_match.build_ai_match_runtime_config({})
-        self.assertEqual(runtime["min_confidence"], 0)
+        self.assertEqual(runtime["min_confidence"], 60)
         self.assertEqual(runtime["cache_ttl_hours"], 24)
         self.assertEqual(runtime["cache_ttl_seconds"], 24 * 3600)
 
@@ -711,6 +716,48 @@ class AiMatchFallbackIntegrationTest(unittest.TestCase):
             scraper._apply_ai_match_fallback(results, raw_items, {}, _fallback_cfg(ai_match_min_confidence=90))
 
         self.assertEqual(results[0]["ai_low_confidence"], 40)
+        self.assertNotIn("ai_selected", results[0])
+        self.assertEqual(results[0]["status"], "manual")
+
+    def test_fallback_prefers_deterministic_year_over_ai_year(self):
+        # 文件名确定性年份（2024）比 AI 给出的年份（1999）更可靠，搜索要用确定性年份。
+        results = [{**_manual_result(1), "year": "2024"}]
+        raw_items = [_raw_item(1)]
+        search_calls = []
+        candidate = _fake_candidate(tmdb_id=603, year="2024")
+
+        def fake_search(query, media_type, year, cfg):
+            search_calls.append((query, media_type, year))
+            return _low_score_candidates()
+
+        with mock.patch(
+            "app.services.ai_match.ai_match_generate_query",
+            return_value=_generated_ok(),
+        ), mock.patch(
+            "app.services.ai_match.ai_match_select_candidate",
+            return_value=_selected_ok(candidate),
+        ), mock.patch.object(scraper, "_search_batch_tmdb_candidates", side_effect=fake_search):
+            scraper._apply_ai_match_fallback(results, raw_items, {}, _fallback_cfg())
+
+        self.assertEqual(search_calls[0][2], "2024")
+        self.assertEqual(results[0]["ai_selected"]["id"], 603)
+
+    def test_fallback_rejects_ai_candidate_with_conflicting_year(self):
+        # 已知条目年份 2024，AI 却选了 2023 的候选：直接不采纳，避免同名异年错配。
+        results = [{**_manual_result(1), "year": "2024"}]
+        raw_items = [_raw_item(1)]
+        conflicting = _fake_candidate(tmdb_id=1171826, title="为乐而生", year="2023")
+        other = _fake_candidate(tmdb_id=603, title="Musica", year="2023")
+        with mock.patch(
+            "app.services.ai_match.ai_match_generate_query",
+            return_value=_generated_ok(),
+        ), mock.patch(
+            "app.services.ai_match.ai_match_select_candidate",
+            return_value=_selected_ok(conflicting, confidence=95),
+        ), mock.patch.object(scraper, "_search_batch_tmdb_candidates", return_value=[conflicting, other]):
+            scraper._apply_ai_match_fallback(results, raw_items, {}, _fallback_cfg())
+
+        self.assertTrue(results[0].get("ai_year_conflict"))
         self.assertNotIn("ai_selected", results[0])
         self.assertEqual(results[0]["status"], "manual")
 

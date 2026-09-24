@@ -3358,7 +3358,7 @@
                 ai_match_temperature: num('ai_match_temperature', 0),
                 ai_match_max_concurrency: num('ai_match_max_concurrency', 3),
                 ai_match_thinking_mode: String(document.getElementById('ai_match_thinking_mode')?.value || 'auto'),
-                ai_match_min_confidence: num('ai_match_min_confidence', 0),
+                ai_match_min_confidence: num('ai_match_min_confidence', 60),
                 ai_match_cache_ttl_hours: num('ai_match_cache_ttl_hours', 24),
             };
         }

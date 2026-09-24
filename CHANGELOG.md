@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.17] - 2026-09-25
+
+### 识别结果可视化 + 识别准确率修复
+
+- **运行记录逐条标出「原名 → 识别为」**：接收夹整理 / 接收夹分发写出的「网盘合并 / 网盘移动」记录，现在会带上 `original_name`（整理前的原文件名）、`match_source`（规则匹配 / AI 识别）、`confidence`（规则分数或 AI 置信度）、`match_reason`（AI 理由）、`tmdb_id`、`identified_year`；前端「运行记录 → 网盘操作」逐条渲染这些字段，配合已有的新名称即可完整看出“把什么识别成了什么”。
+- **保留文件名里的中文片名**：`_extract_scraper_title_candidates` 新增开头括号中文片名提取（`_extract_scraper_leading_cjk_titles`），把 `[朱弦玉磐2024]` 里的「朱弦玉磐」去掉年份后作为高优先级候选，而不是整体当噪声丢弃；字幕/字幕组/简繁/双语/国语/版本等噪声括号继续过滤（`[abc字幕组] 电影名.2024` 仍只返回「电影名」）。
+- **AI 兜底年份硬约束**：`_ai_match_one_item` 里改为「文件名确定性年份优先于 AI 给出的年份」，并在 AI 选中的候选年份与条目年份不一致时直接不采纳（标记 `ai_year_conflict`），避免把 2024 的片子配到 2023 的同名条目。
+- **最低采纳置信度默认 60**：`ai_match_min_confidence` 默认由 0（不过滤）改为 60，`normalize_config` 会把旧默认 0 升级为 60（显式设置的非 0 值保留）；设置页提示同步更新。
+- **电影文件夹名优先用文件名中文名**：`choose_scraper_title` 对电影条目优先用文件名里的中文片名作为整理后的文件夹标题（如「七勇破星阵 (1966)」），没有中文名再回退 TMDB 中文名；剧集条目的名字多是单集文件名、中文片段容易是占位词，仍以 TMDB 命名为准。
+
+### 验证
+
+- `tests.test_scraper_batch_organize` 新增“保留括号内中文片名”“电影文件夹优先用文件名中文名”用例；`tests.test_scraper_ai_match` 新增“确定性年份优先于 AI 年份”“拒绝年份冲突的 AI 候选”“旧默认 0 升级为 60”；`tests.test_quick_import` 新增“移动事件写入识别映射”；`tests.test_monitor_run_frontend` 新增“移动明细展示识别映射字段”。
+- 完整 `unittest discover -s tests -p 'test_*.py'` 1028 项零失败；`compileall app main.py`、改动 JS 的 `node --check`、`git diff --check`、`version.json` 解析通过。
+- 用 `[朱弦玉磐2024][简繁英字幕].Musica.2024...` 构造条目、mock TMDB 搜索复核：确定性识别直接命中「朱弦玉磐」2024（`status=auto`，无需 AI）。
+
 ## [0.11.16] - 2026-09-25
 
 ### 运行详情默认展开

@@ -801,6 +801,53 @@ class QuickImportRunTest(unittest.TestCase):
         # 接收夹里可能是散文件，必须强制整理进媒体文件夹
         self.assertTrue(seen_options[0]["force_media_folder"])
 
+    def test_move_event_records_identification_mapping(self):
+        # 运行记录要能看清「原文件名 → 识别为」，包括来源/置信度/理由/tmdb。
+        cfg = _cfg()
+        identified = {
+            "items": [_item(1, "Musica.2024.mkv", is_dir=False)],
+            "picked": {
+                1: {
+                    "id": 1171826,
+                    "media_type": "movie",
+                    "title": "朱弦玉磐",
+                    "year": "2024",
+                    "source": "ai",
+                    "ai_confidence": 88,
+                    "ai_reason": "片名与年份一致",
+                }
+            },
+            "results": [{"item_index": 1, "status": "suggest"}],
+        }
+        events = []
+        with mock.patch.object(quick_import, "get_config", return_value=cfg), \
+                mock.patch.object(quick_import, "resolve_scraper_dest_folder_id", side_effect=lambda provider, path: f"cid:{path}"), \
+                mock.patch.object(quick_import, "identify_scraper_batch_entries", return_value=identified), \
+                mock.patch.object(quick_import, "build_scraper_plan_for_batch", return_value={
+                    "ok": True,
+                    "items": [{"title": "朱弦玉磐", "year": "2024"}],
+                    "issues": [],
+                    "ready_count": 1,
+                }), \
+                mock.patch.object(quick_import, "create_scraper_job_from_plan", return_value={"job_id": 11}), \
+                mock.patch.object(quick_import, "submit_scraper_job", return_value=self._Future()), \
+                mock.patch.object(quick_import, "_resolve_entry_after_organize", side_effect=lambda cid, summary, entry: entry), \
+                mock.patch.object(scraper, "find_scraper_media_folder", return_value={}), \
+                mock.patch.object(scraper, "move_scraper_entries", return_value={}), \
+                mock.patch.object(quick_import, "record_monitor_run_event", side_effect=lambda *args, **kwargs: events.append(kwargs)):
+            result = quick_import.run_quick_import("test")
+
+        self.assertEqual(len(result["moved"]), 1)
+        move_events = [event for event in events if event.get("operation") in ("move", "merge")]
+        self.assertEqual(len(move_events), 1)
+        detail = move_events[0]["detail"]
+        self.assertEqual(detail["original_name"], "Musica.2024.mkv")
+        self.assertEqual(detail["match_source"], "AI 识别")
+        self.assertEqual(detail["confidence"], 88)
+        self.assertEqual(detail["match_reason"], "片名与年份一致")
+        self.assertEqual(detail["tmdb_id"], 1171826)
+        self.assertEqual(detail["identified_year"], "2024")
+
     def test_mixed_result_waits_when_dispatched_item_needs_strm_sync(self):
         cfg = _cfg()
         identified = {

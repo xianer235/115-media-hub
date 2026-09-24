@@ -959,6 +959,12 @@ def run_quick_import(
                         "monitor_sync_events": int(dispatch.get("monitor_sync_events", 0) or 0),
                     }
                 )
+                is_ai = str(candidate.get("source") or "").strip() == "ai"
+                match_source = "AI 识别" if is_ai else "规则匹配"
+                confidence = max(0, int(candidate.get("ai_confidence") if is_ai else candidate.get("score") or 0))
+                match_reason = str(candidate.get("ai_reason") or "").strip() if is_ai else ""
+                tmdb_id = max(0, parse_int(candidate.get("id") or 0, 0))
+                identified_year = str(candidate.get("year") or "").strip()
                 record_monitor_run_event(
                     monitor_run_id,
                     category="remote",
@@ -968,6 +974,12 @@ def run_quick_import(
                     detail={
                         "step": "接收夹分发",
                         "operation_label": "网盘合并" if dispatch.get("merged") else "网盘移动",
+                        "original_name": source_entry_name,
+                        "match_source": match_source,
+                        "confidence": confidence,
+                        "match_reason": match_reason,
+                        "tmdb_id": tmdb_id,
+                        "identified_year": identified_year,
                         "old_name": entry_name,
                         "new_name": str(dispatch.get("target_folder", "") or entry_name),
                         "old_path": normalize_relative_path(str(entry.get("path", "") or join_relative_path(base_rel, entry_name))),

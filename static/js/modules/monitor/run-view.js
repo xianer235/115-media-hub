@@ -31,6 +31,8 @@
     };
     const fields = {
         old_name: '原名称', new_name: '新名称', old_path: '原路径', new_path: '新路径',
+        original_name: '原文件名', match_source: '识别来源', confidence: '置信度',
+        match_reason: '识别理由', tmdb_id: 'TMDB ID', identified_year: '识别年份',
         path: '文件路径', strm_path: '本地播放文件', remote_path: '网盘文件',
         scope: '本次范围', target: '目标目录', task_name: '监控任务', name: '名称',
         reason: '原因', error: '错误说明', detail: '详细说明', summary: '处理结果',

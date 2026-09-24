@@ -77,6 +77,30 @@ class MonitorRunViewTest(unittest.TestCase):
         self.assertNotIn("internal_trace", html)
         self.assertNotIn("must not leak", html)
 
+    def test_move_detail_shows_identification_mapping(self):
+        html = run_view(
+            "window.MonitorRunView.detailRows({"
+            "original_name: '[朱弦玉磐2024][简繁英字幕].Musica.2024.2160p.mkv', "
+            "new_name: '朱弦玉磐 (2024) [tmdbid-1171826]', "
+            "match_source: 'AI 识别', "
+            "confidence: 88, "
+            "match_reason: '片名与年份一致', "
+            "tmdb_id: 1171826, "
+            "identified_year: '2024'"
+            "})"
+        )
+
+        self.assertIn("原文件名", html)
+        self.assertIn("Musica.2024.2160p.mkv", html)
+        self.assertIn("新名称", html)
+        self.assertIn("朱弦玉磐 (2024) [tmdbid-1171826]", html)
+        self.assertIn("识别来源", html)
+        self.assertIn("AI 识别", html)
+        self.assertIn("置信度", html)
+        self.assertIn("识别理由", html)
+        self.assertIn("TMDB ID", html)
+        self.assertIn("识别年份", html)
+
     def test_historical_started_step_is_not_rendered_as_current_running(self):
         html = run_view(
             "window.MonitorRunView.eventCard({category: 'process', operation: 'started', "

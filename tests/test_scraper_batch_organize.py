@@ -483,6 +483,43 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
             ["Movie Name"],
         )
 
+    def test_extract_title_candidates_keeps_bracketed_chinese_title(self):
+        # 开头方括号里的中文片名是强信号，不能被当作噪声丢弃。
+        candidates = scraper._extract_scraper_title_candidates(
+            "[朱弦玉磐2024][简繁英字幕].Musica.2024.2160p.AMZN.WEB-DL.DDP.5.1.Atmos.HDR10+.H.265-DreamHD.mkv"
+        )
+        self.assertEqual(candidates[0], "朱弦玉磐")
+        self.assertIn("Musica", candidates)
+        # 字幕/字幕组等噪声括号仍要过滤，不能污染候选。
+        self.assertEqual(
+            scraper._extract_scraper_title_candidates("[简繁英字幕] 电影名.2024.1080p.mkv"),
+            ["电影名"],
+        )
+
+    def test_filename_chinese_title_preferred_for_movie_folder(self):
+        entry = {
+            "id": "f1",
+            "name": "七勇破星阵.Star.Pilot.1966.1080p.Uncut.GER.Blu-ray.AVC.DTS-HDMA.2.0-FULLBRUTALiTY.iso",
+            "is_dir": False,
+            "parent_id": "0",
+            "parent_path": "接收",
+            "path": "接收/七勇破星阵.Star.Pilot.1966.iso",
+        }
+        tmdb = {
+            "tmdb_media_type": "movie",
+            "tmdb_title": "星际飞行员",
+            "tmdb_localized_title": "星际飞行员",
+            "tmdb_original_title": "Star Pilot",
+            "tmdb_year": "1966",
+            "title": "星际飞行员",
+            "year": "1966",
+        }
+        title, _file_title, folder_title = scraper._build_scraper_media_titles(
+            tmdb, {"title_language": "zh"}, entry["name"]
+        )
+        self.assertEqual(title, "七勇破星阵")
+        self.assertEqual(folder_title, "七勇破星阵 (1966)")
+
     def test_degraded_query_hit_is_suggest_not_auto(self):
         entry = {
             "id": "d1",

@@ -204,8 +204,8 @@
                                 <input id="ai_match_temperature" type="number" min="0" max="2" step="0.1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
                             </label>
                             <label class="block">
-                                <span class="text-xs text-slate-500">最低采纳置信度（0 = 不过滤）</span>
-                                <input id="ai_match_min_confidence" type="number" min="0" max="100" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
+                                <span class="text-xs text-slate-500">最低采纳置信度（默认 60，低于此值的 AI 结果不采纳；填 0 按默认处理）</span>
+                                <input id="ai_match_min_confidence" type="number" min="0" max="100" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="60">
                             </label>
                             <label class="block">
                                 <span class="text-xs text-slate-500">结果缓存（小时，0 = 关闭）</span>
