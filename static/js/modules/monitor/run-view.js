@@ -20,7 +20,7 @@
     const operations = {
         queued: '已加入队列', merged: '已合并请求', started: '开始执行',
         waiting: '等待后续同步', finished: '本次运行结束',
-        downstream_finished: '后续同步结束', retry: '重新运行',
+        downstream_finished: '后续同步结束', retry: '重新运行', resettled: '重新结算',
         identified: '识别完成', read_dir: '检查目录', write: '写入本地播放文件',
         delete: '删除本地播放文件', sync: '同步本地播放文件',
         rename: '网盘重命名', move: '网盘移动', merge: '网盘合并',
@@ -201,22 +201,61 @@
             </div></article>`;
     }
 
-    function listRow(run) {
+    function listRow(run, options) {
+        const opts = options && typeof options === 'object' ? options : {};
         const stats = metrics(run?.result);
         const parentContext = parentContextText(run);
-        return `<button type="button" class="monitor-run-row" data-run-id="${escape(run?.id)}">
+        const depth = opts.child ? Math.max(1, Math.min(4, Number(opts.depth || run?.group_depth || 1) || 1)) : 0;
+        const childText = depth
+            ? `<span class="monitor-run-group-mark">${depth > 1 ? '└' : '├'}</span>`
+            : '';
+        // 组内的下游已经直接显示在下面，不再重复“后续 N 项”；组头显示整个工作单元的规模。
+        const followUp = depth ? 0 : (count(run?.group_total) || count(run?.child_count));
+        return `<button type="button" class="monitor-run-row${depth ? ' is-group-child' : ''}" data-run-id="${escape(run?.id)}"${depth ? ` style="--run-depth:${depth}"` : ''}>
             <span class="monitor-run-main"><span class="monitor-run-title">${escape(run?.task_name || '文件夹监控')} <i>·</i> ${escape(run?.subject || '全部目录')}</span>
             <span class="monitor-run-meta">流程：${escape(runKindText(run))} · 启动：${escape(sourceText(run))} · ${escape(time(run?.queued_at || run?.started_at))}${duration(run) ? ` · 用时 ${escape(duration(run))}` : ''}</span>
             ${parentContext ? `<span class="monitor-run-meta">${escape(parentContext)}</span>` : ''}
-            <span class="monitor-run-result">${escape(summary(run))}</span>
+            <span class="monitor-run-result">${childText}${escape(summary(run))}</span>
             ${stats.length ? `<span class="monitor-run-inline-metrics">${stats.map(item => `<span${item.warning ? ' class="tone-warning"' : ''}>${item.label} <b>${item.value}</b></span>`).join('')}</span>` : ''}
             </span><span class="monitor-run-side">${badge(run?.status, run)}<span class="monitor-run-open">查看详情</span>
-            ${count(run?.child_count) ? `<span class="monitor-run-child-count">后续 ${count(run.child_count)} 项</span>` : ''}</span></button>`;
+            ${followUp ? `<span class="monitor-run-child-count">后续 ${followUp} 项</span>` : ''}</span></button>`;
+    }
+
+    // 一个工作单元 = 触发记录 + 它派生出来的下游（增量变更同步 → 自动补扫）。
+    // 组头永远在最前，下游缩进在组内，列表因此读起来就是“谁触发了什么”。
+    function listGroup(head) {
+        const rows = Array.isArray(head?.group_runs) ? head.group_runs : [];
+        const total = Math.max(count(head?.group_total), rows.length);
+        if (!rows.length || !total) return listRow(head);
+        const more = Math.max(0, count(head?.group_more) || (total - rows.length));
+        const groupId = escape(head?.id);
+        const expandedLabel = `收起 ${total} 项后续同步`;
+        const collapsedLabel = `展开 ${total} 项后续同步`;
+        return `<div class="monitor-run-group" data-group-id="${groupId}">
+            ${listRow(head)}
+            <button type="button" class="monitor-run-group-toggle" data-group-toggle="${groupId}" data-expanded-label="${escape(expandedLabel)}" data-collapsed-label="${escape(collapsedLabel)}" aria-expanded="true" onclick="toggleMonitorRunGroup('${escape(head?.id)}')">${escape(expandedLabel)}</button>
+            <div class="monitor-run-group-body" data-group-body="${groupId}">
+            ${rows.map(item => listRow(item, {child: true, depth: item?.group_depth || 1})).join('')}
+            ${more ? `<div class="monitor-run-group-more">还有 ${more} 项，打开详情查看。</div>` : ''}
+            </div></div>`;
+    }
+
+    function listHtml(runs) {
+        return (Array.isArray(runs) ? runs : []).map(run => listGroup(run)).join('');
     }
 
     function relations(items, title) {
         if (!items?.length) return '';
         return `<section class="monitor-run-detail-section"><h4>${title}</h4>${items.map(item => `<button type="button" class="monitor-run-child" data-run-id="${escape(item.id)}"><span>${escape(item.task_name || '监控')} · ${escape(item.subject || '全部目录')}</span>${badge(item.status)}<span aria-hidden="true">查看</span></button>`).join('')}</section>`;
+    }
+
+    // 详情里的下游带层级（增量变更同步 → 自动补扫），缩进显示整条链路。
+    function descendantRelations(items, title) {
+        if (!items?.length) return '';
+        return `<section class="monitor-run-detail-section"><h4>${title}</h4>${items.map(item => {
+            const depth = Math.max(1, Math.min(4, Number(item?.depth || 1) || 1));
+            return `<button type="button" class="monitor-run-child${depth > 1 ? ' is-nested' : ''}" style="--run-depth:${depth}" data-run-id="${escape(item.id)}"><span>${escape(item.task_name || '监控')} · ${escape(item.subject || '全部目录')}</span>${badge(item.status)}<span aria-hidden="true">查看</span></button>`;
+        }).join('')}</section>`;
     }
 
     function detailHtml(detail, category) {
@@ -240,7 +279,7 @@
             ${retry || cancel ? `<div class="monitor-run-detail-actions">${retry ? '<button type="button" class="monitor-run-detail-action" onclick="retryMonitorRun()">按原范围重新运行</button><span class="monitor-run-action-note">会重新检查本次记录中的全部范围。</span>' : ''}${cancel ? '<button type="button" class="monitor-run-detail-action is-cancel" onclick="cancelMonitorRun()">取消排队</button>' : ''}</div>` : ''}
         </section>
         ${overview && (problemCount || derived.length) ? `<button class="monitor-run-problem-link" type="button" onclick="switchMonitorRunDetail('problem')">${problemCount ? `${problemCount} 条问题记录` : `${derived.length} 项未完成内容`}，查看原因与影响 <span aria-hidden="true">查看</span></button>` : ''}
-        ${overview ? relations(detail.children, '后续同步') + relations(detail.parents, '来源运行') + relations(detail.related, '原运行记录') : ''}
+        ${overview ? (detail.descendants?.length ? descendantRelations(detail.descendants, '后续同步') : relations(detail.children, '后续同步')) + relations(detail.parents, '来源运行') + relations(detail.related, '原运行记录') : ''}
         <section class="monitor-run-detail-section"><div class="monitor-run-section-head"><h4>${title}</h4><span>${derivedOnly ? '来自运行结果' : `已显示 ${events.length} / ${count(detail.total ?? events.length)} 条`}</span></div>
         ${events.length ? `<div class="monitor-run-timeline">${events.map((event, index) => eventCard(event, index)).join('')}</div>` : (category === 'problem' ? (derived.length ? derivedIssueBlock(run) : '<div class="monitor-run-empty">暂无问题记录。</div>') : '<div class="monitor-run-empty">本次运行尚未记录此类操作。</div>')}
         ${detail.has_more ? '<button type="button" class="monitor-run-load-more log-header-btn" onclick="loadMoreMonitorRunEvents()">加载更多记录</button>' : ''}</section>`;
@@ -248,6 +287,6 @@
 
     global.MonitorRunView = {
         statuses, sources, runKinds, escape, count, status, tone, time, sourceText, runKindText, parentContextText, scopeText,
-        duration, summary, metrics, detailRows, eventCard, listRow, detailHtml, derivedIssues, tabCount,
+        duration, summary, metrics, detailRows, eventCard, listRow, listGroup, listHtml, detailHtml, derivedIssues, tabCount,
     };
 })(window);

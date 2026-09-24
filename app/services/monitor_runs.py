@@ -10,6 +10,11 @@ from ..db import db_connection, now_text, safe_json_dumps, safe_json_loads, sqli
 ACTIVE_RUN_STATUSES = {"queued", "running", "waiting"}
 INCOMPLETE_CHILD_STATUSES = {"failed", "partial", "cancelled"}
 ACTIVE_CHANGE_STATUSES = {"prepared", "pending", "processing"}
+UNRESOLVED_CHANGE_STATUSES = {"failed", "manual_required", "rollback_failed"}
+# 一次整理会派生「增量变更同步 → 自动补扫」两层下游，链路本身很浅；把向上/向下的
+# 遍历限制在这个深度，既覆盖真实链路，也避免异常数据把查询拖成全库递归。
+MAX_RUN_LINK_DEPTH = 5
+GROUP_RUNS_PREVIEW_LIMIT = 10
 SOURCE_LABELS = {
     "manual": "手动触发", "cron": "定时触发", "resource": "资源导入",
     "subscription": "订阅任务", "webhook": "外部通知", "change": "检测到网盘变更",
@@ -66,6 +71,119 @@ def _insert_event(conn: Any, run_id: str, category: str, operation: str, status:
     )
 
 
+def _run_parent_ids(conn: Any, run_ids: List[str]) -> Dict[str, List[str]]:
+    """批量解析直接父运行（直接字段 + 关联表），避免列表页出现 N+1 查询。"""
+    parents: Dict[str, List[str]] = {run_id: [] for run_id in run_ids if run_id}
+    if not parents:
+        return parents
+    marks = ",".join("?" for _ in parents)
+    values = tuple(parents)
+    for row in conn.execute(
+        f"""SELECT id, parent_run_id FROM monitor_runs
+             WHERE id IN ({marks}) AND parent_run_id <> ''""",
+        values,
+    ).fetchall():
+        run_id, parent_id = _text(row[0]), _text(row[1])
+        if run_id in parents and parent_id and parent_id not in parents[run_id]:
+            parents[run_id].append(parent_id)
+    for row in conn.execute(
+        f"""SELECT related_run_id, run_id FROM monitor_run_links
+             WHERE related_run_id IN ({marks}) AND relation IN ('child', 'downstream')""",
+        values,
+    ).fetchall():
+        run_id, parent_id = _text(row[0]), _text(row[1])
+        if run_id in parents and parent_id and parent_id not in parents[run_id]:
+            parents[run_id].append(parent_id)
+    return parents
+
+
+def _ancestor_ids(conn: Any, run_id: str, *, max_depth: int = MAX_RUN_LINK_DEPTH) -> List[str]:
+    """祖先运行 ID，由近到远（最近的一层在前），按深度上限收敛。"""
+    origin = _text(run_id)
+    if not origin:
+        return []
+    seen: List[str] = []
+    pending = [origin]
+    cache: Dict[str, List[str]] = {}
+    for _ in range(max(1, int(max_depth or 1))):
+        level: List[str] = []
+        for value in pending:
+            if value not in cache:
+                cache.update(_run_parent_ids(conn, [value]))
+            for parent_id in cache.get(value, []):
+                if parent_id == origin or parent_id in seen or parent_id in level:
+                    continue
+                level.append(parent_id)
+        if not level:
+            break
+        seen.extend(level)
+        pending = level
+    return seen
+
+
+def _touch_ancestors(conn: Any, run_id: str, now: str) -> None:
+    """把“最近活动”上溯到祖先运行。
+
+    运行记录按 `updated_at` 排序，而列表默认只显示工作单元的头（触发）记录。上游
+    时间跟着下游一起动，组头才始终排在自己的派生任务之前，分页游标也能继续用
+    `updated_at`，不必为分组写递归 CTE。
+    """
+    ancestors = _ancestor_ids(conn, run_id)
+    if not ancestors:
+        return
+    marks = ",".join("?" for _ in ancestors)
+    conn.execute(f"UPDATE monitor_runs SET updated_at = ? WHERE id IN ({marks})", (now, *ancestors))
+
+
+def _descendant_entries(conn: Any, run_id: str, *, max_depth: int = MAX_RUN_LINK_DEPTH) -> List[Dict[str, Any]]:
+    """一条运行的全部下游（含下游的下游），带 `depth`，按触发时间升序。"""
+    origin = _text(run_id)
+    if not origin:
+        return []
+    depths: Dict[str, int] = {}
+    pending = [origin]
+    for depth in range(1, max(1, int(max_depth or 1)) + 1):
+        if not pending:
+            break
+        marks = ",".join("?" for _ in pending)
+        values = tuple([*pending, *pending])
+        level: List[str] = []
+        for row in conn.execute(
+            f"""SELECT * FROM monitor_runs WHERE parent_run_id IN ({marks})
+                UNION
+                SELECT run.* FROM monitor_run_links AS link
+                  JOIN monitor_runs AS run ON run.id = link.related_run_id
+                 WHERE link.run_id IN ({marks}) AND link.relation IN ('child', 'downstream')""",
+            values,
+        ).fetchall():
+            child_id = _text(sqlite_row_to_dict(row).get("id"))
+            if not child_id or child_id == origin or child_id in depths:
+                continue
+            depths[child_id] = depth
+            level.append(child_id)
+        pending = level
+    if not depths:
+        return []
+    marks = ",".join("?" for _ in depths)
+    rows = {
+        _text(sqlite_row_to_dict(row).get("id")): row
+        for row in conn.execute(f"SELECT * FROM monitor_runs WHERE id IN ({marks})", tuple(depths)).fetchall()
+    }
+    items: List[Dict[str, Any]] = []
+    for child_id, depth in depths.items():
+        item = _serialize_run(rows.get(child_id))
+        if not item:
+            continue
+        item["depth"] = depth
+        item["group_id"] = origin
+        item["group_depth"] = depth
+        items.append(item)
+    child_counts = _child_counts(conn, list(depths))
+    for item in items:
+        item["child_count"] = child_counts.get(_text(item.get("id")), 0)
+    return _order_group_entries(items, origin)
+
+
 def create_run(*, run_kind: str, task_name: str, source: str, scope: Optional[Dict[str, Any]] = None, subject: str = "", parent_run_id: str = "", source_ref: str = "", task_snapshot: Optional[Dict[str, Any]] = None) -> str:
     run_id, now = uuid.uuid4().hex, now_text()
     item = {"source": _text(source).lower() or "system", "ref": _text(source_ref), "at": now}
@@ -80,6 +198,7 @@ def create_run(*, run_kind: str, task_name: str, source: str, scope: Optional[Di
         _insert_event(conn, run_id, "process", "queued", "queued", source_label(source), {"scope": _object(scope), "source_ref": item["ref"]}, now)
         if parent:
             conn.execute("INSERT OR IGNORE INTO monitor_run_links (run_id, related_run_id, relation, created_at) VALUES (?, ?, 'child', ?)", (parent, run_id, now))
+            _touch_ancestors(conn, run_id, now)
         conn.commit()
     return run_id
 
@@ -88,8 +207,10 @@ def link_runs(run_id: str, related_run_id: str, relation: str = "related") -> No
     left, right = _text(run_id), _text(related_run_id)
     if not left or not right or left == right:
         return
+    now = now_text()
     with db_connection() as conn:
-        conn.execute("INSERT OR IGNORE INTO monitor_run_links (run_id, related_run_id, relation, created_at) VALUES (?, ?, ?, ?)", (left, right, _text(relation) or "related", now_text()))
+        conn.execute("INSERT OR IGNORE INTO monitor_run_links (run_id, related_run_id, relation, created_at) VALUES (?, ?, ?, ?)", (left, right, _text(relation) or "related", now))
+        _touch_ancestors(conn, left, now)
         conn.commit()
 
 
@@ -102,6 +223,7 @@ def set_parent_run(run_id: str, parent_run_id: str) -> None:
     with db_connection() as conn:
         conn.execute("UPDATE monitor_runs SET parent_run_id = ?, updated_at = ? WHERE id = ?", (parent, now, run_id))
         conn.execute("INSERT OR IGNORE INTO monitor_run_links (run_id, related_run_id, relation, created_at) VALUES (?, ?, 'child', ?)", (parent, run_id, now))
+        _touch_ancestors(conn, run_id, now)
         conn.commit()
 
 
@@ -121,6 +243,7 @@ def add_source(run_id: str, source: str, source_ref: str = "") -> None:
         sources.append(item)
         conn.execute("UPDATE monitor_runs SET sources_json = ?, updated_at = ? WHERE id = ?", (safe_json_dumps(sources), now, run_id))
         _insert_event(conn, run_id, "process", "merged", "queued", source_label(source), {"source_ref": item["ref"]}, now)
+        _touch_ancestors(conn, run_id, now)
         conn.commit()
 
 
@@ -139,14 +262,15 @@ def start_run(run_id: str, *, subject: str = "", scope: Optional[Dict[str, Any]]
     with db_connection() as conn:
         conn.execute(f"UPDATE monitor_runs SET {', '.join(assignments)} WHERE id = ?", tuple(values))
         _insert_event(conn, run_id, "process", "started", "running", "开始执行", {"scope": _object(scope)}, now)
+        _touch_ancestors(conn, run_id, now)
         conn.commit()
 
 
 def update_run(run_id: str, *, subject: Optional[str] = None, status: Optional[str] = None, summary: Optional[str] = None, result: Optional[Dict[str, Any]] = None) -> None:
-    run_id = _text(run_id)
+    run_id, now = _text(run_id), now_text()
     if not run_id:
         return
-    assignments, values = ["updated_at = ?"], [now_text()]
+    assignments, values = ["updated_at = ?"], [now]
     if subject is not None:
         assignments.append("subject = ?"); values.append(_text(subject))
     if status is not None:
@@ -158,6 +282,7 @@ def update_run(run_id: str, *, subject: Optional[str] = None, status: Optional[s
     values.append(run_id)
     with db_connection() as conn:
         conn.execute(f"UPDATE monitor_runs SET {', '.join(assignments)} WHERE id = ?", tuple(values))
+        _touch_ancestors(conn, run_id, now)
         conn.commit()
 
 
@@ -169,100 +294,119 @@ def wait_run(run_id: str, *, summary: str, result: Optional[Dict[str, Any]] = No
         normalized_result = normalize_result(result)
         conn.execute("UPDATE monitor_runs SET status = 'waiting', summary = ?, result_json = ?, updated_at = ? WHERE id = ?", (_text(summary), safe_json_dumps(normalized_result), now, run_id))
         _insert_event(conn, run_id, "process", "waiting", "waiting", _text(summary), normalized_result, now)
+        _touch_ancestors(conn, run_id, now)
         conn.commit()
-    reconcile_inbox_run(run_id)
+    reconcile_waiting_run(run_id)
 
 
-def _linked_child_ids(conn: Any, parent_run_id: str) -> set:
-    children = {
-        _text(row[0])
-        for row in conn.execute(
-            "SELECT id FROM monitor_runs WHERE parent_run_id = ?",
-            (parent_run_id,),
-        ).fetchall()
-        if _text(row[0])
+def _change_event_state(conn: Any, run_id: str) -> Dict[str, Any]:
+    """运行名下变更事件的处理状态：`blocked` 表示仍在处理中，其余计入未完成。"""
+    state: Dict[str, Any] = {"blocked": False, "counts": {status: 0 for status in UNRESOLVED_CHANGE_STATUSES}, "total": 0}
+    rows = conn.execute(
+        "SELECT status, next_retry_at FROM monitor_change_events WHERE monitor_run_id = ?",
+        (run_id,),
+    ).fetchall()
+    for row in rows:
+        status = _text(row[0])
+        state["total"] += 1
+        if status in ACTIVE_CHANGE_STATUSES:
+            state["blocked"] = True
+        elif status == "failed" and float(row[1] or 0) > 0:
+            # 还有退避重试在排队，属于“进行中”，不能提前结算。
+            state["blocked"] = True
+        elif status in UNRESOLVED_CHANGE_STATUSES:
+            state["counts"][status] += 1
+    return state
+
+
+def _run_unfinished_state(conn: Any, run_id: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    """判断一条运行的后续工作是否真的没做完。
+
+    返回 `blocked`（还有进行中的工作，必须继续等待）与 `reasons`（已经确定未完成
+    的内容）。自动补扫是同一批工作的后续步骤，只有它真的失败、或条目仍留在接收夹、
+    或变更事件仍未解决，才算“未完成”。
+    """
+    descendants = _descendant_entries(conn, run_id)
+    active = [item for item in descendants if _text(item.get("status")) in ACTIVE_RUN_STATUSES]
+    if active:
+        return {"blocked": True, "reasons": [], "descendants": descendants}
+
+    change_state = _change_event_state(conn, run_id)
+    if change_state["blocked"]:
+        return {"blocked": True, "reasons": [], "descendants": descendants}
+
+    reasons: List[str] = []
+    left = _count_result(result.get("left"))
+    if left:
+        reasons.append(f"仍留在接收夹 {left} 项")
+    for status, label in (("manual_required", "仍需同步"), ("failed", "处理失败"), ("rollback_failed", "回滚失败")):
+        count = int((change_state["counts"] or {}).get(status, 0) or 0)
+        if count:
+            reasons.append(f"{count} 个目录{label}")
+    for item in descendants:
+        if _text(item.get("status")) in INCOMPLETE_CHILD_STATUSES:
+            subject = _text(item.get("subject")) or _text(item.get("task_name")) or "后续任务"
+            reasons.append(f"后续任务未完成：{subject}")
+    # 事件处理可能刚结束、下游运行还没建好关联：执行期继续等，启动恢复才允许收尾。
+    expected_downstream = _count_result(result.get("monitor_sync_events")) > 0 or _count_result(result.get("waiting_children")) > 0
+    return {
+        "blocked": False,
+        "reasons": reasons,
+        "descendants": descendants,
+        "expected_downstream": expected_downstream,
+        "no_descendants": not descendants,
     }
-    children.update(
-        _text(row[0])
-        for row in conn.execute(
-            """SELECT related_run_id FROM monitor_run_links
-               WHERE run_id = ? AND relation = 'downstream'""",
-            (parent_run_id,),
-        ).fetchall()
-        if _text(row[0])
-    )
-    return children
 
 
-def _reconcile_inbox_run(
+def _waiting_settle_summary(run_kind: str, result: Dict[str, Any], reasons: List[str], descendant_total: int) -> str:
+    if reasons:
+        return f"后续同步结束，仍有未完成内容：{'；'.join(reasons[:2])}。"
+    if run_kind == "change":
+        completed = _count_result(result.get("completed"))
+        rescans = _count_result(result.get("auto_rescan"))
+        head = f"已同步 {completed} 条网盘变更" if completed else "本次变更同步已结束"
+        return f"{head}，{rescans} 个目录的自动补扫已完成。" if rescans else f"{head}。"
+    moved = _count_result(result.get("moved"))
+    head = f"已分发 {moved} 项" if moved else "本次整理已结束"
+    return f"{head}，后续同步全部完成（含自动补扫）。" if descendant_total else f"{head}，后续同步全部完成。"
+
+
+def _reconcile_waiting_run(
     conn: Any,
     run_id: str,
     now: str,
     *,
     finalize_orphaned: bool = False,
+    depth: int = 0,
 ) -> bool:
+    """结算一条 `waiting` 运行：下游（含下游的下游）全部进入终态后才定稿。"""
     row = conn.execute(
         "SELECT run_kind, status, result_json FROM monitor_runs WHERE id = ?",
         (run_id,),
     ).fetchone()
-    if not row or _text(row[0]) != "inbox" or _text(row[1]) != "waiting":
+    if not row or _text(row[1]) != "waiting":
         return False
-
-    child_ids = _linked_child_ids(conn, run_id)
-    child_statuses: List[str] = []
-    if child_ids:
-        marks = ",".join("?" for _ in child_ids)
-        child_statuses = [
-            _text(child[0])
-            for child in conn.execute(
-                f"SELECT status FROM monitor_runs WHERE id IN ({marks})",
-                tuple(child_ids),
-            ).fetchall()
-        ]
-        if any(status in ACTIVE_RUN_STATUSES for status in child_statuses):
-            return False
-
-    change_rows = conn.execute(
-        "SELECT status, next_retry_at FROM monitor_change_events WHERE monitor_run_id = ?",
-        (run_id,),
-    ).fetchall()
-    if any(
-        _text(change[0]) in ACTIVE_CHANGE_STATUSES
-        or (_text(change[0]) == "failed" and float(change[1] or 0) > 0)
-        for change in change_rows
-    ):
-        return False
-
+    run_kind = _text(row[0]) or "scan"
     result = normalize_result(safe_json_loads(row[2], {}))
-    # Event processing can finish just before its child run is linked. During
-    # live execution, wait for that relation; startup recovery may close a
-    # truly orphaned historical wait after rebuilding the event queue.
-    if (
-        not finalize_orphaned
-        and not child_statuses
-        and _count_result(result.get("monitor_sync_events")) > 0
-    ):
+    state = _run_unfinished_state(conn, run_id, result)
+    if state.get("blocked"):
         return False
-    has_left = _count_result(result.get("left")) > 0
-    change_statuses = {_text(change[0]) for change in change_rows}
-    incomplete = (
-        has_left
-        or any(status in INCOMPLETE_CHILD_STATUSES for status in child_statuses)
-        or bool(change_statuses.intersection({"failed", "manual_required", "rollback_failed"}))
-    )
-    final = "partial" if incomplete else "completed"
-    child_count = len(child_statuses)
-    summary = (
-        f"后续同步结束，仍有未完成内容（{child_count} 个任务）"
-        if final == "partial"
-        else f"后续本地播放文件同步完成（{child_count} 个任务）"
-    )
-    conn.execute(
+    reasons = list(state.get("reasons") or [])
+    descendants = state.get("descendants") or []
+    if not descendants and state.get("expected_downstream"):
+        if not finalize_orphaned:
+            return False
+        reasons.append("没有找到对应的后续同步记录")
+    final = "partial" if reasons else "completed"
+    summary = _waiting_settle_summary(run_kind, result, reasons, len(descendants))
+    updated = conn.execute(
         """UPDATE monitor_runs
            SET status = ?, summary = ?, finished_at = ?, updated_at = ?
            WHERE id = ? AND status = 'waiting'""",
         (final, summary, now, now, run_id),
-    )
+    ).rowcount
+    if not updated:
+        return False
     _insert_event(
         conn,
         run_id,
@@ -270,35 +414,46 @@ def _reconcile_inbox_run(
         "downstream_finished",
         final,
         summary,
-        {"children": child_count, "left": _count_result(result.get("left"))},
+        {"children": len(descendants), "left": _count_result(result.get("left")), "reasons": reasons},
         now,
     )
+    _touch_ancestors(conn, run_id, now)
+    if depth < MAX_RUN_LINK_DEPTH:
+        # 结算一条等待中的运行后，它的来源运行可能也可以收尾了。
+        for parent_id in _run_parent_ids(conn, [run_id]).get(run_id, []):
+            _reconcile_waiting_run(conn, parent_id, now, finalize_orphaned=finalize_orphaned, depth=depth + 1)
     return True
 
 
-def reconcile_inbox_run(run_id: str) -> bool:
+# 兼容旧调用点：接收夹是最早引入两阶段状态机的运行类型。
+_reconcile_inbox_run = _reconcile_waiting_run
+
+
+def reconcile_waiting_run(run_id: str) -> bool:
     normalized_run_id = _text(run_id)
     if not normalized_run_id:
         return False
     with db_connection() as conn:
-        reconciled = _reconcile_inbox_run(conn, normalized_run_id, now_text())
+        reconciled = _reconcile_waiting_run(conn, normalized_run_id, now_text())
         conn.commit()
     return reconciled
 
 
-def reconcile_waiting_inbox_runs() -> int:
-    """Reconcile waiting inbox runs without closing parents that still have active work."""
+def reconcile_waiting_runs() -> int:
+    """启动恢复：结算所有下游都已结束的 `waiting` 运行（含断链的历史等待）。"""
     reconciled = 0
     with db_connection() as conn:
-        rows = conn.execute(
-            "SELECT id FROM monitor_runs WHERE run_kind = 'inbox' AND status = 'waiting'"
-        ).fetchall()
+        rows = conn.execute("SELECT id FROM monitor_runs WHERE status = 'waiting'").fetchall()
         for row in rows:
             run_id = _text(row[0])
-            if run_id and _reconcile_inbox_run(conn, run_id, now_text(), finalize_orphaned=True):
+            if run_id and _reconcile_waiting_run(conn, run_id, now_text(), finalize_orphaned=True):
                 reconciled += 1
         conn.commit()
     return reconciled
+
+
+# 兼容旧调用点（早期名为“只处理接收夹”）：现在任何 `waiting` 运行都走同一套结算。
+reconcile_waiting_inbox_runs = reconcile_waiting_runs
 
 
 def recover_interrupted_runs() -> Dict[str, int]:
@@ -325,7 +480,7 @@ def recover_interrupted_runs() -> Dict[str, int]:
             if parent_id:
                 parent_ids.add(parent_id)
         for parent_id in parent_ids:
-            _reconcile_inbox_run(conn, parent_id, now)
+            _reconcile_waiting_run(conn, parent_id, now)
         conn.commit()
     return counts
 
@@ -372,6 +527,152 @@ def repair_change_event_owners() -> int:
     return repaired
 
 
+def _unit_change_events_pending(conn: Any, run_id: str) -> bool:
+    """这条运行所属工作单元是否还有没走完的变更事件（处理中或仍等补扫）。
+
+    只看本工作单元（自身 + 祖先 + 下游）名下的变更事件：同一个监控任务上其他工作单元
+    的滞留事件不该影响这条记录的结算，否则一条卡住的事件会让整个任务的记录都无法重算。
+    """
+    normalized_run_id = _text(run_id)
+    if not normalized_run_id:
+        return False
+    unit = {normalized_run_id, *_ancestor_ids(conn, normalized_run_id)}
+    unit.update(_text(item.get("id")) for item in _descendant_entries(conn, normalized_run_id))
+    unit.discard("")
+    if not unit:
+        return False
+    marks = ",".join("?" for _ in unit)
+    row = conn.execute(
+        f"""SELECT COUNT(*) FROM monitor_change_events
+            WHERE monitor_run_id IN ({marks})
+              AND (status IN ('prepared', 'pending', 'processing', 'manual_required')
+                   OR (status = 'failed' AND next_retry_at > 0))""",
+        tuple(unit),
+    ).fetchone()
+    return bool(row and int(row[0] or 0) > 0)
+
+
+def _resettle_run(
+    conn: Any,
+    run_id: str,
+    summary: str,
+    detail: Dict[str, Any],
+    now: str,
+    *,
+    run_kind: str = "",
+    depth: int = 0,
+    settled: Optional[List[str]] = None,
+) -> None:
+    conn.execute(
+        "UPDATE monitor_runs SET status = 'completed', summary = ?, updated_at = ? WHERE id = ?",
+        (_text(summary), now, run_id),
+    )
+    _insert_event(conn, run_id, "process", "resettled", "completed", summary, detail, now)
+    _touch_ancestors(conn, run_id, now)
+    if settled is not None and run_kind:
+        settled.append(run_kind)
+    if depth < MAX_RUN_LINK_DEPTH:
+        for parent_id in _run_parent_ids(conn, [run_id]).get(run_id, []):
+            _resettle_stale_run(conn, parent_id, now, depth=depth + 1, settled=settled)
+
+
+def _resettle_stale_run(
+    conn: Any,
+    run_id: str,
+    now: str,
+    *,
+    depth: int = 0,
+    settled: Optional[List[str]] = None,
+) -> bool:
+    """把“只因为等自动补扫而写成部分完成、但现在证据已清”的运行改回已完成。
+
+    旧版本在补扫清掉 `manual_required` 事件后不回写运行状态；即使是新版本，事件清理
+    与运行收尾也可能差一步（补扫 runner 先收尾、再清事件），所以这里按证据重新结算，
+    而不是在流程里补一个调用点。真实失败、仍有条目留在接收夹的记录不会被改动。
+    """
+    row = conn.execute(
+        "SELECT run_kind, task_name, status, result_json FROM monitor_runs WHERE id = ?",
+        (run_id,),
+    ).fetchone()
+    if not row:
+        return False
+    run_kind, task_name, status = _text(row[0]), _text(row[1]), _text(row[2])
+    if status != "partial" or run_kind not in {"inbox", "change"}:
+        return False
+    result = normalize_result(safe_json_loads(row[3], {}))
+    if run_kind == "change":
+        # 变更同步写成部分完成的原因只能是“等补扫”；失败或没有补扫记录都不动。
+        if _count_result(result.get("failed")) or not _count_result(result.get("manual_required")):
+            return False
+        if _unit_change_events_pending(conn, run_id):
+            return False
+    elif _count_result(result.get("left")):
+        return False
+    state = _run_unfinished_state(conn, run_id, result)
+    if state.get("blocked") or state.get("reasons"):
+        return False
+    if run_kind == "inbox" and not state.get("descendants") and not state.get("expected_downstream"):
+        # 没有任何下游与事件的接收记录不能凭猜测改判（变更同步上面已有明确证据要求）。
+        return False
+    _resettle_run(
+        conn,
+        run_id,
+        "后续同步与自动补扫都已完成，重新结算为已完成。",
+        {
+            "reason": "downstream_completed",
+            "children": len(state.get("descendants") or []),
+            **({"task_name": task_name} if run_kind == "change" else {}),
+        },
+        now,
+        run_kind=run_kind,
+        depth=depth,
+        settled=settled,
+    )
+    return True
+
+
+def settle_deferred_runs() -> Dict[str, int]:
+    """重算历史上“等到自动补扫开始前就先写成部分完成”的运行。
+
+    接收夹分发文件夹后，变更同步会先把目录交给自动补扫，再在补扫成功后清掉
+    `manual_required` 事件；旧版本没有回写运行状态，于是“明明全部完成”的记录一直停在
+    部分完成。这里按证据重新结算，统计字段原样保留，只改状态与结论并补一条事件留痕。
+    返回修复条数（启动时执行一次，幂等）。
+    """
+    now = now_text()
+    settled = {"change": 0, "inbox": 0}
+    with db_connection() as conn:
+        resettled_kinds: List[str] = []
+        for row in conn.execute(
+            """SELECT id, run_kind FROM monitor_runs
+                WHERE status = 'partial' AND run_kind IN ('inbox', 'change')
+                ORDER BY queued_at, id"""
+        ).fetchall():
+            run_id = _text(row[0])
+            if run_id:
+                _resettle_stale_run(conn, run_id, now, settled=resettled_kinds)
+        for run_kind in resettled_kinds:
+            settled[run_kind] = settled.get(run_kind, 0) + 1
+        if any(settled.values()):
+            conn.commit()
+    return settled
+
+
+def resettle_settled_run(run_id: str) -> bool:
+    """后续补扫补清了事件后，把已经定稿的父运行按证据重新结算。"""
+    normalized = _text(run_id)
+    if not normalized:
+        return False
+    settled = False
+    with db_connection() as conn:
+        now = now_text()
+        for candidate in [normalized, *_ancestor_ids(conn, normalized)]:
+            if _resettle_stale_run(conn, candidate, now):
+                settled = True
+        conn.commit()
+    return settled
+
+
 def finish_run(run_id: str, *, status: str, summary: str, result: Optional[Dict[str, Any]] = None) -> None:
     run_id, now, final = _text(run_id), now_text(), _text(status) or "completed"
     if not run_id:
@@ -380,19 +681,9 @@ def finish_run(run_id: str, *, status: str, summary: str, result: Optional[Dict[
         normalized_result = normalize_result(result)
         conn.execute("UPDATE monitor_runs SET status = ?, summary = ?, result_json = ?, finished_at = ?, updated_at = ? WHERE id = ?", (final, _text(summary), safe_json_dumps(normalized_result), now, now, run_id))
         _insert_event(conn, run_id, "process", "finished", final, _text(summary), normalized_result, now)
-        parent_row = conn.execute("SELECT parent_run_id FROM monitor_runs WHERE id = ?", (run_id,)).fetchone()
-        direct_parent = str(parent_row[0] or "") if parent_row else ""
-        parent_ids = {direct_parent} if direct_parent else set()
-        parent_ids.update(
-            str(row[0] or "")
-            for row in conn.execute(
-                "SELECT run_id FROM monitor_run_links WHERE related_run_id = ? AND relation = 'downstream'",
-                (run_id,),
-            ).fetchall()
-            if str(row[0] or "")
-        )
-        for parent in parent_ids:
-            _reconcile_inbox_run(conn, parent, now)
+        _touch_ancestors(conn, run_id, now)
+        for parent in _run_parent_ids(conn, [run_id]).get(run_id, []):
+            _reconcile_waiting_run(conn, parent, now)
         conn.commit()
 
 
@@ -478,12 +769,48 @@ def _child_counts(conn: Any, run_ids: List[str]) -> Dict[str, int]:
     return counts
 
 
+def _order_group_entries(entries: List[Dict[str, Any]], head_id: str) -> List[Dict[str, Any]]:
+    """组内先按“先触发在前”排序，再把下游紧跟在自己的上游后面（前序遍历）。
+
+    单纯按时间排序会让“自动补扫”排在它所属的“变更同步”之前，看起来像并列任务；
+    前序遍历能让组内层级一眼可读：接收 → 每条变更同步 → 它自己的自动补扫。
+    """
+    children_of: Dict[str, List[Dict[str, Any]]] = {}
+    for entry in entries:
+        parent_id = _text(entry.get("parent_run_id"))
+        children_of.setdefault(parent_id or head_id, []).append(entry)
+    for values in children_of.values():
+        values.sort(key=lambda item: (str(item.get("queued_at") or ""), str(item.get("id") or "")))
+
+    ordered: List[Dict[str, Any]] = []
+    visited: set = set()
+
+    def walk(parent_id: str) -> None:
+        for entry in children_of.get(parent_id, []):
+            run_id = _text(entry.get("id"))
+            if not run_id or run_id in visited:
+                continue
+            visited.add(run_id)
+            ordered.append(entry)
+            walk(run_id)
+
+    walk(head_id)
+    for entry in entries:  # 兜底：上游不在本页时也要展示，不能丢记录。
+        run_id = _text(entry.get("id"))
+        if run_id and run_id not in visited:
+            visited.add(run_id)
+            ordered.append(entry)
+    return ordered
+
+
 def list_runs(*, limit: int = 10, cursor: str = "", task_name: str = "", source: str = "", status: str = "", run_kind: str = "", include_children: bool = False) -> Dict[str, Any]:
     limit = max(1, min(100, int(limit or 10)))
     normalized_kind = _text(run_kind).lower()
     if normalized_kind not in {"scan", "inbox", "change"}:
         normalized_kind = ""
     include_downstream = bool(include_children or normalized_kind == "change")
+    # 默认视图只列“工作单元的头”：没有任何父运行的记录。每条下游运行都会写入
+    # `parent_run_id` 或 `monitor_run_links`，所以这一条过滤同时排除了孙子层级。
     clauses, values = ([] if include_downstream else [
         "parent_run_id = ''",
         """NOT EXISTS (
@@ -501,23 +828,57 @@ def list_runs(*, limit: int = 10, cursor: str = "", task_name: str = "", source:
         normalized_source = _text(source).lower()
         clauses.append("(source = ? OR sources_json LIKE ?)")
         values.extend([normalized_source, f'%"source": "{normalized_source}"%'])
-    if _text(cursor):
-        cursor_time, separator, cursor_id = _text(cursor).rpartition("|")
-        if separator and cursor_time and cursor_id:
-            clauses.append("(updated_at < ? OR (updated_at = ? AND id < ?))")
-            values.extend([cursor_time, cursor_time, cursor_id])
-        else:
-            clauses.append("updated_at < ?"); values.append(_text(cursor))
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+    def fetch(start_cursor: str, size: int) -> List[Any]:
+        local_clauses, local_values = list(clauses), list(values)
+        raw_cursor = _text(start_cursor)
+        if raw_cursor:
+            cursor_time, separator, cursor_id = raw_cursor.rpartition("|")
+            if separator and cursor_time and cursor_id:
+                local_clauses.append("(updated_at < ? OR (updated_at = ? AND id < ?))")
+                local_values.extend([cursor_time, cursor_time, cursor_id])
+            else:
+                local_clauses.append("updated_at < ?"); local_values.append(raw_cursor)
+        where = f"WHERE {' AND '.join(local_clauses)}" if local_clauses else ""
+        return conn.execute(
+            f"SELECT * FROM monitor_runs {where} ORDER BY updated_at DESC, id DESC LIMIT ?",
+            tuple([*local_values, size]),
+        ).fetchall()
+
     with db_connection() as conn:
-        rows = conn.execute(f"SELECT * FROM monitor_runs {where} ORDER BY updated_at DESC, id DESC LIMIT ?", tuple([*values, limit + 1])).fetchall()
+        if include_downstream:
+            # 显式查看下游（流程 = 增量变更同步 / include_children）时保持扁平列表，
+            # 便于按流程排查；默认视图才按工作单元分组。
+            rows = fetch(cursor, limit + 1)
+            has_more, rows = len(rows) > limit, rows[:limit]
+            runs = [_serialize_run(row) for row in rows]
+            _add_parent_contexts(conn, runs)
+            child_counts = _child_counts(conn, [run["id"] for run in runs if run.get("id")])
+            for run in runs:
+                run["child_count"] = child_counts.get(run["id"], 0)
+            return {
+                "runs": runs,
+                "has_more": has_more,
+                "next_cursor": f"{runs[-1]['updated_at']}|{runs[-1]['id']}" if has_more and runs else "",
+            }
+
+        # 默认视图只列“工作单元的头”（没有任何祖先的运行）；每个头的下游按组内前序
+        # 顺序取全，既不会因为翻页窗口截断丢记录，也不会让下游重复出现在列表里。
+        rows = fetch(cursor, limit + 1)
         has_more, rows = len(rows) > limit, rows[:limit]
         runs = [_serialize_run(row) for row in rows]
-        if include_downstream:
-            _add_parent_contexts(conn, runs)
+        _add_parent_contexts(conn, runs)
         child_counts = _child_counts(conn, [run["id"] for run in runs if run.get("id")])
         for run in runs:
-            run["child_count"] = child_counts.get(run["id"], 0)
+            run_id = run.get("id")
+            run["group_id"] = run_id
+            run["group_depth"] = 0
+            run["child_count"] = child_counts.get(run_id, 0)
+            entries = _descendant_entries(conn, run_id) if run_id else []
+            if entries:
+                run["group_runs"] = entries[:GROUP_RUNS_PREVIEW_LIMIT]
+                run["group_total"] = len(entries)
+                run["group_more"] = max(0, len(entries) - GROUP_RUNS_PREVIEW_LIMIT)
     return {
         "runs": runs,
         "has_more": has_more,
@@ -596,6 +957,8 @@ def get_run_detail(run_id: str, *, category: str = "", offset: int = 0, limit: i
             f"SELECT * FROM monitor_runs WHERE id IN ({_CHILD_IDS_SQL}) ORDER BY queued_at, id",
             (run_id, run_id),
         ).fetchall()]
+        # 下游可能再派生一层（增量变更同步 → 自动补扫），详情要能看到完整链路。
+        descendants = _descendant_entries(conn, run_id) if children else []
         links = [sqlite_row_to_dict(row) for row in conn.execute(
             "SELECT related_run_id, relation FROM monitor_run_links WHERE run_id = ?", (run_id,),
         ).fetchall()]
@@ -611,7 +974,7 @@ def get_run_detail(run_id: str, *, category: str = "", offset: int = 0, limit: i
                 if original:
                     related.append({**original, "relation": "retry_of"})
     return {
-        "run": run, "events": events, "children": children, "parents": parents,
+        "run": run, "events": events, "children": children, "descendants": descendants, "parents": parents,
         "links": links, "related": related, "counts": counts, "total": total,
         "has_more": offset + len(events) < total, "next_offset": offset + len(events),
     }

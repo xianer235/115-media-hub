@@ -15,6 +15,8 @@ from .monitor_runs import link_runs as link_monitor_runs
 from .monitor_runs import record_event as record_monitor_run_event
 from .monitor_runs import start_run as start_monitor_run
 from .monitor_runs import update_run as update_monitor_run
+from .monitor_runs import wait_run as wait_monitor_run
+from .monitor_runs import reconcile_waiting_run as reconcile_monitor_waiting_run
 from .monitor_runs import set_parent_run as set_monitor_run_parent
 
 
@@ -1715,11 +1717,14 @@ async def run_monitor_change_task(
                     title="自动整理失败",
                     detail={"error": str(exc)},
                 )
-        auto_rescan_queued = 0
+        auto_rescan_run_ids: List[str] = []
         manual_paths = result.get("manual_required_paths", [])
         if int(result.get("manual_required", 0) or 0) > 0 and isinstance(manual_paths, list) and manual_paths:
-            auto_rescan_queued = _queue_auto_rescan_for_manual_required(cfg, manual_paths)
-            if auto_rescan_queued > 0:
+            auto_rescan = _queue_auto_rescan_for_manual_required(cfg, manual_paths, parent_run_id=run_id)
+            auto_rescan_run_ids = [
+                str(value or "").strip() for value in auto_rescan.get("run_ids", []) if str(value or "").strip()
+            ]
+            if auto_rescan_run_ids:
                 path_preview = "、".join([str(path) for path in manual_paths[:5]])
                 await write_monitor_log(f"已自动安排补扫目录：{path_preview}（无需手动操作）", "info")
             else:
@@ -1759,16 +1764,34 @@ async def run_monitor_change_task(
         if int(result.get("failed", 0) or 0) > 0:
             status_text = "变更同步部分失败"
         elif int(result.get("manual_required", 0) or 0) > 0:
-            status_text = "变更同步待自动补扫" if auto_rescan_queued > 0 else "变更同步待手动监控"
+            status_text = "变更同步待自动补扫" if auto_rescan_run_ids else "变更同步待手动监控"
         else:
             status_text = "变更同步完成"
         final_status = "partial" if failed or manual_required else ("no_change" if not generated and not deleted else "completed")
-        finish_monitor_run(
-            run_id,
-            status=final_status,
-            summary=build_monitor_change_run_summary(result),
-            result={"completed": completed, "failed": failed, "discarded": discarded, "generated": generated, "deleted": deleted, "manual_required": manual_required},
-        )
+        change_result = {
+            "completed": completed, "failed": failed, "discarded": discarded,
+            "generated": generated, "deleted": deleted, "manual_required": manual_required,
+            "auto_rescan": len(auto_rescan_run_ids),
+            "waiting_children": len(auto_rescan_run_ids),
+        }
+        if auto_rescan_run_ids:
+            # 自动补扫是这次变更同步的后续步骤：挂成下游并等待，补扫结束后父运行
+            # 才能按真实结果收尾，而不是提前写成“部分完成”。
+            for child_run_id in auto_rescan_run_ids:
+                link_monitor_runs(run_id, child_run_id, relation="downstream")
+            wait_monitor_run(
+                run_id,
+                summary=f"已同步 {completed} 条网盘变更，等待自动补扫 {len(auto_rescan_run_ids)} 个目录",
+                result=change_result,
+            )
+            status_text = "变更同步等待自动补扫"
+        else:
+            finish_monitor_run(
+                run_id,
+                status=final_status,
+                summary=build_monitor_change_run_summary(result),
+                result=change_result,
+            )
         await _best_effort_monitor_change_await(
             "Failed to write completed monitor change footer",
             write_monitor_task_footer,
@@ -1841,7 +1864,11 @@ async def run_monitor_change_task(
         try:
             detail = get_monitor_run_detail(run_id)
             current_status = str((detail.get("run") or {}).get("status", "") or "")
-            if current_status in {"queued", "running", "waiting"}:
+            if current_status == "waiting":
+                # 「等待自动补扫」是本次变更同步的合法中间态，交给通用的等待结算逻辑：
+                # 补扫结束后按真实结果定稿，不能在这里当成异常结束。
+                reconcile_monitor_waiting_run(run_id)
+            elif current_status in {"queued", "running"}:
                 finish_monitor_run(run_id, status="failed", summary="变更同步异常结束")
         except Exception:
             logging.exception("Failed to finalize active monitor change run")
@@ -2091,13 +2118,18 @@ def queue_monitor_job(
     *,
     force_new: bool = False,
     return_details: bool = False,
+    run_source: str = "",
 ) -> Any:
-    """Queue a monitor run, optionally keeping a retry separate from merged work."""
+    """Queue a monitor run, optionally keeping a retry separate from merged work.
+
+    `trigger` 决定调度语义（例如自动补扫必须按 `manual` 跑，才能清掉“需手动监控”），
+    `run_source` 只在运行记录里标注真实来源（例如 `auto_rescan`），两者可以不同。
+    """
     global _monitor_dispatch_pending
     normalized_task_name = str(task_name or "").strip()
     if not normalized_task_name:
         schedule_ui_state_push(0)
-        return "queued"
+        return {"status": "queued", "run_id": ""} if return_details else "queued"
 
     normalized_trigger = str(trigger or "").strip().lower() or "manual"
     try:
@@ -2112,13 +2144,14 @@ def queue_monitor_job(
         if normalize_task_type(matched_task.get("task_type")) == MONITOR_TASK_TYPE_INBOX:
             # 接收夹不是扫描目标：整理由接收夹流程负责，任何扫描触发都直接忽略。
             schedule_ui_state_push(0)
-            return "inbox"
+            return {"status": "inbox", "run_id": ""} if return_details else "inbox"
         if normalized_trigger != "manual" and matched_task.get("enabled") is False:
             # 「停用」= 不自动跑：定时 / 变更同步 / 资源导入完成 / webhook 都不入队，手动 start 仍可用。
             schedule_ui_state_push(0)
-            return "disabled"
+            return {"status": "disabled", "run_id": ""} if return_details else "disabled"
     normalized_payload = _normalize_monitor_queue_payload(payload)
     mode = str(normalized_payload.get("mode", "scan") or "scan")
+    normalized_source = str(run_source or "").strip().lower() or normalized_trigger
     source_ref = str(
         (payload or {}).get("source_ref", "")
         or (payload or {}).get("resource_job_id", "")
@@ -2144,7 +2177,7 @@ def queue_monitor_job(
             matched_item["payload"] = _merge_monitor_queue_payload(matched_item.get("payload"), normalized_payload)
             matched_run_id = str(matched_item.get("run_id", "") or "").strip()
             if matched_run_id:
-                add_monitor_run_source(matched_run_id, normalized_trigger, source_ref)
+                add_monitor_run_source(matched_run_id, normalized_source, source_ref)
                 merged_scope = _monitor_run_scope(matched_item["payload"])
                 update_monitor_run(
                     matched_run_id,
@@ -2159,7 +2192,7 @@ def queue_monitor_job(
             queued_run_id = create_monitor_run(
                 run_kind="change" if mode == "change" else "scan",
                 task_name=normalized_task_name,
-                source="retry" if retry_of_run_id else normalized_trigger,
+                source="retry" if retry_of_run_id else normalized_source,
                 scope=initial_scope,
                 subject=_monitor_run_subject(normalized_task_name, initial_scope.get("paths")),
                 parent_run_id=parent_run_id,
@@ -2292,7 +2325,14 @@ def retry_monitor_run(run_id: str) -> Dict[str, Any]:
     return {"ok": True, **queued, "retry_of_run_id": target_run_id}
 
 
-def queue_monitor_dir_scan(cfg: Dict[str, Any], provider: str, paths: List[str]) -> Dict[str, Any]:
+def queue_monitor_dir_scan(
+    cfg: Dict[str, Any],
+    provider: str,
+    paths: List[str],
+    *,
+    parent_run_id: str = "",
+    run_source: str = "",
+) -> Dict[str, Any]:
     scan_provider = normalize_mount_provider(provider) or "115"
     scopes: List[str] = []
     for raw_path in paths or []:
@@ -2318,30 +2358,59 @@ def queue_monitor_dir_scan(cfg: Dict[str, Any], provider: str, paths: List[str])
         raise ValueError("所选目录未匹配到任何监控任务")
 
     result_tasks: List[Dict[str, Any]] = []
+    parent = str(parent_run_id or "").strip()
     for task_name, entry in tasks.items():
-        status = queue_monitor_job(
+        queued = queue_monitor_job(
             task_name,
             "manual",
-            {"provider": scan_provider, "savepaths": entry["savepaths"]},
+            {
+                "provider": scan_provider,
+                "savepaths": entry["savepaths"],
+                **({"parent_run_id": parent} if parent else {}),
+            },
+            run_source=run_source,
+            return_details=True,
         )
+        status = str(queued.get("status", "") or "") if isinstance(queued, dict) else str(queued or "")
+        run_id = str(queued.get("run_id", "") or "") if isinstance(queued, dict) else ""
         result_tasks.append(
-            {"task_name": task_name, "status": status, "matched": len(entry["savepaths"])}
+            {"task_name": task_name, "status": status, "run_id": run_id, "matched": len(entry["savepaths"])}
         )
     return {"ok": True, "tasks": result_tasks, "unmatched": unmatched}
 
 
-def _queue_auto_rescan_for_manual_required(cfg: Dict[str, Any], paths: Any) -> int:
-    """为变更同步未知清单的文件夹自动排队补扫；返回成功排队的任务数。"""
+def _queue_auto_rescan_for_manual_required(
+    cfg: Dict[str, Any],
+    paths: Any,
+    *,
+    parent_run_id: str = "",
+) -> Dict[str, Any]:
+    """为变更同步未知清单的文件夹自动排队补扫。
+
+    返回入队的运行记录 ID：这条补扫是同一批工作的后续步骤，必须挂回发起它的变更同步
+    运行，父运行才能在补扫结束后拿到真实结论（而不是永远停在“部分完成”）。
+    """
     normalized_paths: List[str] = []
     for raw_path in paths if isinstance(paths, list) else []:
         path = normalize_relative_path(str(raw_path or "").strip())
         if path and path not in normalized_paths:
             normalized_paths.append(path)
     if not normalized_paths:
-        return 0
+        return {"count": 0, "run_ids": []}
     try:
-        result = queue_monitor_dir_scan(cfg, "115", normalized_paths)
+        result = queue_monitor_dir_scan(
+            cfg,
+            "115",
+            normalized_paths,
+            parent_run_id=parent_run_id,
+            run_source="auto_rescan",
+        )
     except Exception:
-        return 0
+        return {"count": 0, "run_ids": []}
     tasks = result.get("tasks") if isinstance(result, dict) and isinstance(result.get("tasks"), list) else []
-    return len(tasks)
+    run_ids = [
+        str(task.get("run_id", "") or "").strip()
+        for task in tasks
+        if isinstance(task, dict) and str(task.get("run_id", "") or "").strip()
+    ]
+    return {"count": len(tasks), "run_ids": run_ids}

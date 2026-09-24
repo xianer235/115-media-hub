@@ -25,9 +25,10 @@ from .services.subscription import queue_subscription_job
 from .services.scraper import requeue_scraper_jobs_on_startup
 from .services.monitor_runs import (
     cleanup_runs,
-    reconcile_waiting_inbox_runs,
+    reconcile_waiting_runs,
     recover_interrupted_runs,
     repair_change_event_owners,
+    settle_deferred_runs,
 )
 from .services.subscription_offline_cleanup import (
     run_subscription_offline_staging_cleanup_once,
@@ -97,7 +98,17 @@ async def startup() -> None:
     # Reconcile mutations left between the remote operation and local STRM
     # processing before normal schedulers start issuing scans.
     recover_monitor_change_events(cfg=get_config())
-    reconcile_waiting_inbox_runs()
+    reconcile_waiting_runs()
+    try:
+        resettled = settle_deferred_runs()
+        if resettled.get("change") or resettled.get("inbox"):
+            logging.info(
+                "Resettled %s change runs and %s inbox runs whose follow-up sync finished later",
+                resettled.get("change", 0),
+                resettled.get("inbox", 0),
+            )
+    except Exception:
+        logging.exception("Failed to resettle runs whose follow-up sync finished later")
     try:
         repaired = repair_change_event_owners()
         if repaired:

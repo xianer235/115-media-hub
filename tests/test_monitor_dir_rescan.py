@@ -19,11 +19,21 @@ class AutoRescanQueueTest(unittest.TestCase):
         with patch.object(
             monitor,
             "queue_monitor_dir_scan",
-            return_value={"ok": True, "tasks": [{"task_name": TASK_NAME}]},
+            return_value={"ok": True, "tasks": [{"task_name": TASK_NAME, "run_id": "run-1"}]},
         ) as queue_scan:
-            count = monitor._queue_auto_rescan_for_manual_required({}, ["Media/Copied", "Media/Copied"])
-        self.assertEqual(count, 1)
-        queue_scan.assert_called_once_with({}, "115", ["Media/Copied"])
+            queued = monitor._queue_auto_rescan_for_manual_required(
+                {},
+                ["Media/Copied", "Media/Copied"],
+                parent_run_id="change-run",
+            )
+        self.assertEqual(queued, {"count": 1, "run_ids": ["run-1"]})
+        queue_scan.assert_called_once_with(
+            {},
+            "115",
+            ["Media/Copied"],
+            parent_run_id="change-run",
+            run_source="auto_rescan",
+        )
 
     def test_auto_rescan_helper_returns_zero_on_failure(self):
         with patch.object(
@@ -31,12 +41,110 @@ class AutoRescanQueueTest(unittest.TestCase):
             "queue_monitor_dir_scan",
             side_effect=ValueError("所选目录未匹配到任何监控任务"),
         ):
-            self.assertEqual(monitor._queue_auto_rescan_for_manual_required({}, ["Media/Copied"]), 0)
+            self.assertEqual(
+                monitor._queue_auto_rescan_for_manual_required({}, ["Media/Copied"]),
+                {"count": 0, "run_ids": []},
+            )
 
     def test_auto_rescan_helper_ignores_empty_paths(self):
         with patch.object(monitor, "queue_monitor_dir_scan") as queue_scan:
-            self.assertEqual(monitor._queue_auto_rescan_for_manual_required({}, []), 0)
+            self.assertEqual(
+                monitor._queue_auto_rescan_for_manual_required({}, []),
+                {"count": 0, "run_ids": []},
+            )
         queue_scan.assert_not_called()
+
+
+class ChangeRunWaitsForAutoRescanTest(unittest.TestCase):
+    """变更同步把目录交给自动补扫后，必须等补扫结束再结算整条链路。"""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.original_db_path = db.DB_PATH
+        self.original_ensured = db._DB_ENSURED
+        db.DB_PATH = os.path.join(self.tmpdir.name, "data.db")
+        db._DB_ENSURED = False
+        db.ensure_db()
+        self.cfg = {
+            "monitor_tasks": [
+                {
+                    "name": TASK_NAME,
+                    "task_type": "scan",
+                    "enabled": True,
+                    "scan_path": "/115/Media",
+                    "target_path": "Media",
+                }
+            ]
+        }
+
+    def tearDown(self):
+        db.DB_PATH = self.original_db_path
+        db._DB_ENSURED = self.original_ensured
+        self.tmpdir.cleanup()
+
+    def _run_change_task(self, inbox_run: str) -> str:
+        from app.services import monitor_runs
+
+        change_run = monitor_runs.create_run(
+            run_kind="change", task_name=TASK_NAME, source="change", subject="文件变更"
+        )
+        change_result = {
+            "completed": 1,
+            "failed": 0,
+            "discarded": 0,
+            "generated": 0,
+            "deleted": 0,
+            "manual_required": 1,
+            "manual_required_paths": ["Media/Copied"],
+            "errors": [],
+            "change_details": [],
+            "source_actions": [],
+            "monitor_run_ids": [inbox_run] if inbox_run else [],
+        }
+        with patch.object(monitor, "_claim_monitor_job", return_value=True), \
+                patch.object(monitor, "get_config", return_value=self.cfg), \
+                patch.object(monitor, "_finish_monitor_job", new=AsyncMock()), \
+                patch.object(monitor, "write_monitor_task_header", new=AsyncMock()), \
+                patch.object(monitor, "write_monitor_task_footer", new=AsyncMock()), \
+                patch.object(monitor, "write_monitor_section", new=AsyncMock()), \
+                patch.object(monitor, "write_monitor_log", new=AsyncMock()), \
+                patch.object(monitor, "_write_monitor_change_details", new=AsyncMock()), \
+                patch.object(monitor, "schedule_ui_state_push", lambda *args, **kwargs: None), \
+                patch.object(monitor, "submit_background", lambda *args, **kwargs: None), \
+                patch.object(monitor_changes, "process_monitor_change_events", new=AsyncMock(return_value=change_result)):
+            asyncio.run(monitor.run_monitor_change_task(TASK_NAME, "change", {"mode": "change"}, change_run))
+        return change_run
+
+    def test_change_run_waits_for_rescan_and_settles_the_inbox_parent(self):
+        from app.services import monitor_runs
+
+        inbox = monitor_runs.create_run(
+            run_kind="inbox", task_name="最近接收", source="manual", subject="六部影视"
+        )
+        monitor_runs.start_run(inbox)
+        monitor_runs.wait_run(
+            inbox,
+            summary="已分发，等待 STRM 同步",
+            result={"moved": 1, "left": 0, "monitor_sync_events": 1},
+        )
+
+        change_run = self._run_change_task(inbox)
+        detail = monitor_runs.get_run_detail(change_run)
+        rescan_runs = [item for item in detail["descendants"] if item["run_kind"] == "scan"]
+
+        self.assertEqual(detail["run"]["status"], "waiting")
+        self.assertIn("等待自动补扫", detail["run"]["summary"])
+        self.assertEqual(len(rescan_runs), 1)
+        self.assertEqual(rescan_runs[0]["source"], "auto_rescan")
+        self.assertEqual(monitor_runs.get_run_detail(inbox)["run"]["status"], "waiting")
+
+        monitor_runs.finish_run(
+            rescan_runs[0]["id"], status="completed",
+            summary="新增或更新 1 个本地播放文件", result={"generated": 1},
+        )
+
+        self.assertEqual(monitor_runs.get_run_detail(change_run)["run"]["status"], "completed")
+        self.assertEqual(monitor_runs.get_run_detail(inbox)["run"]["status"], "completed")
 
 
 def _dir_item(name: str, modified: str) -> dict:

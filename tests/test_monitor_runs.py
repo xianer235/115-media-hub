@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from unittest.mock import Mock, patch
 
 from app import db
-from app.services import monitor, monitor_runs, quick_import
+from app.services import monitor, monitor_changes, monitor_runs, quick_import
 
 
 class MonitorRunStoreTest(unittest.TestCase):
@@ -119,7 +119,7 @@ class MonitorRunStoreTest(unittest.TestCase):
         )
         monitor_runs.start_run(child)
 
-        self.assertEqual(monitor_runs.reconcile_waiting_inbox_runs(), 0)
+        self.assertEqual(monitor_runs.reconcile_waiting_runs(), 0)
         self.assertEqual(monitor_runs.get_run_detail(parent)["run"]["status"], "waiting")
         self.assertEqual(monitor_runs.cleanup_runs(scope="all_finished")["deleted"], 0)
 
@@ -128,6 +128,230 @@ class MonitorRunStoreTest(unittest.TestCase):
         detail = monitor_runs.get_run_detail(parent)["run"]
         self.assertEqual(detail["status"], "partial")
         self.assertTrue(detail["finished_at"])
+
+    def _event_id(self, dedupe_key: str) -> int:
+        with db.db_connection() as conn:
+            row = conn.execute(
+                "SELECT id FROM monitor_change_events WHERE dedupe_key = ?", (dedupe_key,)
+            ).fetchone()
+        return int(row[0] or 0) if row else 0
+
+    def _add_change_event(self, run_id: str, dedupe_key: str, task_name: str, status: str = "manual_required") -> int:
+        with db.db_connection() as conn:
+            conn.execute(
+                """INSERT INTO monitor_change_events(
+                    dedupe_key, operation, old_path, new_path, task_name,
+                    source_action, monitor_run_id, status, created_at, updated_at
+                ) VALUES (?, 'move', ?, ?, ?, 'scraper-job:1:quick-import', ?, ?, ?, ?)""",
+                (
+                    dedupe_key,
+                    f"最近接收/{dedupe_key}",
+                    f"{task_name}/{dedupe_key}",
+                    task_name,
+                    run_id,
+                    status,
+                    "2026-09-24 21:23:58",
+                    "2026-09-24 21:23:58",
+                ),
+            )
+            conn.commit()
+        return self._event_id(dedupe_key)
+
+    def _dispatch_auto_rescan_batch(self, *, items: int = 6, task_name: str = "最近接收"):
+        """复现接收夹分发：父运行等待，每条条目派生一条变更同步 + 自动补扫。"""
+        parent = monitor_runs.create_run(run_kind="inbox", task_name=task_name, source="manual", subject="识别中")
+        monitor_runs.start_run(parent)
+        monitor_runs.wait_run(
+            parent,
+            summary="已分发，等待 STRM 同步",
+            result={"moved": items, "left": 0, "monitor_sync_events": items},
+        )
+        chain = []
+        for index in range(items):
+            media_task = "电影" if index % 2 else "电视剧"
+            event_id = self._add_change_event(parent, f"batch-event-{index}", media_task)
+            change_run = monitor_runs.create_run(
+                run_kind="change", task_name=media_task, source="change",
+                parent_run_id=parent, subject="文件变更", scope={"kind": "events"},
+            )
+            monitor_runs.start_run(change_run, subject="文件变更", scope={"kind": "events"})
+            rescan = monitor_runs.create_run(
+                run_kind="scan", task_name=media_task, source="auto_rescan",
+                parent_run_id=change_run, subject=f"影视{index}",
+            )
+            monitor_runs.link_runs(change_run, rescan, relation="downstream")
+            monitor_runs.wait_run(
+                change_run,
+                summary="已同步 1 条网盘变更，等待自动补扫 1 个目录",
+                result={
+                    "completed": 1, "failed": 0, "generated": 0, "deleted": 0,
+                    "manual_required": 1, "auto_rescan": 1, "waiting_children": 1,
+                },
+            )
+            chain.append({"task_name": media_task, "change": change_run, "rescan": rescan, "event_id": event_id})
+        return parent, chain
+
+    def test_inbox_batch_settles_completed_after_auto_rescan_finishes(self):
+        parent, chain = self._dispatch_auto_rescan_batch()
+
+        self.assertEqual(monitor_runs.get_run_detail(parent)["run"]["status"], "waiting")
+        for item in chain:
+            monitor_runs.start_run(item["rescan"])
+            # 补扫 runner 的真实顺序是“先清需手动监控事件、再收尾运行”。
+            monitor_changes.complete_manual_required_monitor_events(item["task_name"], [item["event_id"]])
+            monitor_runs.finish_run(
+                item["rescan"], status="completed",
+                summary="新增或更新 1 个本地播放文件", result={"generated": 1},
+            )
+
+        inbox = monitor_runs.get_run_detail(parent)["run"]
+        self.assertEqual(inbox["status"], "completed")
+        self.assertIn("已分发 6 项", inbox["summary"])
+        self.assertIn("后续同步全部完成", inbox["summary"])
+        self.assertNotIn("个任务", inbox["summary"])
+        self.assertEqual(
+            {monitor_runs.get_run_detail(item["change"])["run"]["status"] for item in chain},
+            {"completed"},
+        )
+
+    def test_manual_required_cleared_after_rescan_finish_still_settles_completed(self):
+        """补扫 runner 先收尾、后清事件（或事件被别的扫描补清）时不能永久停在部分完成。"""
+        parent, chain = self._dispatch_auto_rescan_batch(items=2)
+
+        for item in chain:
+            monitor_runs.start_run(item["rescan"])
+            monitor_runs.finish_run(
+                item["rescan"], status="completed",
+                summary="新增或更新 1 个本地播放文件", result={"generated": 1},
+            )
+            monitor_changes.complete_manual_required_monitor_events(item["task_name"], [item["event_id"]])
+
+        self.assertEqual(monitor_runs.get_run_detail(parent)["run"]["status"], "completed")
+        self.assertEqual(
+            {monitor_runs.get_run_detail(item["change"])["run"]["status"] for item in chain},
+            {"completed"},
+        )
+
+    def test_inbox_batch_stays_partial_with_reason_when_auto_rescan_fails(self):
+        parent, chain = self._dispatch_auto_rescan_batch(items=1)
+        item = chain[0]
+
+        monitor_runs.start_run(item["rescan"])
+        monitor_runs.finish_run(item["rescan"], status="failed", summary="目录读取失败")
+
+        inbox = monitor_runs.get_run_detail(parent)["run"]
+        self.assertEqual(inbox["status"], "partial")
+        self.assertIn("仍有未完成内容", inbox["summary"])
+        self.assertIn("仍需同步", inbox["summary"])
+        self.assertNotIn("个任务", inbox["summary"])
+        self.assertIn("未完成", monitor_runs.get_run_detail(item["change"])["run"]["summary"])
+
+    def test_settle_deferred_runs_resettles_legacy_premature_partial(self):
+        parent = monitor_runs.create_run(run_kind="inbox", task_name="最近接收", source="manual", subject="历史记录")
+        monitor_runs.start_run(parent)
+        monitor_runs.wait_run(
+            parent,
+            summary="已分发，等待 STRM 同步",
+            result={"moved": 6, "left": 0, "monitor_sync_events": 6},
+        )
+        change_run = monitor_runs.create_run(
+            run_kind="change", task_name="电影", source="change", parent_run_id=parent, subject="文件变更",
+        )
+        monitor_runs.start_run(change_run)
+        self._add_change_event(parent, "legacy-event", "电影", status="completed")
+        monitor_runs.finish_run(
+            change_run, status="partial", summary="已同步 1 条网盘变更，1 个目录需要手动监控",
+            result={"completed": 1, "failed": 0, "manual_required": 1},
+        )
+        monitor_runs.finish_run(parent, status="partial", summary="后续同步结束，仍有未完成内容（1 个任务）")
+
+        settled = monitor_runs.settle_deferred_runs()
+
+        self.assertEqual(settled, {"change": 1, "inbox": 1})
+        self.assertEqual(monitor_runs.get_run_detail(change_run)["run"]["status"], "completed")
+        self.assertEqual(monitor_runs.get_run_detail(parent)["run"]["status"], "completed")
+        self.assertEqual(monitor_runs.settle_deferred_runs(), {"change": 0, "inbox": 0})
+        self.assertTrue(
+            any(event["operation"] == "resettled" for event in monitor_runs.get_run_detail(parent)["events"])
+        )
+
+    def test_settle_deferred_runs_keeps_real_failures_untouched(self):
+        parent = monitor_runs.create_run(run_kind="inbox", task_name="最近接收", source="manual", subject="真失败")
+        monitor_runs.start_run(parent)
+        monitor_runs.wait_run(
+            parent,
+            summary="等待后续同步",
+            result={"moved": 1, "left": 0, "monitor_sync_events": 1},
+        )
+        change_run = monitor_runs.create_run(
+            run_kind="change", task_name="电视剧", source="change", parent_run_id=parent, subject="文件变更",
+        )
+        monitor_runs.finish_run(change_run, status="failed", summary="变更同步失败")
+        monitor_runs.finish_run(parent, status="partial", summary="后续同步结束，仍有未完成内容")
+
+        self.assertEqual(monitor_runs.settle_deferred_runs(), {"change": 0, "inbox": 0})
+        self.assertEqual(monitor_runs.get_run_detail(parent)["run"]["status"], "partial")
+        self.assertEqual(monitor_runs.get_run_detail(change_run)["run"]["status"], "failed")
+
+    def test_run_list_groups_head_with_its_downstream_runs(self):
+        parent, chain = self._dispatch_auto_rescan_batch(items=2)
+        for item in chain:
+            monitor_changes.complete_manual_required_monitor_events(item["task_name"], [item["event_id"]])
+            monitor_runs.finish_run(
+                item["rescan"], status="completed",
+                summary="新增或更新 1 个本地播放文件", result={"generated": 1},
+            )
+
+        page = monitor_runs.list_runs()
+        head = next(run for run in page["runs"] if run["id"] == parent)
+        listed_ids = [run["id"] for run in page["runs"]]
+        group_ids = [item["id"] for item in head.get("group_runs") or []]
+
+        self.assertNotIn(chain[0]["change"], listed_ids)
+        self.assertEqual(head["group_id"], parent)
+        self.assertEqual(head["group_depth"], 0)
+        self.assertEqual(head["group_total"], 4)
+        self.assertEqual(
+            [(item["run_kind"], item["group_depth"]) for item in head["group_runs"]],
+            [("change", 1), ("scan", 2), ("change", 1), ("scan", 2)],
+        )
+        self.assertIn(chain[1]["rescan"], group_ids)
+
+        flat = monitor_runs.list_runs(run_kind="change")
+        self.assertIn(chain[0]["change"], [run["id"] for run in flat["runs"]])
+
+    def test_downstream_activity_keeps_head_updated_at_ahead_of_children(self):
+        parent, chain = self._dispatch_auto_rescan_batch(items=1)
+        item = chain[0]
+        with db.db_connection() as conn:
+            conn.execute(
+                "UPDATE monitor_runs SET updated_at = '2026-09-01 00:00:00' WHERE id IN (?, ?)",
+                (parent, item["change"]),
+            )
+            conn.commit()
+
+        monitor_changes.complete_manual_required_monitor_events(item["task_name"], [item["event_id"]])
+        monitor_runs.finish_run(
+            item["rescan"], status="completed",
+            summary="新增或更新 1 个本地播放文件", result={"generated": 1},
+        )
+
+        with db.db_connection() as conn:
+            parent_updated = str(
+                conn.execute("SELECT updated_at FROM monitor_runs WHERE id = ?", (parent,)).fetchone()[0]
+            )
+        self.assertGreaterEqual(parent_updated, monitor_runs.get_run_detail(item["rescan"])["run"]["updated_at"])
+
+    def test_run_detail_exposes_downstream_chain_with_depth(self):
+        parent, chain = self._dispatch_auto_rescan_batch(items=1)
+
+        detail = monitor_runs.get_run_detail(parent)
+
+        self.assertEqual(
+            [(item["run_kind"], item["depth"]) for item in detail["descendants"]],
+            [("change", 1), ("scan", 2)],
+        )
+        self.assertEqual(detail["children"][0]["id"], chain[0]["change"])
 
     def test_wait_run_reconciles_child_that_finished_before_parent_started_waiting(self):
         parent = monitor_runs.create_run(run_kind="inbox", task_name="接收", source="manual", subject="电影A")

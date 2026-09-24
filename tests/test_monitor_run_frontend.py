@@ -462,6 +462,91 @@ class MonitorRunViewTest(unittest.TestCase):
         self.assertFalse(keys["statusChanged"])
         self.assertFalse(keys["pageChanged"])
 
+    def test_run_list_renders_head_with_nested_downstream_rows(self):
+        html = run_view(
+            """window.MonitorRunView.listHtml([{
+                id: 'inbox-1', task_name: '最近接收', subject: '六部影视', run_kind: 'inbox',
+                source: 'manual', status: 'completed', queued_at: '2026-09-24 21:23:42',
+                summary: '已分发 6 项，后续同步全部完成（含自动补扫）。',
+                result: {moved: 6}, child_count: 6, group_depth: 0, group_total: 12,
+                group_more: 2,
+                group_runs: [
+                    {id: 'change-1', task_name: '电视剧', subject: '文件变更', run_kind: 'change',
+                     source: 'change', status: 'completed', queued_at: '2026-09-24 21:23:58',
+                     summary: '已同步 1 条网盘变更。', group_depth: 1},
+                    {id: 'scan-1', task_name: '电视剧', subject: '影视1', run_kind: 'scan',
+                     source: 'auto_rescan', status: 'completed', queued_at: '2026-09-24 21:23:58',
+                     summary: '检查完成：新增或更新 1 个本地播放文件。', group_depth: 2},
+                ],
+            }])"""
+        )
+
+        self.assertIn('data-group-id="inbox-1"', html)
+        self.assertIn("monitor-run-group-toggle", html)
+        self.assertIn("收起 12 项后续同步", html)
+        self.assertIn('data-run-id="change-1"', html)
+        self.assertIn("monitor-run-row is-group-child", html)
+        self.assertIn("--run-depth:2", html)
+        self.assertIn("系统补扫", html)
+        self.assertIn("还有 2 项，打开详情查看。", html)
+
+    def test_run_list_row_without_group_data_stays_flat(self):
+        html = run_view(
+            "window.MonitorRunView.listHtml([{id: 'run-1', task_name: '电影', subject: '全部目录',"
+            " source: 'cron', status: 'completed', queued_at: '2026-09-24 21:23:42'}])"
+        )
+
+        self.assertIn('data-run-id="run-1"', html)
+        self.assertNotIn("monitor-run-group", html)
+        self.assertNotIn("is-group-child", html)
+
+    def test_run_detail_nests_downstream_chain(self):
+        html = run_view(
+            """window.MonitorRunView.detailHtml({
+                run: {id: 'inbox-1', task_name: '最近接收', subject: '六部影视', run_kind: 'inbox',
+                      status: 'completed', summary: '已分发 6 项，后续同步全部完成。', result: {moved: 6}},
+                events: [], counts: {}, total: 0,
+                descendants: [
+                    {id: 'change-1', task_name: '电视剧', subject: '文件变更', status: 'completed', depth: 1},
+                    {id: 'scan-1', task_name: '电视剧', subject: '影视1', status: 'completed', depth: 2},
+                ],
+            })"""
+        )
+
+        self.assertIn("monitor-run-child is-nested", html)
+        self.assertIn("--run-depth:2", html)
+        self.assertIn("后续同步", html)
+
+    def test_run_group_state_is_wired_into_the_list(self):
+        source = INDEX_JS_PATH.read_text(encoding="utf-8")
+        css = INDEX_CSS_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("window.MonitorRunView.listHtml(runs)", source)
+        self.assertIn("function toggleMonitorRunGroup(groupId)", source)
+        self.assertIn("window.toggleMonitorRunGroup = toggleMonitorRunGroup;", source)
+        self.assertIn("monitorRunCollapsedGroups", source)
+        self.assertIn("按工作单元排序 · 组内先触发在前", source)
+        self.assertIn(".monitor-run-group.is-collapsed .monitor-run-group-body", css)
+        self.assertIn(".monitor-run-row.is-group-child", css)
+        self.assertIn("html.theme-day .monitor-run-group-toggle", css)
+
+    def test_render_key_tracks_grouped_downstream(self):
+        keys = run_index_async(
+            """(() => {
+                const head = { id: 'a', status: 'waiting', summary: '等待', updated_at: 't',
+                               group_runs: [{ id: 'b', status: 'running', summary: '同步中', group_depth: 1 }] };
+                const base = { runs: [head], run_page: 1 };
+                const childChanged = { runs: [{ ...head, group_runs: [{ id: 'b', status: 'completed', summary: '同步中', group_depth: 1 }] }], run_page: 1 };
+                return {
+                    stable: buildMonitorRunRenderKey(base) === buildMonitorRunRenderKey({ runs: [head], run_page: 1 }),
+                    childChanged: buildMonitorRunRenderKey(base) === buildMonitorRunRenderKey(childChanged),
+                };
+            })()"""
+        )
+
+        self.assertTrue(keys["stable"])
+        self.assertFalse(keys["childChanged"])
+
     def test_task_scoped_clear_only_runs_for_a_selected_task(self):
         page = MONITOR_PAGE_PATH.read_text(encoding="utf-8")
         source = INDEX_JS_PATH.read_text(encoding="utf-8")

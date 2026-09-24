@@ -2193,8 +2193,18 @@ def complete_manual_required_monitor_events(
     if not normalized_task_name or not normalized_event_ids:
         return 0
     placeholders = ",".join("?" for _ in normalized_event_ids)
+    owner_run_ids: Set[str] = set()
     with db_connection() as conn:
         completed_at = now_text()
+        owner_run_ids = {
+            str(row[0] or "").strip()
+            for row in conn.execute(
+                f"""SELECT DISTINCT monitor_run_id FROM monitor_change_events
+                     WHERE task_name = ? AND id IN ({placeholders}) AND monitor_run_id <> ''""",
+                (normalized_task_name, *normalized_event_ids),
+            ).fetchall()
+            if str(row[0] or "").strip()
+        }
         cursor = conn.execute(
             f"""
             UPDATE monitor_change_events
@@ -2206,6 +2216,17 @@ def complete_manual_required_monitor_events(
         )
         completed = max(0, int(cursor.rowcount or 0))
         conn.commit()
+    if completed and owner_run_ids:
+        # 补扫清掉“需手动监控”事件后，等待这些事件的父运行可能已经可以收尾了；已经
+        # 按“还有目录等补扫”定稿成部分完成的运行，也要按证据重新结算。
+        from .monitor_runs import reconcile_waiting_run, resettle_settled_run
+
+        for run_id in sorted(owner_run_ids):
+            try:
+                reconcile_waiting_run(run_id)
+                resettle_settled_run(run_id)
+            except Exception:
+                continue
     return completed
 
 
