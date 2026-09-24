@@ -504,6 +504,31 @@ class MonitorRunViewTest(unittest.TestCase):
         self.assertIn("--run-depth:2", html)
         self.assertIn("后续同步", html)
 
+    def test_run_detail_expands_record_details_by_default(self):
+        """运行详情里的明细默认展开，不用再点“查看明细”。"""
+        html = run_view(
+            """window.MonitorRunView.detailHtml({
+                run: {id: 'run-1', task_name: '电视剧', subject: '示例剧', run_kind: 'scan',
+                      status: 'completed', summary: '检查完成：新增或更新 1 个本地播放文件。',
+                      result: {generated: 1}},
+                events: [
+                    {id: 'run-1', category: 'strm', operation: 'write', status: 'completed',
+                     title: 'S01E01.strm', created_at: '2026-09-25 10:00:00',
+                     detail: {path: '电视剧/示例剧/S01E01.strm'}},
+                    {id: 'run-2', category: 'problem', operation: 'read_dir', status: 'failed',
+                     title: '读取目录失败', created_at: '2026-09-25 10:00:01',
+                     detail: {error: 'permission denied for /115/TV/Show'}},
+                ],
+                counts: {problem: 1}, total: 2,
+            })"""
+        )
+
+        # 普通步骤（strm 写入）与带诊断的步骤都默认展开。
+        self.assertEqual(html.count("monitor-run-event-details"), 2)
+        self.assertNotIn('<details class="monitor-run-event-details"><summary>', html)
+        self.assertIn('<details class="monitor-run-event-details" open>', html)
+        self.assertIn('<details class="monitor-run-diagnostic" open>', html)
+
     def test_run_list_stays_flat_and_keeps_activity_order(self):
         source = INDEX_JS_PATH.read_text(encoding="utf-8")
         css = INDEX_CSS_PATH.read_text(encoding="utf-8")

@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.16] - 2026-09-25
+
+### 运行详情默认展开
+
+- **记录详情默认展开**：运行详情弹窗里每个步骤的「查看明细」不再默认折叠（此前只有执行过程 / 问题 / 失败状态才展开，网盘操作、STRM 操作等要逐条点开），现在默认全部展开，需要时点标题即可收起；问题里的「原始诊断信息」也一并默认展开。
+
+### 验证
+
+- `tests.test_monitor_run_frontend` 新增“运行详情默认展开”用例（普通步骤与原始诊断都带 `open`）；完整 `unittest discover -s tests` 1021 项零失败，`node --check`、`git diff --check`、`version.json` 解析通过。
+
 ## [0.11.15] - 2026-09-25
 
 ### 接收夹分发的每个条目都有单条记录

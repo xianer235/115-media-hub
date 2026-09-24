@@ -160,7 +160,7 @@
                     : /permission|forbidden|unauthorized/i.test(text) ? '访问被拒绝，请检查授权或目录权限。'
                     : /not found|no such file/i.test(text) ? '未找到目标，请检查文件或目录是否仍然存在。'
                     : '服务返回异常信息，请检查连接或任务配置。';
-                return `${escape(friendly)}<details class="monitor-run-diagnostic"><summary>原始诊断信息</summary><pre>${escape(text)}</pre></details>`;
+                return `${escape(friendly)}<details class="monitor-run-diagnostic" open><summary>原始诊断信息</summary><pre>${escape(text)}</pre></details>`;
             }
         }
         return escape(value);
@@ -198,7 +198,7 @@
                 <strong>${escape(title)}</strong><span class="monitor-run-step-state">${escape(label)}</span>
                 <time>${escape(time(event?.created_at))}</time></div>
                 ${name ? `<div class="monitor-run-event-name">${escape(name)}</div>` : ''}
-                ${rows ? `<details class="monitor-run-event-details"${isProcess || event.category === 'problem' || ['error', 'warning'].includes(stateTone) ? ' open' : ''}><summary>查看明细</summary><dl class="monitor-run-detail-grid">${rows}</dl></details>` : ''}
+                ${rows ? `<details class="monitor-run-event-details" open><summary>查看明细</summary><dl class="monitor-run-detail-grid">${rows}</dl></details>` : ''}
             </div></article>`;
     }
 
