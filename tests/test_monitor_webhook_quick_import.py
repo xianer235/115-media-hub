@@ -1,8 +1,11 @@
 """接收夹快捷导入的独立 webhook：把磁力直接投进接收夹，不影响原有按任务推送。"""
 
+import hashlib
+import hmac
 import json
 import os
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -12,6 +15,19 @@ from app.routes import monitor as monitor_routes
 
 
 MAGNET = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Demo"
+
+
+def _signed_headers(secret, payload, *, nonce="0123456789abcdef0123456789abcdef", ts=None):
+    """按脚本的方式算一份签名头，用于复现「同一份签名发两次」的场景。"""
+    body_text = json.dumps(payload, ensure_ascii=False)
+    ts_text = str(int(ts if ts is not None else time.time()))
+    signature_base = f"{ts_text}.{nonce}.{body_text}"
+    sign = hmac.new(secret.encode("utf-8"), signature_base.encode("utf-8"), hashlib.sha256).hexdigest()
+    return {
+        "X-Webhook-Ts": ts_text,
+        "X-Webhook-Nonce": nonce,
+        "X-Webhook-Sign": sign,
+    }
 
 
 class FakeHeaders(dict):
@@ -273,6 +289,68 @@ class QuickImportWebhookTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(extra.get("webhook_task_name"), "电视剧")
         self.assertIsNone(extra.get("quick_import_inbox"))
         submit.assert_called_once()
+
+    async def test_webhook_secret_is_shared_by_scan_and_inbox_tasks(self):
+        """签名密钥是全站唯一的：同一个 token 既能推接收夹任务，也能推普通监控任务。"""
+        cfg = _cfg(webhook_secret="shared-secret")
+        headers = {"X-Webhook-Token": "shared-secret"}
+
+        inbox_response, _submit = await self._call(_magnet_payload(), cfg=cfg, headers=headers)
+        scan_response, _submit = await self._call(
+            _magnet_payload(savepath="电视剧/新片"),
+            cfg=cfg,
+            headers=headers,
+            task_name="电视剧",
+        )
+
+        self.assertEqual(inbox_response.status_code, 200)
+        self.assertEqual(scan_response.status_code, 200)
+
+    async def test_scan_task_empty_savepath_explains_both_modes(self):
+        """扫描任务漏填 savepath 时，提示里要同时说明普通任务必填、接收夹任务可留空。"""
+        response, submit = await self._call(_magnet_payload(savepath=""), task_name="电视剧")
+        message = self._json(response)["msg"]
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("savepath", message)
+        self.assertIn("接收夹", message)
+        self.assertIn("留空", message)
+        submit.assert_not_called()
+
+    async def test_identical_signature_is_accepted_once_and_rejected_twice(self):
+        """同一份签名只能过一次：第二次返回 401「签名已被使用」。
+
+        手机端脚本旧版本在 GM 通道失败后会用同一份签名走 fetch 兜底重发，
+        于是用户看到的就是这个 401——而第一次请求其实已经建好离线任务。
+        """
+        monitor_routes.webhook_used_nonce_cache.clear()
+        payload = _magnet_payload()
+        headers = _signed_headers("PHONE_KEY", payload)
+        cfg = _cfg(webhook_secret="PHONE_KEY")
+
+        first, _submit = await self._call(payload, cfg=cfg, headers=headers)
+        second, _submit = await self._call(payload, cfg=cfg, headers=headers)
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 401)
+        self.assertIn("签名已被使用", self._json(second)["msg"])
+
+    async def test_fresh_signature_retry_falls_into_dedupe_not_replay(self):
+        """换成新签名重试不会撞防重放：会命中「同一条磁力已在处理」的 409 去重。"""
+        monitor_routes.webhook_used_nonce_cache.clear()
+        payload = _magnet_payload()
+        cfg = _cfg(webhook_secret="PHONE_KEY")
+
+        first, _submit = await self._call(
+            payload, cfg=cfg, headers=_signed_headers("PHONE_KEY", payload, nonce="a" * 32)
+        )
+        second, _submit = await self._call(
+            payload, cfg=cfg, headers=_signed_headers("PHONE_KEY", payload, nonce="b" * 32)
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 409)
+        self.assertNotIn("签名已被使用", self._json(second)["msg"])
 
 
 if __name__ == "__main__":

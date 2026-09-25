@@ -19,6 +19,8 @@ MONITOR_ROUTES_PATH = ROOT / "app/routes/monitor.py"
 RESOURCE_ROUTES_PATH = ROOT / "app/routes/resource.py"
 RESOURCE_SERVICE_PATH = ROOT / "app/services/resource.py"
 CLI_PATH = ROOT / "cli.py"
+README_PATH = ROOT / "README.md"
+USERSCRIPT_PATH = ROOT / "115-magnet-helper-webhook.user.js"
 
 
 class InboxTaskFrontendTest(unittest.TestCase):
@@ -202,6 +204,35 @@ class InboxTaskFrontendTest(unittest.TestCase):
         self.assertIn("接收夹", page)
         self.assertIn("根目录下的相对路径", page)
         self.assertNotIn("/webhook/quick-import", page)
+
+    def test_receive_folder_docs_state_staging_purpose_and_shared_secret(self):
+        """接收夹＝新增的可选便捷入口（不是强制流程）；签名密钥全站唯一，普通任务与接收夹共用。"""
+        readme = README_PATH.read_text(encoding="utf-8")
+        self.assertIn("分类前的中转文件夹", readme)
+        self.assertIn("便捷入口", readme)
+        # 旧用法必须仍然可用：直接按分类监控目录推送 / 保存。
+        self.assertIn("不是强制流程", readme)
+        self.assertIn("和普通监控任务共用同一个 Webhook 签名密钥", readme)
+
+        page = SETTINGS_PAGE_PATH.read_text(encoding="utf-8")
+        self.assertIn("分类前的中转文件夹", page)
+        self.assertIn("便捷入口", page)
+        self.assertIn("全站唯一的密钥", page)
+        # 旧说法（把接收夹当成「新增任务」里的一个类型）已经不对：它是内置固定任务。
+        self.assertNotIn("新增任务 → 任务类型选“接收夹任务”", page)
+
+        modal = MONITOR_MODAL_PATH.read_text(encoding="utf-8")
+        self.assertIn("全站唯一", modal)
+        self.assertIn("便捷入口", modal)
+
+        script = INDEX_SCRIPT_PATH.read_text(encoding="utf-8")
+        self.assertIn("与普通监控任务共用同一个全局密钥", script)
+        self.assertIn("可选的便捷入口", script)
+
+        userscript = USERSCRIPT_PATH.read_text(encoding="utf-8")
+        self.assertIn("分类前的中转文件夹", userscript)
+        self.assertIn("便捷入口", userscript)
+        self.assertIn("全部任务共用同一把", userscript)
 
 
 class InboxTaskBackendWiringTest(unittest.TestCase):

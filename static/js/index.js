@@ -4547,12 +4547,13 @@
             const lines = isInbox
                 ? [
                     `webhook 地址：IP:容器端口/webhook/${escapeHtml(name)}（任务名用于绑定这个接收夹任务）`,
+                    '接收夹是分类前的中转文件夹，也是可选的便捷入口：先统一落这里，再按识别结果归到电影 / 电视剧分发目标的目录，不用每次保存前挑分类；不用它也能照旧把 savepath 填到分类监控任务的目录',
                     '只接磁力：magnet 或 link_url；分享转存落到接收夹后同样会自动整理分发',
                     'savepath 填 115 根目录下的相对路径（例如 接收 或 接收/子目录）；留空默认落到接收夹',
                     '面板里的 /115/接收 这类路径照抄也能识别，推荐只写根目录相对路径',
                     '整理规则沿用分发目标任务的自动整理选项；识别不准的留在接收夹并写明原因',
-                    '签名校验（可选）：X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign 或 X-Webhook-Token',
-                    '说明：签名密钥在「参数配置 -> 后台安全管理」里设置；为空时不校验',
+                    '签名校验（可选，与普通监控任务共用同一个全局密钥）：X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign 或 X-Webhook-Token',
+                    '说明：全站只有一个签名密钥，在「参数配置 -> 后台安全管理」里设置，扫描任务和接收夹任务共用；为空时不校验',
                 ]
                 : [
                     `webhook 地址：IP:容器端口/webhook/${escapeHtml(name)}（任务名用于绑定这个监控任务）`,
@@ -4560,8 +4561,8 @@
                     'savepath 填 115 根目录下的相对路径（例如 电影/新片）；必须落在本任务目录内，导入后才会自动刷新 strm',
                     'delayTime 可选：本次导入成功后延迟几秒刷新；不传则使用任务默认延迟',
                     'title / sharetitle 可选：仅用于日志或局部刷新提示',
-                    '签名校验（可选）：X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign 或 X-Webhook-Token',
-                    '说明：签名密钥在「参数配置 -> 后台安全管理」里设置；为空时不校验',
+                    '签名校验（可选，与接收夹任务共用同一个全局密钥）：X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign 或 X-Webhook-Token',
+                    '说明：全站只有一个签名密钥，在「参数配置 -> 后台安全管理」里设置，扫描任务和接收夹任务共用；为空时不校验',
                 ];
             lines.push('修改任务名会改变上面的 webhook 地址，记得同步油猴脚本里的“请求地址”');
             document.getElementById('webhook-hint').innerHTML = lines.join('<br>');

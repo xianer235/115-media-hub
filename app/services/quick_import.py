@@ -158,7 +158,7 @@ def validate_quick_import_config(cfg: Optional[Dict[str, Any]] = None) -> Option
     active_cfg = cfg if isinstance(cfg, dict) else get_config()
     conf = build_quick_import_config(active_cfg)
     if not conf["task_name"]:
-        return "还没有接收夹任务，请先新增一个「接收夹」任务"
+        return "没有找到内置的接收夹任务，请重启服务或检查配置（接收夹是内置固定任务，不需要新增）"
     if not conf["enabled"]:
         return f"接收夹任务「{conf['task_name']}」未启用"
     if not conf["inbox_path"]:

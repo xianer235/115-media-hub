@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         115-media-hub助手
 // @namespace    http://tampermonkey.net/
-// @version      2.7.0
+// @version      2.7.2
 // @description  检测网页 magnet / torrent / 115 / 夸克分享链接并生成快捷按钮（点 115 后的弹窗内可一键复制磁力）
 // @author       仙儿
 // @license      MIT
@@ -460,7 +460,9 @@
         }
         const colors = tone === 'error'
             ? { bg: 'rgba(153,27,27,.96)', border: 'rgba(254,202,202,.3)', fg: '#fee2e2' }
-            : { bg: 'rgba(6,95,70,.96)', border: 'rgba(167,243,208,.3)', fg: '#ecfdf5' };
+            : (tone === 'warn'
+                ? { bg: 'rgba(120,53,15,.96)', border: 'rgba(253,230,138,.3)', fg: '#fef3c7' }
+                : { bg: 'rgba(6,95,70,.96)', border: 'rgba(167,243,208,.3)', fg: '#ecfdf5' });
         el.style.background = colors.bg;
         el.style.border = `1px solid ${colors.border}`;
         el.style.color = colors.fg;
@@ -1017,16 +1019,26 @@
         }
     }
 
-    async function postJson(url, headers, bodyText) {
+    /**
+     * headers 既可以是固定对象，也可以是「每次尝试都重新生成请求头」的异步函数。
+     * 带签名的请求必须用函数形式：GM 通道失败后走 fetch 兜底时不能复用同一份 (ts, nonce)，
+     * 否则服务端防重放会判「签名已被使用」（而第一份签名其实已经被受理）。
+     */
+    async function resolveRequestHeaders(headersOrFactory) {
+        if (typeof headersOrFactory !== 'function') return headersOrFactory;
+        return await headersOrFactory();
+    }
+
+    async function postJson(url, headersOrFactory, bodyText) {
         const requestUrl = encodeUrlForRequest(url);
         let gmResult;
         try {
-            gmResult = await postJsonByGM(requestUrl, headers, bodyText);
+            gmResult = await postJsonByGM(requestUrl, await resolveRequestHeaders(headersOrFactory), bodyText);
         } catch (err) {
             gmResult = { ok: false, status: 0, body: `GM 请求异常: ${err && err.message ? err.message : '未知错误'}` };
         }
         if (gmResult.ok || gmResult.status > 0) return gmResult;
-        const fetchResult = await postJsonByFetch(requestUrl, headers, bodyText);
+        const fetchResult = await postJsonByFetch(requestUrl, await resolveRequestHeaders(headersOrFactory), bodyText);
         if (fetchResult.ok || fetchResult.status > 0) return fetchResult;
         return {
             ok: false,
@@ -1212,14 +1224,25 @@
             const magnet = await resolveMagnetFromSource(source);
             const payload = buildPayload(task, magnet);
             const bodyText = JSON.stringify(payload);
-            const signHeaders = await buildSignedHeaders(secret, bodyText);
-            const result = await postJson(task.webhookUrl, {
+            // 每次尝试（GM / fetch 兜底）都重新签名，避免重发同一份签名被服务端防重放挡下。
+            const result = await postJson(task.webhookUrl, async () => ({
                 'Content-Type': 'application/json',
                 'Accept': 'application/json, text/plain, */*',
-                ...signHeaders
-            }, bodyText);
+                ...(await buildSignedHeaders(secret, bodyText))
+            }), bodyText);
             if (!result.ok) {
                 const tail = result.body ? `\n${String(result.body).slice(0, 200)}` : '';
+                if (result.status === 409) {
+                    // 同一条磁力 + 同一个保存路径会命中去重：多半是刚才那次点击其实已经提交成功。
+                    showToast(`已提交过：这条磁力正在后台处理（上一次点击可能已经成功），请到任务中心确认${tail}`, 'warn');
+                    setButtonState(button, 'idle');
+                    return;
+                }
+                if (result.status === 401 && /签名已被使用/.test(String(result.body || ''))) {
+                    showToast(`推送被拒绝：这份签名已经用过（多为重复点击或客户端重试）\n请到任务中心确认是否已经提交，确认没有收到再重推${tail}`, 'warn');
+                    setButtonState(button, 'idle');
+                    return;
+                }
                 showToast(`推送失败: ${result.status || '网络错误'}${tail}`, 'error');
                 setButtonState(button, 'error');
                 return;
@@ -1431,7 +1454,8 @@
     function validateManagerTask(task) {
         if (!task.name) return '任务名称不能为空';
         if (!task.webhookUrl || !isHttpUrl(task.webhookUrl)) return '请求地址必须是 http:// 或 https://';
-        if (!task.savepath) return '保存路径 savepath 不能为空';
+        // 保存路径允许留空：绑定接收夹任务时后台会默认落到接收夹（接收夹就是分类前的中转目录，
+        // 不需要用户每次想路径）；绑定普通监控任务时后台会返回明确的 400，要求填任务目录内的路径。
         return '';
     }
 
@@ -1464,7 +1488,7 @@
                 <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px;">
                     <input data-editor-field="name" type="text" placeholder="名称：只在脚本内显示，例如：自存电影" value="${escapeHtml(task.name || '')}" style="padding:8px 10px;border:1px solid #475569;border-radius:8px;background:#020617;color:#f8fafc;outline:none;">
                     <input data-editor-field="webhookUrl" type="text" placeholder="完整请求地址，如 http://192.168.1.100:18080/webhook/任务名" value="${escapeHtml(task.webhookUrl || '')}" style="padding:8px 10px;border:1px solid #475569;border-radius:8px;background:#020617;color:#f8fafc;outline:none;">
-                    <input data-editor-field="savepath" type="text" placeholder="保存路径：115 目标目录，需在监控扫描路径内" value="${escapeHtml(task.savepath || '')}" style="padding:8px 10px;border:1px solid #475569;border-radius:8px;background:#020617;color:#f8fafc;outline:none;">
+                    <input data-editor-field="savepath" type="text" placeholder="保存路径：监控任务填其扫描路径内；接收夹任务填接收夹或子目录（可留空）" value="${escapeHtml(task.savepath || '')}" style="padding:8px 10px;border:1px solid #475569;border-radius:8px;background:#020617;color:#f8fafc;outline:none;">
                     <input data-editor-field="delaySeconds" type="number" min="0" step="1" title="延迟：导入成功后等待几秒再刷新；0 使用监控任务默认延迟" value="${Number(task.delaySeconds || 0)}" style="padding:8px 10px;border:1px solid #475569;border-radius:8px;background:#020617;color:#f8fafc;outline:none;">
                 </div>
                 <div style="margin-top:8px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
@@ -1578,8 +1602,9 @@
                     <button id="mh-manager-close" type="button" style="padding:6px 11px;border-radius:9px;border:1px solid #475569;background:#1e293b;color:#e2e8f0;cursor:pointer;">关闭</button>
                 </div>
                 <div style="margin-top:10px;padding:10px;border-radius:10px;background:rgba(30,41,59,.55);border:1px solid rgba(71,85,105,.5);color:#cbd5e1;">
-                    用途：把网页里的 magnet / torrent 推送到 115-media-hub。必须填写“请求地址”和“保存路径”；“延迟”可选，“名称”只用于脚本内识别。签名密钥需与后台的 Webhook 签名密钥一致。
-                    <br>关系：请求地址里的 /webhook/任务名 决定绑定哪个文件夹监控任务；保存路径是磁力离线到 115 的目标目录，也要落在该任务的扫描路径内，导入完成后才会自动刷新并生成 strm。
+                    用途：把网页里的 magnet / torrent 推送到 115-media-hub。“请求地址”必填，“保存路径”看任务类型（普通监控任务填其扫描路径内的目录，内置接收夹任务可留空）；“延迟”可选，“名称”只用于脚本内识别。签名密钥只有一个：填后台「参数配置 → 后台安全管理」里的 Webhook 签名密钥，全部任务共用同一把。
+                    <br>关系：请求地址里的 /webhook/任务名 决定绑定哪条任务。绑定普通监控任务时，保存路径是磁力离线到 115 的目标目录，要落在该任务的扫描路径内，导入完成后才会自动刷新并生成 strm。
+                    <br>绑定内置接收夹任务时，保存路径填接收夹本身或它的子目录（留空即接收夹）。接收夹是分类前的中转文件夹，也是新增的可选便捷入口：先统一落这里，下载完成后自动识别是电影还是电视剧，再按对应分类监控任务的刮削预设整理并移动过去，所以不用每次保存前先挑分类目录；不用它也能照旧绑定分类监控任务、把保存路径填到那个任务的目录。
                 </div>
 
                 <div style="margin-top:12px;padding:12px;border-radius:10px;border:1px solid #334155;background:#0b1220;">
@@ -1807,6 +1832,7 @@
                 jsHmacSha256Hex,
                 jsSha256Hex: (bytes) => arrayBufferToHex(jsSha256Bytes(bytes).buffer),
                 buildSignedHeaders,
+                pushMagnet,
                 registerMenus,
                 createPushButton,
                 copyMagnetFromSource,

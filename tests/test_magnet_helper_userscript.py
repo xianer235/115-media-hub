@@ -524,3 +524,85 @@ context.navigator = { clipboard: { writeText: async (value) => { copied.push(val
         # 复制不应该关闭弹窗，用户仍可继续选任务推送
         self.assertTrue(result["stillOpen"])
         self.assertIsNone(result["picked"])
+
+    def test_task_manager_allows_empty_savepath_for_inbox_push(self):
+        """保存路径可以留空：绑定接收夹任务时后台默认落到接收夹，脚本不该在本地拦下来。"""
+        result = run_userscript(
+            "({"
+            "  emptySavepath: api.validateManagerTask({ name: '接收', webhookUrl: 'http://x/webhook/接收', savepath: '' }),"
+            "  missingName: api.validateManagerTask({ name: '', webhookUrl: 'http://x/webhook/接收', savepath: '接收' }),"
+            "  badUrl: api.validateManagerTask({ name: '接收', webhookUrl: '不是地址', savepath: '接收' })"
+            "})"
+        )
+        self.assertEqual(result["emptySavepath"], "")
+        self.assertIn("任务名称", result["missingName"])
+        self.assertIn("http", result["badUrl"])
+
+    def _push_setup(self, gm_behavior):
+        """GM 通道行为由入参决定；fetch 固定成功，便于检查兜底那次请求用的是哪份签名。"""
+        return self._setup() + f"""
+const attempts = [];
+context.GM_getValue = (key, fallback) => (key === 'magnet_push_secret_v2' ? 's3cret' : fallback);
+context.GM_setValue = () => {{}};
+context.GM_xmlhttpRequest = (opts) => {{
+  attempts.push({{ via: 'gm', headers: opts.headers }});
+  {gm_behavior}
+}};
+context.fetch = async (url, init) => {{
+  attempts.push({{ via: 'fetch', headers: init.headers }});
+  return {{ ok: true, status: 200, text: async () => '{{"ok":true}}' }};
+}};
+"""
+
+    def _push_expression(self):
+        return """
+(async () => {
+  await api.loadPersistedState();
+  const button = makeEl('button');
+  await api.pushMagnet(
+    { name: '接收', webhookUrl: 'http://hub/webhook/接收', savepath: '' },
+    'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef',
+    button
+  );
+  const toast = registry.find((el) => el.id === 'mh-core-toast');
+  return {
+    attempts: attempts.map((item) => ({
+      via: item.via,
+      ts: (item.headers || {})['X-Webhook-Ts'] || '',
+      nonce: (item.headers || {})['X-Webhook-Nonce'] || '',
+      sign: (item.headers || {})['X-Webhook-Sign'] || ''
+    })),
+    toast: toast ? toast.textContent : '',
+    buttonText: button.textContent
+  };
+})()
+"""
+
+    def test_push_resigns_when_gm_falls_back_to_fetch(self):
+        """GM 失败后走 fetch 兜底必须换一份新签名，否则服务端会判「签名已被使用」。"""
+        result = run_userscript(
+            self._push_expression(),
+            self._push_setup("setTimeout(() => opts.onerror({ error: 'boom' }), 0);"),
+        )
+
+        self.assertEqual([item["via"] for item in result["attempts"]], ["gm", "fetch"])
+        first, second = result["attempts"]
+        self.assertTrue(first["sign"] and second["sign"])
+        self.assertNotEqual(first["nonce"], second["nonce"])
+        self.assertNotEqual(first["sign"], second["sign"])
+        self.assertEqual(result["buttonText"], "115")
+
+    def test_push_reports_duplicate_submit_instead_of_generic_failure(self):
+        """409 是「同一条磁力 + 同一个保存路径已在处理」，不是错误；提示要说明可能已提交成功。"""
+        result = run_userscript(
+            self._push_expression(),
+            self._push_setup(
+                "setTimeout(() => opts.onload({ status: 409, responseText: "
+                "'{\"ok\":false,\"msg\":\"该磁力已在处理中，请勿重复提交。\"}' }), 0);"
+            ),
+        )
+
+        self.assertEqual([item["via"] for item in result["attempts"]], ["gm"])
+        self.assertIn("已提交过", result["toast"])
+        self.assertIn("任务中心", result["toast"])
+        self.assertEqual(result["buttonText"], "115")

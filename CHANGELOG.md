@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.18] - 2026-09-25
+
+### 修复：手机端油猴脚本推送到接收夹偶发 `401 Webhook 签名已被使用`
+
+用户反馈：手机上的脚本推送到**接收夹**报 `401 {"ok":false,"msg":"Webhook 签名已被使用"}`，推送到**监控文件夹**却成功。定位与修复如下：
+
+- **结论：这不是接收夹的问题，而是同一份签名被提交了两次。** 服务端 `_verify_webhook_auth` 以 `X-Webhook-Ts` + `X-Webhook-Nonce`（`ts:nonce`）做防重放，且**只在签名校验通过之后才记账**；所以出现「已被使用」必然意味着同一份签名发过两次、**第一份已经受理**。鉴权发生在判断任务类型之前，扫描任务与接收夹共用同一把全站密钥、同一段代码；接收夹那条服务端路径（`build_quick_import_config` / `validate_quick_import_config` / `resolve_provider_relative_path`）全是配置计算、没有任何网络 IO，不会自己拖过脚本的超时。
+- **根因：脚本旧版的备用通道复用了同一份签名。** `postJson()` 先走 `GM_xmlhttpRequest`，返回 status 0（18 秒超时 / iOS 网络抖动 / 扩展未就绪）时会拿**同一份 headers** 走 `fetch` 兜底重发，第二次被防重放挡下，而弹窗显示的正是兜底那次的结果——用户看到 401，其实第一次已经建好离线任务。
+- **修复：每次尝试都重新签名。** `postJson` 支持「请求头工厂」（新增 `resolveRequestHeaders`），`pushMagnet` 在 GM 与 fetch 两次尝试中各自生成新的 `ts/nonce/sign`，不再重发同一份签名。
+- **顺手改掉两处误导提示**：同一条磁力 + 同一保存路径命中去重（409）时改为琥珀色提示「已提交过：这条磁力正在后台处理（上一次点击可能已经成功），请到任务中心确认」，不再显示成推送失败；401 且含「签名已被使用」时提示「到任务中心确认是否已提交，确认没有收到再重推」。服务端该错误文案补成「同一份签名被重复提交（客户端重试或重复点击）」。脚本 `@version` 2.7.0 → **2.7.2**。
+- 同期 `README.md` 油猴章节新增「常见报错」两条（`401 签名已被使用` / `409 已提交过`）。
+
+### 接收夹口径对齐：可选的便捷入口 + 共用同一个签名密钥
+
+- **接收夹＝分类前的中转文件夹，是可选的新增入口，不是强制流程**：以前电影、电视剧各自只有监控目录，保存或推送前要先挑分类；现在多了接收夹，可以什么都不挑先丢进去，由识别结果和分发目标决定归到哪一类。原来的用法完全保留——给电影、电视剧各建监控任务，推送 / 保存时直接指定那个分类目录，行为不变，两种用法可并存。
+- **鉴权只有一套**：全站唯一的 `webhook_secret`，扫描任务与接收夹任务共用（`X-Webhook-Token` 或 `X-Webhook-Ts`/`X-Webhook-Nonce`/`X-Webhook-Sign`），接收夹不需要、也不支持单独配密钥；两者唯一的区别是收到请求之后的处理流程不同。
+- 改动位置：`README.md`「统一落到接收夹」章节与油猴关系条目、`templates/partials/pages/settings.html` 第 8 节、`templates/partials/modals/monitor.html` 的 webhook / 接收夹路径 / 分发目标 / 推送地址提示、`static/js/index.js` 的 `refreshWebhookHint()`、`115-magnet-helper-webhook.user.js` 任务管理器说明，以及 `docs/superpowers/specs/2026-09-23-folder-monitor-workflow-design.md` §3.4。设置页里已失效的「新增任务 → 任务类型选接收夹任务」说法删除（接收夹是内置固定任务）。
+
+### 其它提示与容错
+
+- **油猴脚本的保存路径允许留空**：绑定接收夹任务时留空即默认落到接收夹（与面板文案一致），不再在脚本本地被拦下；绑定普通监控任务时留空由服务端返回明确 400「普通监控任务必须填该任务目录内的保存路径；接收夹任务可以留空（留空即默认落到接收夹）」。
+- `validate_quick_import_config` 的内置接收夹缺失提示不再说「请先新增一个接收夹任务」，改为提示重启服务 / 检查配置（接收夹是内置固定任务，不需要也无法新增）。
+
+### 验证
+
+- 服务端复现用例：`tests.test_monitor_webhook_quick_import` 新增「同一份签名提交两次 → 第一次 200 建任务、第二次 401 签名已被使用」（即用户截图现象）与「换新签名重试 → 200 后是 409 去重、不再撞防重放」。
+- 脚本用例：`tests.test_magnet_helper_userscript` 16 → 18 项，新增「GM 失败后 fetch 兜底必须换一份新签名（两次 nonce / sign 不同）」与「409 提示已提交过且不再回退 fetch」。
+- 文档口径用例：`tests.test_quick_import_frontend` 新增接收夹口径锁定（「便捷入口」「不是强制流程」「共用同一个全局密钥」），并断言旧「新增接收夹任务」说法已删除。
+- 完整 `unittest discover -s tests -p 'test_*.py'` **1036 项零失败**；`compileall app main.py`、改动 JS 的 `node --check`、`git diff --check`、`version.json` 解析通过。
+- 未在真实网盘上执行推送复现（用户手机为另一套 NAS 部署，本地数据卷无对应 webhook 记录），结论由代码链路 + 本地复现用例给出；上线后可在面板「监控日志」核对同一次推送是否成对出现「Webhook 磁力任务已创建」与「Webhook 校验失败: … 签名已被使用」。
+
 ## [0.11.17] - 2026-09-25
 
 ### 识别结果可视化 + 识别准确率修复

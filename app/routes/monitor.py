@@ -85,7 +85,7 @@ def _verify_webhook_auth(request: Request, cfg: Dict[str, Any], body_text: str) 
     nonce_key = f"{ts_text}:{nonce}"
     _cleanup_webhook_nonce_cache(now_ts)
     if nonce_key in webhook_used_nonce_cache:
-        return "Webhook 签名已被使用"
+        return "Webhook 签名已被使用：同一份签名被重复提交（客户端重试或重复点击）"
 
     signature_base = f"{ts_text}.{nonce}.{body_text}"
     expected_sign = hmac.new(secret.encode("utf-8"), signature_base.encode("utf-8"), hashlib.sha256).hexdigest()
@@ -179,7 +179,13 @@ async def _create_userscript_magnet_job(
     """
     normalized_savepath = normalize_relative_path(savepath)
     if not normalized_savepath:
-        return JSONResponse(status_code=400, content={"ok": False, "msg": "磁力任务缺少 savepath"})
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "msg": "磁力任务缺少 savepath：普通监控任务必须填该任务目录内的保存路径；接收夹任务可以留空（留空即默认落到接收夹）",
+            },
+        )
     cookie_115 = str(cfg.get("cookie_115", "")).strip()
     if not cookie_115:
         return JSONResponse(status_code=400, content={"ok": False, "msg": "请先在参数配置中填写 115 Cookie"})
