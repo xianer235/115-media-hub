@@ -22,6 +22,25 @@ class MonitorRunStoreTest(unittest.TestCase):
         db._DB_ENSURED = self.original_ensured
         self.tmpdir.cleanup()
 
+    def test_list_runs_orders_by_start_time_not_updated_at(self):
+        """列表按开始时间排序：后台状态更新（updated_at）不再让条目跳到最前。"""
+        older = monitor_runs.create_run(run_kind="scan", task_name="电视剧", source="manual")
+        newer = monitor_runs.create_run(run_kind="scan", task_name="电视剧", source="manual")
+        with db.db_connection() as conn:
+            conn.execute(
+                "UPDATE monitor_runs SET queued_at = ?, started_at = ?, updated_at = ? WHERE id = ?",
+                ("2026-09-26T19:59:00", "2026-09-26T20:00:00", "2026-09-27T02:58:00", older),
+            )
+            conn.execute(
+                "UPDATE monitor_runs SET queued_at = ?, started_at = ?, updated_at = ? WHERE id = ?",
+                ("2026-09-27T02:20:00", "2026-09-27T02:20:05", "2026-09-27T02:20:06", newer),
+            )
+            conn.commit()
+
+        page = monitor_runs.list_runs()
+
+        self.assertEqual([run["id"] for run in page["runs"]][:2], [newer, older])
+
     def test_records_detail_and_keeps_active_runs_during_cleanup(self):
         completed = monitor_runs.create_run(
             run_kind="scan",
@@ -206,8 +225,8 @@ class MonitorRunStoreTest(unittest.TestCase):
 
         inbox = monitor_runs.get_run_detail(parent)["run"]
         self.assertEqual(inbox["status"], "completed")
-        self.assertIn("已分发 6 项", inbox["summary"])
-        self.assertIn("后续同步全部完成", inbox["summary"])
+        self.assertIn("成功分发 6 项", inbox["summary"])
+        self.assertIn("STRM 同步全部结束", inbox["summary"])
         self.assertNotIn("个任务", inbox["summary"])
         self.assertEqual(
             {monitor_runs.get_run_detail(item["change"])["run"]["status"] for item in chain},
@@ -293,8 +312,8 @@ class MonitorRunStoreTest(unittest.TestCase):
         self.assertEqual(monitor_runs.get_run_detail(parent)["run"]["status"], "partial")
         self.assertEqual(monitor_runs.get_run_detail(change_run)["run"]["status"], "failed")
 
-    def test_run_list_keeps_every_dispatched_run_as_its_own_row(self):
-        """列表是“一条任务一行”：接收夹整理在前，它分发生出来的每条扫描各自成行。"""
+    def test_run_list_groups_dispatched_runs_under_parent(self):
+        """列表按工作单元分组：父任务一行，分发生出来的子任务折叠在 children 里。"""
         parent, chain = self._dispatch_auto_rescan_batch(items=2)
         for item in chain:
             monitor_runs.finish_run(
@@ -307,16 +326,19 @@ class MonitorRunStoreTest(unittest.TestCase):
         listed_ids = [run["id"] for run in page["runs"]]
         listed_by_id = {run["id"]: run for run in page["runs"]}
 
-        # 接收夹整理排在最前，紧跟着的是它分发出来的两条扫描任务。
-        self.assertEqual(listed_ids[0], parent)
-        self.assertEqual(set(listed_ids[1:3]), {item["rescan"] for item in chain})
+        # 顶层只有接收夹父任务，子任务（变更同步 + 扫描）都在它的 children 里。
+        self.assertEqual(listed_ids, [parent])
+        parent_row = listed_by_id[parent]
+        self.assertEqual(parent_row["child_count"], 4)
+        self.assertEqual(
+            {item["id"] for item in parent_row["children"]},
+            {item["rescan"] for item in chain} | {item["change"] for item in chain},
+        )
         for item in chain:
-            self.assertEqual(listed_by_id[item["rescan"]]["source"], "auto_rescan")
-            self.assertEqual(listed_by_id[item["rescan"]]["run_kind"], "scan")
-            self.assertNotIn("group_runs", listed_by_id[item["rescan"]])
-        # 触发记录的直接子运行（增量变更同步）不单独占一行，它属于这条触发记录的后续同步。
-        self.assertNotIn(chain[0]["change"], listed_ids)
-        self.assertEqual(listed_by_id[parent]["child_count"], 2)
+            child = next(entry for entry in parent_row["children"] if entry["id"] == item["rescan"])
+            self.assertEqual(child["source"], "auto_rescan")
+            self.assertEqual(child["run_kind"], "scan")
+            self.assertEqual(child["depth"], 2)
 
         flat = monitor_runs.list_runs(run_kind="change")
         self.assertIn(chain[0]["change"], [run["id"] for run in flat["runs"]])
@@ -345,7 +367,8 @@ class MonitorRunStoreTest(unittest.TestCase):
         # 同秒内的下游也不能把触发记录挤到后面：祖先的活动时间要严格更新。
         self.assertGreater(parent_updated, rescan_updated)
         page = monitor_runs.list_runs()
-        self.assertEqual([run["id"] for run in page["runs"]][:2], [parent, item["rescan"]])
+        self.assertEqual([run["id"] for run in page["runs"]], [parent])
+        self.assertIn(item["rescan"], [entry["id"] for entry in page["runs"][0]["children"]])
 
     def test_run_detail_exposes_downstream_chain_with_depth(self):
         parent, chain = self._dispatch_auto_rescan_batch(items=1)
@@ -529,19 +552,47 @@ class MonitorRunStoreTest(unittest.TestCase):
 
         self.assertEqual([item["id"] for item in page["runs"]], [run_id])
 
-    def test_default_list_keeps_dispatched_run_linked_without_parent_id(self):
-        """分发出去的任务各自占一行；只有触发记录的直接子运行才不单独显示。"""
+    def test_list_runs_supports_grouped_source_and_status_filters(self):
+        """筛选只暴露用户视角的几组：手动 / 定时 / 推送 / 导入 / 系统跟进、进行中 / 已完成 / 需处理 / 已中断。"""
+        manual = monitor_runs.create_run(run_kind="scan", task_name="电影", source="manual", subject="手动")
+        monitor_runs.finish_run(manual, status="completed", summary="完成")
+        retry = monitor_runs.create_run(run_kind="scan", task_name="电影", source="retry", subject="重试")
+        monitor_runs.finish_run(retry, status="failed", summary="失败")
+        cron = monitor_runs.create_run(run_kind="scan", task_name="电影", source="cron", subject="定时")
+        monitor_runs.finish_run(cron, status="no_change", summary="无变化")
+        dispatch = monitor_runs.create_run(run_kind="scan", task_name="电影", source="inbox_dispatch", subject="分发")
+        monitor_runs.finish_run(dispatch, status="partial", summary="部分完成")
+
+        manual_group = {run["id"] for run in monitor_runs.list_runs(source_group="manual")["runs"]}
+        self.assertEqual(manual_group, {manual, retry})
+        followup_group = {run["id"] for run in monitor_runs.list_runs(source_group="followup")["runs"]}
+        self.assertEqual(followup_group, {dispatch})
+        attention_group = {run["id"] for run in monitor_runs.list_runs(status_group="attention")["runs"]}
+        self.assertEqual(attention_group, {retry, dispatch})
+        done_group = {run["id"] for run in monitor_runs.list_runs(status_group="done")["runs"]}
+        self.assertEqual(done_group, {manual, cron})
+        # 合并进来的其它来源也算在这一组里。
+        monitor_runs.add_source(manual, "cron", "")
+        scheduled_group = {run["id"] for run in monitor_runs.list_runs(source_group="scheduled")["runs"]}
+        self.assertIn(manual, scheduled_group)
+        # 未知分组不生效，不能把列表清空。
+        self.assertEqual(len(monitor_runs.list_runs(source_group="unknown")["runs"]), 4)
+
+    def test_default_list_groups_link_only_dispatched_run_under_parent(self):
+        """只挂 downstream 关联的分发任务也归到父任务下，不再单独占一行。"""
         parent = monitor_runs.create_run(run_kind="inbox", task_name="接收", source="manual")
         dispatched = monitor_runs.create_run(run_kind="scan", task_name="电影", source="auto_rescan")
         monitor_runs.link_runs(parent, dispatched, relation="downstream")
         child = monitor_runs.create_run(run_kind="change", task_name="电影", source="change", parent_run_id=parent)
 
-        default_ids = {item["id"] for item in monitor_runs.list_runs()["runs"]}
+        page = monitor_runs.list_runs()
+        default_ids = {item["id"] for item in page["runs"]}
+        children_ids = {item["id"] for item in page["runs"][0]["children"]}
         change_ids = {item["id"] for item in monitor_runs.list_runs(run_kind="change")["runs"]}
 
-        self.assertIn(parent, default_ids)
-        self.assertIn(dispatched, default_ids)
-        self.assertNotIn(child, default_ids)
+        self.assertEqual(default_ids, {parent})
+        self.assertIn(dispatched, children_ids)
+        self.assertIn(child, children_ids)
         self.assertIn(child, change_ids)
 
     def test_detail_includes_remote_change_paths(self):
@@ -734,6 +785,78 @@ class MonitorRunQueueOperationTest(MonitorRunStoreTest):
         self.assertEqual(cancelled["status"], "cancelled")
         self.assertTrue(cancelled["result"]["cancelled_before_start"])
 
+    def test_dispatch_child_queues_its_own_independent_run(self):
+        """分发的每个条目一条独立扫描任务，来源标注接收夹分发、不挂接收夹父运行。"""
+        queued = []
+        status = {"running": True, "current_task": "其他任务", "queued": []}
+        cfg = {
+            "mount_points": [{"provider": "115", "prefix": "/115"}],
+            "monitor_tasks": [self._scan_task()],
+        }
+        with patch.object(monitor, "monitor_queue", queued), \
+                patch.object(monitor, "monitor_status", status), \
+                patch.object(monitor, "get_config", return_value=cfg), \
+                patch.object(monitor, "schedule_ui_state_push", Mock()):
+            run_id = monitor.queue_inbox_dispatch_scan(cfg, "电视剧/三体 S01")
+
+        self.assertTrue(run_id)
+        self.assertEqual(len(queued), 1)
+        self.assertEqual(queued[0]["run_source"], "inbox_dispatch")
+        self.assertEqual(queued[0]["trigger"], "manual")
+        detail = monitor_runs.get_run_detail(run_id)
+        self.assertEqual(detail["run"]["parent_run_id"], "")
+        self.assertEqual(detail["run"]["source"], "inbox_dispatch")
+        self.assertEqual(detail["run"]["scope"], {"kind": "paths", "paths": ["/电视剧/三体 S01"]})
+        self.assertEqual(detail["run"]["subject"], "三体 S01")
+
+    def test_disabled_task_still_accepts_auto_followups(self):
+        """停用只拦住自动定时/资源触发；已经分发的条目仍要完成 STRM 同步。"""
+        queued = []
+        status = {"running": True, "current_task": "其他任务", "queued": []}
+        disabled_task = {**self._scan_task(), "enabled": False}
+        cfg = {"monitor_tasks": [disabled_task]}
+        with patch.object(monitor, "monitor_queue", queued), \
+                patch.object(monitor, "monitor_status", status), \
+                patch.object(monitor, "get_config", return_value=cfg), \
+                patch.object(monitor, "schedule_ui_state_push", Mock()):
+            cron_result = monitor.queue_monitor_job("电视剧监控", "cron")
+            rescan_result = monitor.queue_monitor_job(
+                "电视剧监控",
+                "manual",
+                {"savepaths": ["电视剧/三体 S01"]},
+                run_source="auto_rescan",
+                force_new=True,
+                return_details=True,
+            )
+
+        self.assertEqual(cron_result, "disabled")
+        self.assertEqual(rescan_result["status"], "queued")
+        self.assertEqual(len(queued), 1)
+        self.assertEqual(queued[0]["run_source"], "auto_rescan")
+
+    def test_change_queue_run_starts_with_event_scope(self):
+        """变更同步的范围是“本次文件变更涉及的目录”，入队时不能写成“全部目录”。"""
+        queued = []
+        status = {"running": True, "current_task": "其他任务", "queued": []}
+        cfg = {"monitor_tasks": [self._scan_task()]}
+        with patch.object(monitor, "monitor_queue", queued), \
+                patch.object(monitor, "monitor_status", status), \
+                patch.object(monitor, "get_config", return_value=cfg), \
+                patch.object(monitor, "schedule_ui_state_push", Mock()):
+            result = monitor.queue_monitor_job(
+                "电视剧监控",
+                "change",
+                {"mode": "change"},
+                return_details=True,
+            )
+
+        self.assertEqual(result["status"], "queued")
+        detail = monitor_runs.get_run_detail(result["run_id"])
+        self.assertEqual(detail["run"]["run_kind"], "change")
+        self.assertEqual(detail["run"]["scope"], {"kind": "events"})
+        queued_event = next(item for item in detail["events"] if item.get("operation") == "queued")
+        self.assertEqual(queued_event["detail"]["scope"], {"kind": "events"})
+
     def test_retry_rejects_change_run_without_persisted_event_scope(self):
         original = monitor_runs.create_run(
             run_kind="change",
@@ -906,3 +1029,163 @@ class MonitorRunQueueOperationTest(MonitorRunStoreTest):
         self.assertTrue(monitor_runs.get_run_detail(other_task))
         self.assertTrue(monitor_runs.get_run_detail(active_task))
         self.assertFalse(monitor_runs.get_run_detail(target_task))
+
+
+class MonitorRunDispatchPairTest(unittest.TestCase):
+    """一次分发产生的「变更同步 + 独立目录同步」在默认列表里合并成一行。"""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.original_db_path = db.DB_PATH
+        self.original_ensured = db._DB_ENSURED
+        db.DB_PATH = os.path.join(self.tmpdir.name, "data.db")
+        db._DB_ENSURED = False
+        db.ensure_db()
+
+    def tearDown(self):
+        db.DB_PATH = self.original_db_path
+        db._DB_ENSURED = self.original_ensured
+        self.tmpdir.cleanup()
+
+    def _make_run(
+        self,
+        *,
+        run_kind: str,
+        source: str,
+        paths,
+        subject: str,
+        queued_at: str,
+        task_name: str = "电视剧",
+        status: str = "completed",
+        summary: str = "",
+    ) -> str:
+        run_id = monitor_runs.create_run(
+            run_kind=run_kind,
+            task_name=task_name,
+            source=source,
+            scope={"kind": "paths", "paths": list(paths)},
+            subject=subject,
+        )
+        monitor_runs.start_run(run_id)
+        monitor_runs.finish_run(run_id, status=status, summary=summary, result={})
+        with db.db_connection() as conn:
+            conn.execute(
+                "UPDATE monitor_runs SET queued_at = ?, started_at = ? WHERE id = ?",
+                (queued_at, queued_at, run_id),
+            )
+            conn.commit()
+        return run_id
+
+    def test_default_list_merges_change_and_dispatched_scan(self):
+        change = self._make_run(
+            run_kind="change", source="change",
+            paths=["115自存电视剧/示例剧"], subject="示例剧",
+            queued_at="2026-09-27T05:54:43", summary="已同步 1 条网盘变更。",
+        )
+        scan = self._make_run(
+            run_kind="scan", source="inbox_dispatch",
+            paths=["/115自存电视剧/示例剧"], subject="示例剧",
+            queued_at="2026-09-27T05:54:43", summary="检查完成：新增或更新 6 个本地播放文件。",
+        )
+
+        page = monitor_runs.list_runs()
+
+        # 主行是目录同步；前导斜杠不同的范围也能配对，变更同步不再单独成行。
+        self.assertEqual([run["id"] for run in page["runs"]], [scan])
+        merged = page["runs"][0]
+        self.assertEqual(merged["run_kind"], "scan")
+        self.assertEqual(merged["upstream_change"]["id"], change)
+        self.assertIn("已同步 1 条网盘变更", merged["upstream_change"]["summary"])
+
+        # 详情同样能拿到上游；变更同步看自己没有“上游”。
+        self.assertEqual(monitor_runs.get_run_detail(scan)["upstream_change"]["id"], change)
+        self.assertFalse(monitor_runs.get_run_detail(change).get("upstream_change"))
+
+    def test_pairing_requires_same_task_scope_and_time_window(self):
+        change = self._make_run(
+            run_kind="change", source="change",
+            paths=["115自存电视剧/A"], subject="A", queued_at="2026-09-27T05:00:00",
+        )
+        far_scan = self._make_run(
+            run_kind="scan", source="inbox_dispatch",
+            paths=["/115自存电视剧/A"], subject="A", queued_at="2026-09-27T05:05:00",
+        )
+        other_scope = self._make_run(
+            run_kind="scan", source="inbox_dispatch",
+            paths=["/115自存电视剧/B"], subject="B", queued_at="2026-09-27T05:00:00",
+        )
+        other_task = self._make_run(
+            run_kind="scan", source="inbox_dispatch",
+            paths=["/115自存电视剧/A"], subject="A", queued_at="2026-09-27T05:00:00",
+            task_name="电影",
+        )
+
+        page = monitor_runs.list_runs()
+
+        self.assertEqual(
+            {run["id"] for run in page["runs"]},
+            {change, far_scan, other_scope, other_task},
+        )
+        self.assertFalse(any(run.get("upstream_change") for run in page["runs"]))
+
+    def test_each_change_pairs_at_most_once(self):
+        change = self._make_run(
+            run_kind="change", source="change",
+            paths=["115自存电视剧/A"], subject="A", queued_at="2026-09-27T05:00:00",
+        )
+        first = self._make_run(
+            run_kind="scan", source="inbox_dispatch",
+            paths=["/115自存电视剧/A"], subject="A", queued_at="2026-09-27T05:00:01",
+        )
+        second = self._make_run(
+            run_kind="scan", source="inbox_dispatch",
+            paths=["/115自存电视剧/A"], subject="A", queued_at="2026-09-27T05:00:02",
+        )
+
+        page = monitor_runs.list_runs()
+
+        self.assertEqual({run["id"] for run in page["runs"]}, {first, second})
+        merged = [run for run in page["runs"] if run.get("upstream_change")]
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["upstream_change"]["id"], change)
+
+    def test_filters_keep_flat_list_without_merging(self):
+        change = self._make_run(
+            run_kind="change", source="change",
+            paths=["115自存电视剧/A"], subject="A", queued_at="2026-09-27T05:00:00",
+        )
+        scan = self._make_run(
+            run_kind="scan", source="inbox_dispatch",
+            paths=["/115自存电视剧/A"], subject="A", queued_at="2026-09-27T05:00:01",
+        )
+
+        scan_only = monitor_runs.list_runs(run_kind="scan")
+        self.assertEqual([run["id"] for run in scan_only["runs"]], [scan])
+        self.assertFalse(scan_only["runs"][0].get("upstream_change"))
+
+        change_only = monitor_runs.list_runs(run_kind="change")
+        self.assertEqual([run["id"] for run in change_only["runs"]], [change])
+
+    def test_merged_pair_cursor_keeps_pagination_stable(self):
+        older = self._make_run(
+            run_kind="scan", source="manual",
+            paths=["115自存电视剧/C"], subject="C", queued_at="2026-09-27T04:00:00",
+        )
+        change = self._make_run(
+            run_kind="change", source="change",
+            paths=["115自存电视剧/A"], subject="A", queued_at="2026-09-27T05:00:00",
+        )
+        scan = self._make_run(
+            run_kind="scan", source="inbox_dispatch",
+            paths=["/115自存电视剧/A"], subject="A", queued_at="2026-09-27T05:00:01",
+        )
+
+        first = monitor_runs.list_runs(limit=2)
+        self.assertEqual([run["id"] for run in first["runs"]], [scan])
+        self.assertEqual(first["runs"][0]["upstream_change"]["id"], change)
+        self.assertTrue(first["has_more"])
+
+        second = monitor_runs.list_runs(limit=2, cursor=first["next_cursor"])
+        # 合并行按两个成员里更小的 id 收口，翻页既不跳过也不重复。
+        self.assertEqual([run["id"] for run in second["runs"]], [older])
+        self.assertFalse(second["has_more"])

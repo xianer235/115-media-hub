@@ -2015,10 +2015,10 @@
                 return;
             }
             const monitorHint = match.taskName
-                ? `当前保存路径会映射到 ${providerLabel} 路径 ${match.fullPath}，命中文件夹监控任务“${match.taskName}”，保存完成后会自动触发生成 strm。`
+                ? `映射到 ${providerLabel} 路径 ${match.fullPath}，命中监控任务“${match.taskName}”，保存完成后自动生成 STRM。`
                 : (match.isInbox
-                    ? `当前保存路径会映射到 ${providerLabel} 路径 ${match.fullPath}，命中接收夹“${match.inboxTaskName || '接收夹'}”，保存完成后会自动识别、整理并按类型分发到对应监控目录。`
-                    : `当前保存路径会映射到 ${providerLabel} 路径 ${match.fullPath}，未命中文件夹监控任务，保存后不会自动生成 strm。`);
+                    ? `映射到 ${providerLabel} 路径 ${match.fullPath}，命中接收夹“${match.inboxTaskName || '接收夹'}”，保存完成后自动整理分发，再由监控任务生成 STRM。`
+                    : `映射到 ${providerLabel} 路径 ${match.fullPath}，未纳入文件夹监控，不会自动生成 STRM。`);
             hintEl.innerText = `${selectionHint} ${monitorHint}`.trim();
         }
 

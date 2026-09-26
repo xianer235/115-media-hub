@@ -1327,7 +1327,7 @@ class ScraperMonitorSyncTest(unittest.TestCase):
             ).fetchone()
         self.assertEqual(row[0], "manual_required")
         self.assertEqual(json.loads(row[1])["new_cid"], "")
-        self.assertEqual(row[2], "需手动监控")
+        self.assertEqual(row[2], "等待系统补扫")
 
     def test_zero_destination_cid_requires_manual_monitor_without_listing_root(self):
         cfg = self._cfg()
@@ -2400,10 +2400,12 @@ class ScraperMonitorSyncTest(unittest.TestCase):
                         {
                             "action": "delete",
                             "path": f"媒体库/一级/二级/{action['old_name']}.strm",
+                            "remote_path": action["old_path"],
                         },
                         {
                             "action": "generate",
                             "path": f"媒体库/一级/二级/{action['new_name']}.strm",
+                            "remote_path": action["new_path"],
                         },
                     ],
                 }
@@ -3397,8 +3399,25 @@ class ScraperMonitorSyncTest(unittest.TestCase):
                     "operation": "rename",
                     "old_path": "媒体库/Media/OldFolder",
                     "new_path": "媒体库/Media/NewFolder",
+                    "old_remote_path": "Media/OldFolder",
+                    "new_remote_path": "Media/NewFolder",
                     "deleted": 1,
                     "generated": 1,
+                    # 逐文件明细同时带网盘路径与本地 STRM 路径，供运行记录的「本地文件」页签展示。
+                    "deleted_files": [
+                        {
+                            "local": "媒体库/Media/OldFolder/Episode.mkv.strm",
+                            "remote": "Media/OldFolder/Episode.mkv",
+                            "name": "Episode.mkv",
+                        }
+                    ],
+                    "generated_files": [
+                        {
+                            "local": "媒体库/Media/NewFolder/Episode.mkv.strm",
+                            "remote": "Media/NewFolder/Episode.mkv",
+                            "name": "Episode.mkv",
+                        }
+                    ],
                 }
             ],
         )

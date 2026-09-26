@@ -348,6 +348,8 @@ async def get_monitor_runs(request: Request) -> Dict[str, Any]:
                 source=str(request.query_params.get("source", "") or ""),
                 status=str(request.query_params.get("status", "") or ""),
                 run_kind=str(request.query_params.get("run_kind", "") or ""),
+                source_group=str(request.query_params.get("source_group", "") or ""),
+                status_group=str(request.query_params.get("status_group", "") or ""),
             ),
         }
     except Exception as exc:
@@ -494,13 +496,11 @@ async def start_monitor(request: Request) -> Dict[str, Any]:
     if not task:
         return JSONResponse(status_code=404, content={"ok": False, "msg": "任务不存在"})
     if normalize_task_type(task.get("task_type")) == MONITOR_TASK_TYPE_INBOX:
-        # 接收夹任务没有“扫描”语义，运行时就是整理并分发一次。
-        from ..services.quick_import import run_quick_import
+        # 接收夹任务没有“扫描”语义：登记一次整理请求。正在执行时预约下一轮，
+        # 不阻塞请求，也不会丢掉任何触发。
+        from ..services.quick_import import notify_quick_import
 
-        try:
-            result = await asyncio.to_thread(run_quick_import, "manual")
-        except Exception as exc:
-            return _error_response(exc)
+        result = notify_quick_import("manual")
         return {"ok": True, "status": str(result.get("summary", "") or ""), "result": result}
     status = queue_monitor_job(task_name, "manual")
     return {"ok": True, "status": status}

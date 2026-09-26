@@ -26,7 +26,7 @@
                     <div class="monitor-runs-actions">
                         <button type="button" onclick="refreshMonitorRuns()" class="log-header-btn">刷新记录</button>
                         <button id="monitor-run-clear-task" type="button" onclick="clearMonitorRunTaskRecords()" class="log-header-btn monitor-run-clear-task hidden">清空该任务记录</button>
-                        <button type="button" onclick="openMonitorRunRetention()" class="log-header-btn">记录保留</button>
+                        <button type="button" onclick="openMonitorRunRetention()" class="log-header-btn">记录管理</button>
                         <div class="monitor-run-pagination" aria-label="运行记录分页">
                             <button id="monitor-run-prev" type="button" onclick="loadMonitorRunPage(-1)" class="log-header-btn" disabled>上一页</button>
                             <span id="monitor-run-page-label" class="monitor-run-page-label">第 1 页</span>
@@ -37,13 +37,13 @@
                 <div class="monitor-run-filters" aria-label="运行记录筛选">
                     <select id="monitor-run-task-filter" aria-label="按配置任务筛选" class="monitor-run-filter" onchange="refreshMonitorRuns()"><option value="">全部配置任务</option></select>
                     <select id="monitor-run-kind-filter" aria-label="按运行流程筛选" class="monitor-run-filter" onchange="refreshMonitorRuns()">
-                        <option value="">全部流程</option><option value="scan">目录扫描与 STRM</option><option value="inbox">接收夹整理与分发</option><option value="change">增量变更同步</option>
+                        <option value="">全部流程</option><option value="scan">目录同步</option><option value="inbox">接收夹整理</option><option value="change">变更同步</option>
                     </select>
                     <select id="monitor-run-source-filter" aria-label="按启动方式筛选" class="monitor-run-filter" onchange="refreshMonitorRuns()">
-                        <option value="">全部启动方式</option><option value="manual">手动触发</option><option value="retry">重新运行</option><option value="cron">定时触发</option><option value="resource">资源导入</option><option value="webhook">外部通知</option><option value="change">检测到网盘变更</option><option value="subscription">订阅任务</option><option value="inbox_dispatch">接收夹分发</option><option value="auto_rescan">系统补扫</option><option value="offline">离线下载完成</option><option value="recovery">恢复任务</option>
+                        <option value="">全部启动方式</option><option value="manual">手动操作</option><option value="scheduled">定时执行</option><option value="webhook">推送通知</option><option value="import">导入完成</option><option value="followup">系统跟进</option>
                     </select>
                     <select id="monitor-run-status-filter" aria-label="按运行状态筛选" class="monitor-run-filter" onchange="refreshMonitorRuns()">
-                        <option value="">全部状态</option><option value="queued">排队中</option><option value="running">执行中</option><option value="waiting">等待后续同步</option><option value="completed">已完成</option><option value="no_change">无变化</option><option value="partial">部分完成</option><option value="failed">失败</option><option value="cancelled">已取消或中断</option>
+                        <option value="">全部状态</option><option value="active">进行中</option><option value="done">已完成</option><option value="attention">需处理</option><option value="cancelled">已中断</option>
                     </select>
                     <button id="monitor-run-filter-reset" type="button" class="log-header-btn monitor-run-filter-reset hidden" onclick="resetMonitorRunFilters()">重置筛选</button>
                 </div>
@@ -61,23 +61,18 @@
                         <div id="monitor-run-modal-meta" class="monitor-run-modal-meta"></div>
                     </div>
                     <div class="app-dialog-header-actions">
-                        <button type="button" class="log-header-btn monitor-run-refresh" onclick="switchMonitorRunDetail(activeMonitorRunCategory)" aria-label="刷新运行详情">刷新</button>
+                        <button type="button" class="log-header-btn monitor-run-refresh" onclick="refreshMonitorRunDetail()" aria-label="刷新运行详情">刷新</button>
                         <button type="button" class="app-dialog-close monitor-run-close" onclick="closeMonitorRunModal()" aria-label="关闭运行详情" title="关闭运行详情">×</button>
                     </div>
                 </div>
-                <div class="monitor-run-tabs" role="tablist" aria-label="运行详情">
-                    <button id="monitor-run-tab-0" type="button" role="tab" aria-selected="true" aria-controls="monitor-run-modal-body" tabindex="0" data-monitor-run-category="" onclick="switchMonitorRunDetail('')">概览与过程 <span class="monitor-run-tab-count">0</span></button>
-                    <button id="monitor-run-tab-1" type="button" role="tab" aria-selected="false" aria-controls="monitor-run-modal-body" tabindex="-1" data-monitor-run-category="remote" onclick="switchMonitorRunDetail('remote')">网盘操作 <span class="monitor-run-tab-count">0</span></button>
-                    <button id="monitor-run-tab-2" type="button" role="tab" aria-selected="false" aria-controls="monitor-run-modal-body" tabindex="-1" data-monitor-run-category="strm" onclick="switchMonitorRunDetail('strm')">本地播放文件 <span class="monitor-run-tab-count">0</span></button>
-                    <button id="monitor-run-tab-3" type="button" role="tab" aria-selected="false" aria-controls="monitor-run-modal-body" tabindex="-1" data-monitor-run-category="problem" onclick="switchMonitorRunDetail('problem')">问题 <span class="monitor-run-tab-count">0</span></button>
-                </div>
-                <div id="monitor-run-modal-body" class="monitor-run-modal-body" role="tabpanel" tabindex="0" aria-labelledby="monitor-run-tab-0"></div>
+                <div id="monitor-run-tabs" class="monitor-run-tabs" role="tablist" aria-label="运行记录详情分类"></div>
+                <div id="monitor-run-modal-body" class="monitor-run-modal-body" tabindex="0"></div>
             </div>
         </div>
 
         <div id="monitor-run-retention-modal" class="app-dialog-modal hidden" role="dialog" aria-modal="true" aria-labelledby="monitor-run-retention-title">
             <div class="app-dialog-shell monitor-run-retention-shell">
-                <div class="app-dialog-header"><div><div class="app-dialog-eyebrow">运行记录</div><div id="monitor-run-retention-title" class="app-dialog-title">记录保留</div></div><button type="button" class="app-dialog-close" onclick="closeMonitorRunRetention()">关闭</button></div>
+                <div class="app-dialog-header"><div><div class="app-dialog-eyebrow">运行记录</div><div id="monitor-run-retention-title" class="app-dialog-title">记录管理</div></div><button type="button" class="app-dialog-close" onclick="closeMonitorRunRetention()">关闭</button></div>
                 <div class="monitor-run-retention-body">
                     <section class="monitor-run-retention-section" aria-labelledby="monitor-run-retention-policy-title">
                         <div class="monitor-run-retention-section-head"><h4 id="monitor-run-retention-policy-title">保留策略</h4><p>只影响系统每天自动清理的范围。</p></div>

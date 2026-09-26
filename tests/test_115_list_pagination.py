@@ -430,5 +430,34 @@ class ScraperEntriesSearchTest(unittest.TestCase):
         self.assertEqual(payload["ancestors"], [])
 
 
+class Pan115DeleteVerificationTest(unittest.TestCase):
+    """删除接口返回不明确时用父目录列表复核，避免把“其实已经清掉”误报成删除失败。"""
+
+    def test_unrecognized_response_with_entry_gone_is_success(self):
+        with mock.patch.object(pan115, "_request_115_delete_payload", return_value={"errno": 990001}), \
+                mock.patch.object(pan115, "invalidate_115_entries_cache"), \
+                mock.patch.object(pan115, "list_115_entries", return_value=[{"id": "keep-1", "name": "其他"}]), \
+                mock.patch.object(pan115, "mark_cookie_health_success"), \
+                mock.patch.object(pan115, "mark_cookie_health_failure"):
+            result = pan115.delete_115_entries("cookie-value", ["gone-1"], parent_cid="parent-cid")
+
+        self.assertEqual(result["ids"], ["gone-1"])
+        self.assertTrue(result["response"].get("verified_removed"))
+
+    def test_unrecognized_response_with_entry_present_still_raises(self):
+        with mock.patch.object(pan115, "_request_115_delete_payload", return_value={"errno": 990001}), \
+                mock.patch.object(pan115, "invalidate_115_entries_cache"), \
+                mock.patch.object(pan115, "list_115_entries", return_value=[{"id": "gone-1", "name": "还在"}]), \
+                mock.patch.object(pan115, "mark_cookie_health_success"), \
+                mock.patch.object(pan115, "mark_cookie_health_failure") as health_failure:
+            with self.assertRaises(RuntimeError):
+                pan115.delete_115_entries("cookie-value", ["gone-1"], parent_cid="parent-cid")
+
+        health_failure.assert_called_once()
+
+    def test_verify_without_parent_never_deletes_blindly(self):
+        self.assertFalse(pan115._verify_115_entries_removed("cookie-value", ["gone-1"], ""))
+
+
 if __name__ == "__main__":
     unittest.main()

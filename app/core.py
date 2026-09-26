@@ -7054,10 +7054,16 @@ async def write_subscription_section(title: str) -> None:
     await write_subscription_log(f"·· {title} ··", "section-divider")
 
 
-async def write_monitor_task_header(task: Dict[str, Any], trigger: str, payload: Optional[Dict[str, Any]] = None) -> None:
+async def write_monitor_task_header(
+    task: Dict[str, Any],
+    trigger: str,
+    payload: Optional[Dict[str, Any]] = None,
+    *,
+    source_label: str = "",
+) -> None:
     write_mode_label = "全量重写 STRM" if task.get("strm_write_mode") == "full" else "增量生成/更新 STRM"
     await write_monitor_log(
-        f"━━━━━━━━━━【任务开始 | {task['name']} | {format_monitor_trigger(trigger)}】━━━━━━━━━━",
+        f"━━━━━━━━━━【任务开始 | {task['name']} | {str(source_label or '').strip() or format_monitor_trigger(trigger)}】━━━━━━━━━━",
         "task-divider",
     )
     await write_monitor_log(

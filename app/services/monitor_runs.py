@@ -15,12 +15,33 @@ UNRESOLVED_CHANGE_STATUSES = {"failed", "manual_required", "rollback_failed"}
 # 遍历限制在这个深度，既覆盖真实链路，也避免异常数据把查询拖成全库递归。
 MAX_RUN_LINK_DEPTH = 5
 GROUP_RUNS_PREVIEW_LIMIT = 10
+# 运行记录默认视图里每个父任务最多内联展示的子任务条数；超出部分在详情里看。
+RUN_LIST_CHILDREN_LIMIT = 20
+# 运行列表按“开始时间”排序（未开始则退回排队时间），顺序稳定、不随后台状态更新跳动。
+RUN_LIST_SORT_KEY = "COALESCE(NULLIF(started_at, ''), NULLIF(queued_at, ''), updated_at)"
+# 「变更同步」与它委托出去的独立目录同步是同一次分发的前后两阶段：默认列表把
+# 这一对合并成一行展示（数据层仍保留两条记录），配对的时间容差放在这里。
+DISPATCH_PAIR_WINDOW_SECONDS = 60
 SOURCE_LABELS = {
     "manual": "手动触发", "cron": "定时触发", "resource": "资源导入",
     "subscription": "订阅任务", "webhook": "外部通知", "change": "检测到网盘变更",
     "auto_rescan": "系统补扫", "recovery": "恢复任务", "import": "资源导入",
     "inbox_dispatch": "接收夹分发",
     "offline": "离线下载完成", "retry": "重新运行", "system": "系统触发",
+}
+# 筛选只暴露用户视角的几类启动方式，内部来源细节留在记录里。
+SOURCE_GROUPS: Dict[str, tuple] = {
+    "manual": ("manual", "retry"),
+    "scheduled": ("cron",),
+    "webhook": ("webhook",),
+    "import": ("resource", "subscription", "offline", "import"),
+    "followup": ("change", "inbox_dispatch", "auto_rescan", "recovery", "system"),
+}
+STATUS_GROUPS: Dict[str, tuple] = {
+    "active": ("queued", "running", "waiting"),
+    "done": ("completed", "no_change"),
+    "attention": ("partial", "failed"),
+    "cancelled": ("cancelled",),
 }
 
 
@@ -295,7 +316,15 @@ def start_run(run_id: str, *, subject: str = "", scope: Optional[Dict[str, Any]]
         conn.commit()
 
 
-def update_run(run_id: str, *, subject: Optional[str] = None, status: Optional[str] = None, summary: Optional[str] = None, result: Optional[Dict[str, Any]] = None) -> None:
+def update_run(
+    run_id: str,
+    *,
+    subject: Optional[str] = None,
+    status: Optional[str] = None,
+    summary: Optional[str] = None,
+    result: Optional[Dict[str, Any]] = None,
+    scope: Optional[Dict[str, Any]] = None,
+) -> None:
     run_id, now = _text(run_id), now_text()
     if not run_id:
         return
@@ -308,6 +337,8 @@ def update_run(run_id: str, *, subject: Optional[str] = None, status: Optional[s
         assignments.append("summary = ?"); values.append(_text(summary))
     if result is not None:
         assignments.append("result_json = ?"); values.append(safe_json_dumps(normalize_result(result)))
+    if isinstance(scope, dict):
+        assignments.append("scope_json = ?"); values.append(safe_json_dumps(scope))
     values.append(run_id)
     with db_connection() as conn:
         conn.execute(f"UPDATE monitor_runs SET {', '.join(assignments)} WHERE id = ?", tuple(values))
@@ -396,8 +427,13 @@ def _waiting_settle_summary(run_kind: str, result: Dict[str, Any], reasons: List
         head = f"已同步 {completed} 条网盘变更" if completed else "本次变更同步已结束"
         return f"{head}，{rescans} 个目录的自动补扫已完成。" if rescans else f"{head}。"
     moved = _count_result(result.get("moved"))
-    head = f"已分发 {moved} 项" if moved else "本次整理已结束"
-    return f"{head}，后续同步全部完成（含自动补扫）。" if descendant_total else f"{head}，后续同步全部完成。"
+    left = _count_result(result.get("left"))
+    head = f"成功分发 {moved} 项" if moved else "本次整理已结束"
+    if left:
+        head += f"，留在接收夹 {left} 项"
+    if descendant_total:
+        return f"{head}，{descendant_total} 项 STRM 同步全部结束。"
+    return f"{head}。"
 
 
 def _reconcile_waiting_run(
@@ -834,17 +870,150 @@ def _order_group_entries(entries: List[Dict[str, Any]], head_id: str) -> List[Di
     return ordered
 
 
-def list_runs(*, limit: int = 10, cursor: str = "", task_name: str = "", source: str = "", status: str = "", run_kind: str = "", include_children: bool = False) -> Dict[str, Any]:
+def _pair_scope_key(scope: Any) -> str:
+    """配对用的范围键：只比较归一化后的路径集合（去掉首尾 `/`）。
+
+    变更同步记的是相对路径（`115自存电视剧/剧名`），独立目录同步记的是同类路径
+    但常带前导斜杠，归一化后两边才能稳定对上。
+    """
+    data = _object(scope)
+    if _text(data.get("kind")) != "paths":
+        return ""
+    raw_paths = data.get("paths") if isinstance(data.get("paths"), list) else []
+    paths = sorted({
+        str(item or "").strip().strip("/")
+        for item in raw_paths
+        if str(item or "").strip().strip("/")
+    })
+    return "\n".join(paths)
+
+
+def _pair_timestamp(value: Any) -> float:
+    text = _text(value).replace(" ", "T")
+    if not text:
+        return 0.0
+    try:
+        return datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def _pair_dispatched_runs(runs: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """把一次分发产生的「变更同步」与它派生的独立目录同步配成对。
+
+    返回 ``scan_run_id -> change_run``；同任务、范围归一化后一致、入队时间相差
+    不超过 ``DISPATCH_PAIR_WINDOW_SECONDS`` 才配对，且每条记录最多参与一次。
+    """
+    changes = [
+        run for run in runs
+        if _text(run.get("run_kind")) == "change" and _text(run.get("source")).lower() == "change"
+    ]
+    scans = [
+        run for run in runs
+        if _text(run.get("run_kind")) == "scan" and _text(run.get("source")).lower() == "inbox_dispatch"
+    ]
+    pairs: Dict[str, Dict[str, Any]] = {}
+    used: set = set()
+    for scan in scans:
+        scan_id = _text(scan.get("id"))
+        scope_key = _pair_scope_key(scan.get("scope"))
+        scan_at = _pair_timestamp(scan.get("queued_at") or scan.get("started_at"))
+        if not scan_id or not scope_key or not scan_at:
+            continue
+        best: Optional[Dict[str, Any]] = None
+        best_gap = DISPATCH_PAIR_WINDOW_SECONDS + 1
+        for change in changes:
+            change_id = _text(change.get("id"))
+            if not change_id or change_id in used:
+                continue
+            if _text(change.get("task_name")) != _text(scan.get("task_name")):
+                continue
+            if _pair_scope_key(change.get("scope")) != scope_key:
+                continue
+            change_at = _pair_timestamp(change.get("queued_at") or change.get("started_at"))
+            gap = abs(scan_at - change_at)
+            if gap > DISPATCH_PAIR_WINDOW_SECONDS or gap >= best_gap:
+                continue
+            best, best_gap = change, gap
+        if best is None:
+            continue
+        used.add(_text(best.get("id")))
+        pairs[scan_id] = best
+    return pairs
+
+
+def _upstream_change_payload(run: Dict[str, Any]) -> Dict[str, Any]:
+    """列表副行与详情跳转只需要这几个字段，避免把整条记录塞进每页响应。"""
+    return {
+        "id": _text(run.get("id")),
+        "run_kind": _text(run.get("run_kind")) or "change",
+        "task_name": _text(run.get("task_name")),
+        "source": _text(run.get("source")),
+        "status": _text(run.get("status")),
+        "summary": _text(run.get("summary")),
+        "subject": _text(run.get("subject")),
+        "queued_at": _text(run.get("queued_at")),
+        "started_at": _text(run.get("started_at")),
+        "finished_at": _text(run.get("finished_at")),
+        "result": _object(run.get("result")),
+    }
+
+
+def _find_upstream_change(conn: Any, scan: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """详情用：按与列表相同的规则找这条独立目录同步对应的变更同步。"""
+    scope_key = _pair_scope_key(scan.get("scope"))
+    scan_at = _pair_timestamp(scan.get("queued_at") or scan.get("started_at"))
+    if not scope_key or not scan_at:
+        return None
+    window_start = datetime.fromtimestamp(scan_at - DISPATCH_PAIR_WINDOW_SECONDS).isoformat(timespec="seconds")
+    window_end = datetime.fromtimestamp(scan_at + DISPATCH_PAIR_WINDOW_SECONDS).isoformat(timespec="seconds")
+    rows = conn.execute(
+        """SELECT * FROM monitor_runs
+            WHERE run_kind = 'change' AND source = 'change' AND task_name = ?
+              AND queued_at >= ? AND queued_at <= ?""",
+        (_text(scan.get("task_name")), window_start, window_end),
+    ).fetchall()
+    best: Optional[Dict[str, Any]] = None
+    best_gap = DISPATCH_PAIR_WINDOW_SECONDS + 1
+    for row in rows:
+        candidate = _serialize_run(row)
+        if _pair_scope_key(candidate.get("scope")) != scope_key:
+            continue
+        gap = abs(_pair_timestamp(candidate.get("queued_at") or candidate.get("started_at")) - scan_at)
+        if gap >= best_gap:
+            continue
+        best, best_gap = candidate, gap
+    return _upstream_change_payload(best) if best else None
+
+
+def list_runs(
+    *,
+    limit: int = 10,
+    cursor: str = "",
+    task_name: str = "",
+    source: str = "",
+    status: str = "",
+    run_kind: str = "",
+    include_children: bool = False,
+    source_group: str = "",
+    status_group: str = "",
+) -> Dict[str, Any]:
     limit = max(1, min(100, int(limit or 10)))
     normalized_kind = _text(run_kind).lower()
     if normalized_kind not in {"scan", "inbox", "change"}:
         normalized_kind = ""
     include_downstream = bool(include_children or normalized_kind == "change")
-    # 列表里每一条运行都是它自己的任务，只有“某条触发记录的直接子运行”不单独占一行
-    # （它就是触发记录详情里的“后续同步”，避免一次分发在列表里出现两遍）。
-    # 二次分发出来的扫描/自动补扫只挂在关联表上（没有 parent_run_id），照常各自成行。
+    # 默认视图按“工作单元”分组：顶层任务一行，它派生的子任务（parent_run_id 或
+    # child / downstream 关联）折叠进该行的 children，父任务在子任务全部结束前
+    # 保持「执行中」，其他任务不会插到父子之间。
     clauses, values = ([] if include_downstream else [
-        "parent_run_id = ''",
+        """id NOT IN (
+            SELECT id FROM monitor_runs WHERE parent_run_id <> ''
+            UNION
+            SELECT link.related_run_id FROM monitor_run_links AS link
+             WHERE link.relation IN ('child', 'downstream')
+               AND link.related_run_id <> link.run_id
+        )""",
     ], [])
     for column, value in (("task_name", task_name), ("status", status)):
         if _text(value):
@@ -855,6 +1024,20 @@ def list_runs(*, limit: int = 10, cursor: str = "", task_name: str = "", source:
         normalized_source = _text(source).lower()
         clauses.append("(source = ? OR sources_json LIKE ?)")
         values.extend([normalized_source, f'%"source": "{normalized_source}"%'])
+    normalized_source_group = _text(source_group).lower()
+    if normalized_source_group in SOURCE_GROUPS:
+        # 一组来源展开成多个精确匹配；多来源合并过的运行也要能被筛到。
+        group_clauses: List[str] = []
+        for value in SOURCE_GROUPS[normalized_source_group]:
+            group_clauses.append("(source = ? OR sources_json LIKE ?)")
+            values.extend([value, f'%"source": "{value}"%'])
+        clauses.append("(" + " OR ".join(group_clauses) + ")")
+    normalized_status_group = _text(status_group).lower()
+    if normalized_status_group in STATUS_GROUPS:
+        statuses = STATUS_GROUPS[normalized_status_group]
+        marks = ",".join("?" for _ in statuses)
+        clauses.append(f"status IN ({marks})")
+        values.extend(statuses)
 
     def fetch(start_cursor: str, size: int) -> List[Any]:
         local_clauses, local_values = list(clauses), list(values)
@@ -862,13 +1045,13 @@ def list_runs(*, limit: int = 10, cursor: str = "", task_name: str = "", source:
         if raw_cursor:
             cursor_time, separator, cursor_id = raw_cursor.rpartition("|")
             if separator and cursor_time and cursor_id:
-                local_clauses.append("(updated_at < ? OR (updated_at = ? AND id < ?))")
+                local_clauses.append(f"({RUN_LIST_SORT_KEY} < ? OR ({RUN_LIST_SORT_KEY} = ? AND id < ?))")
                 local_values.extend([cursor_time, cursor_time, cursor_id])
             else:
-                local_clauses.append("updated_at < ?"); local_values.append(raw_cursor)
+                local_clauses.append(f"{RUN_LIST_SORT_KEY} < ?"); local_values.append(raw_cursor)
         where = f"WHERE {' AND '.join(local_clauses)}" if local_clauses else ""
         return conn.execute(
-            f"SELECT * FROM monitor_runs {where} ORDER BY updated_at DESC, id DESC LIMIT ?",
+            f"SELECT *, {RUN_LIST_SORT_KEY} AS sort_at FROM monitor_runs {where} ORDER BY {RUN_LIST_SORT_KEY} DESC, id DESC LIMIT ?",
             tuple([*local_values, size]),
         ).fetchall()
 
@@ -886,23 +1069,65 @@ def list_runs(*, limit: int = 10, cursor: str = "", task_name: str = "", source:
             return {
                 "runs": runs,
                 "has_more": has_more,
-                "next_cursor": f"{runs[-1]['updated_at']}|{runs[-1]['id']}" if has_more and runs else "",
+                "next_cursor": f"{runs[-1].get('sort_at', '')}|{runs[-1]['id']}" if has_more and runs else "",
             }
 
-        # 默认视图就是一条运行一行：接收夹整理排在最前（它的活动时间跟着下游上溯），
-        # 它派生出来的扫描/自动补扫紧接在后，各自是独立任务。
+        # 默认视图一行一个工作单元，按开始时间排序（新数据不再有父子折叠；
+        # 历史记录仍带上 children 供详情兼容展示）。
         rows = fetch(cursor, limit + 1)
         has_more, rows = len(rows) > limit, rows[:limit]
         runs = [_serialize_run(row) for row in rows]
         _add_parent_contexts(conn, runs)
-        child_counts = _child_counts(conn, [run["id"] for run in runs if run.get("id")])
+        # 默认列表把「变更同步 + 它委托出去的独立目录同步」合并成一行（以目录同步
+        # 为主体）；带筛选时保持扁平，方便按流程排查。配对的另一条不在本页窗口内
+        # 就不合并，两条各自独立显示。
+        merge_pairs = not (
+            normalized_kind or _text(source) or _text(status)
+            or _text(source_group) or _text(status_group)
+        )
+        merged_change_ids: set = set()
+        cursor_floor: Dict[str, str] = {}
+        if merge_pairs:
+            pairs = _pair_dispatched_runs(runs)
+            by_id = {_text(run.get("id")): run for run in runs}
+            for scan_id, change in pairs.items():
+                change_id = _text(change.get("id"))
+                merged_change_ids.add(change_id)
+                # 游标必须收口到两个成员在排序里更靠后的那个（sort_at 更小，同刻取
+                # id 更小），否则下一条记录会因为变更同步的 sort_at 更早而被重复列出。
+                members = [
+                    (_text(by_id.get(scan_id, {}).get("sort_at")), scan_id),
+                    (_text(change.get("sort_at")), change_id),
+                ]
+                floor_time, floor_id = min(
+                    [member for member in members if member[0] and member[1]],
+                    default=("", ""),
+                )
+                cursor_floor[scan_id] = f"{floor_time}|{floor_id}"
+            for run in runs:
+                change = pairs.get(_text(run.get("id")))
+                if change is not None:
+                    run["upstream_change"] = _upstream_change_payload(change)
         for run in runs:
-            run_id = run.get("id")
-            run["child_count"] = child_counts.get(run_id, 0)
+            run_id = _text(run.get("id"))
+            descendants = _descendant_entries(conn, run_id) if run_id else []
+            run["child_count"] = len(descendants)
+            run["children_done"] = sum(
+                1 for item in descendants if _text(item.get("status")) not in ACTIVE_RUN_STATUSES
+            )
+            run["children"] = descendants[:RUN_LIST_CHILDREN_LIMIT]
+            run["has_more_children"] = len(descendants) > RUN_LIST_CHILDREN_LIMIT
+        if merged_change_ids:
+            runs = [run for run in runs if _text(run.get("id")) not in merged_change_ids]
+    last = runs[-1] if runs else None
+    last_id = _text(last.get("id")) if last else ""
+    next_cursor = cursor_floor.get(last_id, "") if last_id else ""
+    if not next_cursor and last_id:
+        next_cursor = f"{_text(last.get('sort_at'))}|{last_id}"
     return {
         "runs": runs,
         "has_more": has_more,
-        "next_cursor": f"{runs[-1]['updated_at']}|{runs[-1]['id']}" if has_more and runs else "",
+        "next_cursor": next_cursor if has_more and next_cursor else "",
     }
 
 
@@ -931,6 +1156,180 @@ _PROBLEM_SQL = """(category = 'problem' OR
      ('failed', 'partial', 'pending', 'manual_required', 'rollback_failed')))"""
 
 
+def _scan_scope_rows(rows: List[Any]) -> Dict[str, Any]:
+    paths: List[str] = []
+    covers_task = False
+    for row in rows:
+        scope = safe_json_loads(row[0], {})
+        if not isinstance(scope, dict):
+            continue
+        if _text(scope.get("kind")) != "paths":
+            covers_task = True
+            continue
+        for value in scope.get("paths", []) if isinstance(scope.get("paths"), list) else []:
+            path = _text(value)
+            if path and path not in paths:
+                paths.append(path)
+    return {"covers_task": covers_task, "paths": paths}
+
+
+def list_active_scan_scopes(task_name: str) -> Dict[str, Any]:
+    """该任务仍在排队/执行中的扫描范围，用于自动补扫去重。
+
+    返回 ``{"covers_task": bool, "paths": [...]}``：``covers_task`` 表示有一条
+    全任务扫描在排队或执行（它本身就覆盖所有目录）；``paths`` 是局部扫描覆盖的
+    远端路径列表。
+    """
+    normalized_name = _text(task_name)
+    if not normalized_name:
+        return {"covers_task": False, "paths": []}
+    marks = ",".join("?" for _ in ACTIVE_RUN_STATUSES)
+    with db_connection() as conn:
+        rows = conn.execute(
+            f"""SELECT scope_json FROM monitor_runs
+                 WHERE task_name = ? AND run_kind = 'scan'
+                   AND status IN ({marks})""",
+            (normalized_name, *sorted(ACTIVE_RUN_STATUSES)),
+        ).fetchall()
+    return _scan_scope_rows(rows)
+
+
+def list_dispatch_scan_scopes(task_name: str, *, source: str = "inbox_dispatch") -> Dict[str, Any]:
+    """某个任务下已有的接收夹分发扫描覆盖范围（任何状态），用于补排去重。"""
+    normalized_name = _text(task_name)
+    if not normalized_name:
+        return {"covers_task": False, "paths": []}
+    with db_connection() as conn:
+        rows = conn.execute(
+            "SELECT scope_json FROM monitor_runs WHERE task_name = ? AND run_kind = 'scan' AND source = ?",
+            (normalized_name, _text(source)),
+        ).fetchall()
+    return _scan_scope_rows(rows)
+
+
+def latest_run_progress(*, run_kind: str, task_name: str = "") -> Dict[str, Any]:
+    """最近一条指定类型运行的阶段与子任务进度（接收夹卡片 / 任务卡片展示用）。"""
+    normalized_kind = _text(run_kind).lower()
+    if not normalized_kind:
+        return {}
+    clauses = ["run_kind = ?"]
+    values: List[Any] = [normalized_kind]
+    normalized_task = _text(task_name)
+    if normalized_task:
+        clauses.append("task_name = ?")
+        values.append(normalized_task)
+    with db_connection() as conn:
+        row = conn.execute(
+            f"SELECT * FROM monitor_runs WHERE {' AND '.join(clauses)} ORDER BY updated_at DESC, id DESC LIMIT 1",
+            tuple(values),
+        ).fetchone()
+        run = _serialize_run(row)
+        if not run:
+            return {}
+        run_id = _text(run.get("id"))
+        descendants = _descendant_entries(conn, run_id) if run_id else []
+    run["child_total"] = len(descendants)
+    run["child_done"] = sum(
+        1 for item in descendants if _text(item.get("status")) not in ACTIVE_RUN_STATUSES
+    )
+    return run
+
+
+def list_dispatch_scan_runs(task_name: str, *, source: str = "inbox_dispatch") -> List[Dict[str, Any]]:
+    """某个任务下已有的接收夹分发扫描（含覆盖范围），用于补排去重。"""
+    normalized_name = _text(task_name)
+    if not normalized_name:
+        return []
+    with db_connection() as conn:
+        rows = conn.execute(
+            """SELECT id, status, scope_json FROM monitor_runs
+                WHERE task_name = ? AND run_kind = 'scan' AND source = ?
+                ORDER BY queued_at, id""",
+            (normalized_name, _text(source)),
+        ).fetchall()
+    runs: List[Dict[str, Any]] = []
+    for row in rows:
+        scope = _scan_scope_rows([(row[2],)])
+        runs.append(
+            {
+                "id": _text(row[0]),
+                "status": _text(row[1]),
+                "paths": scope.get("paths", []),
+                "covers_task": bool(scope.get("covers_task")),
+            }
+        )
+    return runs
+
+
+def list_recent_failed_scan_runs(
+    task_name: str,
+    *,
+    since: str = "",
+    source: str = "auto_rescan",
+) -> List[Dict[str, Any]]:
+    """失败 / 部分完成的扫描（含覆盖范围），用于判断自动补扫是否已经尝试过。"""
+    normalized_name = _text(task_name)
+    if not normalized_name:
+        return []
+    clauses = ["task_name = ?", "run_kind = 'scan'", "status IN ('failed', 'partial')"]
+    values: List[Any] = [normalized_name]
+    normalized_source = _text(source).lower()
+    if normalized_source:
+        clauses.append("source = ?")
+        values.append(normalized_source)
+    if _text(since):
+        clauses.append("finished_at >= ?")
+        values.append(_text(since))
+    with db_connection() as conn:
+        rows = conn.execute(
+            f"""SELECT id, status, scope_json, summary, finished_at FROM monitor_runs
+                 WHERE {' AND '.join(clauses)}
+                 ORDER BY finished_at DESC, id DESC LIMIT 50""",
+            tuple(values),
+        ).fetchall()
+    runs: List[Dict[str, Any]] = []
+    for row in rows:
+        scope = _scan_scope_rows([(row[2],)])
+        runs.append(
+            {
+                "id": _text(row[0]),
+                "status": _text(row[1]),
+                "paths": scope.get("paths", []),
+                "covers_task": bool(scope.get("covers_task")),
+                "summary": _text(row[3]),
+                "finished_at": _text(row[4]),
+            }
+        )
+    return runs
+
+
+def settle_run_chain(run_id: str) -> int:
+    """事件被扫描核实后，把这条运行及其上下游一起按证据重新结算。
+
+    接收夹分发的事件归属父运行，但真正停在“部分完成”的往往是它的下游变更同步；
+    只结算归属运行不够，必须顺着链路（先子后父）重算。
+    """
+    normalized = _text(run_id)
+    if not normalized:
+        return 0
+    with db_connection() as conn:
+        ancestors = [value for value in _ancestor_ids(conn, normalized) if value]
+        descendants = [
+            _text(item.get("id")) for item in _descendant_entries(conn, normalized)
+        ]
+    ordered: List[str] = []
+    for candidate in [*reversed([value for value in descendants if value]), normalized, *ancestors]:
+        if candidate and candidate not in ordered:
+            ordered.append(candidate)
+    changed = 0
+    for candidate in ordered:
+        if reconcile_waiting_run(candidate):
+            changed += 1
+        if resettle_settled_run(candidate):
+            changed += 1
+    return changed
+
+
 def get_run_detail(run_id: str, *, category: str = "", offset: int = 0, limit: int = 50) -> Dict[str, Any]:
     run_id, limit = _text(run_id), max(1, min(100, int(limit or 50)))
     offset, category = max(0, int(offset or 0)), _text(category)
@@ -938,6 +1337,9 @@ def get_run_detail(run_id: str, *, category: str = "", offset: int = 0, limit: i
         run = _serialize_run(conn.execute("SELECT * FROM monitor_runs WHERE id = ?", (run_id,)).fetchone())
         if not run:
             return {}
+        upstream_change = None
+        if _text(run.get("run_kind")) == "scan" and _text(run.get("source")).lower() == "inbox_dispatch":
+            upstream_change = _find_upstream_change(conn, run)
         parameters = {"run_id": run_id, "category": category, "limit": limit, "offset": offset}
         grouped = conn.execute(_RUN_EVENTS_SQL + " SELECT category, COUNT(*) FROM events GROUP BY category", parameters).fetchall()
         counts = {key: 0 for key in ("process", "remote", "strm", "problem")}
@@ -996,6 +1398,7 @@ def get_run_detail(run_id: str, *, category: str = "", offset: int = 0, limit: i
     return {
         "run": run, "events": events, "children": children, "descendants": descendants, "parents": parents,
         "links": links, "related": related, "counts": counts, "total": total,
+        "upstream_change": upstream_change,
         "has_more": offset + len(events) < total, "next_offset": offset + len(events),
     }
 

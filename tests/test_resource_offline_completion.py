@@ -450,7 +450,7 @@ class OfflineSubmitFlowTest(unittest.IsolatedAsyncioTestCase):
         extra = json.loads(final["extra_json"])
         self.assertEqual(extra["offline_task_hash"], "AF33BD45B385B16A4BEF434C760E0182")
         self.assertEqual(extra["offline_skip_wait"], 0)
-        self.assertIn("等待 115 离线下载完成后", final["status_detail"])
+        self.assertIn("离线完成后自动刷新", final["status_detail"])
         self.assertEqual(submit.call_args.args[0], resource_service.poll_offline_resource_jobs_once)
 
     async def test_inbox_offline_submit_waits_for_download_then_triggers_inbox_import(self):
@@ -486,8 +486,9 @@ class OfflineSubmitFlowTest(unittest.IsolatedAsyncioTestCase):
 
         final = updates[-1][1]
         self.assertEqual(final["status"], "submitted")
-        self.assertIn("等待 115 离线下载完成后触发接收夹整理与分发", final["status_detail"])
-        self.assertNotIn("不会自动生成 strm", final["status_detail"])
+        # 精简后的状态文案：说明保存到接收夹 + 离线完成后自动整理分发。
+        self.assertIn("保存到接收夹：离线完成后自动整理分发", final["status_detail"])
+        self.assertNotIn("不会自动生成 STRM", final["status_detail"])
         self.assertEqual(submit.call_args.args[0], resource_service.poll_offline_resource_jobs_once)
 
 

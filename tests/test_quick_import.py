@@ -751,8 +751,16 @@ class QuickImportRunTest(unittest.TestCase):
         db.DB_PATH = os.path.join(self.tmpdir.name, "data.db")
         db._DB_ENSURED = False
         db.ensure_db()
+        # 子任务排队走的是真实监控队列；这里固定成一条假 run，避免测试里真的派发后台任务。
+        self._child_run_patcher = mock.patch.object(
+            quick_import,
+            "_queue_dispatch_child_run",
+            side_effect=lambda *args, **kwargs: "child-run-1",
+        )
+        self._child_run_mock = self._child_run_patcher.start()
 
     def tearDown(self):
+        self._child_run_patcher.stop()
         db.DB_PATH = self.original_db_path
         db._DB_ENSURED = self.original_db_ensured
         self.tmpdir.cleanup()
@@ -848,7 +856,8 @@ class QuickImportRunTest(unittest.TestCase):
         self.assertEqual(detail["tmdb_id"], 1171826)
         self.assertEqual(detail["identified_year"], "2024")
 
-    def test_mixed_result_waits_when_dispatched_item_needs_strm_sync(self):
+    def test_mixed_result_finishes_immediately_with_left_items(self):
+        """留在接收夹的条目按部分完成定稿；STRM 同步由独立任务各自记录，父运行不再等待。"""
         cfg = _cfg()
         identified = {
             "items": [_item(1, "电影A"), _item(2, "无法识别")],
@@ -873,11 +882,48 @@ class QuickImportRunTest(unittest.TestCase):
                 mock.patch.object(quick_import, "_resolve_entry_after_organize", side_effect=lambda cid, summary, entry: entry), \
                 mock.patch.object(scraper, "find_scraper_media_folder", return_value={}), \
                 mock.patch.object(scraper, "move_scraper_entries", return_value={"monitor_sync": {"event_count": 1}}), \
-                mock.patch.object(quick_import, "wait_monitor_run", wraps=monitor_runs.wait_run) as wait_run:
+                mock.patch.object(quick_import, "finish_monitor_run", wraps=monitor_runs.finish_run) as finish_run:
             result = quick_import.run_quick_import("test")
 
-        wait_run.assert_called_once()
+        finish_run.assert_called_once()
+        self.assertEqual(finish_run.call_args.kwargs["status"], "partial")
+        stored = monitor_runs.get_run_detail(finish_run.call_args.args[0])["run"]
+        self.assertEqual(stored["status"], "partial")
+        self.assertNotIn("waiting_children", stored["result"])
         self.assertEqual(result["left"][0]["reason_code"], "unrecognized")
+
+    def test_dispatch_without_child_run_still_finishes_immediately(self):
+        """子任务没排上也不再让接收夹等待：记录只覆盖识别与整理移动。"""
+        cfg = _cfg()
+        identified = {
+            "items": [_item(1, "电影A")],
+            "picked": {1: {"id": 603, "media_type": "movie"}},
+            "results": [{"item_index": 1, "status": "auto"}],
+        }
+        self._child_run_mock.side_effect = lambda *args, **kwargs: ""
+
+        with mock.patch.object(quick_import, "get_config", return_value=cfg), \
+                mock.patch.object(quick_import, "resolve_scraper_dest_folder_id", side_effect=lambda provider, path: f"cid:{path}"), \
+                mock.patch.object(quick_import, "identify_scraper_batch_entries", return_value=identified), \
+                mock.patch.object(quick_import, "build_scraper_plan_for_batch", return_value={
+                    "ok": True,
+                    "items": [{"title": "电影A", "year": "2024"}],
+                    "issues": [],
+                    "ready_count": 1,
+                }), \
+                mock.patch.object(quick_import, "create_scraper_job_from_plan", return_value={"job_id": 11}), \
+                mock.patch.object(quick_import, "submit_scraper_job", return_value=self._Future()), \
+                mock.patch.object(quick_import, "_resolve_entry_after_organize", side_effect=lambda cid, summary, entry: entry), \
+                mock.patch.object(scraper, "find_scraper_media_folder", return_value={}), \
+                mock.patch.object(scraper, "move_scraper_entries", return_value={"monitor_sync": {"event_count": 1}}), \
+                mock.patch.object(quick_import, "finish_monitor_run", wraps=monitor_runs.finish_run) as finish_run:
+            result = quick_import.run_quick_import("test")
+
+        finish_run.assert_called_once()
+        self.assertEqual(finish_run.call_args.kwargs["status"], "completed")
+        stored = monitor_runs.get_run_detail(finish_run.call_args.args[0])["run"]
+        self.assertEqual(stored["status"], "completed")
+        self.assertEqual(result["moved"][0]["run_id"], "")
 
     def test_tv_uses_tv_task_options(self):
         cfg = _cfg()
@@ -925,6 +971,51 @@ class QuickImportRunTest(unittest.TestCase):
         move.assert_not_called()
         self.assertEqual(result["moved"], [])
         self.assertIn("电视剧", result["left"][0]["reason"])
+
+    def test_empty_leftover_folder_is_cleaned_instead_of_left(self):
+        """接收夹里整理残留的空壳目录直接清理，不再报“识别失败、留在接收夹”。"""
+        from app.services import monitor_runs
+
+        cfg = _cfg()
+        identified = {
+            "items": [
+                {
+                    "item_index": 1,
+                    "name": "交锋 (2026) [tmdbid-294486]",
+                    "entry": {
+                        "id": "ghost-folder",
+                        "name": "交锋 (2026) [tmdbid-294486]",
+                        "is_dir": True,
+                        "path": "最近接收/交锋 (2026) [tmdbid-294486]",
+                        "parent_id": "cid:最近接收",
+                    },
+                }
+            ],
+            "picked": {},
+            "results": [{"item_index": 1, "status": "manual"}],
+        }
+        deletes = []
+        with mock.patch.object(quick_import, "get_config", return_value=cfg), \
+                mock.patch.object(quick_import, "resolve_scraper_dest_folder_id", side_effect=lambda provider, path: f"cid:{path}"), \
+                mock.patch.object(quick_import, "identify_scraper_batch_entries", return_value=identified), \
+                mock.patch.object(quick_import, "_folder_contains_files", return_value=False), \
+                mock.patch.object(
+                    scraper,
+                    "delete_scraper_entries",
+                    side_effect=lambda *args, **kwargs: deletes.append((args, kwargs)) or {},
+                ):
+            result = quick_import.run_quick_import("test")
+
+        self.assertEqual(result["left"], [])
+        self.assertEqual(len(deletes), 1)
+        self.assertEqual(deletes[0][0][1], ["ghost-folder"])
+        run = monitor_runs.list_runs(run_kind="inbox")["runs"][0]
+        # 这一轮只清理了空壳目录、没有分发内容：按“无变化”定稿。
+        self.assertEqual(run["status"], "no_change")
+        events = monitor_runs.get_run_detail(run["id"])["events"]
+        cleanup_events = [event for event in events if event.get("operation") == "cleanup"]
+        self.assertEqual(len(cleanup_events), 1)
+        self.assertEqual(cleanup_events[0]["status"], "completed")
 
     def test_plan_conflict_keeps_item_in_inbox(self):
         cfg = _cfg()
@@ -1060,8 +1151,15 @@ class QuickImportMergeIntoExistingFolderTest(unittest.TestCase):
         db.DB_PATH = os.path.join(self.tmpdir.name, "data.db")
         db._DB_ENSURED = False
         db.ensure_db()
+        self._child_run_patcher = mock.patch.object(
+            quick_import,
+            "_queue_dispatch_child_run",
+            side_effect=lambda *args, **kwargs: "child-run-1",
+        )
+        self._child_run_mock = self._child_run_patcher.start()
 
     def tearDown(self):
+        self._child_run_patcher.stop()
         db.DB_PATH = self.original_db_path
         db._DB_ENSURED = self.original_db_ensured
         self.tmpdir.cleanup()
@@ -1074,6 +1172,7 @@ class QuickImportMergeIntoExistingFolderTest(unittest.TestCase):
         folder_names=None,
         entry=None,
         options_sink=None,
+        delete_side_effect=None,
     ):
         """跑一次快捷导入：接收夹里一个已整理好的「王子与乞丐 (2026)」文件夹。"""
         cfg = _cfg()
@@ -1110,6 +1209,15 @@ class QuickImportMergeIntoExistingFolderTest(unittest.TestCase):
 
         def fake_move(provider, entry_ids, target_cid, **kwargs):
             moves.append({"entry_ids": list(entry_ids), "target_cid": target_cid, **kwargs})
+            source_cid = str(kwargs.get("source_cid", "") or "")
+            moved_ids = {str(value) for value in entry_ids}
+            if source_cid in children_by_cid:
+                # 移动成功后源目录里就不该再有这些子项，模拟真实网盘状态。
+                children_by_cid[source_cid] = [
+                    child
+                    for child in children_by_cid[source_cid]
+                    if str(child.get("id", "") or "") not in moved_ids
+                ]
             names_by_cid.setdefault(str(target_cid), []).extend(
                 str(item.get("name", "") or "") for item in kwargs.get("entries") or []
             )
@@ -1125,6 +1233,22 @@ class QuickImportMergeIntoExistingFolderTest(unittest.TestCase):
                 "ready_count": 1,
             }
 
+        delete_calls = {"count": 0}
+
+        def fake_delete(*args, **kwargs):
+            if isinstance(delete_side_effect, list):
+                index = delete_calls["count"]
+                delete_calls["count"] += 1
+                effect = delete_side_effect[index] if index < len(delete_side_effect) else None
+                if effect is not None:
+                    raise effect
+                deletes.append(kwargs)
+                return {}
+            if delete_side_effect is not None:
+                raise delete_side_effect
+            deletes.append(kwargs)
+            return {}
+
         with mock.patch.object(quick_import, "get_config", return_value=cfg), \
                 mock.patch.object(quick_import, "resolve_scraper_dest_folder_id", side_effect=lambda provider, path: f"cid:{path}"), \
                 mock.patch.object(quick_import, "identify_scraper_batch_entries", return_value=identified), \
@@ -1135,7 +1259,7 @@ class QuickImportMergeIntoExistingFolderTest(unittest.TestCase):
                 mock.patch.object(scraper, "find_scraper_media_folder", side_effect=fake_find), \
                 mock.patch.object(scraper, "list_scraper_entries", side_effect=fake_list), \
                 mock.patch.object(scraper, "move_scraper_entries", side_effect=fake_move), \
-                mock.patch.object(scraper, "delete_scraper_entries", side_effect=lambda *args, **kwargs: deletes.append(kwargs) or {}):
+                mock.patch.object(scraper, "delete_scraper_entries", side_effect=fake_delete):
             result = quick_import.run_quick_import("test")
         return result, moves, deletes
 
@@ -1180,6 +1304,54 @@ class QuickImportMergeIntoExistingFolderTest(unittest.TestCase):
         self.assertEqual(moves, [])
         self.assertEqual(deletes, [])
         self.assertIn("已存在同名文件", result["left"][0]["reason"])
+
+    def test_cleanup_delete_failure_keeps_dispatch_success(self):
+        """内容已经搬进目标、只是接收夹空目录没删掉时，不能判成“搬运失败、留在接收夹”。"""
+        from app.services import monitor_runs
+
+        result, moves, deletes = self._run_once(
+            existing_map={("cid:电视剧", "王子与乞丐 (2026)"): {"id": "target-folder", "name": "王子与乞丐 (2026)"}},
+            folder_children={
+                "inbox-folder": [{"id": "s1", "name": "Season 01", "is_dir": True}],
+                "s1": [{"id": "f1", "name": "王子与乞丐 (2026) - S01E01.mkv", "is_dir": False}],
+            },
+            delete_side_effect=RuntimeError("115 删除失败（webapi/proapi 均未成功）"),
+        )
+
+        self.assertEqual([item["name"] for item in result["moved"]], ["王子与乞丐 (2026)"])
+        self.assertEqual(result["left"], [])
+        self.assertEqual(deletes, [])
+        inbox_run = monitor_runs.list_runs(run_kind="inbox")["runs"][0]
+        self.assertEqual(inbox_run["status"], "completed")
+        detail = monitor_runs.get_run_detail(inbox_run["id"])
+        cleanup_events = [event for event in detail["events"] if event.get("operation") == "cleanup"]
+        self.assertEqual(len(cleanup_events), 1)
+        self.assertEqual(cleanup_events[0]["status"], "pending")
+        # 记录的是没能删掉的接收夹残留目录。
+        self.assertIn("王子与乞丐 (2026)", cleanup_events[0]["title"])
+
+    def test_cleanup_retry_success_leaves_no_problem_event(self):
+        """派发当下删除失败、本轮收尾重试清掉时，不应该再留下“删除失败/待清理”记录。"""
+        from app.services import monitor_runs
+
+        result, moves, deletes = self._run_once(
+            existing_map={("cid:电视剧", "王子与乞丐 (2026)"): {"id": "target-folder", "name": "王子与乞丐 (2026)"}},
+            folder_children={
+                "inbox-folder": [{"id": "f1", "name": "王子与乞丐 (2026) - S01E01.mkv", "is_dir": False}]
+            },
+            delete_side_effect=[RuntimeError("115 删除失败（webapi/proapi 均未成功）"), None],
+        )
+
+        self.assertEqual(len(result["moved"]), 1)
+        self.assertEqual(result["left"], [])
+        self.assertEqual(len(deletes), 1)
+        run = monitor_runs.list_runs(run_kind="inbox")["runs"][0]
+        self.assertEqual(run["status"], "completed")
+        events = monitor_runs.get_run_detail(run["id"])["events"]
+        self.assertEqual([e for e in events if e.get("status") == "pending"], [])
+        cleanup_events = [e for e in events if e.get("operation") == "cleanup"]
+        self.assertEqual(len(cleanup_events), 1)
+        self.assertEqual(cleanup_events[0]["status"], "completed")
 
     def test_existing_destination_folder_skips_inbox_folder_rename(self):
         """目标监控目录已有这部剧的文件夹时，接收夹文件夹不必先改规范名。
@@ -1242,6 +1414,112 @@ class QuickImportMergeIntoExistingFolderTest(unittest.TestCase):
         )
         # Season 01（已清空）和接收夹里那个空文件夹都要删掉
         self.assertEqual([item["entries"][0]["id"] for item in deletes], ["d1", "inbox-folder"])
+
+
+class InboxTriggerCoordinatorTest(unittest.TestCase):
+    """接收夹触发协调：执行中再触发只预约下一轮，不丢任何一次触发。"""
+
+    def setUp(self):
+        with quick_import._INBOX_TRIGGER_LOCK:
+            quick_import._INBOX_TRIGGER_STATE.update(
+                {"worker": None, "pending": False, "trigger": "", "source_ref": ""}
+            )
+
+    def tearDown(self):
+        with quick_import._INBOX_TRIGGER_LOCK:
+            quick_import._INBOX_TRIGGER_STATE.update(
+                {"worker": None, "pending": False, "trigger": "", "source_ref": ""}
+            )
+
+    def _wait_worker(self, timeout: float = 5.0) -> bool:
+        import threading
+        import time
+
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            with quick_import._INBOX_TRIGGER_LOCK:
+                worker = quick_import._INBOX_TRIGGER_STATE.get("worker")
+            if not (isinstance(worker, threading.Thread) and worker.is_alive()):
+                return True
+            time.sleep(0.02)
+        return False
+
+    def test_trigger_during_run_schedules_one_more_round(self):
+        calls = []
+
+        def fake_run(trigger, **kwargs):
+            calls.append(trigger)
+            if len(calls) == 1:
+                queued = quick_import.notify_quick_import("offline", source_ref="resource:9")
+                self.assertTrue(queued["queued"])
+                self.assertTrue(queued["running"])
+            return {"ok": True, "summary": "done"}
+
+        with mock.patch.object(quick_import, "run_quick_import", side_effect=fake_run):
+            first = quick_import.notify_quick_import("manual")
+            self.assertTrue(first["started"])
+            self.assertTrue(self._wait_worker())
+
+        # 第一轮执行中收到的触发会在本轮结束后自动补跑一轮，而不是被丢弃。
+        self.assertEqual(len(calls), 2)
+        self.assertFalse(quick_import.pending_quick_import_rerun())
+
+    def test_idle_trigger_starts_worker_immediately(self):
+        calls = []
+
+        with mock.patch.object(
+            quick_import,
+            "run_quick_import",
+            side_effect=lambda trigger, **kwargs: calls.append(trigger) or {"ok": True},
+        ):
+            result = quick_import.notify_quick_import("cron")
+            self.assertTrue(result["started"])
+            self.assertTrue(self._wait_worker())
+
+        self.assertEqual(calls, ["cron"])
+
+
+class InboxDispatchChildRunTest(unittest.TestCase):
+    """每个成功分发的条目都要有自己的 STRM 同步子任务（挂在父运行下）。"""
+
+    def test_child_scope_prefers_media_folder(self):
+        self.assertEqual(
+            quick_import._dispatch_scan_scope_rel("电视剧", "如果还有明天 (2010)", True, {"merged": False}),
+            "电视剧/如果还有明天 (2010)",
+        )
+        self.assertEqual(
+            quick_import._dispatch_scan_scope_rel(
+                "电影", "片名.mkv", False, {"merged": True, "target_folder": "片名 (2024)"}
+            ),
+            "电影/片名 (2024)",
+        )
+        # 散文件直接落在监控根目录时只能按任务目录整体刷新。
+        self.assertEqual(
+            quick_import._dispatch_scan_scope_rel("电影", "片名.mkv", False, {"merged": False}),
+            "电影",
+        )
+
+    def test_child_scan_is_queued_as_independent_task(self):
+        """分发出的扫描是独立记录：不挂接收夹父运行，来源由队列侧标注。"""
+        config = {"mount_points": [dict(item) for item in MOUNT_POINTS]}
+        with mock.patch("app.services.monitor.queue_inbox_dispatch_scan", return_value="child-1") as queued:
+            run_id = quick_import._queue_dispatch_child_run(
+                config,
+                "电视剧",
+                "示例剧",
+                True,
+                {"merged": False},
+            )
+
+        self.assertEqual(run_id, "child-1")
+        queued.assert_called_once_with(config, "电视剧/示例剧")
+
+    def test_queue_failure_does_not_break_dispatch(self):
+        with mock.patch("app.services.monitor.queue_inbox_dispatch_scan", side_effect=RuntimeError("boom")):
+            self.assertEqual(
+                quick_import._queue_dispatch_child_run({}, "电影", "片名", True, {"merged": False}),
+                "",
+            )
 
 
 if __name__ == "__main__":

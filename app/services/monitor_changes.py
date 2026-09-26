@@ -1496,6 +1496,8 @@ def _build_committed_change_detail(
             "operation": str(plan.get("operation", "") or ""),
             "old_path": str(old_context.get("local_rel_path", "") or ""),
             "new_path": str(new_context.get("local_rel_path", "") or ""),
+            "old_remote_path": str(plan.get("old_path", "") or ""),
+            "new_remote_path": str(plan.get("new_path", "") or ""),
             "deleted": deleted,
             "generated": generated,
         }
@@ -1503,10 +1505,12 @@ def _build_committed_change_detail(
     changes: List[Dict[str, str]] = []
     old_local_path = str(old_context.get("local_rel_path", "") or "")
     new_local_path = str(new_context.get("local_rel_path", "") or "")
+    old_remote_path = str(plan.get("old_path", "") or "")
+    new_remote_path = str(plan.get("new_path", "") or "")
     if deleted > 0 and old_local_path:
-        changes.append({"action": "delete", "path": f"{old_local_path}.strm"})
+        changes.append({"action": "delete", "path": f"{old_local_path}.strm", "remote_path": old_remote_path})
     if generated > 0 and new_local_path:
-        changes.append({"action": "generate", "path": f"{new_local_path}.strm"})
+        changes.append({"action": "generate", "path": f"{new_local_path}.strm", "remote_path": new_remote_path})
     return {"kind": "file", "changes": changes} if changes else {}
 
 
@@ -1558,29 +1562,30 @@ def _event_added_media_items(
     return items
 
 
-def _event_strm_path_effects(
+def _event_strm_path_pairs(
     cfg: Dict[str, Any],
     task: Dict[str, Any],
     plan: Dict[str, Any],
     *,
     effective_plan: Optional[Dict[str, Any]] = None,
-) -> Tuple[List[str], List[str]]:
-    """返回事件删除/生成的 STRM 本地路径列表，供批次内按净效果统计。"""
+) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+    """返回事件删除/生成的条目：本地 STRM 相对路径 + 对应网盘路径。"""
     active_plan = effective_plan if isinstance(effective_plan, dict) and effective_plan else plan
-    deleted_paths: List[str] = []
-    generated_paths: List[str] = []
+    deleted: List[Dict[str, str]] = []
+    generated: List[Dict[str, str]] = []
     if plan.get("remove_old"):
         if plan.get("is_dir"):
             for item in plan.get("indexed_files", []) if isinstance(plan.get("indexed_files"), list) else []:
-                context = _task_path_context(cfg, task, str(item.get("source_path", "") or ""))
+                remote_path = str(item.get("source_path", "") or "")
+                context = _task_path_context(cfg, task, remote_path)
                 local = str((context or {}).get("local_rel_path", "") or "")
                 if local:
-                    deleted_paths.append(local)
+                    deleted.append({"local": local, "remote": remote_path})
         else:
             old_context = plan.get("old_context") if isinstance(plan.get("old_context"), dict) else {}
             local = str(old_context.get("local_rel_path", "") or "")
             if local:
-                deleted_paths.append(local)
+                deleted.append({"local": local, "remote": str(plan.get("old_path", "") or "")})
     if active_plan.get("add_new"):
         if active_plan.get("is_dir"):
             for item in (
@@ -1588,16 +1593,50 @@ def _event_strm_path_effects(
                 if isinstance(active_plan.get("indexed_files"), list)
                 else []
             ):
-                context = _task_path_context(cfg, task, str(item.get("target_path", "") or ""))
+                remote_path = str(item.get("target_path", "") or "")
+                context = _task_path_context(cfg, task, remote_path)
                 local = str((context or {}).get("local_rel_path", "") or "")
                 if local:
-                    generated_paths.append(local)
+                    generated.append({"local": local, "remote": remote_path})
         else:
             new_context = active_plan.get("new_context") if isinstance(active_plan.get("new_context"), dict) else {}
             local = str(new_context.get("local_rel_path", "") or "")
             if local:
-                generated_paths.append(local)
-    return deleted_paths, generated_paths
+                generated.append(
+                    {
+                        "local": local,
+                        "remote": str(active_plan.get("new_path", "") or plan.get("new_path", "") or ""),
+                    }
+                )
+    return deleted, generated
+
+
+def _attach_strm_effect_paths(
+    change_detail: Any,
+    deleted: List[Dict[str, str]],
+    generated: List[Dict[str, str]],
+) -> None:
+    """把本次变更实际影响的条目（网盘路径 + 本地 STRM 路径）挂进明细。"""
+    if not isinstance(change_detail, dict) or change_detail.get("kind") != "folder":
+        return
+
+    def serialize(items: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        rows: List[Dict[str, str]] = []
+        for item in items:
+            local = str(item.get("local", "") or "")
+            if not local:
+                continue
+            rows.append(
+                {
+                    "local": f"{local}.strm",
+                    "remote": str(item.get("remote", "") or ""),
+                    "name": os.path.basename(local),
+                }
+            )
+        return rows
+
+    change_detail["deleted_files"] = serialize(deleted)
+    change_detail["generated_files"] = serialize(generated)
 
 
 async def _apply_precise_event(
@@ -1665,7 +1704,10 @@ async def _apply_precise_event(
         if int(stats.get("manual_required", 0) or 0) > 0
         else ""
     )
-    stats["deleted_paths"], stats["generated_paths"] = _event_strm_path_effects(cfg, task, plan)
+    deleted_pairs, generated_pairs = _event_strm_path_pairs(cfg, task, plan)
+    stats["deleted_paths"] = [item["local"] for item in deleted_pairs]
+    stats["generated_paths"] = [item["local"] for item in generated_pairs]
+    _attach_strm_effect_paths(stats.get("change_detail"), deleted_pairs, generated_pairs)
     return stats
 
 
@@ -1859,12 +1901,15 @@ async def _reconcile_event(
         if int(stats.get("manual_required", 0) or 0) > 0
         else ""
     )
-    stats["deleted_paths"], stats["generated_paths"] = _event_strm_path_effects(
+    deleted_pairs, generated_pairs = _event_strm_path_pairs(
         cfg,
         task,
         plan,
         effective_plan=effective_plan,
     )
+    stats["deleted_paths"] = [item["local"] for item in deleted_pairs]
+    stats["generated_paths"] = [item["local"] for item in generated_pairs]
+    _attach_strm_effect_paths(stats.get("change_detail"), deleted_pairs, generated_pairs)
     return stats
 
 
@@ -2009,7 +2054,7 @@ async def process_monitor_change_events(
                         "manual_required" if manual_required else "completed",
                         completed_at,
                         "" if manual_required else completed_at,
-                        "需手动监控" if manual_required else "",
+                        "等待系统补扫" if manual_required else "",
                         max(0, int(stats.get("directory_count", 0) or 0)),
                         max(0, int(stats.get("file_count", 0) or 0)),
                         run_owner,
@@ -2108,7 +2153,20 @@ async def process_monitor_change_events(
                         "retryable": not discard,
                     }
                 )
-        result["dispatched_item_paths"] = _inbox_dispatched_paths(conn, dispatched_candidates)
+        dispatched_paths = _inbox_dispatched_paths(conn, dispatched_candidates)
+        # 本次已经用精准路径同步过的条目不再补排目录扫描：重复扫描既浪费 115 请求，
+        # 又会产生一条“无变化”的噪音记录。
+        handled_paths = [normalize_relative_path(path) for path in strm_state.keys() if path]
+        if dispatched_paths and handled_paths:
+            dispatched_paths = [
+                path
+                for path in dispatched_paths
+                if not any(
+                    handled == path or handled.startswith(path.rstrip("/") + "/")
+                    for handled in handled_paths
+                )
+            ]
+        result["dispatched_item_paths"] = dispatched_paths
     return result
 
 
@@ -2160,7 +2218,7 @@ def _inbox_dispatched_paths(conn: Any, candidates: List[Dict[str, str]]) -> List
     return paths
 
 
-def get_monitor_change_counts() -> Dict[str, Dict[str, int]]:
+def get_monitor_change_counts(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, int]]:
     ensure_db()
     counts: Dict[str, Dict[str, int]] = {}
     with db_connection() as conn:
@@ -2183,6 +2241,20 @@ def get_monitor_change_counts() -> Dict[str, Dict[str, int]]:
                 bucket["manual_required"] += count
             else:
                 bucket["pending"] += count
+    # 把“补扫过但失败”的待补扫拆出来：它们不会再自动重排，需要人工处理。
+    for task_name, bucket in counts.items():
+        if not bucket.get("manual_required"):
+            continue
+        try:
+            scopes = get_manual_required_monitor_scopes(task_name, cfg=cfg)
+        except Exception:
+            continue
+        blocked = sum(1 for scope in scopes if scope.get("retry_blocked"))
+        if blocked <= 0:
+            continue
+        blocked = min(blocked, int(bucket["manual_required"]))
+        bucket["manual_required_failed"] = blocked
+        bucket["manual_required"] = max(0, int(bucket["manual_required"]) - blocked)
     return counts
 
 
@@ -2197,11 +2269,32 @@ def get_manual_required_monitor_scopes(
     if not normalized_task_name or not task:
         return []
 
+    # 自动补扫只尝试一次：已经补扫过且失败 / 部分完成的目录标记为“需人工处理”。
+    try:
+        from .monitor_runs import list_recent_failed_scan_runs
+
+        attempted_runs = list_recent_failed_scan_runs(normalized_task_name)
+    except Exception:
+        attempted_runs = []
+
+    def _failed_attempt(provider_path: str) -> Dict[str, Any]:
+        normalized_path = normalize_relative_path(provider_path)
+        if not normalized_path:
+            return {}
+        for run in attempted_runs:
+            if run.get("covers_task"):
+                return run
+            for raw_scope in run.get("paths", []) if isinstance(run.get("paths"), list) else []:
+                scope = normalize_relative_path(str(raw_scope or ""))
+                if scope and (normalized_path == scope or normalized_path.startswith(f"{scope}/")):
+                    return run
+        return {}
+
     scopes: List[Dict[str, Any]] = []
     with db_connection() as conn:
         cursor = conn.execute(
             """
-            SELECT id, operation, old_path, new_path, created_at
+            SELECT id, operation, old_path, new_path, created_at, monitor_run_id
             FROM monitor_change_events
             WHERE task_name = ? AND status = 'manual_required'
             ORDER BY id
@@ -2209,26 +2302,15 @@ def get_manual_required_monitor_scopes(
             (normalized_task_name,),
         )
         for row in cursor.fetchall():
-            def _provider_relative(path_value: Any) -> str:
-                normalized = normalize_relative_path(str(path_value or ""))
-                try:
-                    _provider, resolved = resolve_provider_relative_path(
-                        active_cfg,
-                        str(path_value or ""),
-                        expected_provider="115",
-                    )
-                    return normalize_relative_path(resolved) or normalized
-                except Exception:
-                    return normalized
-
             operation = str(row[1] or "")
-            old_path = _provider_relative(row[2])
-            new_path = _provider_relative(row[3])
+            old_path = _provider_relative_path(active_cfg, row[2])
+            new_path = _provider_relative_path(active_cfg, row[3])
             provider_path = new_path
             context = _task_path_context(active_cfg, task, provider_path)
             if not context:
                 continue
             remote_rel_path = normalize_relative_path(context["remote_rel_path"])
+            failed_attempt = _failed_attempt(provider_path)
             scopes.append(
                 {
                     "event_id": int(row[0] or 0),
@@ -2236,23 +2318,124 @@ def get_manual_required_monitor_scopes(
                     "old_path": old_path,
                     "new_path": new_path,
                     "created_at": str(row[4] or ""),
+                    "monitor_run_id": str(row[5] or ""),
                     "provider_path": provider_path,
                     "remote_path": context["remote_path"],
                     "first_level_dir_rel": remote_rel_path.split("/", 1)[0] if remote_rel_path else "",
+                    "retry_blocked": bool(failed_attempt),
+                    "failed_run_id": str(failed_attempt.get("id", "") or ""),
+                    "failed_summary": str(failed_attempt.get("summary", "") or ""),
+                    "failed_at": str(failed_attempt.get("finished_at", "") or ""),
                 }
             )
     return scopes
+
+
+def _provider_relative_path(cfg: Dict[str, Any], path_value: Any) -> str:
+    """把事件里可能带挂载前缀的路径统一成 115 根目录相对路径。"""
+    normalized = normalize_relative_path(str(path_value or ""))
+    try:
+        _provider, resolved = resolve_provider_relative_path(
+            cfg,
+            str(path_value or ""),
+            expected_provider="115",
+        )
+        return normalize_relative_path(resolved) or normalized
+    except Exception:
+        return normalized
+
+
+def complete_manual_required_monitor_events_for_scopes(
+    task_name: str,
+    provider_scopes: Sequence[str],
+    *,
+    failed_paths: Sequence[str] = (),
+    cfg: Optional[Dict[str, Any]] = None,
+) -> int:
+    """扫描已成功覆盖的目录清掉对应的“等待系统补扫”事件。
+
+    判定按路径覆盖：事件目录要被某个「真实读取成功」的扫描范围覆盖，并且不与任何
+    读取失败的目录相交（相同、被包含或包含它）。局部失败时只有同分支外的事件会被
+    清除，失败目录保持等待补扫，可以安全重试。
+    """
+    normalized_task_name = str(task_name or "").strip()
+    scopes: List[str] = []
+    for raw_scope in provider_scopes if isinstance(provider_scopes, (list, tuple)) else []:
+        scope = normalize_relative_path(str(raw_scope or ""))
+        if scope and scope not in scopes:
+            scopes.append(scope)
+    if not normalized_task_name or not scopes:
+        return 0
+    failures: List[str] = []
+    for raw_failure in failed_paths if isinstance(failed_paths, (list, tuple)) else []:
+        failure = normalize_relative_path(str(raw_failure or ""))
+        if failure and failure not in failures:
+            failures.append(failure)
+
+    def _path_covers(candidate: str, target: str) -> bool:
+        return candidate == target or target.startswith(f"{candidate}/")
+
+    def _path_intersects(path: str, other: str) -> bool:
+        return _path_covers(path, other) or _path_covers(other, path)
+
+    active_cfg = cfg or get_config()
+    with db_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, old_path, new_path, status
+            FROM monitor_change_events
+            WHERE task_name = ? AND status IN ('manual_required', 'pending')
+            """,
+            (normalized_task_name,),
+        ).fetchall()
+    task = _task_by_name(active_cfg, normalized_task_name)
+    if not task:
+        return 0
+    event_ids: List[int] = []
+    for row in rows:
+        old_path = _provider_relative_path(active_cfg, row[1])
+        path = _provider_relative_path(active_cfg, row[2]) or old_path
+        if not path:
+            continue
+        if not any(_path_covers(scope, path) for scope in scopes):
+            continue
+        if any(_path_intersects(path, failure) for failure in failures):
+            continue
+        if str(row[3] or "") == "pending":
+            # 还没处理过的变更事件：只有旧路径落在监控范围之外（例如接收夹中转）时，
+            # 扫描才可以直接核实并完成它；否则要先让变更同步做旧路径的删除/迁移。
+            if old_path and _task_path_context(active_cfg, task, old_path):
+                continue
+        event_ids.append(int(row[0] or 0))
+    return _complete_monitor_change_events(normalized_task_name, event_ids, statuses=("manual_required", "pending"))
 
 
 def complete_manual_required_monitor_events(
     task_name: str,
     event_ids: Sequence[int],
 ) -> int:
+    return _complete_monitor_change_events(task_name, event_ids, statuses=("manual_required",))
+
+
+def _complete_monitor_change_events(
+    task_name: str,
+    event_ids: Sequence[int],
+    *,
+    statuses: Sequence[str] = ("manual_required",),
+) -> int:
+    """把已经由扫描核实过的变更事件直接收尾（等待补扫 / 尚未处理的都适用）。"""
     normalized_task_name = str(task_name or "").strip()
     normalized_event_ids = normalize_monitor_event_ids(event_ids)
     if not normalized_task_name or not normalized_event_ids:
         return 0
+    normalized_statuses = [
+        str(status or "").strip() for status in statuses
+        if str(status or "").strip()
+    ]
+    if not normalized_statuses:
+        return 0
     placeholders = ",".join("?" for _ in normalized_event_ids)
+    status_marks = ",".join("?" for _ in normalized_statuses)
     owner_run_ids: Set[str] = set()
     with db_connection() as conn:
         completed_at = now_text()
@@ -2270,21 +2453,28 @@ def complete_manual_required_monitor_events(
             UPDATE monitor_change_events
             SET status = 'completed', completed_at = ?, updated_at = ?,
                 last_error = '', needs_reconcile = 0
-            WHERE task_name = ? AND id IN ({placeholders}) AND status = 'manual_required'
+            WHERE task_name = ? AND id IN ({placeholders}) AND status IN ({status_marks})
             """,
-            (completed_at, completed_at, normalized_task_name, *normalized_event_ids),
+            (
+                completed_at,
+                completed_at,
+                normalized_task_name,
+                *normalized_event_ids,
+                *normalized_statuses,
+            ),
         )
         completed = max(0, int(cursor.rowcount or 0))
         conn.commit()
     if completed and owner_run_ids:
-        # 补扫清掉“需手动监控”事件后，等待这些事件的父运行可能已经可以收尾了；已经
+        # 补扫清掉“待系统补扫”事件后，等待这些事件的父运行可能已经可以收尾了；已经
         # 按“还有目录等补扫”定稿成部分完成的运行，也要按证据重新结算。
-        from .monitor_runs import reconcile_waiting_run, resettle_settled_run
+        from .monitor_runs import settle_run_chain
 
         for run_id in sorted(owner_run_ids):
             try:
-                reconcile_waiting_run(run_id)
-                resettle_settled_run(run_id)
+                # 事件归属接收夹父运行，真正停在“部分完成”的是下游变更同步；
+                # settle_run_chain 会把上下游一起按证据重算。
+                settle_run_chain(run_id)
             except Exception:
                 continue
     return completed

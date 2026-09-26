@@ -2521,7 +2521,8 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         self.assertIn("manualRequiredTaskArg", index_source)
         self.assertNotIn("openMonitorManualRequired('${escapeHtml(taskKey)}')", index_source)
         self.assertIn("OPERATION_LABELS", index_source)
-        self.assertIn("该目录变更时内容清单未确认", index_source)
+        self.assertIn("该目录的内容清单未确认", index_source)
+        self.assertIn("自动补扫已失败一次，不再自动重试", index_source)
 
         css = (ROOT / "static/css/index.css").read_text(encoding="utf-8")
         self.assertIn(".monitor-manual-required-link", css)

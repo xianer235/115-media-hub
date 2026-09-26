@@ -11,7 +11,9 @@
   不会再被目标监控任务自动刮削一遍，同一条目一生只整理一次。
 """
 
+import logging
 import threading
+import time
 from typing import Any, Dict, List, Optional, Set
 
 from ..core import *  # noqa: F401,F403
@@ -27,10 +29,10 @@ from .scraper import (
 )
 from .monitor_runs import create_run as create_monitor_run
 from .monitor_runs import finish_run as finish_monitor_run
+from .monitor_runs import latest_run_progress as latest_monitor_run_progress
 from .monitor_runs import record_event as record_monitor_run_event
 from .monitor_runs import start_run as start_monitor_run
 from .monitor_runs import update_run as update_monitor_run
-from .monitor_runs import wait_run as wait_monitor_run
 
 
 QUICK_IMPORT_PROVIDER = "115"
@@ -55,14 +57,99 @@ QUICK_IMPORT_LOCK_WAIT_SECONDS = max(
 _QUICK_IMPORT_RUN_LOCK = threading.Lock()
 # 中断标记：接收夹整理是长任务，用户点「中断」后在下一条目开始前生效（已搬完的不会回滚）。
 _QUICK_IMPORT_CANCEL = threading.Event()
+# 触发协调：整理正在执行时把后续触发记成「还需再跑一轮」，由工作线程在本轮结束后
+# 自动接着跑，任何触发都不会被丢掉。
+_INBOX_TRIGGER_LOCK = threading.Lock()
+_INBOX_TRIGGER_STATE: Dict[str, Any] = {
+    "worker": None,
+    "pending": False,
+    "trigger": "",
+    "source_ref": "",
+}
+_INBOX_TRIGGER_PRIORITY = {"manual": 5, "cron": 4, "offline": 3, "import": 2, "test": 1}
 
 
 def request_quick_import_cancel() -> bool:
     """请求中断当前接收夹整理；没有在跑时返回 False。"""
     if not _QUICK_IMPORT_RUN_LOCK.locked():
         return False
+    with _INBOX_TRIGGER_LOCK:
+        # 中断意味着用户不想再排队了：取消同时清掉「再跑一轮」预约。
+        _INBOX_TRIGGER_STATE["pending"] = False
     _QUICK_IMPORT_CANCEL.set()
     return True
+
+
+def _inbox_trigger_priority(trigger: str) -> int:
+    return _INBOX_TRIGGER_PRIORITY.get(str(trigger or "").strip().lower(), 0)
+
+
+def notify_quick_import(trigger: str = "queued", *, source_ref: str = "") -> Dict[str, Any]:
+    """登记一次接收夹整理请求；正在执行时预约下一轮，永不静默跳过。"""
+    normalized_trigger = str(trigger or "").strip().lower() or "queued"
+    normalized_ref = str(source_ref or "").strip()
+    with _INBOX_TRIGGER_LOCK:
+        worker = _INBOX_TRIGGER_STATE.get("worker")
+        if isinstance(worker, threading.Thread) and worker.is_alive():
+            current = str(_INBOX_TRIGGER_STATE.get("trigger", "") or "")
+            if _inbox_trigger_priority(normalized_trigger) >= _inbox_trigger_priority(current):
+                _INBOX_TRIGGER_STATE["trigger"] = normalized_trigger
+                _INBOX_TRIGGER_STATE["source_ref"] = normalized_ref
+            _INBOX_TRIGGER_STATE["pending"] = True
+            return {
+                "ok": True,
+                "started": False,
+                "queued": True,
+                "running": True,
+                "summary": "已有接收夹整理在执行，已安排再跑一轮",
+            }
+        _INBOX_TRIGGER_STATE["pending"] = False
+        _INBOX_TRIGGER_STATE["trigger"] = normalized_trigger
+        _INBOX_TRIGGER_STATE["source_ref"] = normalized_ref
+        worker = threading.Thread(
+            target=_inbox_worker_loop,
+            args=(normalized_trigger, normalized_ref),
+            name="inbox-quick-import",
+            daemon=True,
+        )
+        _INBOX_TRIGGER_STATE["worker"] = worker
+        worker.start()
+    return {
+        "ok": True,
+        "started": True,
+        "queued": True,
+        "running": False,
+        "summary": "已开始接收夹整理",
+    }
+
+
+def _inbox_worker_loop(trigger: str, source_ref: str) -> None:
+    current_trigger, current_ref = trigger, source_ref
+    while True:
+        try:
+            result = run_quick_import(current_trigger, source_ref=current_ref, wait_for_lock=True)
+            if isinstance(result, dict) and result.get("skipped"):
+                # 极端情况下锁超时：不丢请求，稍后重试这一轮。
+                with _INBOX_TRIGGER_LOCK:
+                    _INBOX_TRIGGER_STATE["pending"] = True
+                time.sleep(5)
+        except Exception:
+            logging.exception("接收夹整理执行失败")
+        with _INBOX_TRIGGER_LOCK:
+            if not _INBOX_TRIGGER_STATE.get("pending"):
+                _INBOX_TRIGGER_STATE["worker"] = None
+                _INBOX_TRIGGER_STATE["trigger"] = ""
+                _INBOX_TRIGGER_STATE["source_ref"] = ""
+                return
+            _INBOX_TRIGGER_STATE["pending"] = False
+            current_trigger = str(_INBOX_TRIGGER_STATE.get("trigger", "") or "queued")
+            current_ref = str(_INBOX_TRIGGER_STATE.get("source_ref", "") or "")
+
+
+def pending_quick_import_rerun() -> bool:
+    """是否已经预约了下一轮整理（接收夹卡片展示用）。"""
+    with _INBOX_TRIGGER_LOCK:
+        return bool(_INBOX_TRIGGER_STATE.get("pending"))
 
 
 def _inbox_remote_path(cfg: Dict[str, Any]) -> str:
@@ -357,6 +444,12 @@ def get_quick_import_status() -> Dict[str, Any]:
     runs = list_quick_import_runs(1)
     latest = runs[0] if runs else {}
     detail = safe_json_loads(latest.get("detail_json", "{}"), {}) if latest else {}
+    active_run: Dict[str, Any] = {}
+    if str(conf.get("task_name", "") or "").strip():
+        try:
+            active_run = latest_monitor_run_progress(run_kind="inbox", task_name=str(conf["task_name"]))
+        except Exception:
+            active_run = {}
     return {
         "task_name": conf["task_name"],
         "task_path": conf["inbox_path"],
@@ -372,6 +465,8 @@ def get_quick_import_status() -> Dict[str, Any]:
         },
         "running": _QUICK_IMPORT_RUN_LOCK.locked(),
         "cancelling": _QUICK_IMPORT_RUN_LOCK.locked() and _QUICK_IMPORT_CANCEL.is_set(),
+        "pending_rerun": pending_quick_import_rerun(),
+        "active_run": active_run,
         "latest": latest,
         "latest_detail": detail,
         "recent_jobs": list_inbox_recent_jobs(inbox_rel, 3),
@@ -419,6 +514,82 @@ def _folder_children_payload(folder_id: str, folder_rel: str) -> List[Dict[str, 
         item["path"] = normalize_relative_path(join_relative_path(folder_rel, name))
         result.append(item)
     return result
+
+
+def _folder_contains_files(
+    folder_id: str,
+    folder_rel: str,
+    *,
+    depth: int = 0,
+    max_depth: int = 3,
+) -> bool:
+    """目录子树里是否还有文件；用来识别整理后残留的空壳目录。
+
+    读不到或层级过深时返回 True（保守：宁可留着也不误删有内容的目录）。
+    """
+    normalized_id = str(folder_id or "").strip()
+    if not normalized_id or depth > max_depth:
+        return True
+    try:
+        children = _folder_children_payload(normalized_id, folder_rel)
+    except Exception:
+        return True
+    for child in children:
+        if bool(child.get("is_dir")):
+            if _folder_contains_files(
+                str(child.get("id", "") or ""),
+                str(child.get("path", "") or ""),
+                depth=depth + 1,
+                max_depth=max_depth,
+            ):
+                return True
+        else:
+            return True
+    return False
+
+
+def _retry_inbox_cleanup(
+    leftovers: List[Dict[str, Any]],
+    *,
+    monitor_run_id: str,
+) -> List[Dict[str, Any]]:
+    """全部搬运结束后再清一次接收夹残留：清掉的记过程事件，仍残留的返回给调用方。
+
+    只自动清空壳目录；目录里还有内容时保留，交给下一轮识别。
+    """
+    remaining: List[Dict[str, Any]] = []
+    for leftover in leftovers if isinstance(leftovers, list) else []:
+        if not isinstance(leftover, dict):
+            continue
+        entry_id = str(leftover.get("id", "") or "").strip()
+        parent_id = str(leftover.get("parent_id", "") or "").strip()
+        path = str(leftover.get("path", "") or "")
+        name = str(leftover.get("name", "") or "")
+        if not entry_id:
+            remaining.append({**leftover, "reason": "缺少目录 ID，无法自动清理"})
+            continue
+        if _folder_contains_files(entry_id, path):
+            remaining.append({**leftover, "reason": "目录内仍有内容，未自动清理"})
+            continue
+        try:
+            scraper_service.delete_scraper_entries(
+                QUICK_IMPORT_PROVIDER,
+                [entry_id],
+                parent_id=parent_id,
+                entries=[{"id": entry_id, "name": name, "is_dir": True, "path": path, "parent_id": parent_id}],
+            )
+        except Exception as exc:
+            remaining.append({**leftover, "reason": str(exc)[:120]})
+            continue
+        record_monitor_run_event(
+            monitor_run_id,
+            category="process",
+            operation="cleanup",
+            status="completed",
+            title=name or path or entry_id,
+            detail={"path": path, "reason": "接收夹空目录已清理"},
+        )
+    return remaining
 
 
 def _folder_entry_names(folder_id: str, cache: Dict[str, Set[str]]) -> Set[str]:
@@ -492,6 +663,7 @@ def _merge_organized_folder_into_existing(
     moved_count = 0
     monitor_sync_events = 0
     skipped: List[str] = []
+    cleanup_pending: List[Dict[str, str]] = []
     pending_moves: List[Dict[str, Any]] = []
     target_names = _folder_entry_names(target_id, name_cache)
     for child in _folder_children_payload(source_id, source_rel):
@@ -519,13 +691,26 @@ def _merge_organized_folder_into_existing(
                 moved_count += int(nested.get("moved_count", 0) or 0)
                 monitor_sync_events += int(nested.get("monitor_sync_events", 0) or 0)
                 skipped.extend(nested.get("skipped") or [])
+                cleanup_pending.extend(nested.get("cleanup_pending") or [])
                 if not nested.get("skipped"):
-                    scraper_service.delete_scraper_entries(
-                        QUICK_IMPORT_PROVIDER,
-                        [child_id],
-                        parent_id=source_id,
-                        entries=[child],
-                    )
+                    # 内容已经并过去了，删空目录只是收尾：失败不能连累搬运结果。
+                    try:
+                        scraper_service.delete_scraper_entries(
+                            QUICK_IMPORT_PROVIDER,
+                            [child_id],
+                            parent_id=source_id,
+                            entries=[child],
+                        )
+                    except Exception as exc:
+                        cleanup_pending.append(
+                            {
+                                "id": child_id,
+                                "name": child_name,
+                                "path": str(child.get("path", "") or ""),
+                                "parent_id": source_id,
+                                "reason": str(exc)[:120],
+                            }
+                        )
                 continue
         if child_name in target_names:
             skipped.append(child_name)
@@ -543,7 +728,12 @@ def _merge_organized_folder_into_existing(
         )
         moved_count += len(pending_moves)
         monitor_sync_events += max(0, int(((move_result.get("monitor_sync") or {}).get("event_count", 0) or 0)))
-    return {"moved_count": moved_count, "monitor_sync_events": monitor_sync_events, "skipped": skipped}
+    return {
+        "moved_count": moved_count,
+        "monitor_sync_events": monitor_sync_events,
+        "skipped": skipped,
+        "cleanup_pending": cleanup_pending,
+    }
 
 
 def _dispatch_organized_entry(
@@ -610,21 +800,74 @@ def _dispatch_organized_entry(
         name_cache=cache,
     )
     skipped = list(outcome.get("skipped") or [])
+    cleanup_pending = list(outcome.get("cleanup_pending") or [])
     if not skipped:
-        # 内容已经全部并进目标文件夹，接收夹里那个空文件夹要清掉，否则会一直躺在接收夹里。
-        scraper_service.delete_scraper_entries(
-            QUICK_IMPORT_PROVIDER,
-            [entry_id],
-            parent_id=source_cid,
-            entries=[entry],
-        )
+        # 内容已经全部并进目标文件夹，接收夹里那个空文件夹要清掉；清理失败只记
+        # “待清理”，不能把已经成功的搬运判成失败。
+        try:
+            scraper_service.delete_scraper_entries(
+                QUICK_IMPORT_PROVIDER,
+                [entry_id],
+                parent_id=source_cid,
+                entries=[entry],
+            )
+        except Exception as exc:
+            cleanup_pending.append(
+                {
+                    "id": entry_id,
+                    "name": entry_name,
+                    "path": str(entry.get("path", "") or ""),
+                    "parent_id": source_cid,
+                    "reason": str(exc)[:120],
+                }
+            )
     return {
         "merged": True,
         "skipped": skipped,
+        "cleanup_pending": cleanup_pending,
         "target_folder": existing_name,
         "moved_count": int(outcome.get("moved_count", 0) or 0),
         "monitor_sync_events": int(outcome.get("monitor_sync_events", 0) or 0),
     }
+
+
+def _dispatch_scan_scope_rel(
+    target_rel: str,
+    entry_name: str,
+    is_dir: bool,
+    dispatch: Dict[str, Any],
+) -> str:
+    """分发后要刷新 STRM 的范围：优先该条目的媒体文件夹，散文件退回父目录。"""
+    folder_name = str(dispatch.get("target_folder", "") or "").strip()
+    if not folder_name and is_dir and not dispatch.get("merged"):
+        folder_name = str(entry_name or "").strip()
+    if folder_name:
+        return normalize_relative_path(join_relative_path(target_rel, folder_name))
+    return normalize_relative_path(target_rel)
+
+
+def _queue_dispatch_child_run(
+    cfg: Dict[str, Any],
+    target_rel: str,
+    entry_name: str,
+    is_dir: bool,
+    dispatch: Dict[str, Any],
+) -> str:
+    """为一条分发成功的条目单独排一条目录同步任务（独立记录，不挂接收夹父运行）。
+
+    接收夹整理只负责识别与移动；搬进监控目录后的 STRM 生成是独立的文件夹监控任务，
+    各自留下自己的运行记录，来源统一标注「接收夹分发」。
+    """
+    scope_rel = _dispatch_scan_scope_rel(target_rel, entry_name, is_dir, dispatch)
+    if not scope_rel:
+        return ""
+    try:
+        from .monitor import queue_inbox_dispatch_scan
+
+        return queue_inbox_dispatch_scan(cfg, scope_rel)
+    except Exception:
+        logging.exception("接收夹分发子任务排队失败: %s", scope_rel)
+        return ""
 
 
 def run_quick_import(
@@ -633,13 +876,17 @@ def run_quick_import(
     sub_path: str = "",
     parent_run_id: str = "",
     source_ref: str = "",
+    wait_for_lock: bool = False,
 ) -> Dict[str, Any]:
     """扫描接收夹，整理高置信度条目并按类型分发到标注过的监控目录。
 
     低置信度 / 识别失败 / 计划冲突 / 搬运失败的条目都会留在接收夹，并记录具体原因。
     """
     # 手动点击时不卡住请求：已有整理在跑就直接返回（卡片上会显示黄色的「中断」按钮）。
-    lock_wait_seconds = 0 if str(trigger or "").strip().lower() == "manual" else QUICK_IMPORT_LOCK_WAIT_SECONDS
+    if wait_for_lock:
+        lock_wait_seconds = max(QUICK_IMPORT_LOCK_WAIT_SECONDS, 60)
+    else:
+        lock_wait_seconds = 0 if str(trigger or "").strip().lower() == "manual" else QUICK_IMPORT_LOCK_WAIT_SECONDS
     if not _QUICK_IMPORT_RUN_LOCK.acquire(timeout=lock_wait_seconds):
         return {
             "ok": True,
@@ -674,6 +921,7 @@ def run_quick_import(
         start_monitor_run(monitor_run_id, subject="识别中", scope={"kind": "paths", "paths": [base_rel] if base_rel else []})
         moved: List[Dict[str, Any]] = []
         left: List[Dict[str, Any]] = []
+        cleanup_leftovers: List[Dict[str, Any]] = []
 
         def write_inbox_divider(kind: str, extra: str) -> None:
             # 和扫描任务用同一套分隔行，这样接收夹整理在「监控日志」里也是独立的一个任务分段。
@@ -695,14 +943,14 @@ def run_quick_import(
             """收尾时同时写运行记录和监控日志——接收夹日志要和扫描任务在同一个列表里。"""
             _finish_quick_import_run(run_id, status, moved_count, left_count, summary, detail)
             run_status = "failed" if status == "failed" else ("cancelled" if status == "cancelled" else ("partial" if left_count else ("no_change" if not moved_count else "completed")))
-            run_result = {"moved": moved_count, "left": left_count, **(detail if isinstance(detail, dict) else {})}
-            if (
-                status == "completed"
-                and int(run_result.get("monitor_sync_events", 0) or 0) > 0
-            ):
-                wait_monitor_run(monitor_run_id, summary="已分发，等待目标监控任务完成 STRM 同步", result=run_result)
-            else:
-                finish_monitor_run(monitor_run_id, status=run_status, summary=summary, result=run_result)
+            run_result = {
+                "moved": moved_count,
+                "left": left_count,
+                **(detail if isinstance(detail, dict) else {}),
+            }
+            # 接收夹记录只覆盖「识别 + 整理移动」：分发完成即定稿，STRM 生成由
+            # 后续独立的目录同步任务各自记录，不再让接收夹父运行等待。
+            finish_monitor_run(monitor_run_id, status=run_status, summary=summary, result=run_result)
             if status == "failed":
                 level = "error"
             elif status == "cancelled":
@@ -950,12 +1198,25 @@ def run_quick_import(
                         }
                     )
                     continue
+                # 搬运已经成功，只是接收夹里的空壳目录没删掉：先收集，等本轮全部搬完再统一重试，
+                # 只有确实还残留的才写进运行记录（避免“已清掉却还显示删除失败”）。
+                cleanup_leftovers.extend(dispatch.get("cleanup_pending") or [])
+                # 每个成功分发的条目立刻建一条独立的目录同步任务（自己的运行记录），
+                # 接收夹父运行不等它结束。
+                child_run_id = _queue_dispatch_child_run(
+                    cfg,
+                    str(target.get("scan_rel", "") or ""),
+                    entry_name,
+                    bool(entry.get("is_dir")),
+                    dispatch,
+                )
                 moved.append(
                     {
                         "name": str(item.get("name", "") or ""),
                         "target": QUICK_IMPORT_TARGET_LABELS[media_type],
                         "task_name": str(target.get("task_name", "") or ""),
                         "job_id": job_id,
+                        "run_id": child_run_id,
                         "monitor_sync_events": int(dispatch.get("monitor_sync_events", 0) or 0),
                     }
                 )
@@ -990,6 +1251,7 @@ def run_quick_import(
                         "target": target.get("scan_rel", ""),
                         "task_name": target.get("task_name", ""),
                         "scraper_job_id": job_id,
+                        "child_run_id": child_run_id,
                         "monitor_sync_events": int(dispatch.get("monitor_sync_events", 0) or 0),
                     },
                 )
@@ -998,6 +1260,48 @@ def run_quick_import(
             for index, item in items_by_index.items():
                 if index in handled_indexes:
                     continue
+                entry = item.get("entry") if isinstance(item.get("entry"), dict) else {}
+                if bool(entry.get("is_dir")) and str(entry.get("id", "") or "").strip():
+                    if not _folder_contains_files(
+                        str(entry.get("id", "") or ""),
+                        str(entry.get("path", "") or ""),
+                    ):
+                        # 整理残留的空壳目录（内容已经搬走）：直接清掉，不再报“识别失败、留在接收夹”。
+                        try:
+                            scraper_service.delete_scraper_entries(
+                                QUICK_IMPORT_PROVIDER,
+                                [str(entry.get("id", "") or "")],
+                                parent_id=str(entry.get("parent_id", "") or base_cid),
+                                entries=[entry],
+                            )
+                            record_monitor_run_event(
+                                monitor_run_id,
+                                category="process",
+                                operation="cleanup",
+                                status="completed",
+                                title=str(item.get("name", "") or "空目录"),
+                                detail={
+                                    "path": str(entry.get("path", "") or ""),
+                                    "reason": "接收夹空目录已清理",
+                                },
+                            )
+                            try:
+                                write_monitor_log_sync(
+                                    f"{task_label} · 已清理接收夹空目录：{entry.get('path') or item.get('name')}",
+                                    "info",
+                                )
+                            except Exception:
+                                pass
+                            continue
+                        except Exception as exc:
+                            left.append(
+                                {
+                                    "name": str(item.get("name", "") or ""),
+                                    "reason_code": "cleanup_failed",
+                                    "reason": f"空目录待清理：{str(exc)[:100]}",
+                                }
+                            )
+                            continue
                 left.append(
                     {
                         "name": str(item.get("name", "") or ""),
@@ -1019,6 +1323,30 @@ def run_quick_import(
                             "reason": str(item.get("reason", "") or ""),
                         },
                     )
+
+            if cleanup_leftovers:
+                # 搬运全部结束，再统一重试一次接收夹残留清理：清掉的只记过程事件，
+                # 仍然残留的才写“待清理”，不再把已经清掉的目录显示成删除失败。
+                for leftover in _retry_inbox_cleanup(cleanup_leftovers, monitor_run_id=monitor_run_id):
+                    name = str(leftover.get("name", "") or leftover.get("path", "") or "接收夹残留")
+                    record_monitor_run_event(
+                        monitor_run_id,
+                        category="problem",
+                        operation="cleanup",
+                        status="pending",
+                        title=f"接收夹残留待清理：{name}",
+                        detail={
+                            "path": str(leftover.get("path", "") or ""),
+                            "reason": str(leftover.get("reason", "") or ""),
+                        },
+                    )
+                    try:
+                        write_monitor_log_sync(
+                            f"{task_label} · 接收夹残留待清理：{leftover.get('path') or name}",
+                            "warn",
+                        )
+                    except Exception:
+                        pass
 
             if cancelled:
                 processed_set = set(processed_indexes)

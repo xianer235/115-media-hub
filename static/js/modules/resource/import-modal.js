@@ -531,7 +531,7 @@
                             : (monitorState.tasks || [])
                     ).filter(task => String(task?.task_type || 'scan') !== 'inbox').length;
                     if (!taskCount) {
-                        hints.push(`当前还没有配置文件夹监控任务。保存到 ${currentProviderLabel} 仍然可用，但不会自动生成 strm。`);
+                        hints.push(`还没有配置文件夹监控任务：可以保存到 ${currentProviderLabel}，但不会自动生成 STRM。`);
                     }
                 }
             }
@@ -801,8 +801,8 @@
                     const monitorTail = data.monitor_task_name
                         ? (data.auto_refresh ? `，保存后会自动触发“${data.monitor_task_name}”` : `，已匹配“${data.monitor_task_name}”`)
                         : (data.quick_import_inbox
-                            ? '，保存完成后会由接收夹自动识别整理并分发'
-                            : '，当前目录不会自动生成 strm');
+                            ? '，保存后由接收夹整理分发'
+                            : '，未纳入文件夹监控，不会自动生成 STRM');
                     showToast(`已创建 ${taskCount} 个保存任务${targetPath ? `，目标：${targetPath}` : ''}${monitorTail}`, {
                         tone: 'success',
                         duration: 3800,
@@ -884,7 +884,7 @@
                                     : `已匹配“${matchedTaskName}”，可稍后手动触发刷新`
                             );
                         } else {
-                            summaryParts.push('当前目录不会自动生成 strm');
+                            summaryParts.push('未纳入文件夹监控，不会自动生成 STRM');
                         }
                     }
                     const summaryText = summaryParts.join('，');
@@ -936,13 +936,13 @@
                 const matchedTaskName = String(data.monitor_task_name || '').trim();
                 const providerSupportsMonitor = !!((window.providerMeta || []).find(m => m.name === currentProvider)?.supports_monitor);
                 const tail = !providerSupportsMonitor
-                    ? `，${currentProviderLabel} 链路不联动文件夹监控`
+                    ? `，${currentProviderLabel} 不联动文件夹监控`
                     : (
                         matchedTaskName
                             ? (data.auto_refresh ? `，保存完成后会自动触发“${matchedTaskName}”` : `，已匹配“${matchedTaskName}”，可稍后手动触发刷新`)
                             : (data.quick_import_inbox
-                                ? '，保存完成后会由接收夹自动识别整理并分发'
-                                : '，当前目录不会自动生成 strm')
+                                ? '，保存后由接收夹整理分发'
+                                : '，未纳入文件夹监控，不会自动生成 STRM')
                     );
                 showToast(`已创建导入任务 #${data.job_id}${tail}`, { tone: 'success', duration: 3000, placement: 'top-center' });
             } finally {

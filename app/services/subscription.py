@@ -260,9 +260,9 @@ def _recover_subscription_submitted_jobs(limit: int = 160) -> Dict[str, int]:
             continue
         base_detail = str(job.get("status_detail", "") or "").strip()
         detail = (
-            f"{base_detail}；历史待刷新收口：当前保存路径未纳入文件夹监控，本次不触发 strm 刷新"
+            f"{base_detail}；未纳入文件夹监控，本次不刷新 STRM"
             if base_detail
-            else "历史待刷新收口：当前保存路径未纳入文件夹监控，本次不触发 strm 刷新"
+            else "未纳入文件夹监控，本次不刷新 STRM"
         )
         update_resource_job(
             job_id,
@@ -407,9 +407,9 @@ def _finalize_subscription_batch_refresh(
             continue
         base_detail = str(job.get("status_detail", "") or "").strip()
         detail = (
-            f"{base_detail}；当前保存路径未纳入文件夹监控，本次不触发 strm 刷新"
+            f"{base_detail}；未纳入文件夹监控，本次不刷新 STRM"
             if base_detail
-            else "当前保存路径未纳入文件夹监控，本次不触发 strm 刷新"
+            else "未纳入文件夹监控，本次不刷新 STRM"
         )
         update_resource_job(
             job_id,

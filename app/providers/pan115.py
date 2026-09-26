@@ -1193,6 +1193,28 @@ def _is_115_mutation_success(response: Dict[str, Any]) -> bool:
     return errno_value == 0
 
 
+def _verify_115_entries_removed(cookie: str, ids: List[str], parent_cid: str) -> bool:
+    """删除接口返回不明确时，用父目录列表复核条目是否真的已经不在。
+
+    115 的删除接口在目录已被移走 / 已经删除时会返回无法识别的响应；只要父目录里
+    查不到这些 ID，就按删除成功处理，避免把“其实已经清掉”误报成删除失败。
+    """
+    normalized_parent = str(parent_cid or "").strip()
+    if not normalized_parent or not ids:
+        return False
+    try:
+        invalidate_115_entries_cache(normalized_parent)
+        entries = list_115_entries(cookie, normalized_parent, force_refresh=True)
+    except Exception:
+        return False
+    remaining = {
+        str(item.get("id") or item.get("cid") or item.get("fid") or "").strip()
+        for item in entries
+        if isinstance(item, dict)
+    }
+    return not (set(ids) & remaining)
+
+
 def _request_115_delete_payload(
     cookie: str,
     ids: List[str],
@@ -1267,6 +1289,10 @@ def delete_115_entries(cookie: str, entry_ids: List[str], parent_cid: str = "") 
         detail = last_error or "115 删除失败"
         if len(responses) > 1:
             detail = f"{detail}（webapi/proapi 均未成功）"
+        # 响应无法识别时用父目录列表复核：条目已经不在就按成功处理。
+        if _verify_115_entries_removed(normalized_cookie, ids, parent_cid):
+            mark_cookie_health_success("115", trigger="runtime:delete_115_entries")
+            return {"ids": ids, "response": {"verified_removed": True}}
         raise RuntimeError(detail) from last_exc
     except Exception as exc:
         mark_cookie_health_failure("115", exc, trigger="runtime:delete_115_entries")

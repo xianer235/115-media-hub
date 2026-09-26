@@ -398,7 +398,13 @@ async def run_quick_import_endpoint(request: Request) -> Dict[str, Any]:
     trigger = str(payload.get("trigger", "manual") or "manual").strip() or "manual"
     sub_path = str(payload.get("sub_path", "") or "").strip()
     try:
-        result = await asyncio.to_thread(quick_import.run_quick_import, trigger, sub_path=sub_path)
+        # 显式调用是同步语义：等当前整理结束再跑这一轮，请求不会被丢弃或跳过。
+        result = await asyncio.to_thread(
+            quick_import.run_quick_import,
+            trigger,
+            sub_path=sub_path,
+            wait_for_lock=True,
+        )
         return {"ok": True, **result}
     except Exception as exc:
         return _error_response(exc)

@@ -7,7 +7,7 @@ from datetime import datetime
 from .core import *  # noqa: F401,F403
 from .background import start_background_runtime, stop_background_runtime, submit_background
 from .memory import release_process_memory
-from .services.monitor import queue_monitor_job
+from .services.monitor import queue_monitor_job, retry_pending_manual_rescans
 from .services.monitor_changes import (
     cleanup_completed_monitor_change_events,
     recover_monitor_change_events,
@@ -51,11 +51,11 @@ def _run_prune_step(callback) -> Dict[str, Any]:
 
 
 async def _run_inbox_cron_import() -> None:
-    """接收夹定时整理：放到线程里跑，避免长时间整理把监控调度循环卡住。"""
+    """接收夹定时整理：只登记请求，实际整理在工作线程里串行执行。"""
     try:
-        from .services.quick_import import run_quick_import
+        from .services.quick_import import notify_quick_import
 
-        await asyncio.to_thread(run_quick_import, "cron")
+        notify_quick_import("cron")
     except Exception:
         logging.exception("接收夹定时整理失败")
 
@@ -197,6 +197,12 @@ async def startup() -> None:
                     else:
                         queue_monitor_job(name, "cron")
             queue_ready_monitor_change_tasks(cfg=cfg)
+            try:
+                retried = retry_pending_manual_rescans(cfg)
+                if retried.get("queued"):
+                    logging.info("Queued %s pending auto-rescan directories", retried.get("queued"))
+            except Exception:
+                logging.exception("Failed to retry pending auto-rescan directories")
             if monitor_next_run != prev_next_runs:
                 schedule_ui_state_push(0)
             await asyncio.sleep(5)

@@ -447,7 +447,7 @@ def recover_submitted_resource_jobs_without_monitor(limit: int = 200) -> Dict[st
         recovered = 0
         checked = 0
         recovered_resource_ids: Set[int] = set()
-        hint_text = "当前保存路径未纳入文件夹监控，导入成功后不会自动生成 strm"
+        hint_text = "未纳入文件夹监控，不会自动生成 STRM"
 
         for row in rows:
             data = sqlite_row_to_dict(row)
@@ -457,7 +457,8 @@ def recover_submitted_resource_jobs_without_monitor(limit: int = 200) -> Dict[st
             checked += 1
             detail = str(data.get("status_detail", "") or "").strip()
             next_detail = detail or hint_text
-            if hint_text not in next_detail:
+            # 旧记录里可能已经有老文案（小写 strm），避免重复追加同一层意思。
+            if hint_text not in next_detail and "不会自动生成 strm" not in next_detail.lower():
                 next_detail = f"{next_detail}；{hint_text}" if next_detail else hint_text
             cursor.execute(
                 """

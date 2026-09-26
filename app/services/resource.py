@@ -217,23 +217,19 @@ async def _apply_offline_task_state(job: Dict[str, Any], task: Dict[str, Any]) -
             offline_folder_hint = ""
         job_extra = job.get("extra") if isinstance(job.get("extra"), dict) else {}
         if bool(job_extra.get("quick_import_inbox")):
-            # 落点在接收夹：走快捷导入（整理 + 按类型分发），不再触发监控刷新。
+            # 落点在接收夹：登记一次整理请求（整理在工作线程里串行执行），
+            # 不再触发监控刷新，也不阻塞离线轮询。
             from . import quick_import as quick_import_service
 
             try:
-                await asyncio.to_thread(
-                    quick_import_service.run_quick_import,
-                    "offline",
-                    sub_path=offline_folder_hint,
-                    source_ref=f"resource:{job_id}",
-                )
+                quick_import_service.notify_quick_import("offline", source_ref=f"resource:{job_id}")
             except Exception as exc:
                 _mark_resource_job_failed(job_id, resource_id, f"115 已完成，但快捷导入失败：{exc}")
                 return
             update_resource_job(
                 job_id,
                 status="completed",
-                status_detail="115 离线下载已完成，已执行接收夹快捷导入",
+                status_detail="115 离线下载已完成，已登记接收夹整理（后台串行执行）",
                 last_triggered_at=now_text(),
                 finished_at=now_text(),
             )
@@ -647,14 +643,14 @@ async def run_offline_resource_job_batch(
 
 
 async def _run_quick_import_after_delay(delay_seconds: int) -> None:
-    """按导入任务配置的延迟等待后再跑快捷导入（分享转存落盘需要一点时间时用）。"""
+    """按导入任务配置的延迟等待后登记一次接收夹整理（分享转存落盘需要一点时间时用）。"""
     wait_seconds = max(0, int(delay_seconds or 0))
     if wait_seconds > 0:
         await asyncio.sleep(wait_seconds)
     from . import quick_import as quick_import_service
 
     try:
-        await asyncio.to_thread(quick_import_service.run_quick_import, "import")
+        quick_import_service.notify_quick_import("import")
     except Exception as exc:
         logging.warning("quick import after import finished failed: %s", exc)
 
@@ -945,7 +941,7 @@ async def run_resource_job(job_id: int) -> None:
             job["extra_json"] = safe_json_dumps(merged_offline_extra)
 
         if is_share_receive_link and not bool(getattr(share_provider, "supports_monitor", False)):
-            detail = f"{detail}；{provider_label} 链路不联动文件夹监控，导入成功后不会自动刷新"
+            detail = f"{detail}；{provider_label} 不联动文件夹监控，导入后不会自动刷新"
             next_status = "completed"
         else:
             monitor_task_name = str(job.get("monitor_task_name", "") or "").strip()
@@ -955,31 +951,28 @@ async def run_resource_job(job_id: int) -> None:
             if monitor_task_name:
                 delay_seconds = max(0, int(job.get("refresh_delay_seconds", 0) or 0))
                 if is_offline_link and duplicate_offline:
-                    refresh_text = "该链接已在 115 离线任务中存在，不自动等待，可手动触发刷新"
+                    refresh_text = "离线任务已存在，可手动刷新"
                 elif is_offline_link and auto_refresh_enabled:
-                    refresh_text = "等待 115 离线下载完成后自动触发文件夹监控"
+                    refresh_text = "离线完成后自动刷新"
                 elif auto_refresh_enabled:
                     refresh_text = (
-                        f"等待 {delay_seconds} 秒后自动触发文件夹监控"
+                        f"{delay_seconds} 秒后自动刷新"
                         if delay_seconds > 0
-                        else "提交后自动触发文件夹监控"
+                        else "提交后自动刷新"
                     )
                 else:
-                    refresh_text = "已命中文件夹监控任务，等待手动触发生成 strm"
+                    refresh_text = "已匹配监控任务，待手动刷新"
                 detail = f"{detail}；{refresh_text}（{monitor_task_name}）"
             elif quick_import_inbox:
                 if is_offline_link and auto_refresh_enabled:
-                    import_text = (
-                        "当前保存路径不触发文件夹监控；等待 115 离线下载完成后触发接收夹整理与分发，"
-                        "已分发内容再由目标监控任务同步本地播放文件"
-                    )
+                    import_text = "保存到接收夹：离线完成后自动整理分发，再由监控任务生成 STRM"
                 elif auto_refresh_enabled:
-                    import_text = "当前保存路径不触发文件夹监控；导入完成后触发接收夹整理与分发"
+                    import_text = "保存到接收夹：导入完成后自动整理分发"
                 else:
-                    import_text = "当前保存路径命中接收夹，等待手动整理与分发"
+                    import_text = "保存到接收夹：待手动整理分发"
                 detail = f"{detail}；{import_text}"
             else:
-                detail = f"{detail}；当前保存路径未纳入文件夹监控，导入成功后不会自动生成 strm"
+                detail = f"{detail}；未纳入文件夹监控，不会自动生成 STRM"
 
             next_status = "submitted" if monitor_task_name or quick_import_inbox else "completed"
 
@@ -1012,7 +1005,7 @@ async def run_resource_job(job_id: int) -> None:
             if delay_seconds > 0:
                 submit_background(_run_quick_import_after_delay, delay_seconds, label="quick-import-delayed")
             else:
-                submit_background(quick_import_service.run_quick_import, "import", label="quick-import")
+                submit_background(quick_import_service.notify_quick_import, "import", label="quick-import")
         elif (
             (not is_share_receive_link or bool(getattr(share_provider, "supports_monitor", False)))
             and bool(job.get("auto_refresh"))

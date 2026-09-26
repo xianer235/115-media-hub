@@ -144,7 +144,7 @@ class InboxTaskFrontendTest(unittest.TestCase):
         self.assertIn("导入后自动整理分发", resource_core)
         import_modal = (ROOT / "static/js/modules/resource/import-modal.js").read_text(encoding="utf-8")
         self.assertIn("data.quick_import_inbox", import_modal)
-        self.assertIn("保存完成后会由接收夹自动识别整理并分发", import_modal)
+        self.assertIn("保存后由接收夹整理分发", import_modal)
         self.assertIn("String(task?.task_type || 'scan') !== 'inbox'", import_modal)
 
     def test_inbox_run_button_can_be_interrupted(self):

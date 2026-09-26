@@ -636,17 +636,6 @@
                 if (row) openMonitorRun(row.dataset.runId);
             });
         }
-        document.querySelector('.monitor-run-tabs')?.addEventListener('keydown', (event) => {
-            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-            const tabs = [...document.querySelectorAll('[data-monitor-run-category]')];
-            const index = tabs.indexOf(document.activeElement);
-            if (index < 0) return;
-            event.preventDefault();
-            const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
-                : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
-            tabs[next].focus();
-            switchMonitorRunDetail(tabs[next].dataset.monitorRunCategory);
-        });
         document.getElementById('monitor-run-modal')?.addEventListener('keydown', (event) => {
             if (event.key !== 'Tab') return;
             const focusable = [...event.currentTarget.querySelectorAll('button:not([disabled]), [tabindex="0"], summary')]

@@ -1437,6 +1437,12 @@
                 runs: (Array.isArray(state?.runs) ? state.runs : []).map(run => [
                     run?.id || '', run?.status || '', run?.summary || '', run?.subject || '',
                     run?.updated_at || run?.finished_at || '', Number(run?.child_count || 0),
+                    Number(run?.children_done || 0),
+                    // 合并行会把上游变更同步的结论显示在副行，它变了也要重绘。
+                    [run?.upstream_change?.id || '', run?.upstream_change?.status || '',
+                     run?.upstream_change?.summary || ''],
+                    (Array.isArray(run?.children) ? run.children : [])
+                        .map(item => [item?.id || '', item?.status || '', item?.subject || '']),
                 ]),
                 page: Number(state?.run_page || 1),
                 has_more: !!state?.run_has_more,
@@ -3574,8 +3580,15 @@
             const failed = String(latest.status || '') === 'failed';
             const tone = failed ? 'text-red-400' : (configError ? 'text-amber-300' : 'text-slate-400');
             const errorText = configError ? ` · 配置未就绪：${escapeHtml(configError)}` : '';
+            const pendingText = status.pending_rerun ? ' · 已安排再跑一轮' : '';
+            const activeRun = status.active_run && typeof status.active_run === 'object' ? status.active_run : {};
+            const childTotal = Math.max(0, Number(activeRun.child_total || 0) || 0);
+            const childDone = Math.max(0, Number(activeRun.child_done || 0) || 0);
+            const activeText = String(activeRun.status || '') === 'waiting' && childTotal
+                ? ` · 整理中：等待子任务 ${childDone}/${childTotal}`
+                : (String(activeRun.status || '') === 'running' ? ' · 整理中' : '');
             return `<div class="mt-1 text-xs ${tone}">最近接收 24 小时 ${count} 个 · 最近整理：${escapeHtml(latestText)}`
-                + `${when ? `（${escapeHtml(when)}）` : ''}${errorText}</div>`;
+                + `${when ? `（${escapeHtml(when)}）` : ''}${activeText}${pendingText}${errorText}</div>`;
         }
 
         async function runInboxTaskNow() {
@@ -4499,25 +4512,30 @@
                 const data = await window.MediaHubApi.getJson(`/monitor/manual-required?task_name=${encodeURIComponent(taskName || '')}`);
                 const items = Array.isArray(data.items) ? data.items : [];
                 if (!items.length) {
-                    listEl.innerHTML = '<div class="text-slate-400 text-sm">当前没有需手动监控的路径（可能已被扫描清除）。</div>';
+                    listEl.innerHTML = '<div class="text-slate-400 text-sm">当前没有等待系统补扫的目录（可能已被扫描清除）。</div>';
                 } else {
                     const OPERATION_LABELS = { copy: '复制', move: '移动', rename: '重命名', delete: '删除', create: '新建' };
                     listEl.innerHTML = items.map((item, index) => {
                         const opLabel = OPERATION_LABELS[item.operation] || item.operation || '变更';
                         const oldPath = String(item.old_path || '').trim();
                         const newPath = String(item.remote_path || item.new_path || '').trim();
+                        const retryBlocked = Boolean(item.retry_blocked);
                         const pathLine = oldPath && newPath && oldPath !== newPath
                             ? `${escapeHtml(oldPath)} → ${escapeHtml(newPath)}`
                             : escapeHtml(newPath || oldPath || '--');
+                        const hint = retryBlocked
+                            ? `自动补扫已失败一次，不再自动重试${item.failed_at ? `（${escapeHtml(String(item.failed_at))}）` : ''}：${escapeHtml(String(item.failed_summary || '目录读取失败'))}。请点下方「立即扫描该任务」重试，或先修复网盘目录。`
+                            : '该目录的内容清单未确认；系统会自动按目录逐个排队补扫并补齐本地播放文件，无需手动操作。';
                         return `
                             <div class="py-2 px-1 border-b border-slate-800 last:border-0">
                                 <div class="flex items-center gap-2 text-xs text-slate-400">
-                                    <span class="rounded bg-amber-500/15 text-amber-300 px-1.5 py-0.5 font-bold">#${escapeHtml(String(item.event_id || ''))}</span>
+                                    <span class="rounded ${retryBlocked ? 'bg-red-500/15 text-red-300' : 'bg-amber-500/15 text-amber-300'} px-1.5 py-0.5 font-bold">#${escapeHtml(String(item.event_id || ''))}</span>
                                     <span>${escapeHtml(opLabel)}</span>
                                     ${item.created_at ? `<span>· ${escapeHtml(String(item.created_at))}</span>` : ''}
+                                    ${retryBlocked ? '<span class="text-red-300 font-bold">补扫失败</span>' : ''}
                                 </div>
                                 <div class="font-semibold text-slate-200 mt-1 break-all">${index + 1}. ${pathLine}</div>
-                                <div class="text-xs text-slate-500 mt-1">该目录变更时内容清单未确认；重新扫描该任务后会自动补齐 STRM 并清除此提示。</div>
+                                <div class="text-xs ${retryBlocked ? 'text-red-300' : 'text-slate-500'} mt-1">${hint}</div>
                             </div>
                         `;
                     }).join('');
@@ -4845,17 +4863,23 @@
                 const pendingChanges = Math.max(0, Number(changeCount.pending || 0) || 0);
                 const failedChanges = Math.max(0, Number(changeCount.failed || 0) || 0);
                 const manualRequiredChanges = Math.max(0, Number(changeCount.manual_required || 0) || 0);
+                const manualRequiredFailed = Math.max(0, Number(changeCount.manual_required_failed || 0) || 0);
                 const manualRequiredTaskArg = String(taskName || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
                 const manualRequiredLabel = manualRequiredChanges
-                    ? `<button type="button" class="monitor-manual-required-link" onclick="openMonitorManualRequired('${escapeHtml(manualRequiredTaskArg)}')">需手动监控 ${manualRequiredChanges}</button>`
+                    ? `<button type="button" class="monitor-manual-required-link" onclick="openMonitorManualRequired('${escapeHtml(manualRequiredTaskArg)}')">待自动补扫 ${manualRequiredChanges}</button>`
+                    : '';
+                // 补扫只尝试一次：失败过的目录不会再自动重排，单独标红提示人工处理。
+                const manualRequiredFailedLabel = manualRequiredFailed
+                    ? `<button type="button" class="monitor-manual-required-link is-error" onclick="openMonitorManualRequired('${escapeHtml(manualRequiredTaskArg)}')" title="自动补扫失败过一次，需要人工处理：可点弹窗里的「立即扫描该任务」，或修复网盘目录后重试">补扫失败 ${manualRequiredFailed}</button>`
                     : '';
                 const changeLabels = [
                     pendingChanges ? `待同步 ${pendingChanges}` : '',
                     manualRequiredLabel,
+                    manualRequiredFailedLabel,
                     failedChanges ? `同步失败 ${failedChanges}` : '',
                 ].filter(Boolean);
                 const changeCountHtml = changeLabels.length
-                    ? `<div class="mt-1 text-xs font-semibold ${failedChanges ? 'text-red-400' : 'text-amber-300'}">${changeLabels.join(' / ')}</div>`
+                    ? `<div class="mt-1 text-xs font-semibold ${failedChanges || manualRequiredFailed ? 'text-red-400' : 'text-amber-300'}">${changeLabels.join(' / ')}</div>`
                     : '';
                 // 接收夹整理跑在工作线程里，运行状态来自 /scraper/quick-import/status，而不是监控扫描状态。
                 const inboxStatus = isInboxTask && inboxTaskStatusCache && typeof inboxTaskStatusCache === 'object'
@@ -4979,7 +5003,7 @@
             const next = document.getElementById('monitor-run-next');
             const pageLabel = document.getElementById('monitor-run-page-label');
             const runs = Array.isArray(monitorState.runs) ? monitorState.runs : [];
-            if (summary) summary.innerText = monitorRunLoadBusy ? '正在加载运行记录...' : `按最近活动排序 · 本页 ${runs.length} 条`;
+            if (summary) summary.innerText = monitorRunLoadBusy ? '正在加载运行记录...' : `按开始时间排序 · 本页 ${runs.length} 条`;
             if (pageLabel) pageLabel.innerText = `第 ${monitorRunPage} 页`;
             if (previous) previous.disabled = monitorRunLoadBusy || monitorRunPage <= 1;
             if (next) next.disabled = monitorRunLoadBusy || !monitorRunPageHasMore;
@@ -5005,8 +5029,8 @@
             return {
                 task_name: document.getElementById('monitor-run-task-filter')?.value || '',
                 run_kind: document.getElementById('monitor-run-kind-filter')?.value || '',
-                source: document.getElementById('monitor-run-source-filter')?.value || '',
-                status: document.getElementById('monitor-run-status-filter')?.value || '',
+                source_group: document.getElementById('monitor-run-source-filter')?.value || '',
+                status_group: document.getElementById('monitor-run-status-filter')?.value || '',
             };
         }
 
@@ -5090,18 +5114,21 @@
             document.getElementById('monitor-run-modal-eyebrow').innerText = monitorRunSources(run);
             document.getElementById('monitor-run-modal-title').innerText = `${run.task_name || '文件夹监控'} · ${run.subject || '全部目录'}`;
             document.getElementById('monitor-run-modal-meta').innerText = `${run.started_at ? '开始' : '入队'} ${monitorRunTime(run.started_at || run.queued_at)}${run.finished_at ? ` · 结束 ${monitorRunTime(run.finished_at)}` : ''}`;
+            // 当前页签可能对这条运行不适用（例如切换运行后），统一回到概览。
+            activeMonitorRunCategory = window.MonitorRunView.resolveTab(detail, activeMonitorRunCategory);
+            const tabs = document.getElementById('monitor-run-tabs');
+            if (tabs) tabs.innerHTML = window.MonitorRunView.tabsHtml(detail, activeMonitorRunCategory);
             body.innerHTML = window.MonitorRunView.detailHtml(detail, activeMonitorRunCategory);
-            document.querySelectorAll('[data-monitor-run-category]').forEach(button => {
-                const category = String(button.dataset.monitorRunCategory || '');
-                const selected = category === activeMonitorRunCategory;
-                button.classList.toggle('is-active', selected);
-                button.setAttribute('aria-selected', String(selected));
-                button.tabIndex = selected ? 0 : -1;
-                const count = button.querySelector('.monitor-run-tab-count');
-                if (count) count.innerText = String(window.MonitorRunView.tabCount(detail, category));
-                if (selected) body.setAttribute('aria-labelledby', button.id);
-            });
         }
+
+        // 四个页签互斥：切换只重渲染当前页签，不重新请求（事件快照一次取全）。
+        function setMonitorRunTab(category) {
+            activeMonitorRunCategory = String(category || '');
+            if (!monitorRunDetailData) return;
+            renderMonitorRunDetail(monitorRunDetailData);
+        }
+
+        window.setMonitorRunTab = setMonitorRunTab;
 
         async function openMonitorRun(runId) {
             const modal = document.getElementById('monitor-run-modal');
@@ -5112,12 +5139,11 @@
             monitorRunDetailData = null;
             showLockedModal('monitor-run-modal');
             modal.querySelector('.monitor-run-close')?.focus();
-            await switchMonitorRunDetail('');
+            await loadMonitorRunDetail();
         }
 
-        async function switchMonitorRunDetail(category, { append = false, quiet = false } = {}) {
+        async function loadMonitorRunDetail({ append = false, quiet = false } = {}) {
             clearTimeout(monitorRunDetailTimer);
-            activeMonitorRunCategory = String(category || '');
             const runId = activeMonitorRunId;
             if (!runId) return;
             const revision = ++monitorRunDetailRevision;
@@ -5130,22 +5156,37 @@
             body.setAttribute('aria-busy', 'true');
             try {
                 const query = new URLSearchParams({
-                    category: activeMonitorRunCategory || 'process',
                     offset: String(append ? monitorRunDetailData?.next_offset || 0 : 0), limit: '50',
                 });
                 const data = await window.MediaHubApi.getJson(`/monitor/runs/${encodeURIComponent(runId)}?${query.toString()}`);
                 if (revision !== monitorRunDetailRevision || runId !== activeMonitorRunId) return;
-                if (append && monitorRunDetailData) data.events = [...monitorRunDetailData.events, ...(data.events || [])];
-                monitorRunDetailData = data;
-                renderMonitorRunDetail(data);
+                const loadedMore = Number(monitorRunDetailData?.next_offset || 0) > 50;
+                if (append && monitorRunDetailData) {
+                    data.events = [...monitorRunDetailData.events, ...(data.events || [])];
+                    monitorRunDetailData = data;
+                } else if (quiet && loadedMore && monitorRunDetailData) {
+                    // 静默刷新只更新摘要与第一页：保留已加载的分页，新增记录用提示告知。
+                    const previousTotal = Number(monitorRunDetailData.total || 0);
+                    monitorRunDetailData = {
+                        ...monitorRunDetailData,
+                        run: data.run,
+                        counts: data.counts,
+                        total: data.total,
+                        stale: Number(data.total || 0) > previousTotal,
+                    };
+                } else {
+                    monitorRunDetailData = data;
+                }
+                renderMonitorRunDetail(monitorRunDetailData);
                 if (quiet || append) body.scrollTop = scroll;
-                if (['queued', 'running', 'waiting'].includes(data.run?.status) && !activeMonitorRunCategory && !data.has_more) {
-                    monitorRunDetailTimer = setTimeout(() => switchMonitorRunDetail('', { quiet: true }), 5000);
+                if (['queued', 'running', 'waiting'].includes(data.run?.status) && !data.has_more) {
+                    // 静默刷新只更新概览数字与页签计数，不打断当前页签与已加载分页。
+                    monitorRunDetailTimer = setTimeout(() => loadMonitorRunDetail({ quiet: true }), 5000);
                 }
             } catch (e) {
                 if (revision === monitorRunDetailRevision && runId === activeMonitorRunId) {
                     if (append || quiet) showToast('更新详情失败，可点击刷新重试。', { tone: 'error' });
-                    else body.innerHTML = '<div class="monitor-run-empty" role="alert">无法加载运行详情。<button type="button" class="log-header-btn" onclick="switchMonitorRunDetail(activeMonitorRunCategory)">重新加载</button></div>';
+                    else body.innerHTML = '<div class="monitor-run-empty" role="alert">无法加载运行详情。<button type="button" class="log-header-btn" onclick="refreshMonitorRunDetail()">重新加载</button></div>';
                 }
             } finally {
                 if (revision === monitorRunDetailRevision) body.setAttribute('aria-busy', 'false');
@@ -5154,8 +5195,24 @@
 
         async function loadMoreMonitorRunEvents() {
             if (!monitorRunDetailData?.has_more) return;
-            await switchMonitorRunDetail(activeMonitorRunCategory, { append: true });
+            await loadMonitorRunDetail({ append: true });
         }
+
+        function refreshMonitorRunDetail() {
+            if (!activeMonitorRunId) return;
+            monitorRunDetailData = null;
+            void loadMonitorRunDetail();
+        }
+
+        window.refreshMonitorRunDetail = refreshMonitorRunDetail;
+
+        function reloadMonitorRunDetail() {
+            if (!activeMonitorRunId) return;
+            monitorRunDetailData = null;
+            void loadMonitorRunDetail();
+        }
+
+        window.reloadMonitorRunDetail = reloadMonitorRunDetail;
 
         function closeMonitorRunModal() {
             ++monitorRunDetailRevision;
@@ -5187,7 +5244,7 @@
                 await window.MediaHubApi.postJson(`/monitor/runs/${encodeURIComponent(activeMonitorRunId)}/cancel`, {});
                 showToast('已取消尚未开始的运行。', { tone: 'success', placement: 'top-center' });
                 await refreshMonitorRuns();
-                await switchMonitorRunDetail(activeMonitorRunCategory);
+                refreshMonitorRunDetail();
             } catch (e) {
                 showToast(`取消失败：${e?.message || '未知错误'}`, { tone: 'error', placement: 'top-center' });
             } finally { monitorRunActionBusy = false; }
@@ -5260,7 +5317,7 @@
 
         async function clearLegacyMonitorLogs() {
             if (legacyMonitorLogClearBusy) return;
-            const confirmed = await showAppConfirm('将删除全部历史文本日志（含轮转备份）。运行记录不受影响，可在“记录保留”里单独清理。是否继续？', {
+            const confirmed = await showAppConfirm('将删除全部历史文本日志（含轮转备份）。运行记录不受影响，可在“记录管理”里单独清理。是否继续？', {
                 title: '清空历史文本日志',
                 confirmText: '清空日志',
                 tone: 'warn',

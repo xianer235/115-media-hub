@@ -103,7 +103,7 @@ class MonitorRunSummaryTextTest(unittest.TestCase):
         self.assertEqual(line, "已同步 48 条网盘变更：新增或更新 24 个本地播放文件，清理 24 个。")
         self.assertNotIn("|", line)
 
-    def test_change_summary_keeps_failure_and_manual_required_wording(self):
+    def test_change_summary_keeps_failure_and_auto_rescan_wording(self):
         failed_line = monitor.build_monitor_change_run_summary(
             {"completed": 3, "failed": 2, "discarded": 1, "deleted": 5}
         )
@@ -112,7 +112,8 @@ class MonitorRunSummaryTextTest(unittest.TestCase):
         )
 
         self.assertIn("2 条处理失败并保留重试", failed_line)
-        self.assertIn("1 个目录需要手动监控", manual_line)
+        self.assertIn("1 个目录等待系统补扫", manual_line)
+        self.assertNotIn("手动监控", manual_line)
 
 
 class MonitorLogFrontendSourceTest(unittest.TestCase):

@@ -472,8 +472,8 @@
                         : '未绑定监控');
                 const processingLabel = isInboxImport ? '接收文件夹' : '监控任务';
                 const processingValue = isInboxImport
-                    ? '下载完成后整理与分发'
-                    : (job.monitor_task_name || '当前目录未纳入文件夹监控');
+                    ? '下载后整理分发'
+                    : (job.monitor_task_name || '未纳入文件夹监控');
                 const strategyLabel = isInboxImport ? '处理策略' : '刷新策略';
                 const strategyValue = isInboxImport
                     ? `接收夹整理 · ${autoRefreshText}`
