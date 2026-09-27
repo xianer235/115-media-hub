@@ -122,6 +122,56 @@ class ScraperNoiseSettingsFrontendTest(unittest.TestCase):
         self.assertIn('id="scraper_standalone_noise_words"', html)
         self.assertIn("内置默认过滤词表始终生效", html)
 
+    def test_settings_page_filter_section_has_info_button(self):
+        """标题旁的信息按钮：说明与案例放进弹窗，而不是堆在设置页正文里。"""
+        html = (ROOT / "templates/partials/pages/settings.html").read_text(encoding="utf-8")
+        self.assertIn("settings-title-with-info", html)
+        self.assertIn("showScraperFilterHelp()", html)
+
+    def test_scraper_filter_help_modal_covers_usage_config_and_examples(self):
+        script = (ROOT / "static/js/index.js").read_text(encoding="utf-8")
+        self.assertIn("function showHelpHtml(", script)
+        self.assertIn("body.textContent = normalized;", script)
+        self.assertIn("const SCRAPER_FILTER_HELP_HTML", script)
+        self.assertIn("window.showScraperFilterHelp = showScraperFilterHelp", script)
+        for marker in (
+            "用在哪里",
+            "两类词的区别",
+            "怎么配置",
+            "案例（按上面的规则提取到的片名）",
+            "什么时候需要加",
+            "监狱星级餐厅",
+            "我的中文老师",
+            "单个词 50 字以内",
+        ):
+            self.assertIn(marker, script)
+        help_modal = (ROOT / "templates/partials/modals/resource_import.html").read_text(encoding="utf-8")
+        self.assertIn('id="help-modal-title"', help_modal)
+        css = (ROOT / "static/css/index.css").read_text(encoding="utf-8")
+        self.assertIn(".help-rich-example", css)
+        self.assertIn("html.theme-day .help-rich-text", css)
+
+    def test_help_examples_match_real_cleaning_behavior(self):
+        """弹窗里写的案例必须和真实行为一致，避免说明变成过期文案。"""
+        builtin = {"scraper_noise_phrases": [], "scraper_standalone_noise_words": []}
+        with mock.patch.object(scraper, "get_config", return_value=builtin):
+            self.assertEqual(
+                scraper._extract_scraper_title_candidates("监狱星级餐厅.国语音轨.2024.1080p.mkv"),
+                ["监狱星级餐厅"],
+            )
+            self.assertEqual(
+                scraper._extract_scraper_title_candidates("我的中文老师.2024.1080p.mkv"),
+                ["我的中文老师"],
+            )
+        custom = {"scraper_noise_phrases": ["测试广告词"], "scraper_standalone_noise_words": ["测试"]}
+        with mock.patch.object(scraper, "get_config", return_value=custom):
+            self.assertEqual(
+                scraper._extract_scraper_title_candidates("片名.测试广告词.2024.1080p.mkv"),
+                ["片名"],
+            )
+            self.assertEqual(scraper._extract_scraper_title_candidates("测试尾缀.2024.mkv"), ["测试尾缀"])
+            self.assertEqual(scraper._extract_scraper_title_candidates("测试.2024.mkv"), [])
+
     def test_settings_js_collects_keyword_lines(self):
         source = (ROOT / "static/js/modules/tabs/settings.js").read_text(encoding="utf-8")
         self.assertIn("function parseKeywordLines(", source)

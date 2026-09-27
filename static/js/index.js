@@ -2240,13 +2240,82 @@
 
         function showHelp(text) {
             const normalized = String(text || '').replace(/\\n/g, '\n');
-            document.getElementById('help-modal-body').textContent = normalized;
+            const titleEl = document.getElementById('help-modal-title');
+            if (titleEl) titleEl.textContent = '参数说明';
+            const body = document.getElementById('help-modal-body');
+            if (body) {
+                body.classList.remove('help-rich');
+                body.classList.add('help-text');
+                body.textContent = normalized;
+            }
             document.getElementById('help-modal').classList.remove('hidden');
+        }
+
+        // 富文本版说明：内容较长、需要分节和示例时用（如设置页的批量整理过滤词）。
+        function showHelpHtml(title, html) {
+            const titleEl = document.getElementById('help-modal-title');
+            if (titleEl) titleEl.textContent = String(title || '参数说明');
+            const body = document.getElementById('help-modal-body');
+            if (body) {
+                body.classList.remove('help-text');
+                body.classList.add('help-rich');
+                body.innerHTML = String(html || '');
+            }
+            document.getElementById('help-modal').classList.remove('hidden');
+        }
+
+        // 内容为固定文案（无用户输入），因此这里用 innerHTML 渲染分节结构。
+        const SCRAPER_FILTER_HELP_HTML = `
+            <div class="help-rich-section">
+                <div class="help-rich-title">用在哪里</div>
+                <div class="help-rich-text">批量整理（刮削页）、监控任务的「新增资源自动刮削整理」、接收夹分发整理，都会先从文件名里提取片名，再拿片名去搜 TMDB；提取这一步用的就是这份词表。</div>
+                <div class="help-rich-text">提取结果还会用于：TMDB 搜索关键词、识别不到时按清理后的名字兜底命名、刮削页的关键词建议，以及「这个候选词算不算通用词」的判断（整个文件夹名就叫「国语音轨」时不会被当成片名）。</div>
+                <div class="help-rich-text">它只影响识别与命名判断，不会改动网盘里的源文件；删除广告文件是整理选项里的另一个开关。</div>
+            </div>
+            <div class="help-rich-section">
+                <div class="help-rich-title">两类词的区别</div>
+                <div class="help-rich-row">
+                    <span class="help-rich-key">复合过滤词</span>
+                    <span class="help-rich-text">在文件名里任意位置出现就删掉。适合「国语音轨」「无水印」「夸克网盘」这类整块信息。</span>
+                </div>
+                <div class="help-rich-row">
+                    <span class="help-rich-key">独立过滤词</span>
+                    <span class="help-rich-text">只有它是独立一段时才删（前后是分隔符或中英文边界）。适合「国语」「中文」这类短词，不会误伤「我的中文老师」。</span>
+                </div>
+            </div>
+            <div class="help-rich-section">
+                <div class="help-rich-title">怎么配置</div>
+                <div class="help-rich-text">1）每行一个词，行内不要写逗号、引号，也不用一次写多个。</div>
+                <div class="help-rich-text">2）内置词表始终生效，这里只做追加；常见站点名、发布页、网盘、字幕 / 音轨等信息已经内置，不用重复填。</div>
+                <div class="help-rich-text">3）改完点页面底部的「保存全部配置」，保存后立即生效；回到刮削页「重新扫描 / 生成预览」就能看到效果。</div>
+                <div class="help-rich-text">4）单个词 50 字以内，每个输入框最多 200 条，重复的会自动去重。</div>
+            </div>
+            <div class="help-rich-section">
+                <div class="help-rich-title">案例（按上面的规则提取到的片名）</div>
+                <div class="help-rich-example">
+                    <div>监狱星级餐厅.国语音轨.2024.1080p.mkv<b> → 片名：监狱星级餐厅</b></div>
+                    <div>我的中文老师.2024.1080p.mkv<b> → 片名：我的中文老师</b>（短词只在词边界删，不误伤）</div>
+                    <div>自定义复合词「测试广告词」：片名.测试广告词.2024.1080p.mkv<b> → 片名：片名</b></div>
+                    <div>自定义独立词「测试」：测试尾缀.2024.mkv<b> → 片名：测试尾缀</b></div>
+                    <div>自定义独立词「测试」：测试.2024.mkv<b> → 整条就是过滤词，不产生片名</b></div>
+                </div>
+            </div>
+            <div class="help-rich-section">
+                <div class="help-rich-title">什么时候需要加</div>
+                <div class="help-rich-text">识别不准、片名里混进音轨 / 字幕 / 网盘 / 站点词时，就把那个词加进来。只影响个别名字时优先加「复合过滤词」；1~2 个字的词一定加「独立过滤词」。</div>
+                <div class="help-rich-text">注意别加得太宽（例如把「电影」加进去），会把真实片名里的字一起删掉；加完建议先「重新扫描」看预览，再执行整理。</div>
+            </div>
+        `;
+
+        function showScraperFilterHelp() {
+            showHelpHtml('批量整理过滤词说明', SCRAPER_FILTER_HELP_HTML);
         }
 
         function closeHelpModal() {
             document.getElementById('help-modal').classList.add('hidden');
         }
+
+        window.showScraperFilterHelp = showScraperFilterHelp;
 
         function normalizeMountProviderInput(value) {
             const raw = String(value || '').trim().toLowerCase();
@@ -4562,7 +4631,7 @@
         function refreshWebhookHint() {
             const name = document.getElementById('monitor_name').value.trim() || '任务名';
             const isInbox = monitorFormTaskType() === 'inbox';
-            const lines = isInbox
+            const items = isInbox
                 ? [
                     `webhook 地址：IP:容器端口/webhook/${escapeHtml(name)}（任务名用于绑定这个接收夹任务）`,
                     '接收夹是分类前的中转文件夹，也是可选的便捷入口：先统一落这里，再按识别结果归到电影 / 电视剧分发目标的目录，不用每次保存前挑分类；不用它也能照旧把 savepath 填到分类监控任务的目录',
@@ -4571,7 +4640,6 @@
                     '面板里的 /115/接收 这类路径照抄也能识别，推荐只写根目录相对路径',
                     '整理规则沿用分发目标任务的自动整理选项；识别不准的留在接收夹并写明原因',
                     '签名校验（可选，与普通监控任务共用同一个全局密钥）：X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign 或 X-Webhook-Token',
-                    '说明：全站只有一个签名密钥，在「参数配置 -> 后台安全管理」里设置，扫描任务和接收夹任务共用；为空时不校验',
                 ]
                 : [
                     `webhook 地址：IP:容器端口/webhook/${escapeHtml(name)}（任务名用于绑定这个监控任务）`,
@@ -4580,10 +4648,17 @@
                     'delayTime 可选：本次导入成功后延迟几秒刷新；不传则使用任务默认延迟',
                     'title / sharetitle 可选：仅用于日志或局部刷新提示',
                     '签名校验（可选，与接收夹任务共用同一个全局密钥）：X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign 或 X-Webhook-Token',
-                    '说明：全站只有一个签名密钥，在「参数配置 -> 后台安全管理」里设置，扫描任务和接收夹任务共用；为空时不校验',
                 ];
-            lines.push('修改任务名会改变上面的 webhook 地址，记得同步油猴脚本里的“请求地址”');
-            document.getElementById('webhook-hint').innerHTML = lines.join('<br>');
+            const notes = [
+                '说明：全站只有一个签名密钥，在「参数配置 -> 后台安全管理」里设置，扫描任务和接收夹任务共用；为空时不校验',
+                '修改任务名会改变上面的 webhook 地址，记得同步油猴脚本里的“请求地址”',
+            ];
+            const hintEl = document.getElementById('webhook-hint');
+            if (hintEl) {
+                const itemHtml = items.map((line) => `<div class="webhook-hint-line"><span>${line}</span></div>`).join('');
+                const noteHtml = notes.map((line) => `<div>${line}</div>`).join('');
+                hintEl.innerHTML = `${itemHtml}<div class="webhook-hint-notes">${noteHtml}</div>`;
+            }
             renderMonitorWebhookUrl();
         }
 

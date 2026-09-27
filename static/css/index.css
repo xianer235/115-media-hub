@@ -1873,6 +1873,42 @@
             background: rgba(15, 23, 42, 0.85);
         }
         .help-text { white-space: pre-wrap; line-height: 1.7; }
+        /* 富文本版参数说明：分节 + 案例，深浅色都要可读。 */
+        #help-modal-body { max-block-size: 62vh; overflow-y: auto; }
+        .help-rich { display: grid; gap: 0.85rem; }
+        .help-rich-section { display: grid; gap: 0.22rem; }
+        .help-rich-title { font-weight: 800; color: #e2e8f0; }
+        .help-rich-text { color: #cbd5e1; line-height: 1.7; }
+        .help-rich-row {
+            display: grid;
+            grid-template-columns: 5.6rem minmax(0, 1fr);
+            gap: 0.5rem;
+            align-items: start;
+        }
+        .help-rich-key { color: #7dd3fc; font-weight: 800; }
+        .help-rich-example {
+            display: grid;
+            gap: 0.3rem;
+            padding: 0.65rem 0.75rem;
+            border: 1px solid rgba(51, 65, 85, 0.9);
+            border-radius: 0.75rem;
+            background: rgba(2, 6, 23, 0.5);
+            color: #cbd5e1;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 0.72rem;
+            line-height: 1.65;
+            overflow-wrap: anywhere;
+        }
+        .help-rich-example b { color: #6ee7b7; font-weight: 800; }
+        html.theme-day .help-rich-title { color: #0f172a !important; }
+        html.theme-day .help-rich-text { color: #334155 !important; }
+        html.theme-day .help-rich-key { color: #0369a1 !important; }
+        html.theme-day .help-rich-example {
+            color: #334155 !important;
+            background: #f1f5f9 !important;
+            border-color: #cbd5e1 !important;
+        }
+        html.theme-day .help-rich-example b { color: #047857 !important; }
         .footer-link { color: #38bdf8; text-decoration: underline; text-underline-offset: 3px; }
         .footer-link:hover { color: #7dd3fc; }
         .global-toast-stack {
@@ -2396,6 +2432,11 @@
             color: #e2e8f0;
             font-weight: 800;
         }
+        .settings-title-with-info {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
         .settings-save-card {
             position: fixed;
             left: 50%;
@@ -2917,6 +2958,38 @@
             border-radius: 999px;
             border: 2px solid transparent;
             background-clip: padding-box;
+        }
+        /* webhook 参数说明：每条参数一行，折行后与首行文字对齐，避免整段文字糊成一片。 */
+        .monitor-webhook-hint {
+            display: grid;
+            gap: 0.28rem;
+        }
+        .monitor-webhook-hint .webhook-hint-line {
+            display: flex;
+            align-items: flex-start;
+            gap: 0.5rem;
+        }
+        .monitor-webhook-hint .webhook-hint-line::before {
+            content: "";
+            flex: 0 0 auto;
+            width: 0.34rem;
+            height: 0.34rem;
+            margin-top: 0.46rem;
+            border-radius: 999px;
+            background: currentColor;
+            opacity: 0.6;
+        }
+        .monitor-webhook-hint .webhook-hint-line > span {
+            min-width: 0;
+            overflow-wrap: anywhere;
+        }
+        .monitor-webhook-hint .webhook-hint-notes {
+            display: grid;
+            gap: 0.2rem;
+            margin-top: 0.22rem;
+            padding-top: 0.4rem;
+            border-top: 1px dashed currentColor;
+            opacity: 0.78;
         }
         .subscription-modal-shell {
             --subscription-shell-inline-pad: 1.5rem;

@@ -1242,6 +1242,21 @@ _SCRAPER_CN_AD_SITE_ACTION_RE = re.compile(
     rf"\s*(?:发布|首发|分享|出品|压制|制作|整理|更新)"
 )
 
+# 常见“发布页 / 官网 / 推广话术”（不依赖具体网址）：站点广告图几乎都带这些词。
+# 这份词表同时给文件名清理（噪声词）和广告文件识别用，避免两处口径不一致。
+SCRAPER_CN_AD_PROMO_PHRASES = (
+    "全网首发", "独家首发", "地址发布页", "发布地址", "永久地址", "备用地址",
+    "最新地址", "官网地址", "防走丢", "收藏本站", "最新网址", "发布页",
+    # 长词在前，短词在后，避免 “官网” 抢先匹配掉 “官方网站 / 官方网址”。
+    "官方网站", "官方网址", "官网", "请访问", "访问网站", "更多剧集", "更多电影",
+    "更多资源", "更多精彩", "免费下载", "在线观看",
+    "最新域名", "备用域名", "永久域名", "更换域名", "备用网址", "永久网址",
+)
+
+_SCRAPER_CN_AD_PROMO_RE = re.compile(
+    "|".join(re.escape(phrase) for phrase in SCRAPER_CN_AD_PROMO_PHRASES)
+)
+
 # 常见附属信息短语（不是片名的一部分）：字幕/水印/版本/音轨/资源渠道等。
 SCRAPER_COMMON_NOISE_PHRASES = (
     "无字片源", "无字幕版", "无字幕", "无水印", "无广告", "无删减", "未删减", "未删节",
@@ -1250,9 +1265,7 @@ SCRAPER_COMMON_NOISE_PHRASES = (
     "特效中字", "内嵌中字", "外挂字幕", "简体中字", "繁体中字",
     "中文字幕", "中文配音", "中文音轨", "中文版",
     "提取码", "磁力链接", "种子下载", "网盘下载", "百度网盘", "夸克网盘", "阿里云盘", "天翼云盘", "城通网盘",
-    "全网首发", "独家首发", "地址发布页", "发布地址", "永久地址", "备用地址",
-    "最新地址", "官网地址", "防走丢", "收藏本站", "最新网址", "发布页",
-)
+) + SCRAPER_CN_AD_PROMO_PHRASES
 
 _SCRAPER_COMMON_NOISE_RE = re.compile(
     "|".join(re.escape(phrase) for phrase in SCRAPER_COMMON_NOISE_PHRASES),
@@ -4820,9 +4833,18 @@ def _scraper_subtitle_suffix(name: str) -> str:
 
 
 def _is_scraper_ad_image(name: str, size: int = 0) -> bool:
-    """判断图片是否像站点广告图（Official site / logo / 网站域名水印等）。"""
-    text = str(name or "").lower()
+    """判断图片是否像站点广告图（站名 / 官网 / 发布页 / 网址水印等）。
+
+    与文件名清理共用同一份站点词表：能在文件名里被当成站点广告清理掉的图，
+    这里也要判成广告图，否则会出现“改名会清理、整理不删除”的口径不一致。
+    名称先做 NFKC 归一，全角的 ｗｗｗ／．／（） 也能命中。
+    """
+    text = unicodedata.normalize("NFKC", str(name or "")).lower()
     if any(marker in text for marker in SCRAPER_AD_IMAGE_MARKERS):
+        return True
+    if _SCRAPER_CN_AD_PHRASE_RE.search(text) or _SCRAPER_CN_AD_PROMO_RE.search(text):
+        return True
+    if _SCRAPER_CN_AD_SITE_ACTION_RE.search(text):
         return True
     if re.search(r"www\s*[.\s]", text):
         return True

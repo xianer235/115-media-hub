@@ -1118,6 +1118,36 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         self.assertTrue(scraper._is_scraper_standard_image("folder.jpg"))
         self.assertFalse(scraper._is_scraper_standard_image("Skurkarnas skurk (2026).jpg"))
 
+    def test_scraper_ad_image_uses_cn_site_and_promo_vocabulary(self):
+        """站点广告图的判定要和文件名清理共用同一份中文词表，不能只认 www 和英文。"""
+        # 用户实际遇到的这类图：站名 + 官网 + 推广话术，即使不带 www 也要判成广告。
+        for name in (
+            "更多电视剧集下载请访问 高清剧集网官网（www.BPHDTV.com）.png",
+            "更多电视剧集下载请访问 高清剧集网官网（BPHDTV.com）.png",
+            "更多电视剧集下载请访问高清剧集网官网.png",
+            "高清剧集网.png",
+            "本片由高清剧集网发布.png",
+            "更多资源请访问官方网站.png",
+            "最新地址请收藏本站.png",
+            "备用网址.png",
+            "ｗｗｗ．ＢＰＨＤＴＶ．ｃｏｍ.png",
+        ):
+            self.assertTrue(scraper._is_scraper_ad_image(name, 300 * 1024), name)
+            self.assertTrue(scraper._is_scraper_ad_file(name, 300 * 1024), name)
+        # 正常封面/剧照不能被误判成广告图。
+        for name in (
+            "poster.jpg",
+            "folder.jpg",
+            "thumb.jpg",
+            "海报.png",
+            "封面.png",
+            "剧照 第01集.jpg",
+            "Skurkarnas skurk (2026).jpg",
+            "The.Matrix.1999.png",
+        ):
+            self.assertFalse(scraper._is_scraper_ad_image(name, 300 * 1024), name)
+            self.assertFalse(scraper._is_scraper_ad_file(name, 300 * 1024), name)
+
     def test_build_rename_plan_keeps_subtitles_languages_and_skips_ad_files(self):
         tmdb = self._tmdb_binding()
         plan = self._rename_plan_with_files(
