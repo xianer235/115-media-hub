@@ -1116,5 +1116,30 @@ class MonitorRunTabbedDetailTest(unittest.TestCase):
         self.assertNotIn("monitor-run-problem-link", html)
 
 
+class MonitorPageHelpTest(unittest.TestCase):
+    """监控页头部说明改走信息按钮 + 弹窗，正文不再堆长文案。"""
+
+    def test_header_copy_moves_into_help_button(self):
+        html = MONITOR_PAGE_PATH.read_text(encoding="utf-8")
+        self.assertIn("文件夹监控任务列表", html)
+        self.assertIn('onclick="showMonitorHelp()"', html)
+        self.assertIn('title="文件夹监控说明"', html)
+        self.assertIn("monitor-head-title", html)
+        # 原正文文案不再直接铺在页面上
+        self.assertNotIn("扫描 115 网盘目录，生成或刷新本地", html)
+        self.assertNotIn("命中 savepath 时会优先局部刷新", html)
+
+    def test_help_modal_holds_monitor_copy(self):
+        script = INDEX_JS_PATH.read_text(encoding="utf-8")
+        self.assertIn("const MONITOR_HELP_HTML", script)
+        self.assertIn("function showMonitorHelp()", script)
+        self.assertIn("showHelpHtml('文件夹监控说明', MONITOR_HELP_HTML)", script)
+        self.assertIn("window.showMonitorHelp = showMonitorHelp;", script)
+        # 说明本身保留在弹窗里：局部刷新 + 路径匹配 + 跳过条件
+        self.assertIn("资源导入 / Webhook 命中 savepath 时会优先局部刷新", script)
+        self.assertIn("savepath 必须落在某条任务的扫描路径内", script)
+        self.assertIn("文件大小过滤", script)
+
+
 if __name__ == "__main__":
     unittest.main()

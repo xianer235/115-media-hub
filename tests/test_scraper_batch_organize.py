@@ -1421,6 +1421,24 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         self.assertIn(".scraper-plan-warning-bar", css)
         self.assertIn("html.theme-day .scraper-plan-warning-bar", css)
 
+    def test_naming_option_groups_are_visually_separated(self):
+        """命名选项按「文件夹 / 文件命名 / 文件清理」分组，分组块与分类标题要有明显分界。"""
+        html = (ROOT / "templates/partials/pages/scraper.html").read_text(encoding="utf-8")
+        self.assertEqual(html.count('class="organize-option-group"'), 3)
+        for title in ("文件夹", "文件命名", "文件清理"):
+            self.assertIn(f'<div class="organize-option-group-title">{title}</div>', html)
+
+        css = (ROOT / "static/css/index.css").read_text(encoding="utf-8")
+        group_source = css[css.index(".organize-option-group {"):css.index(".scraper-option-grid {")]
+        # 分组是带左边框强调色的独立块，标题带圆点 + 向右延伸的分割线
+        self.assertIn("border-left: 3px solid rgba(56, 189, 248, 0.62);", group_source)
+        self.assertIn("border-radius: 0.9rem;", group_source)
+        self.assertIn(".organize-option-group-title::before", group_source)
+        self.assertIn(".organize-option-group-title::after", group_source)
+        self.assertIn(".organize-option-group > .scraper-option-toggle", group_source)
+        self.assertIn("html.theme-day .organize-option-group", css)
+        self.assertIn("html.theme-day .organize-option-group-title", css)
+
     def test_batch_execute_rebuilds_plan_when_options_changed(self):
         source = SCRAPER_CORE_PATH.read_text(encoding="utf-8")
         self.assertIn("state.planOptionsSnapshot", source)
@@ -2512,6 +2530,24 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         self.assertIn("applyMonitorAutoScrapeOptions(task.auto_scrape_options)", index_source)
         self.assertIn("function syncMonitorAutoScrapeOptions(", index_source)
         self.assertIn("function collectMonitorAutoScrapeOptions(", index_source)
+
+    def test_monitor_auto_scrape_option_groups_share_naming_style(self):
+        """监控任务的自动整理选项复用批量整理的分组样式，分类分界同样明显。"""
+        html = (ROOT / "templates/partials/modals/monitor.html").read_text(encoding="utf-8")
+        self.assertEqual(html.count('class="organize-option-group"'), 3)
+        for title in ("文件夹", "文件命名", "文件清理"):
+            self.assertIn(f'<div class="organize-option-group-title">{title}</div>', html)
+        # 旧的浅灰小标题已被分组块取代，外层不再套第二层边框。
+        self.assertNotIn("text-[11px] font-bold text-slate-500 uppercase tracking-wide", html)
+        self.assertIn('id="monitor-auto-scrape-options" class="hidden space-y-3"', html)
+        for option_id in (
+            "monitor_asc_rename_folders",
+            "monitor_asc_season_subfolder",
+            "monitor_asc_include_tmdb_id",
+            "monitor_asc_file_name_mode",
+            "monitor_asc_delete_ad_files",
+        ):
+            self.assertIn(f'id="{option_id}"', html)
 
     def test_manual_required_scopes_include_path_details(self):
         from app.services.monitor_changes import get_manual_required_monitor_scopes

@@ -402,7 +402,6 @@
             window.requestAnimationFrame(() => {
                 restoreWindowScrollTop(Math.max(0, Number(moduleScrollTopState[tab] || 0)));
                 syncResourceBackTopButton();
-                syncSettingsSaveDock();
                 window.syncScraperBackTopButton?.();
             });
         }
@@ -558,37 +557,6 @@
             btn.classList.toggle('hidden', !shouldShow);
         }
 
-        function syncSettingsSaveDock() {
-            const dock = document.getElementById('settings-save-dock');
-            const settingsPage = document.getElementById('page-settings');
-            if (!dock || !settingsPage) return;
-
-            const isSettingsVisible = !settingsPage.classList.contains('hidden');
-            if (!isSettingsVisible) {
-                dock.classList.remove('is-inline');
-                settingsPage.classList.remove('has-inline-save-dock');
-                return;
-            }
-
-            const viewportHeight = Math.max(0, window.innerHeight || document.documentElement.clientHeight || 0);
-            const scrollTop = getWindowScrollTop();
-            const docHeight = Math.max(document.body.scrollHeight || 0, document.documentElement.scrollHeight || 0);
-            const footer = document.querySelector('footer.footer-text');
-            const nearDocumentEnd = scrollTop + viewportHeight >= docHeight - 4;
-            let shouldInline = false;
-
-            if (footer) {
-                const footerRect = footer.getBoundingClientRect();
-                const footerVisible = footerRect.top < viewportHeight && footerRect.bottom > 0;
-                shouldInline = footerVisible || nearDocumentEnd;
-            } else {
-                shouldInline = nearDocumentEnd;
-            }
-
-            dock.classList.toggle('is-inline', shouldInline);
-            settingsPage.classList.toggle('has-inline-save-dock', shouldInline);
-        }
-
         function syncViewportMetrics() {
             const viewportHeight = Math.max(
                 0,
@@ -596,6 +564,14 @@
             );
             if (!viewportHeight) return;
             document.documentElement.style.setProperty('--app-vh', `${viewportHeight}px`);
+            // 设置页顶部吸顶分区条需要避开 shell 工具栏，工具栏高度随断点变化，这里统一量一次。
+            const toolbar = document.querySelector('.shell-toolbar');
+            if (toolbar) {
+                const toolbarHeight = Math.round(toolbar.getBoundingClientRect().height);
+                if (toolbarHeight > 0) {
+                    document.documentElement.style.setProperty('--shell-toolbar-h', `${toolbarHeight}px`);
+                }
+            }
         }
 
         function requestViewportMetricsSync() {
@@ -839,6 +815,28 @@
             }
             void loadSettingsTabModule().then((mod) => {
                 mod?.generateWebhookSecret?.({ showToast });
+            });
+        }
+
+        function expandAllSettingsSections() {
+            const settingsModule = tabRuntimeState.tabModuleCache.settings;
+            if (settingsModule?.expandAllSettingsSections) {
+                settingsModule.expandAllSettingsSections();
+                return;
+            }
+            void loadSettingsTabModule().then((mod) => {
+                mod?.expandAllSettingsSections?.();
+            });
+        }
+
+        function collapseAllSettingsSections() {
+            const settingsModule = tabRuntimeState.tabModuleCache.settings;
+            if (settingsModule?.collapseAllSettingsSections) {
+                settingsModule.collapseAllSettingsSections();
+                return;
+            }
+            void loadSettingsTabModule().then((mod) => {
+                mod?.collapseAllSettingsSections?.();
             });
         }
 
@@ -2287,7 +2285,7 @@
                 <div class="help-rich-title">怎么配置</div>
                 <div class="help-rich-text">1）每行一个词，行内不要写逗号、引号，也不用一次写多个。</div>
                 <div class="help-rich-text">2）内置词表始终生效，这里只做追加；常见站点名、发布页、网盘、字幕 / 音轨等信息已经内置，不用重复填。</div>
-                <div class="help-rich-text">3）改完点页面底部的「保存全部配置」，保存后立即生效；回到刮削页「重新扫描 / 生成预览」就能看到效果。</div>
+                <div class="help-rich-text">3）改完点设置页顶部悬浮条里的「保存全部配置」，保存后立即生效；回到刮削页「重新扫描 / 生成预览」就能看到效果。</div>
                 <div class="help-rich-text">4）单个词 50 字以内，每个输入框最多 200 条，重复的会自动去重。</div>
             </div>
             <div class="help-rich-section">
@@ -2311,11 +2309,59 @@
             showHelpHtml('批量整理过滤词说明', SCRAPER_FILTER_HELP_HTML);
         }
 
+        // 监控页头部说明：内容为固定文案（无用户输入），改用信息按钮 + 弹窗，正文只留标题。
+        const MONITOR_HELP_HTML = `
+            <div class="help-rich-section">
+                <div class="help-rich-title">这块在做什么</div>
+                <div class="help-rich-text">文件夹监控会扫描 115 网盘目录，把命中的视频生成为本地 <code>/strm</code> 播放文件；媒体服务器（Emby / Jellyfin / Infuse 等）读本地 strm，播放时再由服务端解析 115 链接回源。</div>
+                <div class="help-rich-text">资源导入 / Webhook 命中 savepath 时会优先局部刷新——只处理这次变动涉及的目录，不必等下一次全量扫描。</div>
+            </div>
+            <div class="help-rich-section">
+                <div class="help-rich-title">什么时候会跑</div>
+                <div class="help-rich-row">
+                    <span class="help-rich-key">定时</span>
+                    <span class="help-rich-text">任务自己的「定时执行」（按分钟，0 为关闭）。</span>
+                </div>
+                <div class="help-rich-row">
+                    <span class="help-rich-key">手动</span>
+                    <span class="help-rich-text">任务卡片上的「立即扫描」，改完配置后马上生效。</span>
+                </div>
+                <div class="help-rich-row">
+                    <span class="help-rich-key">自动</span>
+                    <span class="help-rich-text">Webhook / 资源导入命中 savepath、订阅导入完成、接收夹分发后的目录同步、网盘变更同步，都会自动排队刷新。</span>
+                </div>
+                <div class="help-rich-text">任务停用后，定时和所有自动触发都会停，只保留手动运行（用于排查或临时冻结）。</div>
+            </div>
+            <div class="help-rich-section">
+                <div class="help-rich-title">路径怎么匹配（最容易踩坑）</div>
+                <div class="help-rich-row">
+                    <span class="help-rich-key">扫描路径</span>
+                    <span class="help-rich-text">115 网盘里要监控的源目录，手动运行会从这里递归扫描。</span>
+                </div>
+                <div class="help-rich-row">
+                    <span class="help-rich-key">保存路径</span>
+                    <span class="help-rich-text">资源导入 / 磁力离线下载落到 115 的目标目录，填 115 根目录下的相对路径（例如 <code>电影/新片</code>）。</span>
+                </div>
+                <div class="help-rich-text">savepath 必须落在某条任务的扫描路径内（会先映射到 115 挂载前缀再比较），导入成功后才会自动刷新并生成 strm；不在任何扫描路径内就不会自动生成。</div>
+                <div class="help-rich-text">最终路径是 <code>/strm/目标路径/扫描路径末级/...</code>，扫描路径和保存路径末级重名时会自动去重，不会出现 <code>/自存影视/自存影视</code>。</div>
+            </div>
+            <div class="help-rich-section">
+                <div class="help-rich-title">什么时候不会生成</div>
+                <div class="help-rich-text">后缀名不在「参数配置 → 115 STRM 播放基础配置」的「扫描后缀名」列表内，或文件小于任务里的「文件大小过滤 (MB)」，会被跳过并计入运行记录的跳过数。</div>
+                <div class="help-rich-text">没有纳入任何监控任务、任务被停用、网盘目录读取失败时也不会生成；跳过与失败原因都会写进运行记录和 Web 日志。</div>
+            </div>
+        `;
+
+        function showMonitorHelp() {
+            showHelpHtml('文件夹监控说明', MONITOR_HELP_HTML);
+        }
+
         function closeHelpModal() {
             document.getElementById('help-modal').classList.add('hidden');
         }
 
         window.showScraperFilterHelp = showScraperFilterHelp;
+        window.showMonitorHelp = showMonitorHelp;
 
         function normalizeMountProviderInput(value) {
             const raw = String(value || '').trim().toLowerCase();
@@ -2370,7 +2416,7 @@
         }
 
         async function resetExtensions() {
-            if (await showAppConfirm("确定要恢复默认扫描后缀名吗？\n(恢复后请手动点击下方的保存全部配置)")) {
+            if (await showAppConfirm("确定要恢复默认扫描后缀名吗？\n(恢复后请手动点击设置页顶部悬浮条里的保存全部配置)")) {
                 document.getElementById('extensions').value = DEFAULT_EXTENSIONS;
             }
         }

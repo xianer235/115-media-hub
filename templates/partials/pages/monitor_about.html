@@ -2,8 +2,10 @@
             <div class="group-card">
                 <div class="monitor-page-head">
                     <div class="monitor-head-copy">
-                        <h3 class="group-title mb-2">文件夹监控任务列表</h3>
-                        <div class="text-xs text-slate-400 leading-6">扫描 115 网盘目录，生成或刷新本地 `/strm` 文件；资源导入 / Webhook 命中 savepath 时会优先局部刷新。</div>
+                        <h3 class="group-title mb-0 monitor-head-title">
+                            文件夹监控任务列表
+                            <button type="button" class="info-dot" aria-label="文件夹监控说明" title="文件夹监控说明" onclick="showMonitorHelp()">i</button>
+                        </h3>
                     </div>
                     <div class="monitor-head-actions">
                         <div id="monitor-summary-pill" class="monitor-status-pill" title="当前状态：空闲 / 等待监控任务" aria-label="当前状态：空闲 / 等待监控任务">

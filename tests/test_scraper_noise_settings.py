@@ -117,7 +117,8 @@ class ScraperNoiseSettingsFrontendTest(unittest.TestCase):
     def test_settings_page_has_noise_filter_section(self):
         html = (ROOT / "templates/partials/pages/settings.html").read_text(encoding="utf-8")
         self.assertIn('id="settings-scraper-filter"', html)
-        self.assertIn("9. 批量整理过滤词", html)
+        self.assertIn('data-settings-step="9"', html)
+        self.assertIn("批量整理过滤词（可选）", html)
         self.assertIn('id="scraper_noise_phrases"', html)
         self.assertIn('id="scraper_standalone_noise_words"', html)
         self.assertIn("内置默认过滤词表始终生效", html)

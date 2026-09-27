@@ -93,10 +93,10 @@
                         <input type="checkbox" id="monitor_auto_scrape_on_new" class="ui-checkbox" onchange="syncMonitorAutoScrapeOptions()">
                         <span>新增资源自动刮削整理（仅整理高置信度自动匹配的条目，失败仅记录日志）</span>
                     </label>
-                    <div id="monitor-auto-scrape-options" class="hidden space-y-3 rounded-xl border border-slate-700 bg-slate-900/60 p-3">
+                    <div id="monitor-auto-scrape-options" class="hidden space-y-3">
                         <div class="text-xs font-bold text-slate-300">自动整理选项</div>
-                        <div class="space-y-2">
-                            <div class="text-[11px] font-bold text-slate-500 uppercase tracking-wide">文件夹</div>
+                        <div class="organize-option-group">
+                            <div class="organize-option-group-title">文件夹</div>
                             <label class="flex items-center gap-3 cursor-pointer text-sm">
                                 <input type="checkbox" id="monitor_asc_rename_folders" class="ui-checkbox" checked>
                                 <span>重命名文件夹（按识别结果标准化）</span>
@@ -110,8 +110,8 @@
                                 <span>在媒体文件夹名中写入 TMDB ID</span>
                             </label>
                         </div>
-                        <div class="space-y-2">
-                            <div class="text-[11px] font-bold text-slate-500 uppercase tracking-wide">文件命名</div>
+                        <div class="organize-option-group">
+                            <div class="organize-option-group-title">文件命名</div>
                             <label class="block">
                                 <span class="text-xs text-slate-500">文件命名方式</span>
                                 <select id="monitor_asc_file_name_mode" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none" onchange="syncMonitorAutoScrapeOptions()">
@@ -158,8 +158,8 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="space-y-2">
-                            <div class="text-[11px] font-bold text-slate-500 uppercase tracking-wide">文件清理</div>
+                        <div class="organize-option-group">
+                            <div class="organize-option-group-title">文件清理</div>
                             <label class="flex items-center gap-3 cursor-pointer text-sm">
                                 <input type="checkbox" id="monitor_asc_delete_ad_files" class="ui-checkbox">
                                 <span>整理时删除广告文件（图片/网页/文本，删除进入网盘回收站）</span>

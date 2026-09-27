@@ -1,9 +1,253 @@
 export async function ensureTabData(context) {
     context.moduleVisitState.settings = true;
+    initSettingsSectionNav();
+    refreshSettingsSectionSummaries();
 }
 
 let latestCookieHealthState = {};
+let latestSettingsSensitiveMeta = {};
 const cookieHealthBusyProviders = new Set();
+
+const SETTINGS_OPEN_SECTION_STORAGE_KEY = 'settings-open-section';
+const SETTINGS_OPEN_SECTION_ALL = 'all';
+const SETTINGS_OPEN_SECTION_NONE = 'none';
+
+function settingsSectionCards() {
+    return Array.from(document.querySelectorAll('#page-settings [data-settings-section]'));
+}
+
+function settingsSectionKey(card) {
+    return String(card?.dataset?.settingsSection || '').trim();
+}
+
+function setSettingsSectionOpen(card, open) {
+    if (!card) return;
+    const nextOpen = !!open;
+    card.classList.toggle('is-open', nextOpen);
+    const head = card.querySelector('.settings-section-head');
+    if (head) head.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
+    const body = card.querySelector('.settings-section-body');
+    if (body) body.hidden = !nextOpen;
+}
+
+function readRememberedSettingsSection() {
+    try {
+        return String(localStorage.getItem(SETTINGS_OPEN_SECTION_STORAGE_KEY) || '').trim();
+    } catch (e) {
+        return '';
+    }
+}
+
+function rememberSettingsSection(value) {
+    try {
+        const next = String(value || '').trim();
+        if (next) localStorage.setItem(SETTINGS_OPEN_SECTION_STORAGE_KEY, next);
+        else localStorage.removeItem(SETTINGS_OPEN_SECTION_STORAGE_KEY);
+    } catch (e) {
+        /* 隐身模式等禁用 localStorage 的场景下忽略记忆失败 */
+    }
+}
+
+function syncSettingsSectionNavState(activeKey) {
+    const key = String(activeKey || '').trim();
+    document.querySelectorAll('#settings-section-nav [data-settings-section-target]').forEach((item) => {
+        const isActive = !!key && item.getAttribute('data-settings-section-target') === key;
+        item.classList.toggle('is-active', isActive);
+        if (isActive) item.setAttribute('aria-current', 'true');
+        else item.removeAttribute('aria-current');
+    });
+}
+
+function settingsSectionScrollOffset() {
+    const toolbar = document.querySelector('.shell-toolbar');
+    const navbar = document.getElementById('settings-section-navbar');
+    const toolbarHeight = toolbar ? toolbar.getBoundingClientRect().height : 0;
+    const navbarHeight = navbar ? navbar.getBoundingClientRect().height : 0;
+    return toolbarHeight + navbarHeight + 16;
+}
+
+export function openSettingsSection(sectionKey, { scroll = true, remember = true } = {}) {
+    const cards = settingsSectionCards();
+    if (!cards.length) return;
+    const target = cards.find(card => settingsSectionKey(card) === sectionKey) || cards[0];
+    cards.forEach((card) => setSettingsSectionOpen(card, card === target));
+    const targetKey = settingsSectionKey(target);
+    syncSettingsSectionNavState(targetKey);
+    if (remember) rememberSettingsSection(targetKey);
+    if (!scroll) return;
+    const top = target.getBoundingClientRect().top + window.scrollY - settingsSectionScrollOffset();
+    window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+}
+
+export function expandAllSettingsSections() {
+    settingsSectionCards().forEach((card) => setSettingsSectionOpen(card, true));
+    syncSettingsSectionNavState('');
+    rememberSettingsSection(SETTINGS_OPEN_SECTION_ALL);
+}
+
+export function collapseAllSettingsSections() {
+    settingsSectionCards().forEach((card) => setSettingsSectionOpen(card, false));
+    syncSettingsSectionNavState('');
+    rememberSettingsSection(SETTINGS_OPEN_SECTION_NONE);
+}
+
+function settingsValue(id) {
+    const el = document.getElementById(id);
+    return el ? String(el.value || '').trim() : '';
+}
+
+function settingsChecked(id) {
+    return !!document.getElementById(id)?.checked;
+}
+
+function settingsLineCount(id) {
+    return settingsValue(id).split('\n').map(line => line.trim()).filter(Boolean).length;
+}
+
+function buildAuthSectionSummary() {
+    const meta = Array.isArray(window.providerMeta) ? window.providerMeta : [];
+    const parts = [];
+    if (meta.length) {
+        const enabled = meta.filter(p => settingsChecked('provider_enabled_' + p.name)).length;
+        parts.push(`启用 ${enabled}/${meta.length} 个网盘`);
+    }
+    const health = latestCookieHealthState && typeof latestCookieHealthState === 'object'
+        ? latestCookieHealthState['115']
+        : null;
+    const healthState = String(health?.state || '').trim().toLowerCase();
+    if (healthState === 'valid') parts.push('115 认证有效');
+    else if (healthState === 'invalid' || healthState === 'error') parts.push('115 认证异常');
+    else if (health?.configured || latestSettingsSensitiveMeta.cookie_115) parts.push('115 已配置');
+    else parts.push('115 未配置');
+    parts.push(settingsChecked('sign115_enabled') ? '签到已开' : '签到关闭');
+    return parts.join(' · ');
+}
+
+function buildSettingsSectionSummary(key) {
+    switch (key) {
+        case 'auth':
+            return buildAuthSectionSummary();
+        case 'strm': {
+            const base = settingsValue('strm_proxy_base_url');
+            const rate = settingsValue('api_115_rate_limit_seconds');
+            return [base ? '对外地址已填' : '未填对外地址', rate ? `限频 ${rate}s` : ''].filter(Boolean).join(' · ');
+        }
+        case 'tg': {
+            const total = String(document.getElementById('resource-source-total-count')?.textContent || '0').trim();
+            const search = String(document.getElementById('resource-source-search-count')?.textContent || '0').trim();
+            return `频道 ${total} 个 · 参与搜索 ${search} 个`;
+        }
+        case 'pansou':
+            if (!settingsChecked('pansou_enabled')) return '未启用';
+            return `已启用 · ${settingsValue('pansou_base_url') || '未填服务地址'}`;
+        case 'proxy': {
+            if (!settingsChecked('tg_proxy_enabled')) return '未启用';
+            const protocol = settingsValue('tg_proxy_protocol') || 'http';
+            const host = settingsValue('tg_proxy_host') || '未填地址';
+            const port = settingsValue('tg_proxy_port');
+            return `已启用 · ${protocol}://${host}${port ? ':' + port : ''}`;
+        }
+        case 'tmdb':
+            if (!settingsChecked('tmdb_enabled')) return '未启用';
+            return `已启用 · ${settingsValue('tmdb_language') || 'zh-CN'} / ${settingsValue('tmdb_region') || 'CN'}`;
+        case 'ai': {
+            if (!settingsChecked('ai_match_enabled')) return '未启用';
+            const model = settingsValue('ai_match_model') || '未填模型';
+            const concurrency = settingsValue('ai_match_max_concurrency') || '3';
+            const confidence = settingsValue('ai_match_min_confidence') || '60';
+            return `已启用 · ${model} · 并发 ${concurrency} · 阈值 ${confidence}`;
+        }
+        case 'notify': {
+            const channel = settingsValue('notify_channel') === 'wecom_app' ? '企业微信应用' : '企业微信群机器人';
+            const switches = ['notify_push_enabled', 'notify_monitor_enabled'].filter(id => settingsChecked(id)).length;
+            return `${channel} · ${switches}/2 个推送开关`;
+        }
+        case 'security': {
+            const account = settingsValue('username') ? '账号已填' : '账号未填';
+            const secretConfigured = !!settingsValue('webhook_secret') || !!latestSettingsSensitiveMeta.webhook_secret;
+            return `${account} · ${secretConfigured ? '签名密钥已配置' : '签名密钥未配置'}`;
+        }
+        case 'filter':
+            return `复合词 ${settingsLineCount('scraper_noise_phrases')} 条 · 独立词 ${settingsLineCount('scraper_standalone_noise_words')} 条`;
+        default:
+            return '';
+    }
+}
+
+export function refreshSettingsSectionSummaries() {
+    settingsSectionCards().forEach((card) => {
+        const key = settingsSectionKey(card);
+        const target = card.querySelector(`[data-settings-summary="${key}"]`);
+        if (!target) return;
+        target.textContent = buildSettingsSectionSummary(key);
+    });
+}
+
+export function initSettingsSectionNav() {
+    const page = document.getElementById('page-settings');
+    const nav = document.getElementById('settings-section-nav');
+    const cards = settingsSectionCards();
+    if (!page || !nav || !cards.length) return;
+
+    if (page.dataset.settingsSectionNavReady !== '1') {
+        page.dataset.settingsSectionNavReady = '1';
+        nav.innerHTML = cards.map((card) => {
+            const key = settingsSectionKey(card);
+            const step = String(card.dataset.settingsStep || '').trim();
+            const label = String(card.dataset.settingsNavLabel || card.dataset.settingsTitle || key).trim();
+            return '<button type="button" class="settings-section-nav-item" data-settings-section-target="' + escapeHtml(key) + '">' +
+                '<span class="settings-section-nav-index">' + escapeHtml(step) + '</span>' +
+                '<span>' + escapeHtml(label) + '</span></button>';
+        }).join('');
+        nav.addEventListener('click', (event) => {
+            const item = event.target.closest('[data-settings-section-target]');
+            if (!item) return;
+            event.preventDefault();
+            openSettingsSection(item.getAttribute('data-settings-section-target'));
+        });
+        cards.forEach((card) => {
+            const head = card.querySelector('.settings-section-head');
+            if (!head) return;
+            head.addEventListener('click', () => {
+                // 卡片头是纯开关（可以同时展开多个）；分区条点击才是单开跳转。
+                const willOpen = !card.classList.contains('is-open');
+                setSettingsSectionOpen(card, willOpen);
+                if (willOpen) {
+                    syncSettingsSectionNavState(settingsSectionKey(card));
+                    rememberSettingsSection(settingsSectionKey(card));
+                    return;
+                }
+                const stillOpen = settingsSectionCards().filter(item => item.classList.contains('is-open'));
+                if (stillOpen.length === 1) {
+                    syncSettingsSectionNavState(settingsSectionKey(stillOpen[0]));
+                    rememberSettingsSection(settingsSectionKey(stillOpen[0]));
+                    return;
+                }
+                if (!stillOpen.length) {
+                    syncSettingsSectionNavState('');
+                    rememberSettingsSection(SETTINGS_OPEN_SECTION_NONE);
+                }
+            });
+        });
+        page.addEventListener('change', (event) => {
+            if (!event.target || !event.target.closest('#page-settings')) return;
+            refreshSettingsSectionSummaries();
+        });
+
+        const remembered = readRememberedSettingsSection();
+        if (remembered === SETTINGS_OPEN_SECTION_ALL) {
+            expandAllSettingsSections();
+        } else if (remembered === SETTINGS_OPEN_SECTION_NONE) {
+            collapseAllSettingsSections();
+        } else {
+            const initial = cards.find(card => settingsSectionKey(card) === remembered) || cards[0];
+            cards.forEach((card) => setSettingsSectionOpen(card, card === initial));
+            syncSettingsSectionNavState(settingsSectionKey(initial));
+            rememberSettingsSection(settingsSectionKey(initial));
+        }
+    }
+    refreshSettingsSectionSummaries();
+}
 
 function escapeHtml(value = '') {
     return String(value ?? '')
@@ -794,6 +1038,7 @@ export function renderProviderAuthBlocks(cfg, sensitiveMeta) {
     if (!meta.length) return;
 
     const sm = sensitiveMeta && typeof sensitiveMeta === 'object' ? sensitiveMeta : {};
+    latestSettingsSensitiveMeta = sm;
 
     container.innerHTML = meta.map(p => {
         const enabled = p.enabled;
@@ -1362,6 +1607,7 @@ export async function saveSettings({
         }
         if (typeof refreshResourceState === 'function') void refreshResourceState({ allowSearch: false });
         if (typeof refreshSign115Status === 'function') void refreshSign115Status(false);
+        refreshSettingsSectionSummaries();
         return true;
     }
 
@@ -1594,6 +1840,7 @@ export function updateCookieHealthBar(cookieHealthState) {
     if (!dotsContainer) return;
     const state = cookieHealthState && typeof cookieHealthState === 'object' ? cookieHealthState : {};
     latestCookieHealthState = state;
+    refreshSettingsSectionSummaries();
     const meta = window.providerMeta || [];
     let busy = false;
     dotsContainer.innerHTML = meta.map(p => {

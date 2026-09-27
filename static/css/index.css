@@ -1578,6 +1578,11 @@
         .monitor-head-copy {
             min-width: 0;
         }
+        .monitor-head-title {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
         .monitor-head-actions {
             display: grid;
             grid-template-columns: minmax(0, 1fr) auto;
@@ -2380,12 +2385,8 @@
         }
         #page-settings {
             position: relative;
-            padding-bottom: calc(8.6rem + env(safe-area-inset-bottom));
-        }
-        #page-settings.has-inline-save-dock {
             padding-bottom: 0.9rem;
         }
-        .settings-save-card,
         .resource-source-panel-head {
             position: relative;
             z-index: 1;
@@ -2436,46 +2437,6 @@
             display: flex;
             align-items: center;
             gap: 0.5rem;
-        }
-        .settings-save-card {
-            position: fixed;
-            left: 50%;
-            bottom: max(0.85rem, env(safe-area-inset-bottom));
-            transform: translateX(-50%);
-            width: min(72rem, calc(100vw - 1rem));
-            margin-top: 0;
-            align-items: center;
-            z-index: 45;
-            border-color: rgba(56, 189, 248, 0.34);
-            backdrop-filter: blur(12px);
-            background:
-                radial-gradient(circle at left center, rgba(16, 185, 129, 0.18), transparent 30%),
-                linear-gradient(180deg, rgba(15, 23, 42, 0.95), rgba(15, 23, 42, 0.88));
-            box-shadow: 0 18px 42px rgba(2, 6, 23, 0.42);
-        }
-        .settings-save-card.is-inline {
-            position: static;
-            left: auto;
-            right: auto;
-            bottom: auto;
-            transform: none;
-            width: 100%;
-            margin-top: 0.75rem;
-            z-index: 2;
-            backdrop-filter: none;
-            box-shadow: 0 10px 24px rgba(2, 6, 23, 0.24);
-        }
-        .settings-save-title {
-            font-size: 1rem;
-            font-weight: 900;
-            color: #f8fafc;
-        }
-        .settings-save-copy {
-            margin-top: 0.42rem;
-            max-width: 40rem;
-            font-size: 0.78rem;
-            line-height: 1.7;
-            color: #94a3b8;
         }
         .resource-source-panel {
             display: flex;
@@ -7999,28 +7960,6 @@
             }
         }
         @media (max-width: 767px) {
-            #page-settings {
-                padding-bottom: calc(9.6rem + env(safe-area-inset-bottom));
-            }
-            #page-settings.has-inline-save-dock {
-                padding-bottom: 0.65rem;
-            }
-            .settings-save-card {
-                align-items: stretch;
-                left: 50%;
-                width: calc(100vw - 0.8rem);
-                bottom: max(0.5rem, env(safe-area-inset-bottom));
-                padding: 0.8rem;
-                gap: 0.75rem;
-            }
-            .settings-save-title {
-                font-size: 0.9rem;
-            }
-            .settings-save-copy {
-                margin-top: 0.28rem;
-                font-size: 0.72rem;
-                line-height: 1.55;
-            }
             .resource-source-panel-footer {
                 align-items: stretch;
             }
@@ -8288,7 +8227,6 @@
             background: linear-gradient(135deg, #0ea5e9, #2563eb);
             border-color: #38bdf8;
         }
-        html.theme-day .settings-save-card,
         html.theme-day .settings-info-note,
         html.theme-day .resource-source-summary-card,
         html.theme-day .resource-source-summary-item,
@@ -8301,14 +8239,6 @@
             border-color: var(--border) !important;
             box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
         }
-        html.theme-day .settings-save-card {
-            border-color: rgba(14, 165, 233, 0.32) !important;
-            background:
-                radial-gradient(circle at left center, rgba(14, 165, 233, 0.12), transparent 32%),
-                linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(248, 250, 252, 0.96)) !important;
-            box-shadow: 0 16px 34px rgba(15, 23, 42, 0.12);
-        }
-        html.theme-day .settings-save-title,
         html.theme-day .settings-info-note-title,
         html.theme-day .resource-source-summary-value,
         html.theme-day .resource-source-data-title,
@@ -8317,7 +8247,6 @@
         html.theme-day .resource-source-modal-title {
             color: var(--text) !important;
         }
-        html.theme-day .settings-save-copy,
         html.theme-day .settings-info-note,
         html.theme-day .resource-source-panel-copy,
         html.theme-day .resource-source-panel-note,
@@ -13483,106 +13412,6 @@
             border-color: rgba(146, 64, 14, 0.72);
         }
 
-        .settings-save-text {
-            min-width: 0;
-            flex: 1 1 auto;
-        }
-
-        .settings-save-compact-label,
-        .settings-save-action-compact {
-            display: none;
-        }
-
-        .settings-save-action {
-            flex: 0 0 auto;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            min-height: 52px;
-            padding: 0.9rem 2.4rem;
-            border-radius: 999px;
-            white-space: nowrap;
-        }
-
-        @media (max-width: 1180px) {
-            #page-settings {
-                padding-bottom: calc(12rem + env(safe-area-inset-bottom));
-            }
-
-            .settings-save-card:not(.is-inline) {
-                width: min(17.5rem, calc(100vw - 6.75rem));
-                bottom: calc(env(safe-area-inset-bottom) + 6.85rem);
-                padding: 0.44rem 0.48rem 0.44rem 0.72rem;
-                gap: 0.5rem;
-                flex-wrap: nowrap;
-                align-items: center;
-                justify-content: space-between;
-                border-radius: 999px;
-                border-color: rgba(174, 214, 255, 0.26);
-                background:
-                    radial-gradient(circle at 18% 24%, rgba(255, 255, 255, 0.16), transparent 34%),
-                    linear-gradient(180deg, rgba(24, 36, 54, 0.84), rgba(13, 20, 32, 0.78));
-                box-shadow: 0 24px 44px rgba(4, 10, 22, 0.28);
-                backdrop-filter: blur(26px) saturate(180%);
-                -webkit-backdrop-filter: blur(26px) saturate(180%);
-            }
-
-            .settings-save-card:not(.is-inline) .settings-save-text {
-                display: flex;
-                align-items: center;
-                min-width: 0;
-                flex: 1 1 auto;
-            }
-
-            .settings-save-card:not(.is-inline) .settings-save-title,
-            .settings-save-card:not(.is-inline) .settings-save-copy,
-            .settings-save-card:not(.is-inline) .settings-save-action-full {
-                display: none;
-            }
-
-            .settings-save-card:not(.is-inline) .settings-save-compact-label,
-            .settings-save-card:not(.is-inline) .settings-save-action-compact {
-                display: block;
-            }
-
-            .settings-save-card:not(.is-inline) .settings-save-compact-label {
-                min-width: 0;
-                font-size: 0.76rem;
-                line-height: 1;
-                font-weight: 820;
-                color: #edf4ff;
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
-            }
-
-            .settings-save-card:not(.is-inline) .settings-save-action {
-                min-height: 35px;
-                padding: 0.42rem 0.92rem;
-                border-radius: 999px;
-                font-size: 0.76rem;
-                line-height: 1;
-                box-shadow: 0 10px 20px rgba(16, 185, 129, 0.18);
-            }
-
-            .settings-save-card:not(.is-inline) .settings-save-action-compact {
-                display: inline-flex;
-                align-items: center;
-            }
-
-        html.theme-day .settings-save-card:not(.is-inline) {
-            border-color: rgba(120, 155, 206, 0.28);
-            background:
-                radial-gradient(circle at 18% 24%, rgba(255, 255, 255, 0.88), transparent 38%),
-                linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(242, 247, 255, 0.9));
-            box-shadow: 0 18px 34px rgba(111, 135, 166, 0.2);
-        }
-        html.theme-day .settings-save-card:not(.is-inline) .settings-save-compact-label {
-            color: #18314e;
-        }
-        }
-    
-
         .scraper-page {
             color: #dbeafe;
         }
@@ -14673,7 +14502,7 @@
         .scraper-options {
             display: flex;
             flex-direction: column;
-            gap: 0.82rem;
+            gap: 0.95rem;
         }
 
         .scraper-options-head {
@@ -14711,18 +14540,71 @@
             margin-bottom: 0.5rem;
         }
 
-        .scraper-options-group {
+        /* 整理选项分组：批量整理的「命名选项」与监控任务的「自动整理选项」共用。 */
+        .organize-option-group {
+            position: relative;
             display: flex;
             flex-direction: column;
-            gap: 0.58rem;
+            gap: 0.55rem;
+            padding: 0.7rem 0.85rem 0.8rem;
+            border: 1px solid rgba(71, 85, 105, 0.6);
+            border-left: 3px solid rgba(56, 189, 248, 0.62);
+            border-radius: 0.9rem;
+            background: linear-gradient(180deg, rgba(15, 23, 42, 0.72), rgba(15, 23, 42, 0.46));
         }
 
-        .scraper-options-group-title {
-            color: #94a3b8;
-            font-size: 0.73rem;
-            font-weight: 850;
-            letter-spacing: 0.01em;
-            text-transform: uppercase;
+        .organize-option-group + .organize-option-group {
+            margin-top: 0.15rem;
+        }
+
+        /* 分组框自己负责间距，直接子项的 margin-top 会显得松散。 */
+        .organize-option-group > .scraper-option-toggle {
+            margin-top: 0;
+        }
+
+        .organize-option-group-title {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: #7dd3fc;
+            font-size: 0.8rem;
+            font-weight: 900;
+            letter-spacing: 0.02em;
+        }
+
+        .organize-option-group-title::before {
+            content: "";
+            flex: 0 0 auto;
+            width: 0.38rem;
+            height: 0.38rem;
+            border-radius: 999px;
+            background: currentColor;
+            box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.16);
+        }
+
+        .organize-option-group-title::after {
+            content: "";
+            flex: 1 1 auto;
+            height: 1px;
+            background: linear-gradient(90deg, rgba(125, 211, 252, 0.3), rgba(125, 211, 252, 0));
+        }
+
+        html.theme-day .organize-option-group {
+            border-color: #c9d7e8;
+            border-left-color: #0ea5e9;
+            background: linear-gradient(180deg, #f8fbff, #eef4fb);
+        }
+
+        html.theme-day .organize-option-group-title {
+            color: #0369a1;
+        }
+
+        html.theme-day .organize-option-group-title::before {
+            box-shadow: 0 0 0 3px rgba(13, 99, 215, 0.14);
+        }
+
+        html.theme-day .organize-option-group-title::after {
+            background: linear-gradient(90deg, rgba(3, 105, 161, 0.22), rgba(3, 105, 161, 0));
         }
 
         .scraper-option-grid {
@@ -16825,4 +16707,272 @@
                 min-height: 36px;
             }
             .resource-ed2k-title-actions > * { flex: 1; }
+        }
+
+        /* ── 设置页：顶部横向分区条 + 单开折叠卡片 ───────────────────────── */
+        .settings-section-navbar {
+            position: sticky;
+            top: calc(var(--shell-toolbar-h, 72px) + 8px);
+            z-index: 45;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.6rem;
+            padding: 0.55rem 0.7rem;
+            border: 1px solid rgba(148, 163, 184, 0.18);
+            border-radius: 1.1rem;
+            background: linear-gradient(180deg, rgba(11, 20, 35, 0.96), rgba(9, 16, 29, 0.94));
+            box-shadow: 0 14px 30px rgba(2, 6, 23, 0.32);
+            backdrop-filter: blur(18px);
+            -webkit-backdrop-filter: blur(18px);
+        }
+        .settings-section-nav {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.35rem;
+            flex: 1 1 auto;
+            min-width: 0;
+        }
+        .settings-section-nav-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            min-height: 32px;
+            padding: 0.34rem 0.68rem;
+            border: 1px solid rgba(148, 163, 184, 0.22);
+            border-radius: 999px;
+            background: rgba(15, 23, 42, 0.72);
+            color: #94a3b8;
+            font-size: 0.76rem;
+            font-weight: 700;
+            white-space: nowrap;
+            cursor: pointer;
+            transition: color 0.16s ease, border-color 0.16s ease, background-color 0.16s ease;
+        }
+        .settings-section-nav-item:hover {
+            color: #e2e8f0;
+            border-color: rgba(56, 189, 248, 0.4);
+        }
+        .settings-section-nav-item.is-active {
+            color: #e0f2fe;
+            border-color: rgba(56, 189, 248, 0.55);
+            background: rgba(14, 165, 233, 0.18);
+        }
+        .settings-section-nav-item:focus-visible {
+            outline: 2px solid rgba(56, 189, 248, 0.7);
+            outline-offset: 2px;
+        }
+        .settings-section-nav-index {
+            color: #7dd3fc;
+            font-size: 0.68rem;
+            font-weight: 800;
+        }
+        .settings-section-nav-actions {
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+            flex: 0 0 auto;
+        }
+        .settings-section-nav-action {
+            min-height: 30px;
+            padding: 0.3rem 0.66rem;
+            border: 1px solid rgba(148, 163, 184, 0.22);
+            border-radius: 999px;
+            background: rgba(15, 23, 42, 0.6);
+            color: #94a3b8;
+            font-size: 0.72rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: color 0.16s ease, border-color 0.16s ease;
+        }
+        .settings-section-nav-action:hover {
+            color: #e2e8f0;
+            border-color: rgba(56, 189, 248, 0.4);
+        }
+        .settings-section-save-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 32px;
+            padding: 0.34rem 1rem;
+            border: 1px solid rgba(16, 185, 129, 0.55);
+            border-radius: 999px;
+            background: linear-gradient(135deg, #059669, #0d9488);
+            color: #f8fafc;
+            font-size: 0.76rem;
+            font-weight: 800;
+            white-space: nowrap;
+            cursor: pointer;
+            box-shadow: 0 10px 22px rgba(16, 185, 129, 0.22);
+            transition: filter 0.16s ease, transform 0.16s ease;
+        }
+        .settings-section-save-btn:hover { filter: brightness(1.08); }
+        .settings-section-save-btn:active { transform: scale(0.97); }
+        .settings-section-save-btn:focus-visible {
+            outline: 2px solid rgba(16, 185, 129, 0.75);
+            outline-offset: 2px;
+        }
+        .settings-section-save-compact { display: none; }
+        .settings-section-card { padding: 0; }
+        .settings-section-header {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 1rem 1.25rem;
+        }
+        .settings-section-head {
+            flex: 1 1 auto;
+            min-width: 0;
+            display: flex;
+            align-items: center;
+            gap: 0.7rem;
+            margin: 0;
+            padding: 0.35rem 0;
+            border: 0;
+            background: transparent;
+            color: inherit;
+            font: inherit;
+            text-align: left;
+            cursor: pointer;
+        }
+        .settings-section-head:focus-visible {
+            outline: 2px solid rgba(56, 189, 248, 0.7);
+            outline-offset: 4px;
+            border-radius: 0.6rem;
+        }
+        .settings-section-step {
+            flex: 0 0 auto;
+            min-width: 1.7rem;
+            height: 1.7rem;
+            display: grid;
+            place-items: center;
+            border: 1px solid rgba(56, 189, 248, 0.3);
+            border-radius: 0.6rem;
+            background: rgba(56, 189, 248, 0.14);
+            color: #7dd3fc;
+            font-size: 0.72rem;
+            font-weight: 800;
+        }
+        .settings-section-heading {
+            flex: 1 1 auto;
+            min-width: 0;
+            display: grid;
+            gap: 0.15rem;
+        }
+        .settings-section-title {
+            color: #38bdf8;
+            font-size: 0.875rem;
+            font-weight: 800;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+        }
+        .settings-section-summary {
+            color: #94a3b8;
+            font-size: 0.72rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .settings-section-summary:empty,
+        .settings-section-card.is-open .settings-section-summary { display: none; }
+        .settings-section-chevron {
+            flex: 0 0 auto;
+            display: inline-flex;
+            color: #94a3b8;
+            transition: transform 0.18s ease;
+        }
+        .settings-section-card.is-open .settings-section-chevron { transform: rotate(180deg); }
+        .settings-section-body { padding: 0 1.25rem 1.25rem; }
+        .settings-section-card.is-open > .settings-section-body {
+            padding-top: 1rem;
+            border-top: 1px solid rgba(148, 163, 184, 0.14);
+        }
+        .settings-section-card:not(.is-open) > .settings-section-body { display: none; }
+        .settings-help-fold {
+            border: 1px solid rgba(51, 65, 85, 0.95);
+            border-radius: 0.9rem;
+            background: rgba(15, 23, 42, 0.6);
+            color: #cbd5e1;
+            font-size: 0.75rem;
+            line-height: 1.55rem;
+        }
+        .settings-help-fold > summary {
+            display: flex;
+            align-items: center;
+            gap: 0.45rem;
+            padding: 0.6rem 0.85rem;
+            color: #94a3b8;
+            font-weight: 700;
+            list-style: none;
+            cursor: pointer;
+        }
+        .settings-help-fold > summary::-webkit-details-marker { display: none; }
+        .settings-help-fold > summary::before {
+            content: "";
+            flex: 0 0 auto;
+            width: 0.45rem;
+            height: 0.45rem;
+            border-right: 2px solid currentColor;
+            border-bottom: 2px solid currentColor;
+            transform: rotate(-45deg);
+            transition: transform 0.16s ease;
+        }
+        .settings-help-fold[open] > summary::before { transform: rotate(45deg); }
+        .settings-help-fold[open] > summary { border-bottom: 1px solid rgba(51, 65, 85, 0.7); }
+        .settings-help-fold-body { padding: 0.7rem 0.85rem; }
+        html.theme-day .settings-section-navbar {
+            border-color: #dbe4ee;
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(241, 247, 255, 0.95));
+            box-shadow: 0 10px 24px rgba(111, 135, 166, 0.16);
+        }
+        html.theme-day .settings-section-nav-item,
+        html.theme-day .settings-section-nav-action {
+            border-color: #dbe4ee;
+            background: rgba(241, 245, 249, 0.95);
+            color: #475569;
+        }
+        html.theme-day .settings-section-nav-item.is-active {
+            color: #075985;
+            border-color: #7dd3fc;
+            background: #e0f2fe;
+        }
+        html.theme-day .settings-section-nav-index { color: #0369a1; }
+        html.theme-day .settings-section-title { color: #0369a1; }
+        html.theme-day .settings-section-summary { color: #64748b; }
+        html.theme-day .settings-section-step {
+            color: #075985;
+            border-color: rgba(13, 99, 215, 0.28);
+            background: rgba(13, 99, 215, 0.1);
+        }
+        html.theme-day .settings-section-chevron { color: #64748b; }
+        html.theme-day .settings-section-card.is-open > .settings-section-body { border-top-color: #e2e8f0; }
+        html.theme-day .settings-help-fold {
+            border-color: #dbe4ee;
+            background: rgba(248, 250, 252, 0.95);
+            color: #334155;
+        }
+        html.theme-day .settings-help-fold > summary { color: #475569; }
+        html.theme-day .settings-help-fold[open] > summary { border-bottom-color: #dbe4ee; }
+        @media (max-width: 767px) {
+            .settings-section-navbar {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            .settings-section-nav {
+                width: 100%;
+                flex-wrap: nowrap;
+                overflow-x: auto;
+                scrollbar-width: none;
+                padding-bottom: 0.1rem;
+            }
+            .settings-section-nav::-webkit-scrollbar { display: none; }
+            .settings-section-nav-actions {
+                width: 100%;
+                justify-content: flex-end;
+            }
+            .settings-section-save-full { display: none; }
+            .settings-section-save-compact { display: inline; }
+            .settings-section-header { padding: 0.85rem 1rem; }
+            .settings-section-body { padding: 0 1rem 1rem; }
         }
