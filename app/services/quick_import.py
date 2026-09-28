@@ -53,6 +53,13 @@ QUICK_IMPORT_LOCK_WAIT_SECONDS = max(
     30,
     int(os.environ.get("QUICK_IMPORT_LOCK_WAIT_SECONDS", 300) or 300),
 )
+QUICK_IMPORT_DEFAULT_IDLE_SECONDS = 120
+QUICK_IMPORT_MAX_IDLE_SECONDS = 3600
+QUICK_IMPORT_DEFAULT_MAX_ITEMS = 100
+QUICK_IMPORT_MAX_ITEMS = 500
+QUICK_IMPORT_DEFAULT_BATCH_PAUSE_SECONDS = 5
+QUICK_IMPORT_MAX_BATCH_PAUSE_SECONDS = 300
+QUICK_IMPORT_SCAN_SCOPE_CHUNK = 50
 
 _QUICK_IMPORT_RUN_LOCK = threading.Lock()
 # 中断标记：接收夹整理是长任务，用户点「中断」后在下一条目开始前生效（已搬完的不会回滚）。
@@ -60,11 +67,13 @@ _QUICK_IMPORT_CANCEL = threading.Event()
 # 触发协调：整理正在执行时把后续触发记成「还需再跑一轮」，由工作线程在本轮结束后
 # 自动接着跑，任何触发都不会被丢掉。
 _INBOX_TRIGGER_LOCK = threading.Lock()
+_INBOX_TRIGGER_EVENT = threading.Event()
 _INBOX_TRIGGER_STATE: Dict[str, Any] = {
     "worker": None,
     "pending": False,
     "trigger": "",
     "source_ref": "",
+    "last_arrival_at": 0.0,
 }
 _INBOX_TRIGGER_PRIORITY = {"manual": 5, "cron": 4, "offline": 3, "import": 2, "test": 1}
 
@@ -76,6 +85,7 @@ def request_quick_import_cancel() -> bool:
     with _INBOX_TRIGGER_LOCK:
         # 中断意味着用户不想再排队了：取消同时清掉「再跑一轮」预约。
         _INBOX_TRIGGER_STATE["pending"] = False
+    _INBOX_TRIGGER_EVENT.set()
     _QUICK_IMPORT_CANCEL.set()
     return True
 
@@ -88,7 +98,9 @@ def notify_quick_import(trigger: str = "queued", *, source_ref: str = "") -> Dic
     """登记一次接收夹整理请求；正在执行时预约下一轮，永不静默跳过。"""
     normalized_trigger = str(trigger or "").strip().lower() or "queued"
     normalized_ref = str(source_ref or "").strip()
+    started_worker: Optional[threading.Thread] = None
     with _INBOX_TRIGGER_LOCK:
+        _INBOX_TRIGGER_STATE["last_arrival_at"] = time.monotonic()
         worker = _INBOX_TRIGGER_STATE.get("worker")
         if isinstance(worker, threading.Thread) and worker.is_alive():
             current = str(_INBOX_TRIGGER_STATE.get("trigger", "") or "")
@@ -96,31 +108,58 @@ def notify_quick_import(trigger: str = "queued", *, source_ref: str = "") -> Dic
                 _INBOX_TRIGGER_STATE["trigger"] = normalized_trigger
                 _INBOX_TRIGGER_STATE["source_ref"] = normalized_ref
             _INBOX_TRIGGER_STATE["pending"] = True
-            return {
-                "ok": True,
-                "started": False,
-                "queued": True,
-                "running": True,
-                "summary": "已有接收夹整理在执行，已安排再跑一轮",
-            }
-        _INBOX_TRIGGER_STATE["pending"] = False
-        _INBOX_TRIGGER_STATE["trigger"] = normalized_trigger
-        _INBOX_TRIGGER_STATE["source_ref"] = normalized_ref
-        worker = threading.Thread(
-            target=_inbox_worker_loop,
-            args=(normalized_trigger, normalized_ref),
-            name="inbox-quick-import",
-            daemon=True,
-        )
-        _INBOX_TRIGGER_STATE["worker"] = worker
-        worker.start()
+            started = False
+            running = True
+        else:
+            _INBOX_TRIGGER_STATE["pending"] = False
+            _INBOX_TRIGGER_STATE["trigger"] = normalized_trigger
+            _INBOX_TRIGGER_STATE["source_ref"] = normalized_ref
+            started_worker = threading.Thread(
+                target=_inbox_worker_loop,
+                args=(normalized_trigger, normalized_ref),
+                name="inbox-quick-import",
+                daemon=True,
+            )
+            _INBOX_TRIGGER_STATE["worker"] = started_worker
+            started = True
+            running = False
+    if started_worker is not None:
+        started_worker.start()
+    _INBOX_TRIGGER_EVENT.set()
     return {
         "ok": True,
-        "started": True,
+        "started": started,
         "queued": True,
-        "running": False,
-        "summary": "已开始接收夹整理",
+        "running": running,
+        "summary": "已有接收夹整理在执行，已安排再跑一轮" if running else "已开始接收夹整理",
     }
+
+
+def _inbox_delay_seconds() -> int:
+    try:
+        conf = build_quick_import_config(get_config())
+    except Exception:
+        conf = {}
+    return max(0, int(conf.get("inbox_idle_seconds", QUICK_IMPORT_DEFAULT_IDLE_SECONDS) or 0))
+
+
+def _wait_for_inbox_next_run() -> None:
+    """等待下一次接收夹整理：新保存按静默窗口；手动触发立即放行。"""
+    idle_seconds = _inbox_delay_seconds()
+    while True:
+        with _INBOX_TRIGGER_LOCK:
+            if not _INBOX_TRIGGER_STATE.get("pending"):
+                return
+            if str(_INBOX_TRIGGER_STATE.get("trigger", "") or "").strip() == "manual":
+                return
+            if idle_seconds <= 0:
+                return
+            deadline = float(_INBOX_TRIGGER_STATE.get("last_arrival_at", 0.0) or 0.0) + idle_seconds
+            now = time.monotonic()
+            remaining = deadline - now
+        if remaining <= 0:
+            return
+        _INBOX_TRIGGER_EVENT.wait(min(0.5, remaining))
 
 
 def _inbox_worker_loop(trigger: str, source_ref: str) -> None:
@@ -132,7 +171,9 @@ def _inbox_worker_loop(trigger: str, source_ref: str) -> None:
                 # 极端情况下锁超时：不丢请求，稍后重试这一轮。
                 with _INBOX_TRIGGER_LOCK:
                     _INBOX_TRIGGER_STATE["pending"] = True
+                _INBOX_TRIGGER_EVENT.set()
                 time.sleep(5)
+                continue
         except Exception:
             logging.exception("接收夹整理执行失败")
         with _INBOX_TRIGGER_LOCK:
@@ -140,10 +181,22 @@ def _inbox_worker_loop(trigger: str, source_ref: str) -> None:
                 _INBOX_TRIGGER_STATE["worker"] = None
                 _INBOX_TRIGGER_STATE["trigger"] = ""
                 _INBOX_TRIGGER_STATE["source_ref"] = ""
+                _INBOX_TRIGGER_EVENT.clear()
                 return
-            _INBOX_TRIGGER_STATE["pending"] = False
             current_trigger = str(_INBOX_TRIGGER_STATE.get("trigger", "") or "queued")
             current_ref = str(_INBOX_TRIGGER_STATE.get("source_ref", "") or "")
+        _wait_for_inbox_next_run()
+        with _INBOX_TRIGGER_LOCK:
+            if not _INBOX_TRIGGER_STATE.get("pending"):
+                _INBOX_TRIGGER_STATE["worker"] = None
+                _INBOX_TRIGGER_STATE["trigger"] = ""
+                _INBOX_TRIGGER_STATE["source_ref"] = ""
+                _INBOX_TRIGGER_EVENT.clear()
+                return
+            current_trigger = str(_INBOX_TRIGGER_STATE.get("trigger", "") or current_trigger)
+            current_ref = str(_INBOX_TRIGGER_STATE.get("source_ref", "") or current_ref)
+            _INBOX_TRIGGER_STATE["pending"] = False
+            _INBOX_TRIGGER_EVENT.clear()
 
 
 def pending_quick_import_rerun() -> bool:
@@ -218,12 +271,21 @@ def build_quick_import_config(cfg: Optional[Dict[str, Any]] = None) -> Dict[str,
                 task.get("auto_scrape_options") if isinstance(task.get("auto_scrape_options"), dict) else {}
             ),
         }
+    raw_inbox_max_items = inbox.get("inbox_max_items_per_run", 100)
+    inbox_max_items_per_run = (
+        int(raw_inbox_max_items)
+        if raw_inbox_max_items is not None and str(raw_inbox_max_items).strip() != ""
+        else 100
+    )
     return {
         "task_name": str(inbox.get("name", "") or "").strip(),
         "enabled": bool(inbox.get("enabled")) if inbox else False,
         "inbox_path": _inbox_remote_path(active_cfg),
         "inbox_rel": _inbox_rel_path(active_cfg),
         "targets": targets,
+        "inbox_idle_seconds": max(0, int(inbox.get("inbox_idle_seconds", 120) or 120)),
+        "inbox_max_items_per_run": max(1, min(500, inbox_max_items_per_run)),
+        "inbox_batch_pause_seconds": max(0, int(inbox.get("inbox_batch_pause_seconds", 5) or 5)),
     }
 
 
@@ -870,6 +932,42 @@ def _queue_dispatch_child_run(
         return ""
 
 
+def _queue_dispatch_child_runs(cfg: Dict[str, Any], scopes: List[str]) -> Dict[str, str]:
+    """把本轮所有分发范围按监控任务合并入队，返回 task_name -> run_id。"""
+    unique_scopes: List[str] = []
+    for raw_scope in scopes if isinstance(scopes, list) else []:
+        scope = normalize_relative_path(str(raw_scope or "").strip())
+        if scope and scope not in unique_scopes:
+            unique_scopes.append(scope)
+    if not unique_scopes:
+        return {}
+    try:
+        from .monitor import queue_monitor_dir_scan
+    except Exception:
+        logging.exception("加载监控扫描队列失败")
+        return {}
+    run_ids: Dict[str, str] = {}
+    for index in range(0, len(unique_scopes), QUICK_IMPORT_SCAN_SCOPE_CHUNK):
+        chunk = unique_scopes[index : index + QUICK_IMPORT_SCAN_SCOPE_CHUNK]
+        try:
+            result = queue_monitor_dir_scan(
+                cfg,
+                QUICK_IMPORT_PROVIDER,
+                chunk,
+                run_source="inbox_dispatch",
+                force_new=False,
+            )
+        except Exception:
+            logging.exception("接收夹分发扫描合并入队失败：%s", "、".join(chunk[:3]))
+            continue
+        for task in result.get("tasks") if isinstance(result.get("tasks"), list) else []:
+            task_name = str((task or {}).get("task_name", "") or "").strip()
+            run_id = str((task or {}).get("run_id", "") or "").strip()
+            if task_name and run_id:
+                run_ids[task_name] = run_id
+    return run_ids
+
+
 def run_quick_import(
     trigger: str = "manual",
     *,
@@ -1008,255 +1106,344 @@ def run_quick_import(
 
             processed_indexes: List[int] = []
             cancelled = False
-            for index in sorted(picked):
-                if _QUICK_IMPORT_CANCEL.is_set():
-                    cancelled = True
+            max_items_per_run = max(1, int(conf.get("inbox_max_items_per_run", 100) or 100))
+            batch_pause_seconds = max(0, int(conf.get("inbox_batch_pause_seconds", QUICK_IMPORT_DEFAULT_BATCH_PAUSE_SECONDS) or 0))
+            ordered_indexes = sorted(picked)
+            pending_moved: List[Dict[str, Any]] = []
+            dispatch_scan_scopes: List[str] = []
+
+            for batch_start in range(0, len(ordered_indexes), max_items_per_run):
+                if cancelled:
                     break
-                processed_indexes.append(index)
-                item = items_by_index.get(index)
-                candidate = picked.get(index) if isinstance(picked.get(index), dict) else {}
-                if not item or not candidate:
-                    continue
-                media_type = normalize_tmdb_media_type(candidate.get("media_type"), "")
-                if media_type not in QUICK_IMPORT_TARGET_KEYS:
-                    left.append(
-                        {
-                            "name": str(item.get("name", "") or ""),
-                            "reason_code": "unrecognized",
-                            "reason": "无法判断是电影还是电视剧",
-                        }
-                    )
-                    continue
-                target = conf["targets"].get(media_type) or {}
-                if not target:
-                    left.append(
-                        {
-                            "name": str(item.get("name", "") or ""),
-                            "reason_code": "target_unavailable",
-                            "reason": f"没有监控任务标注为「{QUICK_IMPORT_TARGET_LABELS[media_type]}」快捷导入目标",
-                        }
-                    )
-                    continue
-                options = _target_scrape_options(target)
-                # 接收夹里常常是"散文件"（没有独立文件夹），必须强制整理进 片名 (年份)/ 再搬运，
-                # 否则只会原地改名、搬过去还是散文件。
-                options["force_media_folder"] = True
-                try:
-                    target_cid = resolve_scraper_dest_folder_id(
-                        QUICK_IMPORT_PROVIDER,
-                        target["scan_rel"],
-                    )
-                except Exception as exc:
-                    left.append(
-                        {
-                            "name": str(item.get("name", "") or ""),
-                            "reason_code": "target_unavailable",
-                            "reason": f"目标监控目录不可用：{str(exc)[:120]}",
-                        }
-                    )
-                    continue
-                # 接收夹里的文件夹只是中转：目标监控目录里已经有这部剧/这部电影的文件夹时，
-                # 直接把内容并进去即可，不必先把接收夹文件夹改成规范名——同批多个同名文件夹
-                # 会互相撞成"当前目录中已有同名文件夹"，最后一个只能留在接收夹里。
-                source_entry = item.get("entry") if isinstance(item.get("entry"), dict) else {}
-                source_entry_name = str(source_entry.get("name", "") or "").strip()
-                if bool(source_entry.get("is_dir")) and source_entry_name:
-                    try:
-                        existing_target_folder = scraper_service.find_scraper_media_folder(
-                            QUICK_IMPORT_PROVIDER,
-                            target_cid,
-                            source_entry_name,
+                batch_indexes = ordered_indexes[batch_start : batch_start + max_items_per_run]
+                prepared: List[Dict[str, Any]] = []
+                for index in batch_indexes:
+                    if _QUICK_IMPORT_CANCEL.is_set():
+                        cancelled = True
+                        break
+                    processed_indexes.append(index)
+                    item = items_by_index.get(index)
+                    candidate = picked.get(index) if isinstance(picked.get(index), dict) else {}
+                    if not item or not candidate:
+                        continue
+                    media_type = normalize_tmdb_media_type(candidate.get("media_type"), "")
+                    if media_type not in QUICK_IMPORT_TARGET_KEYS:
+                        left.append(
+                            {
+                                "name": str(item.get("name", "") or ""),
+                                "reason_code": "unrecognized",
+                                "reason": "无法判断是电影还是电视剧",
+                            }
                         )
-                    except Exception:
-                        # 查一下目标目录只是"能不能直接合并"的优化，失败就按老流程（改规范名再搬）走。
-                        existing_target_folder = {}
-                    if existing_target_folder:
-                        options["rename_selected_folders"] = False
-                plan = build_scraper_plan_for_batch(
-                    QUICK_IMPORT_PROVIDER,
-                    [item],
-                    {index: candidate},
-                    options,
-                    base_cid=base_cid,
-                    base_path=base_rel,
-                )
-                plan_summaries = plan.get("items") if isinstance(plan, dict) else []
-                plan_summary = plan_summaries[0] if isinstance(plan_summaries, list) and plan_summaries else {}
-                issues = [
-                    str(value).strip()
-                    for value in ((plan.get("issues") if isinstance(plan, dict) else None) or [])
-                    if str(value or "").strip()
-                ]
-                if not plan or issues:
-                    left.append(
-                        {
-                            "name": str(item.get("name", "") or ""),
-                            "reason_code": "plan_conflict",
-                            "reason": f"整理计划有冲突：{issues[0][:120]}" if issues else "无法生成整理计划",
-                        }
-                    )
-                    continue
-                ready_count = max(0, parse_int(plan.get("ready_count", 0), 0))
-                job_id = 0
-                if ready_count > 0:
+                        continue
+                    target = conf["targets"].get(media_type) or {}
+                    if not target:
+                        left.append(
+                            {
+                                "name": str(item.get("name", "") or ""),
+                                "reason_code": "target_unavailable",
+                                "reason": f"没有监控任务标注为「{QUICK_IMPORT_TARGET_LABELS[media_type]}」快捷导入目标",
+                            }
+                        )
+                        continue
+                    options = _target_scrape_options(target)
+                    options["force_media_folder"] = True
                     try:
-                        job = create_scraper_job_from_plan({"plan": plan})
-                        job_id = max(0, parse_int(job.get("job_id", 0), 0))
-                        if job_id > 0:
-                            submit_scraper_job(job_id).result(timeout=QUICK_IMPORT_JOB_WAIT_SECONDS)
-                            state = scraper_service.get_scraper_jobs_state(job_id=job_id)
-                            jobs = state.get("jobs") if isinstance(state, dict) else []
-                            actual = jobs[0] if isinstance(jobs, list) and jobs else {}
-                            actual_status = str(actual.get("status", "") or "").strip()
-                            if actual_status in {"failed", "partial", "rollback_failed"}:
-                                detail = str(actual.get("status_detail", "") or "整理动作未全部完成")
-                                left.append(
-                                    {
-                                        "name": str(item.get("name", "") or ""),
-                                        "reason_code": "organize_failed",
-                                        "reason": f"整理{('部分完成' if actual_status == 'partial' else '失败')}：{detail[:120]}",
-                                    }
-                                )
-                                record_monitor_run_event(
-                                    monitor_run_id,
-                                    category="problem",
-                                    operation="organize",
-                                    status=actual_status,
-                                    title=str(item.get("name", "") or ""),
-                                    detail={"scraper_job_id": job_id, "status": actual_status, "detail": detail},
-                                )
-                                continue
-                            if actual_status == "completed":
-                                record_monitor_run_event(
-                                    monitor_run_id,
-                                    category="remote",
-                                    operation="organize",
-                                    status="completed",
-                                    title=str(item.get("name", "") or ""),
-                                    detail={
-                                        "scraper_job_id": job_id,
-                                        "succeeded_actions": int(actual.get("succeeded_actions", 0) or 0),
-                                        "failed_actions": int(actual.get("failed_actions", 0) or 0),
-                                    },
-                                )
+                        target_cid = resolve_scraper_dest_folder_id(
+                            QUICK_IMPORT_PROVIDER,
+                            target["scan_rel"],
+                        )
                     except Exception as exc:
                         left.append(
                             {
                                 "name": str(item.get("name", "") or ""),
-                                "reason_code": "organize_failed",
-                                "reason": f"整理失败：{str(exc)[:120]}",
+                                "reason_code": "target_unavailable",
+                                "reason": f"目标监控目录不可用：{str(exc)[:120]}",
                             }
                         )
                         continue
+                    source_entry = item.get("entry") if isinstance(item.get("entry"), dict) else {}
+                    source_entry_name = str(source_entry.get("name", "") or "").strip()
+                    if bool(source_entry.get("is_dir")) and source_entry_name:
+                        try:
+                            existing_target_folder = scraper_service.find_scraper_media_folder(
+                                QUICK_IMPORT_PROVIDER,
+                                target_cid,
+                                source_entry_name,
+                            )
+                        except Exception:
+                            existing_target_folder = {}
+                        if existing_target_folder:
+                            options["rename_selected_folders"] = False
+                    prepared.append(
+                        {
+                            "index": index,
+                            "item": item,
+                            "candidate": candidate,
+                            "media_type": media_type,
+                            "target": target,
+                            "target_cid": target_cid,
+                            "options": options,
+                            "source_entry_name": source_entry_name,
+                        }
+                    )
+                if not prepared:
+                    if cancelled:
+                        break
+                    if batch_start + max_items_per_run < len(ordered_indexes) and batch_pause_seconds > 0:
+                        if _QUICK_IMPORT_CANCEL.wait(batch_pause_seconds):
+                            cancelled = True
+                            break
+                    continue
+                groups: Dict[Any, List[Dict[str, Any]]] = {}
+                for prepared_item in prepared:
+                    key = (
+                        str(prepared_item["media_type"]),
+                        str(prepared_item["target"].get("task_name", "") or ""),
+                        bool(prepared_item["options"].get("rename_selected_folders", True)),
+                    )
+                    groups.setdefault(key, []).append(prepared_item)
+                for group in groups.values():
+                    if cancelled:
+                        break
+                    group_indexes = [int(item["index"]) for item in group]
+                    group_items = [items_by_index[index] for index in group_indexes if index in items_by_index]
+                    group_picked = {index: picked[index] for index in group_indexes if index in picked}
+                    if not group_items or not group_picked:
+                        continue
+                    group_options = dict(group[0]["options"])
+                    plan = build_scraper_plan_for_batch(
+                        QUICK_IMPORT_PROVIDER,
+                        group_items,
+                        group_picked,
+                        group_options,
+                        base_cid=base_cid,
+                        base_path=base_rel,
+                        item_indexes=set(group_indexes),
+                    )
+                    plan_items = plan.get("items") if isinstance(plan, dict) else []
+                    plan_items = plan_items if isinstance(plan_items, list) else []
+                    issues = [
+                        str(value).strip()
+                        for value in ((plan.get("issues") if isinstance(plan, dict) else None) or [])
+                        if str(value or "").strip()
+                    ]
+                    if not plan or issues:
+                        reason = f"整理计划有冲突：{issues[0][:120]}" if issues else "无法生成整理计划"
+                        for prepared_item in group:
+                            left.append(
+                                {
+                                    "name": str(prepared_item["item"].get("name", "") or ""),
+                                    "reason_code": "plan_conflict",
+                                    "reason": reason,
+                                }
+                            )
+                        continue
+                    summary_by_index = {
+                        max(0, parse_int(summary.get("item_index", 0), 0)): summary
+                        for summary in plan_items
+                        if isinstance(summary, dict)
+                    }
+                    ready_count = max(0, parse_int(plan.get("ready_count", 0), 0))
+                    job_id = 0
+                    if ready_count > 0:
+                        try:
+                            job = create_scraper_job_from_plan({"plan": plan})
+                            job_id = max(0, parse_int(job.get("job_id", 0), 0))
+                            if job_id > 0:
+                                submit_scraper_job(job_id).result(timeout=QUICK_IMPORT_JOB_WAIT_SECONDS)
+                                state = scraper_service.get_scraper_jobs_state(job_id=job_id)
+                                jobs = state.get("jobs") if isinstance(state, dict) else []
+                                actual = jobs[0] if isinstance(jobs, list) and jobs else {}
+                                actual_status = str(actual.get("status", "") or "").strip()
+                                if actual_status in {"failed", "partial", "rollback_failed"}:
+                                    detail = str(actual.get("status_detail", "") or "整理动作未全部完成")
+                                    for prepared_item in group:
+                                        left.append(
+                                            {
+                                                "name": str(prepared_item["item"].get("name", "") or ""),
+                                                "reason_code": "organize_failed",
+                                                "reason": f"整理{('部分完成' if actual_status == 'partial' else '失败')}：{detail[:120]}",
+                                            }
+                                        )
+                                    record_monitor_run_event(
+                                        monitor_run_id,
+                                        category="problem",
+                                        operation="organize",
+                                        status=actual_status or "failed",
+                                        title=f"{len(group)} 个条目",
+                                        detail={"scraper_job_id": job_id, "status": actual_status or "failed", "detail": detail},
+                                    )
+                                    continue
+                                if actual_status == "completed":
+                                    record_monitor_run_event(
+                                        monitor_run_id,
+                                        category="remote",
+                                        operation="organize",
+                                        status="completed",
+                                        title=f"{len(group)} 个条目",
+                                        detail={
+                                            "scraper_job_id": job_id,
+                                            "succeeded_actions": int(actual.get("succeeded_actions", 0) or 0),
+                                            "failed_actions": int(actual.get("failed_actions", 0) or 0),
+                                        },
+                                    )
+                        except Exception as exc:
+                            for prepared_item in group:
+                                left.append(
+                                    {
+                                        "name": str(prepared_item["item"].get("name", "") or ""),
+                                        "reason_code": "organize_failed",
+                                        "reason": f"整理失败：{str(exc)[:120]}",
+                                    }
+                                )
+                            continue
+                    for prepared_item in group:
+                        if _QUICK_IMPORT_CANCEL.is_set():
+                            cancelled = True
+                            break
+                        index = int(prepared_item["index"])
+                        item = prepared_item["item"]
+                        target = prepared_item["target"]
+                        target_cid = str(prepared_item["target_cid"] or "")
+                        original_entry = item.get("entry") if isinstance(item.get("entry"), dict) else {}
+                        summary = summary_by_index.get(index) or (plan_items[0] if len(plan_items) == 1 else {})
+                        if not summary:
+                            left.append(
+                                {
+                                    "name": str(item.get("name", "") or ""),
+                                    "reason_code": "organize_failed",
+                                    "reason": "整理计划缺少该条目，请人工确认",
+                                }
+                            )
+                            continue
+                        entry = _resolve_entry_after_organize(base_cid, summary, original_entry)
+                        entry_id = str(entry.get("id", "") or "").strip()
+                        if not entry_id:
+                            left.append(
+                                {
+                                    "name": str(item.get("name", "") or ""),
+                                    "reason_code": "organize_failed",
+                                    "reason": "整理后未能在接收夹内定位到条目，请人工确认",
+                                }
+                            )
+                            continue
+                        entry_name = str(entry.get("name", "") or "").strip()
+                        entry["parent_id"] = str(entry.get("parent_id", "") or base_cid).strip() or base_cid
+                        entry["parent_path"] = base_rel
+                        entry["path"] = normalize_relative_path(join_relative_path(base_rel, entry_name))
+                        try:
+                            dispatch = _dispatch_organized_entry(
+                                entry,
+                                source_cid=base_cid,
+                                source_rel=base_rel,
+                                target_cid=target_cid,
+                                target_rel=target["scan_rel"],
+                                job_id=job_id,
+                                name_cache=dispatch_name_cache,
+                                monitor_run_id=monitor_run_id,
+                            )
+                        except Exception as exc:
+                            left.append(
+                                {
+                                    "name": str(item.get("name", "") or ""),
+                                    "reason_code": "dispatch_failed",
+                                    "reason": f"搬运失败：{str(exc)[:120]}",
+                                }
+                            )
+                            continue
+                        if dispatch.get("skipped"):
+                            left.append(
+                                {
+                                    "name": str(item.get("name", "") or ""),
+                                    "reason_code": "plan_conflict",
+                                    "reason": (
+                                        f"目标文件夹「{dispatch.get('target_folder', '')}」中已存在同名文件："
+                                        f"{'、'.join(str(value) for value in dispatch.get('skipped') or [])[:120]}"
+                                    ),
+                                }
+                            )
+                            continue
+                        cleanup_leftovers.extend(dispatch.get("cleanup_pending") or [])
+                        scope_rel = _dispatch_scan_scope_rel(
+                            str(target.get("scan_rel", "") or ""),
+                            entry_name,
+                            bool(entry.get("is_dir")),
+                            dispatch,
+                        )
+                        if scope_rel and scope_rel not in dispatch_scan_scopes:
+                            dispatch_scan_scopes.append(scope_rel)
+                        candidate = prepared_item["candidate"]
+                        source_entry_name = prepared_item["source_entry_name"]
+                        is_ai = str(candidate.get("source") or "").strip() == "ai"
+                        match_source = "AI 识别" if is_ai else "规则匹配"
+                        confidence = max(0, int(candidate.get("ai_confidence") if is_ai else candidate.get("score") or 0))
+                        match_reason = str(candidate.get("ai_reason") or "").strip() if is_ai else ""
+                        tmdb_id = max(0, parse_int(candidate.get("id") or 0, 0))
+                        identified_year = str(candidate.get("year") or "").strip()
+                        pending_moved.append(
+                            {
+                                "name": str(item.get("name", "") or ""),
+                                "target_label": QUICK_IMPORT_TARGET_LABELS[prepared_item["media_type"]],
+                                "task_name": str(target.get("task_name", "") or ""),
+                                "job_id": job_id,
+                                "monitor_sync_events": int(dispatch.get("monitor_sync_events", 0) or 0),
+                                "title": str(item.get("name", "") or ""),
+                                "operation": "merge" if dispatch.get("merged") else "move",
+                                "detail": {
+                                    "step": "接收夹分发",
+                                    "operation_label": "网盘合并" if dispatch.get("merged") else "网盘移动",
+                                    "original_name": source_entry_name,
+                                    "match_source": match_source,
+                                    "confidence": confidence,
+                                    "match_reason": match_reason,
+                                    "tmdb_id": tmdb_id,
+                                    "identified_year": identified_year,
+                                    "old_name": entry_name,
+                                    "new_name": str(dispatch.get("target_folder", "") or entry_name),
+                                    "old_path": normalize_relative_path(str(entry.get("path", "") or join_relative_path(base_rel, entry_name))),
+                                    "new_path": normalize_relative_path(join_relative_path(
+                                        str(target.get("scan_rel", "") or ""),
+                                        str(dispatch.get("target_folder", "") or entry_name),
+                                    )),
+                                    "target": target.get("scan_rel", ""),
+                                    "task_name": target.get("task_name", ""),
+                                    "scraper_job_id": job_id,
+                                    "monitor_sync_events": int(dispatch.get("monitor_sync_events", 0) or 0),
+                                },
+                            }
+                        )
+                if cancelled:
+                    break
+                if batch_start + max_items_per_run < len(ordered_indexes) and batch_pause_seconds > 0:
+                    if _QUICK_IMPORT_CANCEL.wait(batch_pause_seconds):
+                        cancelled = True
+                        break
 
-                original_entry = item.get("entry") if isinstance(item.get("entry"), dict) else {}
-                entry = _resolve_entry_after_organize(base_cid, plan_summary, original_entry)
-                entry_id = str(entry.get("id", "") or "").strip()
-                if not entry_id:
-                    left.append(
-                        {
-                            "name": str(item.get("name", "") or ""),
-                            "reason_code": "organize_failed",
-                            "reason": "整理后未能在接收夹内定位到条目，请人工确认",
-                        }
-                    )
-                    continue
-                # 条目本身在接收夹里，补上接收夹下的完整路径：搬运/合并的监控同步事件要靠它算新旧路径。
-                entry_name = str(entry.get("name", "") or "").strip()
-                entry["parent_id"] = str(entry.get("parent_id", "") or base_cid).strip() or base_cid
-                entry["parent_path"] = base_rel
-                entry["path"] = normalize_relative_path(join_relative_path(base_rel, entry_name))
-                try:
-                    dispatch = _dispatch_organized_entry(
-                        entry,
-                        source_cid=base_cid,
-                        source_rel=base_rel,
-                        target_cid=target_cid,
-                        target_rel=target["scan_rel"],
-                        job_id=job_id,
-                        name_cache=dispatch_name_cache,
-                        monitor_run_id=monitor_run_id,
-                    )
-                except Exception as exc:
-                    left.append(
-                        {
-                            "name": str(item.get("name", "") or ""),
-                            "reason_code": "dispatch_failed",
-                            "reason": f"搬运失败：{str(exc)[:120]}",
-                        }
-                    )
-                    continue
-                if dispatch.get("skipped"):
-                    left.append(
-                        {
-                            "name": str(item.get("name", "") or ""),
-                            "reason_code": "plan_conflict",
-                            "reason": (
-                                f"目标文件夹「{dispatch.get('target_folder', '')}」中已存在同名文件："
-                                f"{'、'.join(str(value) for value in dispatch.get('skipped') or [])[:120]}"
-                            ),
-                        }
-                    )
-                    continue
-                # 搬运已经成功，只是接收夹里的空壳目录没删掉：先收集，等本轮全部搬完再统一重试，
-                # 只有确实还残留的才写进运行记录（避免“已清掉却还显示删除失败”）。
-                cleanup_leftovers.extend(dispatch.get("cleanup_pending") or [])
-                # 每个成功分发的条目立刻建一条独立的目录同步任务（自己的运行记录），
-                # 接收夹父运行不等它结束。
-                child_run_id = _queue_dispatch_child_run(
-                    cfg,
-                    str(target.get("scan_rel", "") or ""),
-                    entry_name,
-                    bool(entry.get("is_dir")),
-                    dispatch,
-                )
+            run_id_by_task = _queue_dispatch_child_runs(cfg, dispatch_scan_scopes)
+            for pending in pending_moved:
+                child_run_id = run_id_by_task.get(str(pending.get("task_name", "") or ""), "")
+                detail = {**pending["detail"], "child_run_id": child_run_id}
                 moved.append(
                     {
-                        "name": str(item.get("name", "") or ""),
-                        "target": QUICK_IMPORT_TARGET_LABELS[media_type],
-                        "task_name": str(target.get("task_name", "") or ""),
-                        "job_id": job_id,
+                        "name": pending["name"],
+                        "target": pending["target_label"],
+                        "task_name": pending["task_name"],
+                        "job_id": pending["job_id"],
                         "run_id": child_run_id,
-                        "monitor_sync_events": int(dispatch.get("monitor_sync_events", 0) or 0),
+                        "monitor_sync_events": pending["monitor_sync_events"],
                     }
                 )
-                is_ai = str(candidate.get("source") or "").strip() == "ai"
-                match_source = "AI 识别" if is_ai else "规则匹配"
-                confidence = max(0, int(candidate.get("ai_confidence") if is_ai else candidate.get("score") or 0))
-                match_reason = str(candidate.get("ai_reason") or "").strip() if is_ai else ""
-                tmdb_id = max(0, parse_int(candidate.get("id") or 0, 0))
-                identified_year = str(candidate.get("year") or "").strip()
                 record_monitor_run_event(
                     monitor_run_id,
                     category="remote",
-                    operation="merge" if dispatch.get("merged") else "move",
+                    operation=pending["operation"],
                     status="completed",
-                    title=str(item.get("name", "") or ""),
-                    detail={
-                        "step": "接收夹分发",
-                        "operation_label": "网盘合并" if dispatch.get("merged") else "网盘移动",
-                        "original_name": source_entry_name,
-                        "match_source": match_source,
-                        "confidence": confidence,
-                        "match_reason": match_reason,
-                        "tmdb_id": tmdb_id,
-                        "identified_year": identified_year,
-                        "old_name": entry_name,
-                        "new_name": str(dispatch.get("target_folder", "") or entry_name),
-                        "old_path": normalize_relative_path(str(entry.get("path", "") or join_relative_path(base_rel, entry_name))),
-                        "new_path": normalize_relative_path(join_relative_path(
-                            str(target.get("scan_rel", "") or ""),
-                            str(dispatch.get("target_folder", "") or entry_name),
-                        )),
-                        "target": target.get("scan_rel", ""),
-                        "task_name": target.get("task_name", ""),
-                        "scraper_job_id": job_id,
-                        "child_run_id": child_run_id,
-                        "monitor_sync_events": int(dispatch.get("monitor_sync_events", 0) or 0),
-                    },
+                    title=pending["title"],
+                    detail=detail,
                 )
 
-            handled_indexes = set(picked.keys())
+            handled_indexes = set(picked.keys()) if cancelled else set(processed_indexes)
             for index, item in items_by_index.items():
                 if index in handled_indexes:
                     continue

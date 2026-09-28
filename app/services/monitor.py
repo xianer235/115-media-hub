@@ -2333,6 +2333,7 @@ def queue_monitor_job(
                     matched_run_id,
                     subject=_monitor_run_subject(normalized_task_name, merged_scope.get("paths")),
                     result={"scope": merged_scope},
+                    scope=merged_scope,
                 )
             queued_run_id = matched_run_id
             matched_item["mode"] = mode
@@ -2574,10 +2575,10 @@ def queue_inbox_dispatch_scan(
     cfg: Dict[str, Any],
     path: str,
 ) -> str:
-    """接收夹分发一个条目后，立刻为它单独排一条独立的目录同步任务。
+    """接收夹分发条目后，登记对应的目录同步范围。
 
-    任务不挂接收夹父运行：接收夹记录只覆盖识别与整理移动，STRM 生成由这条
-    独立记录展示，来源标注「接收夹分发」。
+    同一个监控任务下的多个分发范围会合并进同一条队列任务，避免 144 个条目
+    产生 144 次目录扫描。任务不挂接收夹父运行，来源标注「接收夹分发」。
     """
     normalized = normalize_relative_path(str(path or "").strip())
     if not normalized:
@@ -2588,7 +2589,7 @@ def queue_inbox_dispatch_scan(
             "115",
             [normalized],
             run_source="inbox_dispatch",
-            force_new=True,
+            force_new=False,
         )
     except Exception:
         logging.exception("Failed to queue inbox dispatch scan: %s", normalized)

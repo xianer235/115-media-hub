@@ -164,6 +164,10 @@
         .monitor-run-simple-metrics dt { color: var(--run-muted); font-size: 0.7rem; }
         .monitor-run-simple-metrics dd { margin: 0.1rem 0 0; color: var(--run-text); font-size: 1rem; font-weight: 800; }
         .monitor-run-simple-meta { margin: 0.5rem 0 0; color: var(--run-muted); font-size: 0.72rem; line-height: 1.6; overflow-wrap: anywhere; }
+        .monitor-run-scope-label { color: var(--run-muted); }
+        .monitor-run-scope-paths { display: grid; gap: 0.22rem; margin-top: 0.3rem; }
+        .monitor-run-scope-path { color: var(--run-text); font-size: 0.72rem; line-height: 1.5; padding-left: 0.6rem; border-left: 2px solid var(--run-line); overflow-wrap: anywhere; }
+        .monitor-run-meta-items { display: inline-block; margin-top: 0.4rem; }
         .monitor-run-outcome { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
         .monitor-run-outcome h4 { margin: 0; color: var(--run-muted); font-size: 0.72rem; font-weight: 800; letter-spacing: 0; }
         .monitor-run-detail-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.8rem; }
@@ -191,6 +195,12 @@
         .monitor-run-step.is-current .monitor-run-step-dot { color: var(--run-active); background: rgba(14, 165, 233, 0.14); }
         .monitor-run-step.is-todo .monitor-run-step-dot { color: var(--run-muted); }
         .monitor-run-step.is-stopped .monitor-run-step-dot { color: var(--run-warning); background: rgba(251, 191, 36, 0.14); }
+        .monitor-run-inbox-pairs { display: grid; gap: 0.4rem; margin: 0.5rem 0 0; }
+        .monitor-run-inbox-pair { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 0.5rem; align-items: baseline; padding: 0.42rem 0.55rem; border: 1px solid var(--run-line); border-radius: 0.45rem; background: var(--run-soft); }
+        .monitor-run-inbox-original,
+        .monitor-run-inbox-organized { min-width: 0; color: var(--run-text); font-size: 0.74rem; font-weight: 700; overflow-wrap: anywhere; }
+        .monitor-run-inbox-arrow { color: var(--run-muted); font-size: 0.7rem; font-weight: 900; }
+        .monitor-run-inbox-meta { grid-column: 1 / -1; color: var(--run-muted); font-size: 0.68rem; }
         .monitor-run-subsection { margin: 1rem 0 0.45rem; color: var(--run-muted); font-size: 0.72rem; font-weight: 800; letter-spacing: 0; }
         .monitor-run-event-row { display: grid; grid-template-columns: 4.6rem minmax(0, 1fr) auto; gap: 0.6rem; align-items: start; padding: 0.55rem 0.4rem; border-bottom: 1px solid var(--run-line); text-align: left; color: var(--run-text); }
         button.monitor-run-event-row { width: 100%; background: none; border-left: 0; border-right: 0; border-top: 0; }
@@ -242,6 +252,7 @@
             .monitor-run-modal-body { padding: 0.85rem 0.75rem 1.1rem; }
             .monitor-run-detail-action { flex: 1 1 auto; min-height: 38px; }
             .monitor-run-steps { width: 100%; }
+            .monitor-run-inbox-pair { grid-template-columns: 1fr; }
             .monitor-run-event-row { grid-template-columns: 4rem minmax(0, 1fr); }
             .monitor-run-event-time { grid-column: 2; }
             .monitor-run-detail-row { grid-template-columns: 1fr; gap: 0.16rem; }

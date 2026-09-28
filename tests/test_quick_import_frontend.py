@@ -86,6 +86,22 @@ class InboxTaskFrontendTest(unittest.TestCase):
         self.assertIn("'monitor-scan-fields'", script)
         self.assertIn("'monitor-inbox-fields'", script)
 
+    def test_inbox_throttle_fields_are_present_and_wired(self):
+        modal = MONITOR_MODAL_PATH.read_text(encoding="utf-8")
+        for marker in (
+            'id="monitor_inbox_idle_seconds"',
+            'id="monitor_inbox_max_items_per_run"',
+            'id="monitor_inbox_batch_pause_seconds"',
+        ):
+            self.assertIn(marker, modal)
+        script = INDEX_SCRIPT_PATH.read_text(encoding="utf-8")
+        for marker in (
+            "inbox_idle_seconds",
+            "inbox_max_items_per_run",
+            "inbox_batch_pause_seconds",
+        ):
+            self.assertIn(marker, script)
+
     def test_inbox_task_is_builtin_and_not_deletable(self):
         """接收夹是内置槽位：默认就有一个，界面上不给新建第二个、也不给删除。"""
         script = INDEX_SCRIPT_PATH.read_text(encoding="utf-8")

@@ -720,6 +720,63 @@ class MonitorRunViewTest(unittest.TestCase):
         # 步骤只出现一次：概览的步骤条不再复制到别处。
         self.assertEqual(html.count("monitor-run-step-name"), 2)
 
+    def test_inbox_overview_lists_original_and_organized_names(self):
+        """接收夹概览显示原始名称 -> 整理后名称，并附识别来源与置信度。"""
+        html = run_view(
+            """window.MonitorRunView.detailHtml({
+                run: {id: 'inbox-1', task_name: '接收', subject: '示例剧', run_kind: 'inbox',
+                      status: 'completed', summary: '已分发 1 项。', result: {moved: 1, left: 0}},
+                events: [],
+                inbox_items: [
+                    {original_name: '【原始文件夹】示例剧', new_name: '示例剧 (2024) [tmdbid-1]',
+                     match_source: 'AI 识别', confidence: 68},
+                ],
+                counts: {}, total: 0,
+            })"""
+        )
+
+        self.assertIn("已整理条目", html)
+        self.assertIn("【原始文件夹】示例剧", html)
+        self.assertIn("示例剧 (2024) [tmdbid-1]", html)
+        self.assertIn("AI 识别 · 68", html)
+        self.assertIn("monitor-run-inbox-pair", html)
+
+    def test_inbox_overview_name_mapping_only_for_inbox_and_nonempty(self):
+        scan = run_view(
+            "window.MonitorRunView.detailHtml({run: {id: 's1', run_kind: 'scan', task_name: '电影', "
+            "status: 'completed', summary: '检查完成', result: {generated: 1}}, events: [], "
+            "inbox_items: [{original_name: 'A', new_name: 'B'}], counts: {}, total: 0})"
+        )
+        empty_inbox = run_view(
+            "window.MonitorRunView.detailHtml({run: {id: 'i2', run_kind: 'inbox', task_name: '接收', "
+            "status: 'no_change', summary: '没有需要分发的条目', result: {moved: 0}}, events: [], "
+            "inbox_items: [], counts: {}, total: 0})"
+        )
+
+        self.assertNotIn("已整理条目", scan)
+        self.assertNotIn("monitor-run-inbox-pair", scan)
+        self.assertNotIn("已整理条目", empty_inbox)
+        self.assertNotIn("monitor-run-inbox-pair", empty_inbox)
+
+    def test_overview_scope_paths_render_line_by_line(self):
+        """变更同步的多条范围路径要逐行展示，不能堆成一段。"""
+        html = run_view(
+            """window.MonitorRunView.detailHtml({
+                run: {id: 'c1', run_kind: 'change', task_name: '电视剧', source: 'change', status: 'completed',
+                      summary: '已同步 2 条网盘变更', scope: {kind: 'paths', paths: [
+                        '电视剧/抑制热情 (2000) [tmdbid-4546]/Subs/S08E01',
+                        '电视剧/抑制热情 (2000) [tmdbid-4546]/Subs/S08E02',
+                      ]}},
+                events: [], counts: {}, total: 0,
+            })"""
+        )
+
+        self.assertIn("monitor-run-scope-paths", html)
+        self.assertEqual(html.count('class="monitor-run-scope-path"'), 2)
+        self.assertIn("S08E01", html)
+        self.assertIn("S08E02", html)
+        self.assertNotIn("S08E01、S08E02", html)
+
     def test_change_and_scan_overview_skip_step_strip(self):
         scan = run_view(
             "window.MonitorRunView.detailHtml({run: {id: 's1', run_kind: 'scan', task_name: '电影', "

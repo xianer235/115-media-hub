@@ -4194,7 +4194,16 @@
                     : (parseInt(document.getElementById('monitor_list_delay_ms').value, 10) || 0),
                 min_file_size_mb: parseFloat(document.getElementById('monitor_min_file_size_mb').value || '0') || 0,
                 delay_seconds: parseInt(document.getElementById('monitor_delay_seconds').value || '0', 10) || 0,
-                cron_minutes: parseInt(document.getElementById('monitor_cron_minutes').value || '0', 10) || 0
+                cron_minutes: parseInt(document.getElementById('monitor_cron_minutes').value || '0', 10) || 0,
+                inbox_idle_seconds: taskType === 'inbox'
+                    ? Math.max(0, Math.min(3600, parseInt(document.getElementById('monitor_inbox_idle_seconds').value || '120', 10) || 120))
+                    : 120,
+                inbox_max_items_per_run: taskType === 'inbox'
+                    ? Math.max(1, Math.min(500, parseInt(document.getElementById('monitor_inbox_max_items_per_run').value || '100', 10) || 100))
+                    : 100,
+                inbox_batch_pause_seconds: taskType === 'inbox'
+                    ? Math.max(0, Math.min(300, parseInt(document.getElementById('monitor_inbox_batch_pause_seconds').value || '5', 10) || 5))
+                    : 5
             };
         }
 
@@ -4602,6 +4611,9 @@
             document.getElementById('monitor_min_file_size_mb').value = 0;
             document.getElementById('monitor_delay_seconds').value = 0;
             document.getElementById('monitor_cron_minutes').value = 0;
+            document.getElementById('monitor_inbox_idle_seconds').value = 120;
+            document.getElementById('monitor_inbox_max_items_per_run').value = 100;
+            document.getElementById('monitor_inbox_batch_pause_seconds').value = 5;
             populateMonitorInboxTargetSelects({});
             syncMonitorTaskTypeOptions();
             applyMonitorTaskTypeUI();
@@ -4786,6 +4798,9 @@
             document.getElementById('monitor_min_file_size_mb').value = task.min_file_size_mb ?? 0;
             document.getElementById('monitor_delay_seconds').value = task.delay_seconds ?? 0;
             document.getElementById('monitor_cron_minutes').value = task.cron_minutes ?? 0;
+            document.getElementById('monitor_inbox_idle_seconds').value = task.inbox_idle_seconds ?? 120;
+            document.getElementById('monitor_inbox_max_items_per_run').value = task.inbox_max_items_per_run ?? 100;
+            document.getElementById('monitor_inbox_batch_pause_seconds').value = task.inbox_batch_pause_seconds ?? 5;
             syncMonitorTaskTypeOptions();
             applyMonitorTaskTypeUI();
             showLockedModal('monitor-modal');

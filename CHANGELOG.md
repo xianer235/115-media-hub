@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.12.2] - 2026-09-28
+
+### 接收夹整理降频与运行记录可读性优化
+
+本版修复接收夹大批量导入时反复重扫导致 115 限流的问题，并补齐接收夹整理节流配置、原名称 / 整理后名称对照，以及运行记录多条范围路径的逐行展示。
+
+#### 1. 接收夹整理改为「一次扫描 + 批内执行」
+
+- **背景**：旧实现为了限制单轮处理数量，每处理 50 个条目就结束当前运行并重新进入整理流程；下一轮会再次从头扫描接收夹、重新识别全部剩余条目。连续导入 144 个条目时会形成多次完整扫描，且默认间隔只有 5 秒，容易触发 115 限流。
+- **改法**：`run_quick_import()` 现在一轮只调用一次 `identify_scraper_batch_entries()`，识别结果保留在内存中；按 `inbox_max_items_per_run` 切批，但批次只影响计划 / 执行，不再触发重新扫描。
+- **分组建计划**：每个批次按媒体类型、目标监控任务和重命名策略分组，每组只调用一次 `build_scraper_plan_for_batch()` 并提交一个刮削任务；底层移动 / 重命名继续按已有的 100 条 / 次批量接口执行，避免退化成逐条请求。
+- **子扫描合并**：本轮所有分发成功的目录范围先收集去重，收尾时统一调用 `queue_monitor_dir_scan()` 合并入队，不再依赖逐条 `force_new=False` 的竞态式合并。
+
+#### 2. 接收夹整理节流配置
+
+- 文件夹监控 → 编辑内置接收夹任务新增「接收夹整理节流」：
+  - **无新文件等待时间**（默认 `120` 秒）：连续多久没有新保存才自动执行，新保存会重新计时；手动「立即整理」立即执行。
+  - **单批最多整理条目数**（默认 `100`）：只控制同一轮内的执行批次，不重新扫描接收夹。
+  - **轮间暂停**（默认 `5` 秒）：批次之间的额外缓冲。
+- 配置由 `normalize_task()` 统一钳制并保存，旧配置缺少字段时自动补默认值，不新增数据表。
+
+#### 3. 运行记录展示
+
+- 接收夹运行概览新增「已整理条目」对照区，逐条显示原始文件夹名 / 文件名 → 整理后文件夹名，并附识别来源与置信度；只取成功移动 / 合并的分发事件，不重复计算整理重命名事件。
+- 运行记录概览的多条范围路径改为逐行展示，长路径自动换行，不再用「、」拼成一段。
+
+#### 4. 修复
+
+- 等待下一次接收夹整理期间点「中断」时，等待线程现在会立即退出，不再等到静默窗口结束。
+- 同一次接收夹分发产生的多个目录扫描范围会统一合并入队，减少逐条目扫描任务。
+
+### 验证
+
+- 新增 / 更新 `test_batch_size_processes_all_items_without_rescan`（一次识别、两批处理不重扫）、`test_batch_scan_merges_scopes_before_queueing`（分发范围先去重再入队）、`test_inbox_dispatch_scans_merge_within_same_task`（同任务多次分发合并同一条扫描）、`test_inbox_overview_lists_original_and_organized_names`（概览名称对照）、`test_overview_scope_paths_render_line_by_line`（范围逐行展示）等回归。
+- 完整 `unittest discover -s tests -p 'test_*.py'` **1126 项零失败**；`compileall app main.py`、改动 JS `node --check`、`git diff --check`、`version.json` 解析通过。
+- 未做：真实 115 批量移动 / 重命名链路、容器重建与浏览器页面复核。
+
 ## [0.12.1] - 2026-09-27
 
 ### 优化：设置页分区折叠、说明收进弹窗、整理选项分界加强

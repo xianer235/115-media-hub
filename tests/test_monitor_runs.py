@@ -118,6 +118,45 @@ class MonitorRunStoreTest(unittest.TestCase):
         self.assertEqual(detail["counts"]["remote"], 1)
         self.assertEqual([event["title"] for event in detail["events"]], ["示例剧 24 集"])
 
+    def test_inbox_detail_overview_lists_dispatch_name_mapping_only(self):
+        parent = monitor_runs.create_run(run_kind="inbox", task_name="接收", source="manual", subject="示例剧")
+        monitor_runs.record_event(
+            parent,
+            category="remote",
+            operation="organize",
+            status="completed",
+            title="整理重命名",
+            detail={"step": "接收夹分发", "old_name": "示例剧", "new_name": "示例剧 (2024) [tmdbid-1]"},
+        )
+        monitor_runs.record_event(
+            parent,
+            category="remote",
+            operation="move",
+            status="completed",
+            title="示例剧",
+            detail={
+                "step": "接收夹分发",
+                "original_name": "【原始文件夹】示例剧",
+                "new_name": "示例剧 (2024) [tmdbid-1]",
+                "match_source": "AI 识别",
+                "confidence": 68,
+            },
+        )
+
+        detail = monitor_runs.get_run_detail(parent)
+
+        self.assertEqual(
+            detail["inbox_items"],
+            [
+                {
+                    "original_name": "【原始文件夹】示例剧",
+                    "new_name": "示例剧 (2024) [tmdbid-1]",
+                    "match_source": "AI 识别",
+                    "confidence": 68,
+                }
+            ],
+        )
+
     def test_waiting_inbox_parent_with_left_items_stays_active_until_child_finishes(self):
         parent = monitor_runs.create_run(run_kind="inbox", task_name="接收", source="manual", subject="混合结果")
         monitor_runs.wait_run(
@@ -786,7 +825,7 @@ class MonitorRunQueueOperationTest(MonitorRunStoreTest):
         self.assertTrue(cancelled["result"]["cancelled_before_start"])
 
     def test_dispatch_child_queues_its_own_independent_run(self):
-        """分发的每个条目一条独立扫描任务，来源标注接收夹分发、不挂接收夹父运行。"""
+        """接收夹分发的扫描记录来源标注接收夹分发、不挂接收夹父运行。"""
         queued = []
         status = {"running": True, "current_task": "其他任务", "queued": []}
         cfg = {
@@ -808,6 +847,30 @@ class MonitorRunQueueOperationTest(MonitorRunStoreTest):
         self.assertEqual(detail["run"]["source"], "inbox_dispatch")
         self.assertEqual(detail["run"]["scope"], {"kind": "paths", "paths": ["/电视剧/三体 S01"]})
         self.assertEqual(detail["run"]["subject"], "三体 S01")
+
+    def test_inbox_dispatch_scans_merge_within_same_task(self):
+        """同一次接收夹分发的多个目标文件夹合并成一条目录同步，避免逐条扫描。"""
+        queued = []
+        status = {"running": True, "current_task": "其他任务", "queued": []}
+        cfg = {
+            "mount_points": [{"provider": "115", "prefix": "/115"}],
+            "monitor_tasks": [self._scan_task()],
+        }
+        with patch.object(monitor, "monitor_queue", queued), \
+                patch.object(monitor, "monitor_status", status), \
+                patch.object(monitor, "get_config", return_value=cfg), \
+                patch.object(monitor, "schedule_ui_state_push", Mock()):
+            first = monitor.queue_inbox_dispatch_scan(cfg, "电视剧/三体 S01")
+            second = monitor.queue_inbox_dispatch_scan(cfg, "电视剧/三体 S02")
+
+        self.assertTrue(first)
+        self.assertEqual(first, second)
+        self.assertEqual(len(queued), 1)
+        detail = monitor_runs.get_run_detail(first)
+        self.assertEqual(
+            detail["run"]["scope"],
+            {"kind": "paths", "paths": ["/电视剧/三体 S01", "/电视剧/三体 S02"]},
+        )
 
     def test_disabled_task_still_accepts_auto_followups(self):
         """停用只拦住自动定时/资源触发；已经分发的条目仍要完成 STRM 同步。"""

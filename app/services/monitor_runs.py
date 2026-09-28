@@ -1330,6 +1330,39 @@ def settle_run_chain(run_id: str) -> int:
     return changed
 
 
+def _inbox_dispatch_items(conn: Any, run_id: str) -> List[Dict[str, Any]]:
+    """提取接收夹整理里成功分发/合并的条目，用于概览的原始名称 -> 整理后名称对照。"""
+    rows = conn.execute(
+        """SELECT detail_json FROM monitor_run_events
+            WHERE run_id = ? AND category = 'remote'
+              AND operation IN ('move', 'merge')
+              AND status = 'completed'
+            ORDER BY id""",
+        (_text(run_id),),
+    ).fetchall()
+    items: List[Dict[str, Any]] = []
+    for row in rows:
+        detail = safe_json_loads(row[0], {})
+        if not isinstance(detail, dict):
+            detail = {}
+        original_name = _text(detail.get("original_name") or detail.get("old_name"))
+        new_name = _text(detail.get("new_name"))
+        if not new_name:
+            new_path = _text(detail.get("new_path"))
+            new_name = new_path.rstrip("/").rsplit("/", 1)[-1] if new_path else ""
+        if not original_name and not new_name:
+            continue
+        items.append(
+            {
+                "original_name": original_name,
+                "new_name": new_name,
+                "match_source": _text(detail.get("match_source")),
+                "confidence": _count_result(detail.get("confidence", 0)),
+            }
+        )
+    return items
+
+
 def get_run_detail(run_id: str, *, category: str = "", offset: int = 0, limit: int = 50) -> Dict[str, Any]:
     run_id, limit = _text(run_id), max(1, min(100, int(limit or 50)))
     offset, category = max(0, int(offset or 0)), _text(category)
@@ -1340,6 +1373,7 @@ def get_run_detail(run_id: str, *, category: str = "", offset: int = 0, limit: i
         upstream_change = None
         if _text(run.get("run_kind")) == "scan" and _text(run.get("source")).lower() == "inbox_dispatch":
             upstream_change = _find_upstream_change(conn, run)
+        inbox_items = _inbox_dispatch_items(conn, run_id) if _text(run.get("run_kind")) == "inbox" else []
         parameters = {"run_id": run_id, "category": category, "limit": limit, "offset": offset}
         grouped = conn.execute(_RUN_EVENTS_SQL + " SELECT category, COUNT(*) FROM events GROUP BY category", parameters).fetchall()
         counts = {key: 0 for key in ("process", "remote", "strm", "problem")}
@@ -1398,6 +1432,7 @@ def get_run_detail(run_id: str, *, category: str = "", offset: int = 0, limit: i
     return {
         "run": run, "events": events, "children": children, "descendants": descendants, "parents": parents,
         "links": links, "related": related, "counts": counts, "total": total,
+        "inbox_items": inbox_items,
         "upstream_change": upstream_change,
         "has_more": offset + len(events) < total, "next_offset": offset + len(events),
     }

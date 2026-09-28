@@ -196,6 +196,24 @@
                                 </select>
                             </label>
                         </div>
+                        <div class="rounded-xl border border-slate-700 bg-slate-900/60 p-3 space-y-3">
+                            <div class="text-xs font-bold text-slate-300">接收夹整理节流</div>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">无新文件等待时间 (秒)</span>
+                                    <input id="monitor_inbox_idle_seconds" type="number" min="0" max="3600" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="120">
+                                </label>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">单批最多整理条目数</span>
+                                    <input id="monitor_inbox_max_items_per_run" type="number" min="1" max="500" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="100">
+                                </label>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">轮间暂停 (秒)</span>
+                                    <input id="monitor_inbox_batch_pause_seconds" type="number" min="0" max="300" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="5">
+                                </label>
+                            </div>
+                            <div class="text-[11px] text-slate-500 leading-5">“无新文件等待时间”会在有新保存时重新计时，连续 2 分钟没有新文件才统一整理；“单批最多整理条目数”只控制同一轮内的执行批次，不会重新扫描接收夹；“轮间暂停”控制批次之间的额外缓冲。手动点“立即整理”不受等待时间限制。</div>
+                        </div>
                         <div class="text-[11px] text-slate-500 leading-5">接收夹只是分类前的中转：识别为电影 / 电视剧的条目会按所选任务的刮削预设整理，再搬进该任务的目录；识别不准的留在接收夹并写明原因。</div>
                         <div class="rounded-xl border border-slate-700 bg-slate-900/60 p-3 space-y-3">
                             <div class="flex flex-wrap items-center justify-between gap-2">

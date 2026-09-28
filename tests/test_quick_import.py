@@ -117,6 +117,33 @@ class QuickImportConfigTest(unittest.TestCase):
         # 用户手动关掉的 webhook 不会被归一化重新打开。
         self.assertFalse(inbox["webhook_enabled"])
 
+    def test_inbox_throttle_fields_have_defaults(self):
+        cfg = core.normalize_config({})
+        inbox = core.get_inbox_task(cfg)
+        self.assertEqual(inbox["inbox_idle_seconds"], 120)
+        self.assertEqual(inbox["inbox_max_items_per_run"], 100)
+        self.assertEqual(inbox["inbox_batch_pause_seconds"], 5)
+
+    def test_inbox_throttle_fields_clamp_to_supported_ranges(self):
+        cfg = core.normalize_config(
+            {
+                "monitor_tasks": [
+                    {
+                        "name": "接收",
+                        "task_type": "inbox",
+                        "scan_path": "/115/接收",
+                        "inbox_idle_seconds": 99999,
+                        "inbox_max_items_per_run": 0,
+                        "inbox_batch_pause_seconds": 99999,
+                    }
+                ]
+            }
+        )
+        inbox = core.get_inbox_task(cfg)
+        self.assertEqual(inbox["inbox_idle_seconds"], 3600)
+        self.assertEqual(inbox["inbox_max_items_per_run"], 1)
+        self.assertEqual(inbox["inbox_batch_pause_seconds"], 300)
+
     def test_normalize_config_migrates_legacy_global_inbox(self):
         cfg = core.normalize_config(
             {
@@ -754,8 +781,8 @@ class QuickImportRunTest(unittest.TestCase):
         # 子任务排队走的是真实监控队列；这里固定成一条假 run，避免测试里真的派发后台任务。
         self._child_run_patcher = mock.patch.object(
             quick_import,
-            "_queue_dispatch_child_run",
-            side_effect=lambda *args, **kwargs: "child-run-1",
+            "_queue_dispatch_child_runs",
+            return_value={"电影": "child-run-1", "电视剧": "child-run-1", "电视剧监控": "child-run-1"},
         )
         self._child_run_mock = self._child_run_patcher.start()
 
@@ -808,6 +835,54 @@ class QuickImportRunTest(unittest.TestCase):
         self.assertEqual(seen_options[0]["file_name_mode"], "standard")
         # 接收夹里可能是散文件，必须强制整理进媒体文件夹
         self.assertTrue(seen_options[0]["force_media_folder"])
+
+    def test_batch_size_processes_all_items_without_rescan(self):
+        cfg = _cfg(inbox=_inbox_task(inbox_max_items_per_run=1))
+        identified = {
+            "items": [_item(1, "电影A"), _item(2, "剧集B")],
+            "picked": {
+                1: {"id": 603, "media_type": "movie"},
+                2: {"id": 1399, "media_type": "tv"},
+            },
+            "results": [
+                {"item_index": 1, "status": "auto"},
+                {"item_index": 2, "status": "auto"},
+            ],
+        }
+
+        def plan_side_effect(provider, items, picked, options, **kwargs):
+            return {
+                "ok": True,
+                "items": [{"title": "片名", "year": "2024"}],
+                "issues": [],
+                "ready_count": 1,
+            }
+
+        try:
+            identify_mock = mock.MagicMock(return_value=identified)
+            with mock.patch.object(quick_import, "get_config", return_value=cfg), \
+                    mock.patch.object(quick_import, "resolve_scraper_dest_folder_id", side_effect=lambda provider, path: f"cid:{path}"), \
+                    mock.patch.object(quick_import, "identify_scraper_batch_entries", identify_mock), \
+                    mock.patch.object(quick_import, "build_scraper_plan_for_batch", side_effect=plan_side_effect), \
+                    mock.patch.object(quick_import, "create_scraper_job_from_plan", return_value={"job_id": 11}), \
+                    mock.patch.object(quick_import, "submit_scraper_job", return_value=self._Future()), \
+                    mock.patch.object(quick_import, "_resolve_entry_after_organize", side_effect=lambda cid, summary, entry: entry), \
+                    mock.patch.object(scraper, "find_scraper_media_folder", return_value={}), \
+                    mock.patch.object(scraper, "move_scraper_entries", return_value={}):
+                result = quick_import.run_quick_import("test")
+
+            self.assertEqual(identify_mock.call_count, 1)
+            self.assertEqual(len(result["moved"]), 2)
+            self.assertEqual(result["left"], [])
+            with quick_import._INBOX_TRIGGER_LOCK:
+                self.assertFalse(quick_import._INBOX_TRIGGER_STATE.get("pending"))
+                self.assertFalse(quick_import._INBOX_TRIGGER_STATE.get("continuation"))
+        finally:
+            with quick_import._INBOX_TRIGGER_LOCK:
+                quick_import._INBOX_TRIGGER_STATE.update(
+                    {"worker": None, "pending": False, "trigger": "", "source_ref": "", "continuation": False}
+                )
+            quick_import._INBOX_TRIGGER_EVENT.clear()
 
     def test_move_event_records_identification_mapping(self):
         # 运行记录要能看清「原文件名 → 识别为」，包括来源/置信度/理由/tmdb。
@@ -900,7 +975,7 @@ class QuickImportRunTest(unittest.TestCase):
             "picked": {1: {"id": 603, "media_type": "movie"}},
             "results": [{"item_index": 1, "status": "auto"}],
         }
-        self._child_run_mock.side_effect = lambda *args, **kwargs: ""
+        self._child_run_mock.return_value = {}
 
         with mock.patch.object(quick_import, "get_config", return_value=cfg), \
                 mock.patch.object(quick_import, "resolve_scraper_dest_folder_id", side_effect=lambda provider, path: f"cid:{path}"), \
@@ -1153,8 +1228,8 @@ class QuickImportMergeIntoExistingFolderTest(unittest.TestCase):
         db.ensure_db()
         self._child_run_patcher = mock.patch.object(
             quick_import,
-            "_queue_dispatch_child_run",
-            side_effect=lambda *args, **kwargs: "child-run-1",
+            "_queue_dispatch_child_runs",
+            return_value={"电影": "child-run-1", "电视剧": "child-run-1", "电视剧监控": "child-run-1"},
         )
         self._child_run_mock = self._child_run_patcher.start()
 
@@ -1520,6 +1595,26 @@ class InboxDispatchChildRunTest(unittest.TestCase):
                 quick_import._queue_dispatch_child_run({}, "电影", "片名", True, {"merged": False}),
                 "",
             )
+
+    def test_batch_scan_merges_scopes_before_queueing(self):
+        config = {"mount_points": [dict(item) for item in MOUNT_POINTS]}
+        with mock.patch(
+            "app.services.monitor.queue_monitor_dir_scan",
+            return_value={"tasks": [{"task_name": "电视剧", "run_id": "child-batch-1"}]},
+        ) as queued:
+            mapping = quick_import._queue_dispatch_child_runs(
+                config,
+                ["电视剧/示例剧/S01", "电视剧/示例剧/S02", "电视剧/示例剧/S01"],
+            )
+
+        self.assertEqual(mapping, {"电视剧": "child-batch-1"})
+        queued.assert_called_once_with(
+            config,
+            "115",
+            ["电视剧/示例剧/S01", "电视剧/示例剧/S02"],
+            run_source="inbox_dispatch",
+            force_new=False,
+        )
 
 
 if __name__ == "__main__":

@@ -157,6 +157,14 @@
         return '';
     }
 
+    function scopeHtml(scope, snapshot = {}) {
+        if (scope?.kind === 'paths' && Array.isArray(scope.paths) && scope.paths.length) {
+            return `<div class="monitor-run-scope-paths">${scope.paths.map(path => `<div class="monitor-run-scope-path">${escape(path)}</div>`).join('')}</div>`;
+        }
+        const text = scopeText(scope, snapshot);
+        return text ? escape(text) : '';
+    }
+
     function duration(run) {
         const start = Date.parse(String(run?.started_at || '').replace(' ', 'T'));
         const end = Date.parse(String(run?.finished_at || '').replace(' ', 'T'));
@@ -202,7 +210,7 @@
     }
 
     function valueHtml(key, value) {
-        if (key === 'scope') return escape(scopeText(value));
+        if (key === 'scope') return scopeHtml(value);
         if (typeof value === 'boolean') return value ? '是' : '否';
         if (Array.isArray(value)) return value.map(item => `<div class="monitor-run-value-item">${valueHtml(key, item)}</div>`).join('');
         if (value && typeof value === 'object') {
@@ -546,26 +554,50 @@
         })).join('')}`;
     }
 
+    function inboxItemsHtml(run, detail) {
+        if (String(run?.run_kind || '') !== 'inbox') return '';
+        const items = Array.isArray(detail?.inbox_items) ? detail.inbox_items : [];
+        if (!items.length) return '';
+        const rows = items.map(item => {
+            const original = String(item?.original_name || '').trim();
+            const organized = String(item?.new_name || '').trim();
+            const source = String(item?.match_source || '').trim();
+            const confidence = count(item?.confidence);
+            const meta = [source, confidence ? `${confidence}` : ''].filter(Boolean).join(' · ');
+            return `<div class="monitor-run-inbox-pair">
+                <span class="monitor-run-inbox-original">${escape(original)}</span>
+                <span class="monitor-run-inbox-arrow" aria-hidden="true">→</span>
+                <span class="monitor-run-inbox-organized">${escape(organized)}</span>
+                ${meta ? `<span class="monitor-run-inbox-meta">${escape(meta)}</span>` : ''}
+            </div>`;
+        }).join('');
+        return `<div class="monitor-run-subsection">已整理条目</div><div class="monitor-run-inbox-pairs">${rows}</div>`;
+    }
+
     function overviewHtml(run, detail, events) {
         const stats = metrics(run?.result);
         const derived = derivedIssues(run);
-        const scope = scopeText(run?.scope, run?.task_snapshot);
+        const scope = scopeHtml(run?.scope, run?.task_snapshot);
         const used = duration(run);
-        const meta = [
-            scope ? `范围：${scope}` : '',
+        const metaItems = [
             used ? `用时 ${used}` : '',
             `触发：${sourceText(run)}`,
             parentContextText(run),
         ].filter(Boolean).join(' · ');
+        const meta = [
+            scope ? `<span class="monitor-run-scope-label">范围：</span>${scope}` : '',
+            metaItems ? `<span class="monitor-run-meta-items">${escape(metaItems)}</span>` : '',
+        ].filter(Boolean).join('');
         const retry = ['failed', 'partial'].includes(String(run?.status || '')) && run?.run_kind === 'scan';
         const cancel = String(run?.status || '') === 'queued' && run?.run_kind !== 'inbox';
         return `${stepsHtml(inboxSteps(run, events))}
+            ${inboxItemsHtml(run, detail)}
             <section class="monitor-run-simple">
                 <div class="monitor-run-outcome"><h4>运行结果</h4><span class="monitor-run-outcome-tags">${runKindChip(run)}${badge(run?.status, run)}</span></div>
                 <p class="monitor-run-simple-summary">${escape(summary(run))}</p>
                 ${derived.length ? `<p class="monitor-run-derived-line tone-warning">未完成内容：${escape(derived.join('；'))}</p>` : ''}
                 ${stats.length ? `<dl class="monitor-run-simple-metrics">${stats.map(item => `<div${item.warning ? ' class="tone-warning"' : ''}><dt>${escape(item.label)}</dt><dd>${item.value}</dd></div>`).join('')}</dl>` : ''}
-                ${meta ? `<p class="monitor-run-simple-meta">${escape(meta)}</p>` : ''}
+                ${meta ? `<div class="monitor-run-simple-meta">${meta}</div>` : ''}
                 ${upstreamRow(detail?.upstream_change)}
                 ${legacyChildren(run, detail)}
                 ${retry || cancel ? `<div class="monitor-run-detail-actions">${retry ? '<button type="button" class="monitor-run-detail-action" onclick="retryMonitorRun()">按原范围重新运行</button>' : ''}${cancel ? '<button type="button" class="monitor-run-detail-action is-cancel" onclick="cancelMonitorRun()">取消排队</button>' : ''}</div>` : ''}
@@ -605,7 +637,7 @@
 
     global.MonitorRunView = {
         statuses, sources, runKinds, escape, count, status, tone, time, sourceText, runKindText, runKindKey,
-        parentContextText, upstreamText, upstreamRow, scopeText, duration, summary, metrics, derivedIssues, isProblemEvent,
+        parentContextText, upstreamText, upstreamRow, scopeText, scopeHtml, duration, summary, metrics, derivedIssues, isProblemEvent,
         tabDefsFor, resolveTab, tabsHtml, detailHtml, listRow, valueHtml, detailRows,
     };
 })(window);

@@ -1180,6 +1180,14 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
     quick_import_target = str(task.get("quick_import_target", "") or "").strip().lower()
     if quick_import_target not in ("movie", "tv"):
         quick_import_target = ""
+    inbox_idle_seconds = int(task.get("inbox_idle_seconds", 120) or 120)
+    raw_inbox_max_items = task.get("inbox_max_items_per_run", 100)
+    inbox_max_items_per_run = (
+        int(raw_inbox_max_items)
+        if raw_inbox_max_items is not None and str(raw_inbox_max_items).strip() != ""
+        else 100
+    )
+    inbox_batch_pause_seconds = int(task.get("inbox_batch_pause_seconds", 5) or 5)
     return {
         "name": name,
         "task_type": task_type,
@@ -1200,6 +1208,9 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         "min_file_size_mb": max(0, min_file_size_mb),
         "delay_seconds": max(0, delay_seconds),
         "cron_minutes": max(0, cron_minutes),
+        "inbox_idle_seconds": max(0, min(3600, inbox_idle_seconds)),
+        "inbox_max_items_per_run": max(1, min(500, inbox_max_items_per_run)),
+        "inbox_batch_pause_seconds": max(0, min(300, inbox_batch_pause_seconds)),
     }
 
 
