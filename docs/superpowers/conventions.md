@@ -1,0 +1,41 @@
+# 项目稳定约定（架构不变量与已知坑）
+
+> 这里只放**长期不变**的内容：架构约束、容易写反的产品口径、反复踩到的坑。
+> 目的是一次写清楚，避免每个会话重新推导一遍。
+> 与代码冲突时以代码为准；`version.json` 是版本号的唯一真源。
+> 变动频率高的“现在是什么状态”写在 `docs/superpowers/state.md`。
+
+## 架构不变量
+
+- **单体应用**：FastAPI 单容器，内嵌 SQLite，自带前端，不拆微服务、不引 ORM/DAO 层。
+- **共享状态中心**：`app/core.py` 是模块级共享状态中心（`task_status`、`monitor_status`、`subscription_status`、各队列等），路由统一 `from ..core import *`。改状态前先确认是不是这里定义的。
+- **请求链路**：`main.py` → `app/main.py` → `app/core.py` → `app/routes/*` → `app/services/*` → `app/providers/*`。定位问题时按这条链走。
+- **后台任务**：`app/background.py:73` 的 `submit_background(job_factory, ...)` 把长任务丢到独立线程的事件循环；不要在请求协程里直接跑长任务，也不要占用共享后台循环做慢请求。
+- **provider 注册**：provider 通过 `app/providers/registry.py:10` 的 `register()` 自注册，`app/core.py` 底部 import 触发。新增网盘要同时补注册、能力声明和前端 provider 列表。
+- **命名约定**：`normalize_*` 负责校验/归一化入参，`build_*` 负责构造响应，保持这个分工。
+
+## 产品口径（容易写反）
+
+- **接收夹（inbox）是中转入口，不是强制流程**。电影/电视剧各自仍有监控目录，“直接推送到分类监控目录”的旧用法继续有效，两种并存。详见 `docs/superpowers/specs/2026-09-23-folder-monitor-workflow-design.md` §3.4。
+- **接收夹与文件夹监控是两套触发方式**，共用同一个全局 `webhook_secret`（没有按任务拆分的密钥），但接收后的处理链路不同：接收夹走“识别 → 整理 → 分发”，监控走“扫描 → 生成/同步 STRM”。
+- **NFO 是媒体信息文件不是广告**：不参与整理、始终保留原名，即使开启“删除广告文件”也不删除。
+- **整理锚点**：文件夹模式下文件目标锚定在“所选文件夹的父目录”（剧集目录层级），不要锚定当前浏览目录，否则内容会建到错误层级。
+- **接收夹分发完成 ≠ 目标目录 STRM 同步完成**，两者是不同时间点，目前没有统一运行链路串成最终结果，描述时不要合并成一句。
+
+## 运行与验证的坑
+
+- **容器路径是硬编码的**：`app/db.py:11` 的 `DB_PATH = "/app/config/data.db"`、`app/core.py:387` 的 `CONFIG_PATH = "/app/config/settings.json"`、`TREE_DIR`、`STRM_ROOT` 都是 `/app/...`。本机直接起 uvicorn 会在 `/app` 上失败，容器行为的真实验证要用重建后的容器。
+- **Python 一律用 `.venv/bin/python`**，不要用系统 `python3`；语法验证加 `PYTHONPYCACHEPREFIX=/tmp/115-media-hub-pycache`。
+- **Docker 构建先设代理**：`export HTTP_PROXY/HTTPS_PROXY=http://127.0.0.1:7897`、`NO_PROXY=localhost,127.0.0.1,registry-1.docker.io`，再 `docker compose up -d --build`，否则可能用旧镜像得出错误结论。
+- **前端样式要先重新生成 Tailwind**：新增的工具类若不在 `static/css/tailwind.generated.css` 里就不生效，改模板类名后执行 `npm run build:css`。
+- **主题必须日夜双查**：页面用到 `html.theme-day` / `html:not(.theme-day)` 两套配色，只看夜间模式容易漏掉日间可见性问题。
+- **115 相关代码偏脆弱**：下载链接解析依赖逆向出来的 RSA/加密 downurl 协议（`app/routes/strm.py`）；大目录读取可能触发 `IncompleteRead`，现有策略是断连/超时类错误重试并逐级缩小单页大小。改动这些地方要同时验证“正常路径”和“服务端掐断”路径。
+- **外部授权只能在部署环境验证**：115 扫码登录、阿里云盘 OAuth、token 过期与刷新都无法在本地沙箱验证，回复时必须把“单测通过”和“实盘待验”分开表述。
+
+## 文档维护方式
+
+- 三层结构：`state.md`（当前状态，每次读）→ `handoff.md`（最近条目，每次读但很小）→ `handoff-archive.md`（历史，按需 `rg` 检索）。
+- 追加交接条目后运行 `.venv/bin/python scripts/rotate_handoff.py`；`--dry-run` 预览、`--check` 用于判断是否需要轮转。不要手工搬条目。
+- 每条交接只写一行：日期、分支或提交、版本、变更一句话、根因、验证证据、下一步；细节留给 commit message 和 `specs/`。
+- 发布时同步 `version.json`、`CHANGELOG.md`、README 与 `state.md`；提交/推送只在用户明确要求时进行。
+- `docs/superpowers/plans/` 与 `docs/superpowers/specs/` 是历史设计与计划，按需查阅；同一主题有新旧多份时，以日期更新且被后续 spec 引用的一份为准。

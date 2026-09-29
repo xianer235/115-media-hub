@@ -1,5 +1,10 @@
 # CLI vs API 完整字段级审计
 
+> **时效声明（2026-09-30 补）**：本文档是 2026-07-09 基于当时代码的字段级快照，之后只做过零散补记，
+> 不保证与当前 `cli.py` / `app/routes/` 一致。回答 CLI 行为问题时**以代码为准**，
+> 需要引用本文结论前先 `rg` 核对对应端点与 `cmd_*` 函数。
+> 当前状态见 `docs/superpowers/state.md`；长期约定见 `docs/superpowers/conventions.md`。
+
 审计日期: 2026-07-09
 方法: 逐行对比 cli.py 的 cmd_* 函数 HTTP 调用 payload vs 容器内 routes/*.py 端点处理函数的 data.get()/query_params.get() 读取
 
