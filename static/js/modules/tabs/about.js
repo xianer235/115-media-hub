@@ -122,13 +122,14 @@ export function renderVersionInfoPanel({
 
     const changelogUrl = getChangelogUrl(versionInfo, fallbackProjectUrl, fallbackChangelogUrl);
     const projectUrl = getProjectUrl(versionInfo, fallbackProjectUrl);
-    const starUrl = `${projectUrl.replace(/\/+$/, '')}/stargazers`;
     const changelogLink = document.getElementById('about-changelog-link');
     if (changelogLink) changelogLink.href = changelogUrl;
     const projectLink = document.getElementById('about-project-link');
     if (projectLink) projectLink.href = projectUrl;
+    // GitHub 的 /stargazers 是“点赞名单”页，未登录访问会 404；
+    // 点 Star 需要在仓库首页由登录用户操作，所以这里直接指向项目地址。
     const starLink = document.getElementById('about-star-link');
-    if (starLink) starLink.href = starUrl;
+    if (starLink) starLink.href = projectUrl;
 }
 
 export function showVersionBanner({
