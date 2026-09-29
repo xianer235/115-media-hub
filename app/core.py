@@ -5886,9 +5886,9 @@ def build_monitor_status_payload(
     segment_page = build_monitor_log_segment_page(limit=MONITOR_UI_RECENT_TASK_LOG_LIMIT)
     try:
         from .services.monitor_runs import list_runs
-        # 运行记录页面固定按 10 条分页；状态推送也只携带第一页，避免把
-        # 实时状态刷新误当成完整列表，或让首屏一次渲染出两页记录。
-        run_page = list_runs(limit=10)
+        # 运行记录页面固定按 5 条分页（前端 `fetchMonitorRunPage` 的 limit 必须保持一致）；
+        # 状态推送也只携带第一页，避免把实时状态刷新误当成完整列表，或让首屏一次渲染出两页记录。
+        run_page = list_runs(limit=5)
     except Exception:
         run_page = {"runs": [], "has_more": False, "next_cursor": ""}
     payload = {

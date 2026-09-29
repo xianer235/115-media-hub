@@ -26,6 +26,9 @@ from .monitor_runs import source_label as monitor_source_label
 
 MONITOR_DIR_MISSING_RELEASE_CONFIRMATIONS = 2
 MONITOR_SCAN_SAVEPATHS_MAX = 50
+# 运行详情「概览」里的过程时间线：每个运行最多落多少条目录级过程事件，
+# 大库全量扫描时只保留前 N 条，其余用一条截断提示收口。
+MONITOR_RUN_PROCESS_EVENT_LIMIT = 200
 _monitor_dispatch_pending = False
 
 
@@ -631,6 +634,7 @@ def _auto_scrape_new_media_items(
     cfg: Dict[str, Any],
     task: Dict[str, Any],
     new_media_items: List[Dict[str, Any]],
+    run_id: str = "",
 ) -> str:
     """新增媒体文件自动刮削整理：只对高置信度自动匹配条目执行一次，失败仅记录。"""
     from .scraper import (
@@ -763,6 +767,57 @@ def _auto_scrape_new_media_items(
     status = str(actual.get("status", "") or "").strip()
     succeeded = max(0, int(actual.get("succeeded_actions", 0) or 0))
     failed = max(0, int(actual.get("failed_actions", 0) or 0))
+    identified_folder_paths = [
+        normalize_relative_path(str(entry.get("path", "") or ""))
+        for entry in entries
+        if isinstance(entry, dict) and entry.get("is_dir") and str(entry.get("path", "") or "").strip()
+    ]
+
+    def _action_entry_type(action: Dict[str, Any], old_path: str) -> str:
+        """这条动作来自整目录识别还是单文件识别（用于运行记录区分条目类型）。"""
+        if bool(action.get("is_dir")):
+            return "folder"
+        normalized_old = normalize_relative_path(str(old_path or ""))
+        if any(
+            normalized_old == folder_path or normalized_old.startswith(folder_path + "/")
+            for folder_path in identified_folder_paths
+        ):
+            return "folder"
+        return "file"
+
+    if run_id and isinstance(actual, dict):
+        for action in actual.get("actions") if isinstance(actual.get("actions"), list) else []:
+            if not isinstance(action, dict):
+                continue
+            old_path = str(action.get("old_path", "") or "").strip()
+            new_path = str(action.get("new_path", "") or "").strip()
+            old_name = str(action.get("old_name", "") or "").strip()
+            new_name = str(action.get("new_name", "") or "").strip()
+            if not old_path and not new_path:
+                continue
+            action_status = str(action.get("status", "") or "").strip() or "completed"
+            same_parent = (
+                str(action.get("old_parent_id", "") or "").strip()
+                and str(action.get("old_parent_id", "") or "").strip()
+                == str(action.get("new_parent_id", "") or "").strip()
+            )
+            record_monitor_run_event(
+                run_id,
+                category="remote",
+                operation="rename" if same_parent else "move",
+                status=action_status,
+                title=old_name or new_name or "自动整理",
+                detail={
+                    "step": "自动整理",
+                    "operation_label": "网盘重命名" if same_parent else "网盘移动",
+                    "old_name": old_name,
+                    "new_name": new_name,
+                    "old_path": old_path,
+                    "new_path": new_path,
+                    "entry_type": _action_entry_type(action, old_path),
+                    "scraper_job_id": job_id,
+                },
+            )
     if status == "completed":
         return f"已自动整理 {succeeded} 项（任务 #{job_id}）"
     if status == "partial":
@@ -845,6 +900,33 @@ async def run_monitor_task(
     generated_strm_paths: List[str] = []
     new_media_items: List[Dict[str, Any]] = []
     force_strm_rewrite = str(task.get("strm_write_mode", "incremental") or "incremental").strip().lower() == "full"
+    process_event_count = 0
+    process_event_truncated = False
+
+    def record_process_event(operation: str, status: str, title: str, detail: Dict[str, Any]) -> None:
+        """把目录级扫描进度落成结构化事件，供运行详情「概览」展示。"""
+        nonlocal process_event_count, process_event_truncated
+        if process_event_count >= MONITOR_RUN_PROCESS_EVENT_LIMIT:
+            if not process_event_truncated:
+                process_event_truncated = True
+                record_monitor_run_event(
+                    run_id,
+                    category="process",
+                    operation="progress_truncated",
+                    status="skipped",
+                    title="过程明细已截断",
+                    detail={"limit": MONITOR_RUN_PROCESS_EVENT_LIMIT},
+                )
+            return
+        process_event_count += 1
+        record_monitor_run_event(
+            run_id,
+            category="process",
+            operation=operation,
+            status=status,
+            title=title or operation,
+            detail=detail,
+        )
 
     try:
         header_label = (
@@ -1048,6 +1130,12 @@ async def run_monitor_task(
                 # existing folders are visible during recursive scans.
                 modified, items = await list_remote_dir(cfg, remote_dir, True, task)
                 stats["success_dirs"] += 1
+                record_process_event(
+                    "read_dir",
+                    "completed",
+                    os.path.basename(remote_dir.rstrip("/")) or remote_dir,
+                    {"path": remote_dir},
+                )
             except Exception as exc:
                 stats["failed_dirs"] += 1
                 failed_dir_rels.add(dir_rel)
@@ -1136,6 +1224,12 @@ async def run_monitor_task(
                         stats["skipped_first_level_dirs"] += 1
                         await mark_cached_dir_as_seen(conn, task_name, item_local_rel)
                         await write_monitor_log(f"跳过目录: {item_remote_path}", "warn")
+                        record_process_event(
+                            "skip_dir",
+                            "skipped",
+                            os.path.basename(item_remote_path.rstrip("/")) or item_remote_path,
+                            {"path": item_remote_path, "reason": "目录未变化"},
+                        )
                         continue
 
                     if is_task_root:
@@ -1415,6 +1509,7 @@ async def run_monitor_task(
                     cfg,
                     task,
                     list(new_media_items),
+                    run_id=run_id,
                 )
                 auto_summary = auto_message
                 await write_monitor_log(f"自动整理: {auto_message}", "success")
@@ -1456,6 +1551,8 @@ async def run_monitor_task(
         final_result = {
             "generated": stats["generated"], "skipped": stats["skipped"],
             "deleted": stats["deleted_files"], "failed_dirs": stats["failed_dirs"],
+            "scanned_dirs": stats["success_dirs"], "skipped_dirs": stats["skipped_dirs"],
+            "rescan_branches": stats["rescan_branches"],
             "auto_summary": auto_summary,
         }
         final_status = "partial" if stats["failed_dirs"] else ("no_change" if not stats["generated"] and not stats["deleted_files"] else "completed")
@@ -1776,6 +1873,7 @@ async def run_monitor_change_task(
                     cfg,
                     task,
                     list(new_media_items),
+                    run_id=run_id,
                 )
                 await write_monitor_log(f"自动整理: {auto_message}", "success")
                 record_monitor_run_event(

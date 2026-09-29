@@ -50,6 +50,11 @@
                     <button id="monitor-run-filter-reset" type="button" class="log-header-btn monitor-run-filter-reset hidden" onclick="resetMonitorRunFilters()">重置筛选</button>
                 </div>
                 <div id="monitor-run-list" class="monitor-run-list" aria-live="polite"></div>
+                <div id="monitor-run-pagination-bottom" class="monitor-run-pagination monitor-run-pagination-bottom hidden" aria-label="运行记录分页（底部）">
+                    <button id="monitor-run-prev-bottom" type="button" onclick="loadMonitorRunPage(-1)" class="log-header-btn" disabled>上一页</button>
+                    <span id="monitor-run-page-label-bottom" class="monitor-run-page-label">第 1 页</span>
+                    <button id="monitor-run-next-bottom" type="button" onclick="loadMonitorRunPage(1)" class="log-header-btn" disabled>下一页</button>
+                </div>
                 <div class="monitor-legacy-log-link"><button type="button" onclick="openLegacyMonitorLogs()">查看历史文本日志</button></div>
             </div>
         </div>

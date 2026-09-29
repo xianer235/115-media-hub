@@ -47,6 +47,7 @@
     const fields = {
         old_name: '原名称', new_name: '新名称', old_path: '原路径', new_path: '新路径',
         original_name: '原文件名', match_source: '识别来源', confidence: '置信度',
+        entry_type: '条目类型',
         match_reason: '识别理由', tmdb_id: 'TMDB ID', identified_year: '识别年份',
         path: '文件路径', strm_path: '本地播放文件', remote_path: '网盘文件',
         scope: '本次范围', target: '目标目录', task_name: '监控任务', name: '名称',
@@ -94,6 +95,12 @@
     };
     const eventDetail = event => (event?.detail && typeof event.detail === 'object') ? event.detail : {};
     const eventOperation = event => String(event?.operation || '');
+    const entryTypeText = detail => {
+        const type = String(detail?.entry_type || '').trim();
+        if (type === 'folder') return '文件夹';
+        if (type === 'file') return '单文件';
+        return '';
+    };
 
     function sourceText(run) {
         const entries = Array.isArray(run?.sources) && run.sources.length
@@ -403,6 +410,7 @@
             || '已记录网盘变更';
         const confidence = count(detail.confidence);
         const fields = eventFields([
+            ['条目类型', entryTypeText(detail)],
             ['原位置', detail.old_path],
             ['原名称', detail.original_name || detail.old_name],
             ['新位置', detail.new_path],
@@ -563,7 +571,7 @@
             const organized = String(item?.new_name || '').trim();
             const source = String(item?.match_source || '').trim();
             const confidence = count(item?.confidence);
-            const meta = [source, confidence ? `${confidence}` : ''].filter(Boolean).join(' · ');
+            const meta = [entryTypeText(item), source, confidence ? `${confidence}` : ''].filter(Boolean).join(' · ');
             return `<div class="monitor-run-inbox-pair">
                 <span class="monitor-run-inbox-original">${escape(original)}</span>
                 <span class="monitor-run-inbox-arrow" aria-hidden="true">→</span>
@@ -572,6 +580,55 @@
             </div>`;
         }).join('');
         return `<div class="monitor-run-subsection">已整理条目</div><div class="monitor-run-inbox-pairs">${rows}</div>`;
+    }
+
+    // 概览里的「过程」时间线：目录扫描、STRM 生成、网盘整理都按同一行样式折叠展示。
+    function processTimelineRow(event) {
+        const category = String(event?.category || '');
+        const detail = eventDetail(event);
+        const operation = eventOperation(event);
+        const action = category === 'strm'
+            ? (STRM_ACTIONS[operation] || '处理')
+            : category === 'remote'
+                ? (REMOTE_ACTIONS[operation] || operations[operation] || '网盘操作')
+                : (operations[operation] || '过程');
+        const main = category === 'strm'
+            ? (baseName(detail.strm_path || detail.path || event?.title) || '本地播放文件')
+            : (String(detail.path || detail.new_path || event?.title || '').trim() || action);
+        const extras = [];
+        if (category === 'remote') {
+            const typeText = entryTypeText(detail);
+            if (typeText) extras.push(typeText);
+        }
+        if (category === 'strm' && detail.remote_path) extras.push(String(detail.remote_path));
+        if (category === 'remote') {
+            if (detail.old_path && detail.new_path && detail.old_path !== detail.new_path) {
+                extras.push(`${detail.old_path} → ${detail.new_path}`);
+            } else if (detail.new_path) {
+                extras.push(String(detail.new_path));
+            }
+        }
+        if (category === 'process' && detail.reason) extras.push(String(detail.reason));
+        return eventRow({
+            action,
+            main,
+            extra: extras.length ? escape(extras.join(' · ')) : '',
+            timeText: timeOnly(event?.created_at),
+        });
+    }
+
+    function processTimelineHtml(run, events) {
+        const list = (Array.isArray(events) ? events : []).filter(event => (
+            ['process', 'strm', 'remote'].includes(String(event?.category || ''))
+        ));
+        if (!list.length) return '';
+        const limit = 40;
+        const shown = list.slice(0, limit);
+        const more = list.length > limit
+            ? `<div class="monitor-run-shown">已显示 ${shown.length} / 共 ${list.length} 条过程记录</div>`
+            : '';
+        return `<div class="monitor-run-subsection">过程</div>
+            <div class="monitor-run-timeline">${shown.map(processTimelineRow).join('')}</div>${more}`;
     }
 
     function overviewHtml(run, detail, events) {
@@ -600,6 +657,7 @@
                 ${meta ? `<div class="monitor-run-simple-meta">${meta}</div>` : ''}
                 ${upstreamRow(detail?.upstream_change)}
                 ${legacyChildren(run, detail)}
+                ${processTimelineHtml(run, events)}
                 ${retry || cancel ? `<div class="monitor-run-detail-actions">${retry ? '<button type="button" class="monitor-run-detail-action" onclick="retryMonitorRun()">按原范围重新运行</button>' : ''}${cancel ? '<button type="button" class="monitor-run-detail-action is-cancel" onclick="cancelMonitorRun()">取消排队</button>' : ''}</div>` : ''}
             </section>`;
     }
@@ -621,13 +679,38 @@
         return `${stale}<div class="monitor-run-tab-panel" role="tabpanel">${body}</div>`;
     }
 
-    // 列表第一眼只保留：任务/对象名、状态、一句结论和类型标签。
+    // 列表第一眼保留：任务/对象名、开始/结束时间、本次范围、状态、一句结论和类型标签。
+    function listTimeText(run) {
+        const state = String(run?.status || '');
+        const queued = String(run?.queued_at || '').trim();
+        const started = String(run?.started_at || '').trim();
+        const finished = String(run?.finished_at || '').trim();
+        const begin = started || queued;
+        if (ACTIVE_STATUSES.includes(state) || !finished) {
+            return begin ? `${started ? '开始' : '排队'} ${time(begin)}` : '';
+        }
+        if (!begin) return `结束 ${time(finished)}`;
+        const used = duration(run);
+        return `开始 ${time(begin)} · 结束 ${time(finished)}${used ? ` · 用时 ${used}` : ''}`;
+    }
+
+    function listScopeText(run) {
+        const scope = run?.scope;
+        if (!scope || !Array.isArray(scope.paths) || !scope.paths.length) return '';
+        const subject = String(run?.subject || '').trim();
+        if (subject && subject !== '全部目录') return '';
+        const paths = scope.paths.map(path => String(path || '').trim()).filter(Boolean);
+        return paths.length ? `范围 ${paths.join('、')}` : '';
+    }
+
     function listRow(run) {
         const runId = String(run?.id || '');
         const upstream = upstreamText(run?.upstream_change);
+        const metaText = [listTimeText(run), listScopeText(run)].filter(Boolean).join(' · ');
         return `<div class="monitor-run-group" data-run-group="${escape(runId)}">
             <button type="button" class="monitor-run-row" data-run-id="${escape(runId)}">
                 <span class="monitor-run-main"><span class="monitor-run-title">${escape(run?.task_name || '文件夹监控')} <i>·</i> ${escape(run?.subject || '全部目录')}</span>
+                ${metaText ? `<span class="monitor-run-meta">${escape(metaText)}</span>` : ''}
                 <span class="monitor-run-result">${escape(summary(run))}</span>
                 ${upstream ? `<span class="monitor-run-upstream">${escape(upstream)}</span>` : ''}</span>
                 <span class="monitor-run-side">${runKindChip(run)}${badge(run?.status, run)}<span class="monitor-run-open">查看详情</span></span>
@@ -639,5 +722,6 @@
         statuses, sources, runKinds, escape, count, status, tone, time, sourceText, runKindText, runKindKey,
         parentContextText, upstreamText, upstreamRow, scopeText, scopeHtml, duration, summary, metrics, derivedIssues, isProblemEvent,
         tabDefsFor, resolveTab, tabsHtml, detailHtml, listRow, valueHtml, detailRows,
+        listTimeText, listScopeText, processTimelineHtml,
     };
 })(window);

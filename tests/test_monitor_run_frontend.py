@@ -121,7 +121,10 @@ class MonitorRunViewTest(unittest.TestCase):
         strm = run_view(f"window.MonitorRunView.detailHtml({detail}, 'strm')")
         problem = run_view(f"window.MonitorRunView.detailHtml({detail}, 'problem')")
 
-        self.assertNotIn("monitor-run-event-row", overview)
+        # 概览现在按设计内联展示「过程」时间线（扫描/生成/整理），但问题事件仍只在问题页签。
+        self.assertIn("monitor-run-timeline", overview)
+        self.assertIn("最近接收/X", overview)
+        self.assertNotIn("读取目录失败", overview)
         self.assertNotIn("monitor-run-line-list", overview)
         self.assertIn("原位置", remote)
         self.assertIn("最近接收/X", remote)
@@ -203,6 +206,21 @@ class MonitorRunViewTest(unittest.TestCase):
         self.assertNotIn("新增或更新", html)
         self.assertNotIn("失败目录", html)
         self.assertNotIn("partial", html)
+
+    def test_list_row_shows_start_finish_time_and_scope(self):
+        """列表要能看出这次什么时候跑的、跑了哪些目录。"""
+        html = run_view(
+            "window.MonitorRunView.listRow({id: 'run-time', task_name: '电视剧', subject: '全部目录', "
+            "status: 'completed', queued_at: '2026-09-29T12:00:00', started_at: '2026-09-29T12:00:05', "
+            "finished_at: '2026-09-29T12:00:35', "
+            "scope: {kind: 'paths', paths: ['/115/电视剧/A', '/115/电视剧/B']}, "
+            "summary: '检查完成：新增或更新 1 个本地播放文件。', result: {generated: 1}})"
+        )
+
+        self.assertIn("开始 2026-09-29 12:00:05", html)
+        self.assertIn("结束 2026-09-29 12:00:35", html)
+        self.assertIn("用时 30 秒", html)
+        self.assertIn("范围 /115/电视剧/A、/115/电视剧/B", html)
 
     def test_inbox_left_metric_is_labeled_as_finished_unhandled_work(self):
         html = run_view(
@@ -729,7 +747,7 @@ class MonitorRunViewTest(unittest.TestCase):
                 events: [],
                 inbox_items: [
                     {original_name: '【原始文件夹】示例剧', new_name: '示例剧 (2024) [tmdbid-1]',
-                     match_source: 'AI 识别', confidence: 68},
+                     match_source: 'AI 识别', confidence: 68, entry_type: 'folder'},
                 ],
                 counts: {}, total: 0,
             })"""
@@ -738,8 +756,44 @@ class MonitorRunViewTest(unittest.TestCase):
         self.assertIn("已整理条目", html)
         self.assertIn("【原始文件夹】示例剧", html)
         self.assertIn("示例剧 (2024) [tmdbid-1]", html)
-        self.assertIn("AI 识别 · 68", html)
+        self.assertIn("文件夹 · AI 识别 · 68", html)
         self.assertIn("monitor-run-inbox-pair", html)
+
+    def test_entry_type_distinguishes_folder_and_single_file(self):
+        """运行记录要能看出识别的是整个文件夹还是单个文件。"""
+        html = run_view(
+            """window.MonitorRunView.detailHtml({
+                run: {id: 'inbox-2', task_name: '接收', subject: '示例剧', run_kind: 'inbox',
+                      status: 'completed', summary: '已分发 2 项。', result: {moved: 2, left: 0}},
+                events: [],
+                inbox_items: [
+                    {original_name: 'Curb...S09.1080p', new_name: '抑制热情 (2000) [tmdbid-4546]',
+                     match_source: '规则匹配', confidence: 95, entry_type: 'folder'},
+                    {original_name: 'Musica.2024.mkv', new_name: '朱弦玉磐 (2024) [tmdbid-1171826]',
+                     match_source: 'AI 识别', confidence: 88, entry_type: 'file'},
+                ],
+                counts: {}, total: 0,
+            })"""
+        )
+        self.assertIn("文件夹 · 规则匹配 · 95", html)
+        self.assertIn("单文件 · AI 识别 · 88", html)
+
+        remote = run_view(
+            """window.MonitorRunView.detailHtml({
+                run: {id: 'scan-9', run_kind: 'scan', task_name: '电视剧', status: 'completed',
+                      summary: '检查完成', result: {}},
+                events: [
+                    {id: 'e1', category: 'remote', operation: 'move', status: 'completed',
+                     title: 'Musica.2024.mkv',
+                     detail: {entry_type: 'file', old_path: '最近接收/Musica.2024.mkv',
+                              new_path: '115自存电影/朱弦玉磐 (2024)/Musica.2024.mkv'},
+                     created_at: '2026-09-29 13:00:00'},
+                ],
+                counts: {remote: 1}, total: 1,
+            }, 'remote')"""
+        )
+        self.assertIn("条目类型", remote)
+        self.assertIn("单文件", remote)
 
     def test_inbox_overview_name_mapping_only_for_inbox_and_nonempty(self):
         scan = run_view(
@@ -776,6 +830,34 @@ class MonitorRunViewTest(unittest.TestCase):
         self.assertIn("S08E01", html)
         self.assertIn("S08E02", html)
         self.assertNotIn("S08E01、S08E02", html)
+
+    def test_overview_shows_process_timeline(self):
+        """概览页要能看到扫描目录、生成文件、网盘整理的逐条过程。"""
+        html = run_view(
+            """window.MonitorRunView.detailHtml({
+                run: {id: 's1', run_kind: 'scan', task_name: '电视剧', subject: '全部目录',
+                      status: 'completed', scope: {kind: 'paths', paths: ['/115/电视剧']},
+                      summary: '检查完成：新增或更新 1 个本地播放文件。', result: {generated: 1}},
+                events: [
+                    {id: 'p1', category: 'process', operation: 'read_dir', status: 'completed', title: 'A',
+                     detail: {path: '/115/电视剧/A'}, created_at: '2026-09-29 12:00:06'},
+                    {id: 's1', category: 'strm', operation: 'write', status: 'completed',
+                     title: 'a.mkv.strm',
+                     detail: {strm_path: '/app/strm/电视剧/A/a.mkv.strm', remote_path: '/115/电视剧/A/a.mkv'},
+                     created_at: '2026-09-29 12:00:07'},
+                    {id: 'r1', category: 'remote', operation: 'rename', status: 'completed',
+                     title: 'A', detail: {old_path: '/115/电视剧/A', new_path: '/115/电视剧/A (2000)'},
+                     created_at: '2026-09-29 12:00:08'},
+                ],
+                counts: {process: 1, strm: 1, remote: 1}, total: 3,
+            })"""
+        )
+
+        self.assertIn("monitor-run-timeline", html)
+        self.assertIn("读取目录", html)
+        self.assertIn("/115/电视剧/A", html)
+        self.assertIn("a.mkv.strm", html)
+        self.assertIn("/115/电视剧/A → /115/电视剧/A (2000)", html)
 
     def test_change_and_scan_overview_skip_step_strip(self):
         scan = run_view(
@@ -1030,6 +1112,22 @@ class MonitorRunViewTest(unittest.TestCase):
         self.assertNotIn("data-run-group-toggle", source)
         self.assertNotIn(".monitor-run-children", css)
         self.assertNotIn(".monitor-run-group-toggle", css)
+
+    def test_run_list_uses_5_per_page_and_has_bottom_pager(self):
+        """每页 5 条，顶部和底部都有翻页控件，读完一页不用再滑回顶部。"""
+        page = MONITOR_PAGE_PATH.read_text(encoding="utf-8")
+        source = INDEX_JS_PATH.read_text(encoding="utf-8")
+        core_source = (ROOT / "app/core.py").read_text(encoding="utf-8")
+        css = INDEX_CSS_PATH.read_text(encoding="utf-8")
+
+        # 前端请求与后端状态推送必须同为 5 条，否则首屏会被推送重新填成 10 条。
+        self.assertIn("limit: '5'", source)
+        self.assertIn("list_runs(limit=5)", core_source)
+        self.assertIn('id="monitor-run-pagination-bottom"', page)
+        self.assertIn('id="monitor-run-prev-bottom"', page)
+        self.assertIn('id="monitor-run-next-bottom"', page)
+        self.assertIn("monitor-run-page-label-bottom", source)
+        self.assertIn(".monitor-run-pagination-bottom", css)
 
     def test_render_key_tracks_every_dispatched_row(self):
         keys = run_index_async(

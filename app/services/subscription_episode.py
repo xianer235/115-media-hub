@@ -356,6 +356,29 @@ def _extract_numeric_episode_from_filename(file_name: str) -> int:
     return 0
 
 
+_EXPLICIT_EPISODE_MARKER_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9])s\d{1,2}[\s._-]*e(\d{1,4})(?![0-9])"
+    r"|(?<![A-Za-z0-9])(?:e|ep)[\s._-]*(\d{1,4})(?![0-9])"
+)
+
+
+def _has_explicit_episode_marker(value: str) -> bool:
+    """文件名是否自带 SxxEyy / Exx 这类明确集数标记（裸数字不算）。"""
+    return bool(_EXPLICIT_EPISODE_MARKER_RE.search(str(value or "")))
+
+
+def _extract_single_parent_episode(value: str) -> int:
+    """父目录里唯一的明确集号；出现多个（如 E01-E10 区间）时返回 0，避免误判。"""
+    text = str(value or "")
+    episodes = set()
+    for match in _EXPLICIT_EPISODE_MARKER_RE.finditer(text):
+        raw = match.group(1) or match.group(2) or ""
+        episode = max(0, int(raw or 0))
+        if episode > 0:
+            episodes.add(episode)
+    return next(iter(episodes)) if len(episodes) == 1 else 0
+
+
 def _extract_task_episodes_from_file_entry(
     task: Dict[str, Any],
     file_name: str,
@@ -382,6 +405,22 @@ def _extract_task_episodes_from_file_entry(
         target_season = max(1, int(task.get("season", 1) or 1))
         if parent_season > 0 and parent_season != target_season:
             return set()
+
+    # 字幕常见结构：Subs/<剧集.SxxEyy...>/2_English.srt。文件名里的 "2_" 是字幕序号，
+    # 不是集数；父目录的 SxxEyy 才是准的。文件名自己没有季集标记时，优先采用父目录集号，
+    # 避免 E01 的字幕被挂到 E02。
+    if normalized_parent and not _has_explicit_episode_marker(file_leaf):
+        parent_episode = _extract_single_parent_episode(normalized_parent)
+        if parent_episode > 0:
+            evidence = SubscriptionEpisodeEvidence(
+                source="folder_structure",
+                season=effective_parent_season,
+                episode=parent_episode,
+                context=normalized_parent,
+            )
+            folder_result = _normalize_subscription_episode_evidence(task, evidence)
+            if folder_result.episodes:
+                return folder_result.episodes
 
     for probe in (file_leaf, os.path.splitext(file_leaf)[0]):
         parsed_result = _extract_task_episode_normalization_from_name(task, probe)

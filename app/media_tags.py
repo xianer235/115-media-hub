@@ -3,7 +3,7 @@ import unicodedata
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 
-MEDIA_TAG_GROUP_ORDER = ("resolution", "source", "dynamic_range", "video", "audio", "language", "subtitle")
+MEDIA_TAG_GROUP_ORDER = ("resolution", "source", "group", "dynamic_range", "video", "audio", "language", "subtitle")
 MEDIA_TAG_GROUPS = set(MEDIA_TAG_GROUP_ORDER)
 MEDIA_AUDIO_CHANNEL_REGEX = re.compile(
     r"(?<![0-9])(?:1[ ]?[.]?[ ]?0|2[ ]?[.]?[ ]?0|2[ ]?[.]?[ ]?1|5[ ]?[.]?[ ]?1|6[ ]?[.]?[ ]?1|7[ ]?[.]?[ ]?1)(?![0-9])",
@@ -130,6 +130,76 @@ def _add_media_tag(groups: Dict[str, List[str]], seen: set, group: str, label: s
     groups.setdefault(group, []).append(label)
 
 
+# 发布组 / 字幕组 / 压制组：整名末尾的 -GROUP，或显式的中文“XX字幕组”。为了避免把
+# 分辨率、编码、语言后缀（zh-Hans）误判成组名，只在这些技术标签已经出现时才认定
+# 末尾 -GROUP，并用停用词挡住常见技术 token。
+MEDIA_RELEASE_GROUP_STOPWORDS = frozenset(
+    {
+        "hd", "dl", "ma", "x", "br", "us", "cn", "hk", "tw", "sg", "hans", "hant",
+        "gb", "big5", "web", "webdl", "webrip", "bluray", "bdrip", "remux", "hdtv",
+        "uhd", "4k", "8k", "2160p", "1080p", "1080i", "720p", "576p", "480p",
+        "hdr", "hdr10", "hdr10plus", "sdr", "dv", "dovi", "hlg",
+        "hevc", "avc", "h265", "h264", "x265", "x264", "av1", "vp9", "10bit",
+        "8bit", "hi10p", "aac", "ac3", "eac3", "dd", "ddp", "truehd", "dts",
+        "dtshd", "dtsma", "dtshdma", "hdma", "atmos", "flac", "mp3", "opus", "repack", "proper",
+        "extended", "uncut", "internal", "multi", "complete", "directorcut",
+        "fanedit", "remastered", "extendedcut", "finalcut",
+    }
+)
+MEDIA_RELEASE_GROUP_TECH_GROUPS = ("resolution", "source", "dynamic_range", "video", "audio")
+# 只剥离真实文件扩展名；不能用 os.path.splitext，否则 "H.264-NTb" 会把 ".264-NTb"
+# 当成扩展名，末尾发布组就整段错位了。
+MEDIA_TAG_FILE_EXT_RE = re.compile(
+    r"\.(?:mkv|mp4|avi|ts|m2ts|wmv|mov|flv|webm|rmvb|rm|mpg|mpeg|vob|iso|m4v|3gp|m2v|mts|tp|divx|asf|ogm"
+    r"|srt|ass|ssa|sub|vtt|idx|smi|sup|nfo|jpg|jpeg|png|webp|bmp|gif)$",
+    re.IGNORECASE,
+)
+
+
+def _media_release_group_stopword(token: str) -> bool:
+    compact = re.sub(r"[._\s-]+", "", str(token or "")).lower()
+    return compact in MEDIA_RELEASE_GROUP_STOPWORDS
+
+
+def _media_release_group_like(token: str) -> bool:
+    """发布组判定：全大写可含数字（RARBG / D-Z0N3），或纯字母大小写混排（NTb / BlackTV / XviD）。
+
+    混排要求“纯字母”是刻意收紧的：像 WEB-DL.x264.DDP5.1 这类由技术片段拼出来的
+    尾巴同时含大小写和数字，不能当发布组。
+    """
+    text = str(token or "").strip()
+    compact = re.sub(r"[._\s-]+", "", text)
+    if not (3 <= len(compact) <= 24) or not re.search(r"[A-Za-z]", compact):
+        return False
+    if re.fullmatch(r"[A-Z0-9]+", compact):
+        return True
+    return bool(
+        re.fullmatch(r"[A-Za-z]+", compact)
+        and re.search(r"[A-Z]", compact)
+        and re.search(r"[a-z]", compact)
+    )
+
+
+def _find_media_release_group(text: str, groups: Dict[str, List[str]]) -> Optional[Tuple[str, Tuple[int, int]]]:
+    # 文件名可能带扩展名（.mkv/.mp4），先去掉再匹配末尾发布组，避免把 ".mkv" 当成组名。
+    stem = MEDIA_TAG_FILE_EXT_RE.sub("", text)
+    explicit = re.search(
+        r"(?:^|[\s._\-\[\]()【】])([A-Za-z0-9\u4e00-\u9fff]{1,20}(?:字幕组|字幕組|压制组|壓制組))",
+        stem,
+    )
+    if explicit:
+        return explicit.group(1), explicit.span(1)
+    if not any(groups.get(name) for name in MEDIA_RELEASE_GROUP_TECH_GROUPS):
+        return None
+    trailing = re.search(r"[-–—]([A-Za-z][A-Za-z0-9._]{1,23})\s*$", stem)
+    if not trailing:
+        return None
+    token = trailing.group(1)
+    if _media_release_group_stopword(token) or not _media_release_group_like(token):
+        return None
+    return token, trailing.span(1)
+
+
 def parse_media_tags(text: Any) -> Dict[str, Any]:
     normalized_text = _normalize_media_tag_text(text)
     groups: Dict[str, List[str]] = {group: [] for group in MEDIA_TAG_GROUP_ORDER}
@@ -149,6 +219,12 @@ def parse_media_tags(text: Any) -> Dict[str, Any]:
                         span_end = max(span_end, channel_span[1])
             _add_media_tag(groups, seen, group, tag_label)
             spans.append((span_start, span_end))
+
+    release_group = _find_media_release_group(normalized_text, groups)
+    if release_group:
+        label, span = release_group
+        _add_media_tag(groups, seen, "group", label)
+        spans.append(span)
 
     tags: List[str] = []
     for group in MEDIA_TAG_GROUP_ORDER:

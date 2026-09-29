@@ -158,6 +158,7 @@ class MonitorDirScanTest(unittest.TestCase):
         task: dict,
         trigger: str = "manual",
         payload: Optional[dict] = None,
+        run_id: str = "",
     ) -> List[str]:
         call_log: List[str] = []
 
@@ -212,9 +213,31 @@ class MonitorDirScanTest(unittest.TestCase):
                     side_effect=lambda local_rel_path: strm_files.delete_managed_strm_file(local_rel_path, root=self.strm_root),
                 )
             )
-            asyncio.run(monitor.run_monitor_task(TASK_NAME, trigger=trigger, payload=payload))
+            asyncio.run(monitor.run_monitor_task(TASK_NAME, trigger=trigger, payload=payload, run_id=run_id))
 
         return call_log
+
+    def test_scan_records_directory_process_events_and_counts(self):
+        """运行详情概览要有目录级过程事件与扫描目录计数。"""
+        task = self._task(sync_clean=False, skip_by_dir_mtime=False)
+        path_results = {
+            "/115/Library": ("", [_dir_item("SeriesA", "t1")]),
+            "/115/Library/SeriesA": ("t1", [_file_item("E01.mkv", "t1")]),
+        }
+        run_id = monitor.create_monitor_run(run_kind="scan", task_name=TASK_NAME, source="manual")
+
+        self._run_monitor(path_results, task=task, run_id=run_id)
+
+        detail = monitor.get_monitor_run_detail(run_id)
+        process_ops = [
+            str(event.get("operation", "") or "")
+            for event in detail["events"]
+            if str(event.get("category", "") or "") == "process"
+        ]
+        self.assertIn("read_dir", process_ops)
+        self.assertGreaterEqual(process_ops.count("read_dir"), 2)
+        self.assertEqual(detail["run"]["status"], "completed")
+        self.assertEqual(detail["run"]["result"]["scanned_dirs"], 2)
 
     def test_manual_savepaths_scans_only_selected_subtrees_and_forces_deep_dirs(self):
         task = self._task(skip_by_dir_mtime=True)

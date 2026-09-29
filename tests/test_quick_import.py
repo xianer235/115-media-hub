@@ -605,6 +605,94 @@ class SharedOrganizeFlowTest(unittest.TestCase):
         self.assertEqual(plan["actions"], [])
         self.assertEqual(plan["unchanged_count"], len(files))
 
+    def test_season_pack_expands_into_show_season_folder(self):
+        """发布式整季文件夹按集展开到 片名 (年份)/Season NN/，不再整包改名撞车。"""
+        season_name = "Curb.Your.Enthusiasm.S09.1080p.WEBRip.x265-RARBG"
+        season_entry = {
+            "id": "s9",
+            "name": season_name,
+            "is_dir": True,
+            "parent_id": "inbox",
+            "parent_path": "接收",
+            "path": f"接收/{season_name}",
+        }
+        files = [
+            {
+                "id": f"f{episode:02d}",
+                "name": f"Curb.Your.Enthusiasm.S09E{episode:02d}.1080p.WEBRip.x265-RARBG.mkv",
+                "is_dir": False,
+                "size": 1,
+                "parent_id": "s9",
+            }
+            for episode in (1, 2)
+        ]
+        files.append(
+            {
+                "id": "ad1",
+                "name": "RARBG.txt",
+                "is_dir": False,
+                "size": 30,
+                "parent_id": "s9",
+            }
+        )
+        tmdb = {
+            "tmdb_id": 4546,
+            "tmdb_media_type": "tv",
+            "tmdb_title": "抑制热情",
+            "tmdb_localized_title": "抑制热情",
+            "tmdb_original_title": "Curb Your Enthusiasm",
+            "tmdb_aliases": [],
+            "tmdb_year": "2000",
+            "tmdb_season_episode_map": {"9": 10},
+            "tmdb_episode_mode": "seasonal",
+        }
+
+        def fake_list(provider, cookie, cid, folders_only=False, offset=0, limit=0):
+            return {"entries": [dict(item) for item in files] if cid == "s9" else []}
+
+        with (
+            mock.patch.object(scraper, "_require_scraper_operation"),
+            mock.patch.object(scraper, "_require_provider_cookie", return_value="cookie"),
+            mock.patch.object(scraper, "_target_name_exists", return_value=False),
+            mock.patch.object(scraper, "_walk_existing_folder", return_value=("", False)),
+            mock.patch.object(scraper, "_list_provider_entries_payload", side_effect=fake_list),
+            mock.patch.object(
+                scraper,
+                "get_config",
+                return_value={"tmdb_enabled": True, "tmdb_api_key": "key", "tmdb_language": "zh-CN"},
+            ),
+        ):
+            plan = scraper.build_scraper_rename_plan(
+                {
+                    "provider": "115",
+                    "base_cid": "inbox",
+                    "base_path": "接收",
+                    "entries": [season_entry],
+                    "tmdb": tmdb,
+                    "options": {
+                        "title_language": "zh",
+                        "file_name_mode": "standard",
+                        "selection_mode": "contents",
+                        "season": 9,
+                        "force_media_folder": True,
+                        "season_pack": True,
+                        "include_tmdb_id": True,
+                        "use_season_subfolder": True,
+                    },
+                }
+            )
+
+        self.assertEqual(plan["issues"], [])
+        self.assertFalse(any(action.get("is_dir") for action in plan["actions"]))
+        self.assertEqual(
+            sorted(action["new_path"] for action in plan["actions"]),
+            [
+                "接收/抑制热情 (2000) [tmdbid-4546]/Season 09/RARBG.txt",
+                "接收/抑制热情 (2000) [tmdbid-4546]/Season 09/抑制热情 (2000) - S09E01.mkv",
+                "接收/抑制热情 (2000) [tmdbid-4546]/Season 09/抑制热情 (2000) - S09E02.mkv",
+            ],
+        )
+
     def test_same_show_sibling_folder_does_not_block_plan(self):
         """接收夹里已有"同一部剧"的另一个名字（[tmdbid-…] 装饰）时，不该报冲突留守。
 
@@ -930,6 +1018,8 @@ class QuickImportRunTest(unittest.TestCase):
         self.assertEqual(detail["match_reason"], "片名与年份一致")
         self.assertEqual(detail["tmdb_id"], 1171826)
         self.assertEqual(detail["identified_year"], "2024")
+        # 这条是散文件识别：运行记录要能看出条目类型。
+        self.assertEqual(detail["entry_type"], "file")
 
     def test_mixed_result_finishes_immediately_with_left_items(self):
         """留在接收夹的条目按部分完成定稿；STRM 同步由独立任务各自记录，父运行不再等待。"""
@@ -1120,6 +1210,105 @@ class QuickImportRunTest(unittest.TestCase):
         move.assert_not_called()
         self.assertIn("整理计划有冲突", result["left"][0]["reason"])
         self.assertEqual(result["left"][0]["reason_code"], "plan_conflict")
+
+    def test_multi_season_pack_stays_in_inbox_with_reason(self):
+        """多季合集（S01-S03）暂不自动拆分，明确留在接收夹等人工处理。"""
+        cfg = _cfg()
+        identified = {
+            "items": [_item(1, "Show.S01-S03.1080p.WEB-DL")],
+            "picked": {1: {"id": 1, "media_type": "tv"}},
+            "results": [{"item_index": 1, "status": "auto"}],
+        }
+        with mock.patch.object(quick_import, "get_config", return_value=cfg), \
+                mock.patch.object(quick_import, "identify_scraper_batch_entries", return_value=identified), \
+                mock.patch.object(quick_import, "resolve_scraper_dest_folder_id", return_value="cid"), \
+                mock.patch.object(quick_import, "build_scraper_plan_for_batch") as build:
+            result = quick_import.run_quick_import("test")
+
+        build.assert_not_called()
+        self.assertEqual(result["moved"], [])
+        self.assertEqual(result["left"][0]["reason_code"], "multi_season_pack")
+        self.assertIn("多季合集", result["left"][0]["reason"])
+
+    def test_season_packs_dispatch_show_folder_once_and_clean_source(self):
+        """同剧多个整季包整理进同一个剧集文件夹，只搬运一次，源季包目录交给清理。"""
+        cfg = _cfg()
+        names = [
+            "Curb.Your.Enthusiasm.S09.1080p.WEBRip.x265-RARBG",
+            "Curb.Your.Enthusiasm.S10.1080p.WEBRip.x265-RARBG",
+            "Curb.Your.Enthusiasm.S11.1080p.WEBRip.x265-RARBG",
+        ]
+        items = [_item(index + 1, name) for index, name in enumerate(names)]
+        picked = {
+            index + 1: {"id": 4546, "media_type": "tv", "title": "抑制热情", "year": "2000"}
+            for index in range(len(names))
+        }
+        identified = {
+            "items": items,
+            "picked": picked,
+            "results": [{"item_index": index + 1, "status": "auto"} for index in range(len(names))],
+        }
+        plan = {
+            "ok": True,
+            "items": [
+                {"item_index": index + 1, "title": "抑制热情", "year": "2000"}
+                for index in range(len(names))
+            ],
+            "issues": [],
+            "ready_count": len(names),
+        }
+        show_folder = {
+            "id": "show",
+            "name": "抑制热情 (2000) [tmdbid-4546]",
+            "is_dir": True,
+            "parent_id": "inbox",
+        }
+        dispatch_calls = []
+        cleanup_inputs = []
+
+        def resolve_side_effect(cid, summary, entry):
+            return dict(show_folder) if not entry else entry
+
+        def dispatch_side_effect(entry, **kwargs):
+            dispatch_calls.append({"entry": dict(entry), **kwargs})
+            return {
+                "merged": True,
+                "target_folder": "抑制热情 (2000) [tmdbid-4546]",
+                "monitor_sync_events": 1,
+            }
+
+        def cleanup_side_effect(leftovers, **kwargs):
+            cleanup_inputs.append(list(leftovers))
+            return []
+
+        with mock.patch.object(quick_import, "get_config", return_value=cfg), \
+                mock.patch.object(quick_import, "resolve_scraper_dest_folder_id", side_effect=lambda provider, path: f"cid:{path}"), \
+                mock.patch.object(quick_import, "identify_scraper_batch_entries", return_value=identified), \
+                mock.patch.object(quick_import, "build_scraper_plan_for_batch", return_value=plan), \
+                mock.patch.object(quick_import, "create_scraper_job_from_plan", return_value={"job_id": 11}), \
+                mock.patch.object(quick_import, "submit_scraper_job", return_value=self._Future()), \
+                mock.patch.object(quick_import, "_resolve_entry_after_organize", side_effect=resolve_side_effect), \
+                mock.patch.object(quick_import, "_dispatch_organized_entry", side_effect=dispatch_side_effect), \
+                mock.patch.object(quick_import, "_retry_inbox_cleanup", side_effect=cleanup_side_effect), \
+                mock.patch.object(scraper, "find_scraper_media_folder", return_value={}):
+            result = quick_import.run_quick_import("test")
+
+        self.assertEqual(result["left"], [])
+        self.assertEqual(len(result["moved"]), 3)
+        # 三个整季包整理进同一个剧集文件夹，只触发一次搬运。
+        self.assertEqual(len(dispatch_calls), 1)
+        self.assertEqual(dispatch_calls[0]["entry"]["id"], "show")
+        self.assertEqual(len(cleanup_inputs), 1)
+        self.assertEqual(len(cleanup_inputs[0]), 3)
+        # 整季包识别的是目录：运行记录要能看出条目类型。
+        inbox_run = monitor_runs.list_runs(run_kind="inbox")["runs"][0]
+        move_events = [
+            event
+            for event in monitor_runs.get_run_detail(inbox_run["id"])["events"]
+            if event.get("operation") in ("move", "merge")
+        ]
+        self.assertTrue(move_events)
+        self.assertTrue(all(event["detail"].get("entry_type") == "folder" for event in move_events))
 
     def test_move_failure_keeps_item_and_records_reason(self):
         cfg = _cfg()

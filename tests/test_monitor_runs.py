@@ -140,6 +140,7 @@ class MonitorRunStoreTest(unittest.TestCase):
                 "new_name": "示例剧 (2024) [tmdbid-1]",
                 "match_source": "AI 识别",
                 "confidence": 68,
+                "entry_type": "folder",
             },
         )
 
@@ -153,6 +154,7 @@ class MonitorRunStoreTest(unittest.TestCase):
                     "new_name": "示例剧 (2024) [tmdbid-1]",
                     "match_source": "AI 识别",
                     "confidence": 68,
+                    "entry_type": "folder",
                 }
             ],
         )

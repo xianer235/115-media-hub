@@ -1358,6 +1358,7 @@ def _inbox_dispatch_items(conn: Any, run_id: str) -> List[Dict[str, Any]]:
                 "new_name": new_name,
                 "match_source": _text(detail.get("match_source")),
                 "confidence": _count_result(detail.get("confidence", 0)),
+                "entry_type": _text(detail.get("entry_type")),
             }
         )
     return items

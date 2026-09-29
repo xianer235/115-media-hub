@@ -21,6 +21,7 @@ from ..db import now_text, retry_sqlite_locked
 from . import scraper as scraper_service
 from .scraper import (
     _normalize_scraper_batch_preferences,
+    _scraper_season_pack_seasons,
     build_scraper_plan_for_batch,
     create_scraper_job_from_plan,
     identify_scraper_batch_entries,
@@ -1164,7 +1165,26 @@ def run_quick_import(
                         continue
                     source_entry = item.get("entry") if isinstance(item.get("entry"), dict) else {}
                     source_entry_name = str(source_entry.get("name", "") or "").strip()
-                    if bool(source_entry.get("is_dir")) and source_entry_name:
+                    season_pack = 0
+                    if media_type == "tv" and bool(source_entry.get("is_dir")) and source_entry_name:
+                        seasons = _scraper_season_pack_seasons(source_entry_name)
+                        if len(seasons) > 1:
+                            # 多季合集（S01-S03）暂不自动拆分，明确留在接收夹等人工处理，
+                            # 避免继续走“整包 = 一个作品文件夹”的老逻辑反复报冲突。
+                            left.append(
+                                {
+                                    "name": str(item.get("name", "") or ""),
+                                    "reason_code": "multi_season_pack",
+                                    "reason": (
+                                        f"检测到多季合集（第{'、'.join(str(value) for value in seasons)}季），"
+                                        "暂不支持自动拆分，请在刮削页手动整理"
+                                    ),
+                                }
+                            )
+                            continue
+                        if seasons:
+                            season_pack = seasons[0]
+                    if bool(source_entry.get("is_dir")) and source_entry_name and not season_pack:
                         try:
                             existing_target_folder = scraper_service.find_scraper_media_folder(
                                 QUICK_IMPORT_PROVIDER,
@@ -1185,6 +1205,7 @@ def run_quick_import(
                             "target_cid": target_cid,
                             "options": options,
                             "source_entry_name": source_entry_name,
+                            "season_pack": season_pack,
                         }
                     )
                 if not prepared:
@@ -1298,6 +1319,10 @@ def run_quick_import(
                                     }
                                 )
                             continue
+                    # 先解析“整理后要搬运的文件夹”，再按文件夹 ID 去重搬运：
+                    # 多个整季包会整理进同一个「片名 (年份)」文件夹，整包只搬一次；
+                    # 重复搬运会把已经移走的空壳当成新条目再搬一遍。
+                    resolved_items: List[Dict[str, Any]] = []
                     for prepared_item in group:
                         if _QUICK_IMPORT_CANCEL.is_set():
                             cancelled = True
@@ -1305,7 +1330,6 @@ def run_quick_import(
                         index = int(prepared_item["index"])
                         item = prepared_item["item"]
                         target = prepared_item["target"]
-                        target_cid = str(prepared_item["target_cid"] or "")
                         original_entry = item.get("entry") if isinstance(item.get("entry"), dict) else {}
                         summary = summary_by_index.get(index) or (plan_items[0] if len(plan_items) == 1 else {})
                         if not summary:
@@ -1317,14 +1341,25 @@ def run_quick_import(
                                 }
                             )
                             continue
-                        entry = _resolve_entry_after_organize(base_cid, summary, original_entry)
+                        season_pack = max(0, parse_int(prepared_item.get("season_pack", 0), 0))
+                        # 整季包整理后生成的是新的「片名 (年份)」文件夹，不是原来的季包目录；
+                        # 传空 entry 让定位逻辑按计划标题去找新文件夹。
+                        entry = _resolve_entry_after_organize(
+                            base_cid,
+                            summary,
+                            {} if season_pack else original_entry,
+                        )
                         entry_id = str(entry.get("id", "") or "").strip()
                         if not entry_id:
                             left.append(
                                 {
                                     "name": str(item.get("name", "") or ""),
                                     "reason_code": "organize_failed",
-                                    "reason": "整理后未能在接收夹内定位到条目，请人工确认",
+                                    "reason": (
+                                        "整理后未能在接收夹内定位到剧集文件夹，请人工确认"
+                                        if season_pack
+                                        else "整理后未能在接收夹内定位到条目，请人工确认"
+                                    ),
                                 }
                             )
                             continue
@@ -1332,23 +1367,51 @@ def run_quick_import(
                         entry["parent_id"] = str(entry.get("parent_id", "") or base_cid).strip() or base_cid
                         entry["parent_path"] = base_rel
                         entry["path"] = normalize_relative_path(join_relative_path(base_rel, entry_name))
+                        resolved_items.append(
+                            {
+                                **prepared_item,
+                                "entry": entry,
+                                "entry_id": entry_id,
+                                "entry_name": entry_name,
+                                "original_entry": original_entry,
+                                "season_pack": season_pack,
+                            }
+                        )
+                    if cancelled:
+                        break
+                    dispatch_results: Dict[str, Dict[str, Any]] = {}
+                    for resolved in resolved_items:
+                        entry_id = str(resolved["entry_id"])
+                        if entry_id in dispatch_results:
+                            continue
                         try:
-                            dispatch = _dispatch_organized_entry(
-                                entry,
+                            dispatch_results[entry_id] = _dispatch_organized_entry(
+                                resolved["entry"],
                                 source_cid=base_cid,
                                 source_rel=base_rel,
-                                target_cid=target_cid,
-                                target_rel=target["scan_rel"],
+                                target_cid=str(resolved["target_cid"] or ""),
+                                target_rel=resolved["target"]["scan_rel"],
                                 job_id=job_id,
                                 name_cache=dispatch_name_cache,
                                 monitor_run_id=monitor_run_id,
                             )
                         except Exception as exc:
+                            dispatch_results[entry_id] = {"__dispatch_error__": str(exc)[:120]}
+                    for resolved in resolved_items:
+                        if _QUICK_IMPORT_CANCEL.is_set():
+                            cancelled = True
+                            break
+                        item = resolved["item"]
+                        target = resolved["target"]
+                        entry = resolved["entry"]
+                        entry_name = str(resolved["entry_name"])
+                        dispatch = dispatch_results.get(str(resolved["entry_id"])) or {}
+                        if dispatch.get("__dispatch_error__"):
                             left.append(
                                 {
                                     "name": str(item.get("name", "") or ""),
                                     "reason_code": "dispatch_failed",
-                                    "reason": f"搬运失败：{str(exc)[:120]}",
+                                    "reason": f"搬运失败：{str(dispatch.get('__dispatch_error__'))[:120]}",
                                 }
                             )
                             continue
@@ -1365,6 +1428,21 @@ def run_quick_import(
                             )
                             continue
                         cleanup_leftovers.extend(dispatch.get("cleanup_pending") or [])
+                        if resolved["season_pack"]:
+                            # 整季包目录里的内容已经按集搬进新剧集文件夹，源目录只剩空壳；
+                            # 交给统一的残留清理，只有确实空了才删除。
+                            original_entry = resolved["original_entry"]
+                            source_entry_name = str(resolved.get("source_entry_name", "") or "")
+                            cleanup_leftovers.append(
+                                {
+                                    "id": str(original_entry.get("id", "") or ""),
+                                    "name": source_entry_name,
+                                    "path": normalize_relative_path(
+                                        str(original_entry.get("path", "") or join_relative_path(base_rel, source_entry_name))
+                                    ),
+                                    "parent_id": str(original_entry.get("parent_id", "") or base_cid),
+                                }
+                            )
                         scope_rel = _dispatch_scan_scope_rel(
                             str(target.get("scan_rel", "") or ""),
                             entry_name,
@@ -1373,18 +1451,22 @@ def run_quick_import(
                         )
                         if scope_rel and scope_rel not in dispatch_scan_scopes:
                             dispatch_scan_scopes.append(scope_rel)
-                        candidate = prepared_item["candidate"]
-                        source_entry_name = prepared_item["source_entry_name"]
+                        candidate = resolved["candidate"]
+                        source_entry_name = str(resolved.get("source_entry_name", "") or "")
                         is_ai = str(candidate.get("source") or "").strip() == "ai"
                         match_source = "AI 识别" if is_ai else "规则匹配"
                         confidence = max(0, int(candidate.get("ai_confidence") if is_ai else candidate.get("score") or 0))
                         match_reason = str(candidate.get("ai_reason") or "").strip() if is_ai else ""
                         tmdb_id = max(0, parse_int(candidate.get("id") or 0, 0))
                         identified_year = str(candidate.get("year") or "").strip()
+                        source_entry_for_type = item.get("entry") if isinstance(item.get("entry"), dict) else {}
+                        entry_type = "folder" if (
+                            bool(source_entry_for_type.get("is_dir")) or bool(item.get("is_dir"))
+                        ) else "file"
                         pending_moved.append(
                             {
                                 "name": str(item.get("name", "") or ""),
-                                "target_label": QUICK_IMPORT_TARGET_LABELS[prepared_item["media_type"]],
+                                "target_label": QUICK_IMPORT_TARGET_LABELS[resolved["media_type"]],
                                 "task_name": str(target.get("task_name", "") or ""),
                                 "job_id": job_id,
                                 "monitor_sync_events": int(dispatch.get("monitor_sync_events", 0) or 0),
@@ -1399,6 +1481,7 @@ def run_quick_import(
                                     "match_reason": match_reason,
                                     "tmdb_id": tmdb_id,
                                     "identified_year": identified_year,
+                                    "entry_type": entry_type,
                                     "old_name": entry_name,
                                     "new_name": str(dispatch.get("target_folder", "") or entry_name),
                                     "old_path": normalize_relative_path(str(entry.get("path", "") or join_relative_path(base_rel, entry_name))),

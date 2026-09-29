@@ -5138,11 +5138,17 @@
             const previous = document.getElementById('monitor-run-prev');
             const next = document.getElementById('monitor-run-next');
             const pageLabel = document.getElementById('monitor-run-page-label');
+            const previousBottom = document.getElementById('monitor-run-prev-bottom');
+            const nextBottom = document.getElementById('monitor-run-next-bottom');
+            const pageLabelBottom = document.getElementById('monitor-run-page-label-bottom');
             const runs = Array.isArray(monitorState.runs) ? monitorState.runs : [];
             if (summary) summary.innerText = monitorRunLoadBusy ? '正在加载运行记录...' : `按开始时间排序 · 本页 ${runs.length} 条`;
             if (pageLabel) pageLabel.innerText = `第 ${monitorRunPage} 页`;
             if (previous) previous.disabled = monitorRunLoadBusy || monitorRunPage <= 1;
             if (next) next.disabled = monitorRunLoadBusy || !monitorRunPageHasMore;
+            if (pageLabelBottom) pageLabelBottom.innerText = `第 ${monitorRunPage} 页`;
+            if (previousBottom) previousBottom.disabled = monitorRunLoadBusy || monitorRunPage <= 1;
+            if (nextBottom) nextBottom.disabled = monitorRunLoadBusy || !monitorRunPageHasMore;
         }
 
         function renderMonitorLogs() {
@@ -5155,6 +5161,7 @@
             const runs = Array.isArray(monitorState.runs) ? monitorState.runs : [];
             box.innerHTML = runs.length ? runs.map(window.MonitorRunView.listRow).join('')
                 : `<div class="monitor-run-empty">${monitorState.run_filtered ? '没有符合筛选条件的记录，可调整筛选后查看。' : '暂无运行记录。扫描或接收夹整理开始后，将在这里显示过程和结果。'}</div>`;
+            document.getElementById('monitor-run-pagination-bottom')?.classList.toggle('hidden', !runs.length);
             updateMonitorRunSummary();
             syncMonitorRunFilterReset();
             syncMonitorRunTaskClearButton();
@@ -5212,7 +5219,9 @@
             monitorState = { ...monitorState, run_filtered: Object.values(filters).some(Boolean), run_loading: true };
             updateMonitorRunSummary();
             try {
-                const query = new URLSearchParams({ limit: '10', cursor, ...filters });
+                // 与后端 build_monitor_status_payload 的 list_runs(limit=5) 保持一致，
+                // 否则首屏会被状态推送重新填成 10 条。
+                const query = new URLSearchParams({ limit: '5', cursor, ...filters });
                 const data = await window.MediaHubApi.getJson(`/monitor/runs?${query.toString()}`);
                 if (revision !== monitorRunRequestRevision) return;
                 if (page === 1) monitorRunPageCursors = [''];

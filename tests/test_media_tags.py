@@ -7,7 +7,39 @@ class MediaTagGroupOrderTest(unittest.TestCase):
     def test_new_groups_follow_audio_and_keep_release_convention(self):
         self.assertEqual(
             MEDIA_TAG_GROUP_ORDER,
-            ("resolution", "source", "dynamic_range", "video", "audio", "language", "subtitle"),
+            ("resolution", "source", "group", "dynamic_range", "video", "audio", "language", "subtitle"),
+        )
+
+
+class MediaTagReleaseGroupTest(unittest.TestCase):
+    def test_trailing_release_group_is_preserved(self):
+        self.assertEqual(
+            media_tag_labels(
+                "The.Boys.S05E01.2160p.AMZN.WEB-DL.DDP.5.1.HDR10+.H.265-BlackTV.mkv"
+            ),
+            ["2160p", "WEB-DL", "BlackTV", "HDR10+", "HEVC", "DDP 5.1"],
+        )
+        self.assertIn("RARBG", media_tag_labels("Movie.2024.1080p.BluRay.x264-RARBG.mkv"))
+        self.assertIn("NTb", media_tag_labels("Show.S01E01.1080p.WEB-DL.DDP5.1.H.264-NTb.mkv"))
+
+    def test_chinese_subtitle_group_is_preserved(self):
+        self.assertIn(
+            "CMCT字幕组",
+            media_tag_labels("Movie.2024.1080p.WEB-DL.x264.DDP5.1-CMCT字幕组.mkv"),
+        )
+
+    def test_technical_suffix_is_not_mistaken_for_release_group(self):
+        self.assertNotIn(
+            "group",
+            parse_media_tags("Movie.2024.1080p.WEB-DL.x264.DTS-HD.MA.mkv")["groups"]["group"],
+        )
+        self.assertEqual(
+            media_tag_labels("Movie.2024.1080p.WEB-DL.x264.DDP5.1.mkv"),
+            ["1080p", "WEB-DL", "H.264", "DDP 5.1"],
+        )
+        self.assertEqual(
+            media_tag_labels("Movie.2024.1080p.WEB-DL.x264.zh-Hans.mkv"),
+            ["1080p", "WEB-DL", "H.264"],
         )
 
 

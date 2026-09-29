@@ -677,6 +677,108 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         self.assertEqual(len(plan["items"]), 2)
         self.assertEqual(plan["items"][0]["title"], "新标题")
 
+    def test_batch_plan_expands_season_pack_without_folder_rename_conflict(self):
+        """整季包（Show.S09.1080p…）要按集展开到 Season NN，不能再整包改名撞车。"""
+
+        def fake_binding(binding, cfg):
+            return {
+                **binding,
+                "tmdb_id": 4546,
+                "tmdb_media_type": "tv",
+                "tmdb_title": "抑制热情",
+                "tmdb_year": "2000",
+                "tmdb_original_title": "Curb Your Enthusiasm",
+                "tmdb_localized_title": "抑制热情",
+                "tmdb_aliases": [],
+                "tmdb_total_episodes": 120,
+                "tmdb_total_seasons": 12,
+                "tmdb_season_episode_map": {"9": 10, "10": 10},
+                "tmdb_episode_mode": "seasonal",
+            }
+
+        def season_entry(index, season):
+            name = f"Curb.Your.Enthusiasm.S{season:02d}.1080p.WEBRip.x265-RARBG"
+            return {
+                "item_index": index,
+                "name": name,
+                "entry": {
+                    "id": f"s{season}",
+                    "name": name,
+                    "is_dir": True,
+                    "parent_id": "inbox",
+                    "parent_path": "接收",
+                    "path": f"接收/{name}",
+                },
+                "tmdb": {"tmdb_id": 4546, "media_type": "tv"},
+            }
+
+        payload = {
+            "provider": "115",
+            "base_cid": "inbox",
+            "base_path": "接收",
+            "options": {
+                "title_language": "zh",
+                "force_media_folder": True,
+                "include_tmdb_id": True,
+                "use_season_subfolder": True,
+            },
+            "items": [season_entry(1, 9), season_entry(2, 10)],
+        }
+        seen_options = []
+
+        def fake_item_plan(payload, **kwargs):
+            entry = payload["entries"][0]
+            options = payload["options"]
+            seen_options.append(dict(options))
+            season = int(options.get("season") or 1)
+            new_path = (
+                f"抑制热情 (2000) [tmdbid-4546]/Season {season:02d}/"
+                f"抑制热情 (2000) - S{season:02d}E01.mkv"
+            )
+            return {
+                "actions": [
+                    {
+                        "entry_id": f"file-{season}",
+                        "is_dir": False,
+                        "old_parent_id": entry["id"],
+                        "old_name": f"Show.S{season:02d}E01.mkv",
+                        "old_path": f"接收/{entry['name']}/Show.S{season:02d}E01.mkv",
+                        "new_parent_id": "folder",
+                        "new_name": new_path.rsplit("/", 1)[-1],
+                        "new_path": new_path,
+                        "target_parent_path": f"抑制热情 (2000) [tmdbid-4546]/Season {season:02d}",
+                        "file_size": 0,
+                        "remote_modified": "",
+                        "issue": "",
+                        "warning": "",
+                        "ready": True,
+                    }
+                ],
+                "issues": [],
+                "warnings": [],
+                "unchanged_count": 0,
+            }
+
+        with (
+            patch.object(scraper, "_require_scraper_operation"),
+            patch.object(scraper, "_resolve_batch_tmdb_binding", side_effect=fake_binding),
+            patch.object(scraper, "build_scraper_rename_plan", side_effect=fake_item_plan),
+            patch.object(
+                scraper,
+                "get_config",
+                return_value={"tmdb_enabled": True, "tmdb_api_key": "key"},
+            ),
+        ):
+            plan = scraper.build_scraper_batch_plan(payload)
+
+        self.assertEqual(plan["issues"], [])
+        self.assertEqual(plan["ready_count"], 2)
+        self.assertFalse(any(action.get("is_dir") for action in plan["actions"]))
+        self.assertEqual([options["season"] for options in seen_options], [9, 10])
+        for options in seen_options:
+            self.assertEqual(options["selection_mode"], "contents")
+            self.assertTrue(options["force_media_folder"])
+
     def test_batch_plan_reports_unbound_item_as_issue(self):
         payload = {
             "provider": "115",
@@ -1109,6 +1211,30 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         self.assertEqual(scraper._scraper_subtitle_suffix("Movie.eng.srt"), ".eng")
         self.assertEqual(scraper._scraper_subtitle_suffix("Movie.zh-Hans.forced.srt"), ".zh-Hans.forced")
         self.assertEqual(scraper._scraper_subtitle_suffix("Movie.srt"), "")
+
+    def test_scraper_subtitle_suffix_keeps_multiple_languages(self):
+        """多语言字幕不能只保留最后一个语言（真实案例：chs.eng 被截成 .eng）。"""
+        self.assertEqual(scraper._scraper_subtitle_suffix("Movie.chs.eng.srt"), ".zh-Hans.eng")
+        self.assertEqual(scraper._scraper_subtitle_suffix("Movie.eng.chs.srt"), ".eng.zh-Hans")
+        self.assertEqual(scraper._scraper_subtitle_suffix("Movie.zh-Hans.zh-Hant.srt"), ".zh-Hans.zh-Hant")
+        self.assertEqual(scraper._scraper_subtitle_suffix("Movie.chs&eng.srt"), ".zh-Hans.eng")
+        self.assertEqual(scraper._scraper_subtitle_suffix("Movie.中英.srt"), ".zh-Hans.eng")
+        self.assertEqual(scraper._scraper_subtitle_suffix("Movie.简繁英.srt"), ".zh-Hans.zh-Hant.eng")
+        self.assertEqual(scraper._scraper_subtitle_suffix("Movie.zh-Hans.zh-Hant.forced.srt"), ".zh-Hans.zh-Hant.forced")
+
+    def test_scraper_season_pack_detection(self):
+        """发布式整季文件夹要被识别为单季包；单集/裸季节目录/多季合集不能误判。"""
+        self.assertEqual(
+            scraper._scraper_season_pack_number("Curb.Your.Enthusiasm.S09.1080p.WEBRip.x265-RARBG"),
+            9,
+        )
+        self.assertEqual(scraper._scraper_season_pack_number("Show.Season.10.1080p.WEB-DL"), 10)
+        self.assertEqual(scraper._scraper_season_pack_number("片名.第3季.1080p"), 3)
+        self.assertIsNone(scraper._scraper_season_pack_number("Show.S09E01.1080p.WEB-DL"))
+        self.assertIsNone(scraper._scraper_season_pack_number("Season 09"))
+        self.assertIsNone(scraper._scraper_season_pack_number("Movie.2024.1080p"))
+        self.assertIsNone(scraper._scraper_season_pack_number("Show.S01-S03.1080p"))
+        self.assertEqual(scraper._scraper_season_pack_seasons("Show.S01-S03.1080p"), [1, 3])
 
     def test_scraper_ad_image_and_standard_image_detection(self):
         self.assertTrue(scraper._is_scraper_ad_image("YTS.GG - Official site.jpg"))
@@ -2428,6 +2554,96 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         self.assertEqual(captured_options[0]["delete_ad_files"], False)
         self.assertNotIn("file_name_mode", captured_options[0])
 
+    def test_auto_scrape_records_per_action_events(self):
+        """自动整理要把每条重命名/移动写进运行记录，概览的过程时间线才有内容。"""
+        from app.services import monitor_runs
+
+        cfg = self._cfg()
+        run_id = monitor_runs.create_run(run_kind="scan", task_name="影视监控", source="manual")
+        items = [
+            {
+                "id": "f1",
+                "fid": "f1",
+                "name": "逐玉.S01E01.mkv",
+                "size": 1024,
+                "remote_rel": "一级/逐玉.S01E01.mkv",
+                "local_rel": "媒体库/一级/逐玉.S01E01.mkv",
+            }
+        ]
+        scan_item = {
+            "item_index": 1,
+            "name": "逐玉",
+            "entry": {
+                "id": "f1",
+                "name": "逐玉.S01E01.mkv",
+                "is_dir": False,
+                "parent_id": "cid1",
+                "parent_path": "一级",
+                "path": "一级/逐玉.S01E01.mkv",
+            },
+            "files": [{"id": "f1"}],
+        }
+        job_state = {
+            "jobs": [
+                {
+                    "id": 9,
+                    "status": "completed",
+                    "succeeded_actions": 1,
+                    "failed_actions": 0,
+                    "actions": [
+                        {
+                            "id": 1,
+                            "job_id": 9,
+                            "status": "completed",
+                            "is_dir": False,
+                            "old_parent_id": "cid1",
+                            "new_parent_id": "cid2",
+                            "old_name": "逐玉.S01E01.mkv",
+                            "new_name": "逐玉 (2026) - S01E01.mkv",
+                            "old_path": "Media/一级/逐玉.S01E01.mkv",
+                            "new_path": "媒体库/逐玉 (2026)/Season 01/逐玉 (2026) - S01E01.mkv",
+                        }
+                    ],
+                }
+            ]
+        }
+        with (
+            patch.object(scraper, "_walk_existing_folder", return_value=("cid1", True)),
+            patch.object(scraper, "scan_scraper_batch_items", return_value={"items": [scan_item]}),
+            patch.object(
+                scraper,
+                "identify_scraper_batch_items",
+                return_value={
+                    "results": [
+                        {
+                            "item_index": 1,
+                            "status": "auto",
+                            "auto_pick": {"id": 1, "media_type": "tv", "title": "逐玉", "year": "2026"},
+                        }
+                    ]
+                },
+            ),
+            patch.object(scraper, "build_scraper_batch_plan", return_value={"ready_count": 1}),
+            patch.object(scraper, "create_scraper_job_from_plan", return_value={"job_id": 9}),
+            patch.object(scraper, "run_scraper_job"),
+            patch.object(scraper, "get_scraper_jobs_state", return_value=job_state),
+        ):
+            message = monitor._auto_scrape_new_media_items(cfg, self._task(), items, run_id=run_id)
+
+        self.assertIn("已自动整理 1 项", message)
+        detail = monitor_runs.get_run_detail(run_id)
+        organize_events = [
+            event
+            for event in detail["events"]
+            if event.get("category") == "remote" and event.get("operation") in ("move", "rename")
+        ]
+        self.assertEqual(len(organize_events), 1)
+        self.assertEqual(
+            organize_events[0]["detail"]["new_path"],
+            "媒体库/逐玉 (2026)/Season 01/逐玉 (2026) - S01E01.mkv",
+        )
+        self.assertEqual(organize_events[0]["detail"]["entry_type"], "folder")
+
     def test_auto_scrape_helper_skips_non_auto_and_runs_auto(self):
         cfg = self._cfg()
         items = [
@@ -2955,6 +3171,40 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         self.assertEqual(issue, "")
         code, _ = scraper._format_tv_episode_code(info)
         self.assertEqual(code, "S01E01")
+
+    def test_subtitle_episode_prefers_parent_folder_over_numeric_prefix(self):
+        """Subs/<S09E01>/2_English.srt 里的 2_ 是字幕序号，不能盖过父目录的 E01。"""
+        task = {
+            "media_type": "tv",
+            "season": 9,
+            "multi_season_mode": False,
+            "anime_mode": False,
+            "tmdb_total_episodes": 10,
+            "tmdb_total_seasons": 1,
+            "tmdb_season_episode_map": {"9": 10},
+            "tmdb_episode_mode": "seasonal",
+        }
+        parent = (
+            "最近接收/Curb.Your.Enthusiasm.S09.1080p.WEBRip.x265-RARBG/"
+            "Subs/Curb.Your.Enthusiasm.S09E01.1080p.WEBRip.x265-RARBG"
+        )
+        self.assertEqual(
+            scraper._extract_task_episodes_from_file_entry(
+                task,
+                f"{parent}/2_English.srt",
+                parent_path=parent,
+            ),
+            {1},
+        )
+        # 字幕文件名自带 SxxEyy 时，仍以文件名为准。
+        self.assertEqual(
+            scraper._extract_task_episodes_from_file_entry(
+                task,
+                f"{parent}/Curb.Your.Enthusiasm.S09E05.1080p.WEBRip.x265-RARBG.srt",
+                parent_path=parent,
+            ),
+            {5},
+        )
 
     def test_extract_title_candidates_strips_cn_ad_site_phrases(self):
         self.assertEqual(

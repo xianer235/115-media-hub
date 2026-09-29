@@ -1251,6 +1251,9 @@ SCRAPER_CN_AD_PROMO_PHRASES = (
     "官方网站", "官方网址", "官网", "请访问", "访问网站", "更多剧集", "更多电影",
     "更多资源", "更多精彩", "免费下载", "在线观看",
     "最新域名", "备用域名", "永久域名", "更换域名", "备用网址", "永久网址",
+    # 社交引流 / 版权声明式水印：词形明确，不会出现在正常片名里。
+    "扫码关注", "关注公众号", "微信公众号", "二维码", "加入群聊",
+    "仅供学习", "仅供交流", "请勿传播", "收集于网络", "资源来源于网络",
 )
 
 _SCRAPER_CN_AD_PROMO_RE = re.compile(
@@ -3034,6 +3037,7 @@ def build_scraper_rename_plan(
     unchanged_rows: List[Dict[str, Any]] = []
     delete_actions: List[Dict[str, Any]] = []
     subtitle_seen: Dict[Tuple[str, str], int] = {}
+    season_pack_mode = bool(plan_options.get("season_pack"))
     if folder_mode and bool(plan_options.get("rename_selected_folders", True)):
         _, _, target_folder_name = _build_scraper_media_titles(tmdb, plan_options, "")
         for raw in selected:
@@ -3129,6 +3133,72 @@ def build_scraper_rename_plan(
         entry_name = str(entry.get("name", "") or "")
         category = _scraper_file_category(entry_name)
         file_size = max(0, parse_int(entry.get("size", 0), 0))
+        if season_pack_mode and (category in ("info", "image", "other") or _is_scraper_ad_file(entry_name, file_size)):
+            # 整季包拆集时，广告 / NFO / 图片 / 说明等非视频文件不能原地留下：它们会让源季包
+            # 目录永远非空，下一轮被反复识别成“整理失败”。默认“保留”就随季搬进
+            # 片名 (年份)/Season NN/（文件名不改）；开启删除广告时仍然只删除广告类文件。
+            if _is_scraper_ad_file(entry_name, file_size) and bool(plan_options.get("delete_ad_files", False)):
+                delete_actions.append(entry)
+                continue
+            _, _, pack_folder_title = _build_scraper_media_titles(tmdb, plan_options, "")
+            pack_target_path = _canonical_scraper_mount_path(
+                normalize_relative_path(
+                    join_relative_path(pack_folder_title, f"Season {max(1, int(default_season or 1)):02d}", entry_name)
+                ),
+                base_path,
+            )
+            old_parent_id = str(entry.get("parent_id", "") or base_cid).strip() or "0"
+            old_path = _canonical_scraper_mount_path(
+                str(entry.get("path", "") or entry.get("name", "")),
+                base_path,
+            )
+            action_issue = ""
+            if pack_target_path and pack_target_path == old_path:
+                unchanged_count += 1
+                unchanged_rows.append(
+                    {
+                        "old_name": entry_name,
+                        "old_path": old_path,
+                        "new_name": entry_name,
+                        "new_path": pack_target_path,
+                        "is_dir": False,
+                    }
+                )
+                continue
+            if pack_target_path:
+                if pack_target_path in target_paths:
+                    action_issue = "本批次内目标路径重复"
+                else:
+                    target_paths.add(pack_target_path)
+            else:
+                action_issue = "无法生成目标路径"
+            pack_target_parent = (
+                normalize_relative_path(os.path.dirname(pack_target_path).replace("\\", "/"))
+                if pack_target_path
+                else ""
+            )
+            action = {
+                "action_index": action_index,
+                "entry_id": str(entry.get("id", "") or ""),
+                "is_dir": False,
+                "old_parent_id": old_parent_id,
+                "old_name": entry_name,
+                "old_path": old_path,
+                "new_parent_id": "",
+                "new_name": entry_name,
+                "new_path": pack_target_path,
+                "target_parent_path": pack_target_parent,
+                "file_size": file_size,
+                "remote_modified": str(entry.get("remote_modified", "") or ""),
+                "issue": action_issue,
+                "warning": "",
+                "ready": bool(pack_target_path and not action_issue),
+            }
+            if action_issue:
+                issues.append(f"{entry_name}：{action_issue}")
+            actions.append(action)
+            action_index += 1
+            continue
         if category == "info":
             # NFO 等媒体信息文件：保留原名、不删除、不参与整理。
             ignored_names.append(entry_name)
@@ -4615,6 +4685,7 @@ SCRAPER_BATCH_PRESERVE_TAG_KEYS = frozenset(
     {
         "resolution",
         "source",
+        "group",
         "dynamic_range",
         "video",
         "audio",
@@ -4746,7 +4817,7 @@ SCRAPER_STANDARD_IMAGE_STEMS = {
 }
 SCRAPER_AD_IMAGE_MARKERS = (
     "official site", "visit", "logo", "banner", "广告", "水印", "推广", "推荐",
-    "watch now", "download now",
+    "watch now", "download now", "扫码", "公众号", "二维码", "加群",
 )
 SCRAPER_SUBTITLE_LANGUAGE_MAP = {
     "dan": "dan", "danish": "dan", "da": "dan",
@@ -4787,10 +4858,93 @@ SCRAPER_SUBTITLE_LANGUAGE_MAP = {
     "cat": "cat", "ca": "cat", "加泰罗尼亚语": "cat",
     "epo": "epo", "eo": "epo", "世界语": "epo",
     "lat": "lat", "la": "lat", "拉丁语": "lat",
+    "yue": "yue", "粤语": "yue", "粵語": "yue", "cantonese": "yue",
     "forced": "forced", "sdh": "sdh", "hi": "hi", "cc": "cc", "default": "default",
     "utf8": "utf8", "utf-8": "utf8", "gb": "gb", "gbk": "gbk", "shift-jis": "sjis",
 }
 _SCRAPER_SUBTITLE_MARKER_VALUES = {"forced", "sdh", "hi", "cc", "default", "utf8", "gb", "gbk", "sjis"}
+# 组合写法：一个 token 里同时表达多种语言/字幕形态。值按文件名从左到右的顺序展开，
+# "双语" 无法确定具体是哪两种语言时保留为原词，避免猜错。
+SCRAPER_SUBTITLE_LANGUAGE_COMBOS: Dict[str, List[str]] = {
+    "简繁英": ["zh-Hans", "zh-Hant", "eng"],
+    "繁简英": ["zh-Hans", "zh-Hant", "eng"],
+    "简繁": ["zh-Hans", "zh-Hant"],
+    "繁简": ["zh-Hans", "zh-Hant"],
+    "中英双语": ["zh-Hans", "eng"],
+    "中英": ["zh-Hans", "eng"],
+    "国英双语": ["zh", "eng"],
+    "國英双语": ["zh", "eng"],
+    "国英": ["zh", "eng"],
+    "國英": ["zh", "eng"],
+    "国粤双语": ["zh", "yue"],
+    "國粵双语": ["zh", "yue"],
+    "国粤": ["zh", "yue"],
+    "國粵": ["zh", "yue"],
+    "国语中字": ["zh"],
+    "國語中字": ["zh"],
+    "粤语中字": ["yue"],
+    "粵語中字": ["yue"],
+    "英语中字": ["eng"],
+    "英語中字": ["eng"],
+    "双语": ["双语"],
+    "雙語": ["双语"],
+}
+
+
+def _scraper_subtitle_token_languages(token: str) -> List[str]:
+    """解析单个文件名 token 里的语言/标记，支持组合词与 & - + , / 分隔写法。"""
+    raw = str(token or "").strip()
+    if not raw:
+        return []
+    key = raw.lower()
+    combined = SCRAPER_SUBTITLE_LANGUAGE_COMBOS.get(raw) or SCRAPER_SUBTITLE_LANGUAGE_COMBOS.get(key)
+    if combined:
+        return list(combined)
+    direct = SCRAPER_SUBTITLE_LANGUAGE_MAP.get(key)
+    if direct:
+        return [direct]
+    # 组合写法：chs&eng / zh-Hans-zh-Hant / chs-eng 等。
+    for separator in (r"[&+,/／|]+", r"[-]+"):
+        parts = [part for part in re.split(separator, raw) if part]
+        if len(parts) <= 1:
+            continue
+        resolved: List[str] = []
+        for part in parts:
+            part_key = part.lower()
+            value = (
+                SCRAPER_SUBTITLE_LANGUAGE_COMBOS.get(part)
+                or SCRAPER_SUBTITLE_LANGUAGE_COMBOS.get(part_key)
+                or SCRAPER_SUBTITLE_LANGUAGE_MAP.get(part_key)
+            )
+            if not value:
+                resolved = []
+                break
+            resolved.extend(value if isinstance(value, list) else [value])
+        if resolved:
+            return resolved
+    # 兜底：整个 token 由已知词 + 分隔符组成时按最长匹配切分。
+    known = sorted(
+        set(SCRAPER_SUBTITLE_LANGUAGE_COMBOS) | set(SCRAPER_SUBTITLE_LANGUAGE_MAP),
+        key=len,
+        reverse=True,
+    )
+    pattern = re.compile("(" + "|".join(re.escape(item) for item in known) + ")", re.IGNORECASE)
+    resolved = []
+    for index, part in enumerate(pattern.split(raw)):
+        if index % 2 == 0:
+            if part.strip(" ._-&+,/／|"):
+                return []
+            continue
+        part_key = part.lower()
+        value = (
+            SCRAPER_SUBTITLE_LANGUAGE_COMBOS.get(part)
+            or SCRAPER_SUBTITLE_LANGUAGE_COMBOS.get(part_key)
+            or SCRAPER_SUBTITLE_LANGUAGE_MAP.get(part_key)
+        )
+        if not value:
+            return []
+        resolved.extend(value if isinstance(value, list) else [value])
+    return resolved
 
 
 def _scraper_file_category(name: str) -> str:
@@ -4812,24 +4966,84 @@ def _scraper_file_category(name: str) -> str:
 
 
 def _scraper_subtitle_suffix(name: str) -> str:
-    """从字幕文件名尾部提取语言/编码/特殊标记，如 Denmark.dan.srt → '.dan'。"""
+    """从字幕文件名尾部提取语言/编码/特殊标记，多语言全部保留。
+
+    例：Denmark.dan.srt → '.dan'；Movie.chs.eng.srt → '.zh-Hans.eng'；
+    Movie.中英.srt → '.zh-Hans.eng'。以前只取最后一个语言 token，多语言字幕会
+    丢失前面的语言，这里改为从尾部连续收集，直到遇到片名等非语言 token。
+    """
     stem = os.path.splitext(str(name or "").strip())[0]
     tokens = [token for token in re.split(r"[._\s]+", stem) if token]
     suffix_parts: List[str] = []
-    language_taken = False
     for token in reversed(tokens):
-        canonical = SCRAPER_SUBTITLE_LANGUAGE_MAP.get(token.lower())
-        if canonical is None:
+        resolved = _scraper_subtitle_token_languages(token)
+        if not resolved:
             break
-        if canonical not in _SCRAPER_SUBTITLE_MARKER_VALUES:
-            if language_taken:
-                break
-            language_taken = True
-        suffix_parts.append(canonical)
-        if len(suffix_parts) >= 3:
+        for part in reversed(resolved):
+            if part not in suffix_parts:
+                suffix_parts.append(part)
+        if len(suffix_parts) >= 4:
             break
     suffix_parts.reverse()
     return f".{'.'.join(suffix_parts)}" if suffix_parts else ""
+
+
+_SCRAPER_CN_DIGITS = {
+    "零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "兩": 2, "三": 3, "四": 4,
+    "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
+}
+
+
+def _scraper_cn_number(value: Any) -> int:
+    """把 1-99 的中文数字转成整数（用于“第N季”）。"""
+    text = str(value or "").strip()
+    if not text:
+        return 0
+    if text.isdigit():
+        return int(text)
+    if "十" in text:
+        left, _, right = text.partition("十")
+        tens = _SCRAPER_CN_DIGITS.get(left, 1) if left else 1
+        ones = _SCRAPER_CN_DIGITS.get(right, 0) if right else 0
+        return tens * 10 + ones
+    return _SCRAPER_CN_DIGITS.get(text, 0)
+
+
+def _scraper_season_pack_seasons(name: str) -> List[int]:
+    """提取“发布式整季文件夹名”里的季号列表。
+
+    只认明确的 S09 / Season 09 / 第9季 写法；裸的 ``Season 09`` 交给现有“就地整理”
+    逻辑处理；带集数标记（S09E01 / EP01）的文件夹是单集或全集范围，不算单季包。
+    返回去重后的季号列表，空列表表示不是整季包。
+    """
+    text = unicodedata.normalize("NFKC", str(name or "")).strip()
+    if not text or is_subscription_season_folder_name(text):
+        return []
+    if re.search(r"(?i)(?<![A-Za-z])(?:e|ep)[\s._-]*\d{1,4}(?![0-9])", text):
+        return []
+    seasons: List[int] = []
+
+    def add(value: Any) -> None:
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            number = 0
+        if 1 <= number <= 99 and number not in seasons:
+            seasons.append(number)
+
+    for match in re.finditer(r"(?<![A-Za-z0-9])S(\d{1,2})(?![0-9])", text):
+        add(match.group(1))
+    for match in re.finditer(r"(?i)(?<![A-Za-z0-9])season[\s._-]*(\d{1,2})(?![0-9])", text):
+        add(match.group(1))
+    for match in re.finditer(r"第\s*([0-9零〇一二三四五六七八九十两兩]{1,4})\s*季", text):
+        add(_scraper_cn_number(match.group(1)))
+    return sorted(seasons)
+
+
+def _scraper_season_pack_number(name: str) -> Optional[int]:
+    """单季包返回季号；多季合集/识别不了返回 None。"""
+    seasons = _scraper_season_pack_seasons(name)
+    return seasons[0] if len(seasons) == 1 else None
 
 
 def _is_scraper_ad_image(name: str, size: int = 0) -> bool:
@@ -5939,6 +6153,23 @@ def build_scraper_batch_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
         item_options.update(item_overrides)
         if bool(entry.get("is_dir")):
             item_options["selection_mode"] = "folder"
+            # 发布式整季文件夹（Show.S09.1080p…）不能当成“一个作品文件夹”整体改名，
+            # 否则同一部剧的多季会都撞到同一个 片名 (年份) 目录。这里改成展开目录内容，
+            # 按集落到 片名 (年份)/Season NN/，与散文件/单集整理保持同一套目标形状。
+            binding_media_type = normalize_tmdb_media_type(
+                binding.get("tmdb_media_type") or binding.get("media_type"),
+                "",
+            )
+            season_pack = (
+                _scraper_season_pack_number(str(entry.get("name", "") or item_name))
+                if binding_media_type == "tv"
+                else None
+            )
+            if season_pack:
+                item_options["selection_mode"] = "contents"
+                item_options["season"] = season_pack
+                item_options["force_media_folder"] = True
+                item_options["season_pack"] = True
         else:
             item_options["selection_mode"] = "contents"
         item_options["base_path"] = base_path

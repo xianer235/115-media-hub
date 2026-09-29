@@ -107,6 +107,7 @@
         .monitor-runs-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }
         .monitor-runs-actions, .monitor-run-filters, .monitor-run-retention-actions, .monitor-run-pagination { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
         .monitor-run-page-label { min-width: 3.8rem; color: var(--run-muted); font-size: 0.72rem; text-align: center; }
+        .monitor-run-pagination-bottom { justify-content: center; margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--run-line); }
         .monitor-run-filters { margin: 1rem 0 0.7rem; padding-bottom: 0.75rem; border-bottom: 1px solid var(--run-line); }
         .monitor-run-filter { flex: 0 1 12rem; min-width: 10rem; min-height: 34px; border: 1px solid #334155; border-radius: 0.45rem; background: #0f172a; color: #cbd5e1; padding: 0.35rem 0.55rem; font-size: 0.75rem; }
         .monitor-run-list { display: grid; }
@@ -215,6 +216,7 @@
         .monitor-run-field dd { margin: 0; color: var(--run-text); font-size: 0.72rem; overflow-wrap: anywhere; }
         .monitor-run-event-time { padding-top: 0.15rem; color: var(--run-muted); font-size: 0.7rem; white-space: nowrap; }
         .monitor-run-event-row.is-problem .monitor-run-event-action { color: var(--run-error); }
+        .monitor-run-timeline { max-height: 22rem; overflow: auto; border: 1px solid var(--run-line); border-radius: 0.5rem; }
         .monitor-run-shown { display: flex; flex-wrap: wrap; align-items: center; gap: 0.55rem; margin-top: 0.55rem; color: var(--run-muted); font-size: 0.7rem; }
         .monitor-run-shown .monitor-run-load-more { margin: 0; }
         .monitor-run-load-more { display: block; margin: 0.8rem auto 0; }
