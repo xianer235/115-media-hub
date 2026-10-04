@@ -897,7 +897,27 @@ class QuickImportRunTest(unittest.TestCase):
             seen_options.append(options)
             return {
                 "ok": True,
-                "items": [{"title": "电影A", "year": "2024"}],
+                "items": [
+                    {
+                        "item_index": 1,
+                        "title": "电影A",
+                        "year": "2024",
+                        "total": 1,
+                        "ready": 1,
+                        "issue_count": 0,
+                    }
+                ],
+                "actions": [
+                    {
+                        "item_index": 1,
+                        "action_index": 1,
+                        "entry_id": "e1",
+                        "is_dir": False,
+                        "ready": True,
+                        "issue": "",
+                        "new_path": "接收/电影A (2024).mkv",
+                    }
+                ],
                 "issues": [],
                 "ready_count": 1,
             }
@@ -1211,6 +1231,188 @@ class QuickImportRunTest(unittest.TestCase):
         self.assertIn("整理计划有冲突", result["left"][0]["reason"])
         self.assertEqual(result["left"][0]["reason_code"], "plan_conflict")
 
+    def test_conflicting_item_does_not_block_other_items(self):
+        """同一批里某个条目冲突时只留它自己，其他条目照常整理分发。"""
+        cfg = _cfg()
+        identified = {
+            "items": [_item(1, "电影A"), _item(2, "电影B")],
+            "picked": {
+                1: {"id": 603, "media_type": "movie"},
+                2: {"id": 604, "media_type": "movie"},
+            },
+            "results": [
+                {"item_index": 1, "status": "auto"},
+                {"item_index": 2, "status": "auto"},
+            ],
+        }
+        plan = {
+            "ok": True,
+            "items": [
+                {
+                    "item_index": 1,
+                    "title": "电影A",
+                    "year": "2026",
+                    "media_type": "movie",
+                    "total": 1,
+                    "ready": 1,
+                    "issue_count": 0,
+                },
+                {
+                    "item_index": 2,
+                    "title": "电影B",
+                    "year": "2026",
+                    "media_type": "movie",
+                    "total": 1,
+                    "ready": 0,
+                    "issue_count": 1,
+                },
+            ],
+            "actions": [
+                {
+                    "item_index": 1,
+                    "action_index": 1,
+                    "entry_id": "e1",
+                    "is_dir": False,
+                    "ready": True,
+                    "issue": "",
+                    "new_path": "接收/电影A (2026).mkv",
+                }
+            ],
+            "issues": ["条目 #2 电影B：目标目录中已有同名文件"],
+            "ready_count": 1,
+        }
+        created_plans = []
+        dispatched = []
+
+        def create_side_effect(payload):
+            created_plans.append(payload["plan"])
+            return {"job_id": 9}
+
+        def dispatch_side_effect(entry, **kwargs):
+            dispatched.append(dict(entry))
+            return {"merged": False, "target_folder": "电影A (2026)", "monitor_sync_events": 0}
+
+        with mock.patch.object(quick_import, "get_config", return_value=cfg), \
+                mock.patch.object(quick_import, "resolve_scraper_dest_folder_id", return_value="cid"), \
+                mock.patch.object(quick_import, "identify_scraper_batch_entries", return_value=identified), \
+                mock.patch.object(quick_import, "build_scraper_plan_for_batch", return_value=plan), \
+                mock.patch.object(quick_import, "create_scraper_job_from_plan", side_effect=create_side_effect), \
+                mock.patch.object(quick_import, "submit_scraper_job", return_value=self._Future()), \
+                mock.patch.object(
+                    quick_import,
+                    "_resolve_entry_after_organize",
+                    side_effect=lambda cid, summary, entry: entry,
+                ), \
+                mock.patch.object(quick_import, "_dispatch_organized_entry", side_effect=dispatch_side_effect):
+            result = quick_import.run_quick_import("test")
+
+        # 只提交没冲突的条目 1；条目 2 自己的原因留在接收夹。
+        self.assertEqual(len(created_plans), 1)
+        self.assertEqual([action["item_index"] for action in created_plans[0]["actions"]], [1])
+        self.assertEqual([entry["id"] for entry in dispatched], ["e1"])
+        self.assertEqual([item["name"] for item in result["moved"]], ["电影A"])
+        self.assertEqual(len(result["left"]), 1)
+        self.assertEqual(result["left"][0]["name"], "电影B")
+        self.assertEqual(result["left"][0]["reason_code"], "plan_conflict")
+        self.assertIn("目标目录中已有同名文件", result["left"][0]["reason"])
+
+    def test_merged_same_title_item_skips_dispatch_and_cleans_source(self):
+        """同一部影视的另一个条目已并进媒体文件夹：只登记合并 + 清理空壳，不单独搬运。"""
+        cfg = _cfg()
+        named = "功夫女足(2026)[tmdbid-1491920]"
+        junk = "【发布组】功夫女足[高码版].Kung.Fu.Soccer.2026.2160p-PandaQT"
+        identified = {
+            "items": [_item(1, named), _item(2, junk)],
+            "picked": {
+                1: {"id": 1491920, "media_type": "movie"},
+                2: {"id": 1491920, "media_type": "movie"},
+            },
+            "results": [
+                {"item_index": 1, "status": "auto"},
+                {"item_index": 2, "status": "auto"},
+            ],
+        }
+        merged_folder = "功夫女足 (2026) [tmdbid-1491920]"
+        plan = {
+            "ok": True,
+            "items": [
+                {
+                    "item_index": 1,
+                    "title": "功夫女足",
+                    "year": "2026",
+                    "media_type": "movie",
+                    "total": 1,
+                    "ready": 1,
+                    "issue_count": 0,
+                    "merged_into_folder": "",
+                },
+                {
+                    "item_index": 2,
+                    "title": "功夫女足",
+                    "year": "2026",
+                    "media_type": "movie",
+                    "total": 1,
+                    "ready": 1,
+                    "issue_count": 0,
+                    "merged_into_folder": merged_folder,
+                },
+            ],
+            "actions": [
+                {
+                    "item_index": 1,
+                    "action_index": 1,
+                    "entry_id": "e1",
+                    "is_dir": True,
+                    "ready": True,
+                    "issue": "",
+                    "new_path": f"接收/{merged_folder}",
+                }
+            ],
+            "issues": [],
+            "ready_count": 1,
+        }
+        dispatched = []
+        cleanup_inputs = []
+
+        def dispatch_side_effect(entry, **kwargs):
+            dispatched.append(dict(entry))
+            return {"merged": False, "target_folder": merged_folder, "monitor_sync_events": 0}
+
+        def cleanup_side_effect(leftovers, **kwargs):
+            cleanup_inputs.append(list(leftovers))
+            return []
+
+        with mock.patch.object(quick_import, "get_config", return_value=cfg), \
+                mock.patch.object(quick_import, "resolve_scraper_dest_folder_id", return_value="cid"), \
+                mock.patch.object(quick_import, "identify_scraper_batch_entries", return_value=identified), \
+                mock.patch.object(quick_import, "build_scraper_plan_for_batch", return_value=plan), \
+                mock.patch.object(quick_import, "create_scraper_job_from_plan", return_value={"job_id": 12}), \
+                mock.patch.object(quick_import, "submit_scraper_job", return_value=self._Future()), \
+                mock.patch.object(
+                    quick_import,
+                    "_resolve_entry_after_organize",
+                    side_effect=lambda cid, summary, entry: entry,
+                ), \
+                mock.patch.object(quick_import, "_dispatch_organized_entry", side_effect=dispatch_side_effect), \
+                mock.patch.object(quick_import, "_retry_inbox_cleanup", side_effect=cleanup_side_effect):
+            result = quick_import.run_quick_import("test")
+
+        # 只有条目 1 触发搬运；条目 2 记为合并并把空壳交给清理。
+        self.assertEqual([entry["id"] for entry in dispatched], ["e1"])
+        self.assertEqual(len(result["left"]), 0)
+        self.assertEqual([item["name"] for item in result["moved"]], [named, junk])
+        self.assertEqual(len(cleanup_inputs), 1)
+        self.assertEqual([item["id"] for item in cleanup_inputs[0]], ["e2"])
+        inbox_run = monitor_runs.list_runs(run_kind="inbox")["runs"][0]
+        merge_events = [
+            event
+            for event in monitor_runs.get_run_detail(inbox_run["id"])["events"]
+            if event.get("operation") == "merge" and event.get("category") == "remote"
+        ]
+        self.assertEqual(len(merge_events), 1)
+        self.assertEqual(merge_events[0]["detail"]["new_name"], merged_folder)
+        self.assertEqual(merge_events[0]["detail"]["merged_into_folder"], merged_folder)
+
     def test_multi_season_pack_stays_in_inbox_with_reason(self):
         """多季合集（S01-S03）暂不自动拆分，明确留在接收夹等人工处理。"""
         cfg = _cfg()
@@ -1492,7 +1694,27 @@ class QuickImportMergeIntoExistingFolderTest(unittest.TestCase):
                 options_sink.append(dict(options))
             return {
                 "ok": True,
-                "items": [{"title": "王子与乞丐", "year": "2026"}],
+                "items": [
+                    {
+                        "item_index": 1,
+                        "title": "王子与乞丐",
+                        "year": "2026",
+                        "total": 1,
+                        "ready": 1,
+                        "issue_count": 0,
+                    }
+                ],
+                "actions": [
+                    {
+                        "item_index": 1,
+                        "action_index": 1,
+                        "entry_id": "inbox-folder",
+                        "is_dir": True,
+                        "ready": True,
+                        "issue": "",
+                        "new_path": "接收/王子与乞丐 (2026)",
+                    }
+                ],
                 "issues": [],
                 "ready_count": 1,
             }

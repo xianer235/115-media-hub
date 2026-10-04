@@ -380,6 +380,131 @@ def _resolve_entry_after_organize(
     return {}
 
 
+def _plan_issue_item_index(text: str) -> int:
+    """从 ``条目 #2 片名：原因`` 这类问题文案里取条目序号（取不到返回 0）。"""
+    prefix = "条目 #"
+    value = str(text or "").strip()
+    if not value.startswith(prefix):
+        return 0
+    digits = ""
+    for char in value[len(prefix):]:
+        if not char.isdigit():
+            break
+        digits += char
+    return max(0, parse_int(digits, 0)) if digits else 0
+
+
+def _plan_blocked_item_reasons(plan: Dict[str, Any]) -> Dict[int, str]:
+    """取出整理计划里"被冲突挡住的条目"和它自己的原因。
+
+    同一批里的条目是互相独立的：某个条目冲突（同标题但不同作品、目标文件重名等）
+    只该留它自己，不能让整批都留在接收夹——旧行为正是后者，实测会把已经识别好的
+    条目一起扣下。
+    """
+    blocked: Dict[int, str] = {}
+    plan_items = plan.get("items") if isinstance(plan.get("items"), list) else []
+    for summary in plan_items:
+        if not isinstance(summary, dict):
+            continue
+        index = max(0, parse_int(summary.get("item_index", 0), 0))
+        if index <= 0:
+            continue
+        issue_count = max(0, parse_int(summary.get("issue_count", 0), 0))
+        total = max(0, parse_int(summary.get("total", 0), 0))
+        ready = max(0, parse_int(summary.get("ready", 0), 0))
+        if issue_count <= 0 and total <= ready:
+            continue
+        blocked.setdefault(index, "")
+    raw_issues = plan.get("issues") if isinstance(plan.get("issues"), list) else []
+    item_reasons: Dict[int, str] = {}
+    for value in raw_issues:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        index = _plan_issue_item_index(text)
+        if index <= 0:
+            # 读目录失败这类不属于任何条目的问题：保守处理，整批先不动。
+            return {key: text for key in blocked}
+        item_reasons.setdefault(index, text)
+        blocked.setdefault(index, "")
+    for index in list(blocked):
+        blocked[index] = item_reasons.get(index) or "整理计划有冲突"
+    return blocked
+
+
+def _record_merged_inbox_item(
+    *,
+    pending_moved: List[Dict[str, Any]],
+    cleanup_leftovers: List[Dict[str, Any]],
+    prepared_item: Dict[str, Any],
+    original_entry: Dict[str, Any],
+    merged_into_folder: str,
+    job_id: int,
+    base_cid: str,
+    base_rel: str,
+) -> None:
+    """同一部影视的多个版本/多个条目已经并进同一个媒体文件夹时的收尾登记。
+
+    内容跟着那个条目的文件夹一起搬运（搬运由那一条负责），这里只登记合并结果；
+    自己留下的空壳目录交给统一的残留清理，避免被当成"整理后定位失败"再捡一遍。
+    """
+    item = prepared_item.get("item") if isinstance(prepared_item.get("item"), dict) else {}
+    target = prepared_item.get("target") if isinstance(prepared_item.get("target"), dict) else {}
+    candidate = prepared_item.get("candidate") if isinstance(prepared_item.get("candidate"), dict) else {}
+    media_type = str(prepared_item.get("media_type", "") or "")
+    name = str(item.get("name", "") or "")
+    entry_name = str(original_entry.get("name", "") or name)
+    entry_path = normalize_relative_path(
+        str(original_entry.get("path", "") or join_relative_path(base_rel, entry_name))
+    )
+    is_folder_entry = bool(original_entry.get("is_dir")) or bool(item.get("is_dir"))
+    if is_folder_entry and str(original_entry.get("id", "") or "").strip():
+        cleanup_leftovers.append(
+            {
+                "id": str(original_entry.get("id", "") or ""),
+                "name": entry_name,
+                "path": entry_path,
+                "parent_id": str(original_entry.get("parent_id", "") or base_cid),
+            }
+        )
+    is_ai = str(candidate.get("source") or "").strip() == "ai"
+    target_rel = str(target.get("scan_rel", "") or "")
+    pending_moved.append(
+        {
+            "name": name,
+            "target_label": QUICK_IMPORT_TARGET_LABELS.get(media_type, ""),
+            "task_name": str(target.get("task_name", "") or ""),
+            "job_id": job_id,
+            "monitor_sync_events": 0,
+            "title": name,
+            "operation": "merge",
+            "detail": {
+                "step": "接收夹分发",
+                "operation_label": "并入同部影视文件夹",
+                "original_name": entry_name,
+                "match_source": "AI 识别" if is_ai else "规则匹配",
+                "confidence": max(
+                    0,
+                    int(candidate.get("ai_confidence") if is_ai else candidate.get("score") or 0),
+                ),
+                "match_reason": str(candidate.get("ai_reason") or "").strip() if is_ai else "",
+                "tmdb_id": max(0, parse_int(candidate.get("id") or 0, 0)),
+                "identified_year": str(candidate.get("year") or "").strip(),
+                "entry_type": "folder" if is_folder_entry else "file",
+                "old_name": entry_name,
+                "new_name": merged_into_folder,
+                "old_path": entry_path,
+                "new_path": normalize_relative_path(join_relative_path(target_rel, merged_into_folder)),
+                "target": target_rel,
+                "task_name": str(target.get("task_name", "") or ""),
+                "scraper_job_id": job_id,
+                "monitor_sync_events": 0,
+                "merged_into_folder": merged_into_folder,
+            },
+        }
+    )
+
+
 def _insert_quick_import_run(trigger: str, inbox_path: str, started_at: str) -> int:
     ensure_db()
 
@@ -1244,19 +1369,13 @@ def run_quick_import(
                     )
                     plan_items = plan.get("items") if isinstance(plan, dict) else []
                     plan_items = plan_items if isinstance(plan_items, list) else []
-                    issues = [
-                        str(value).strip()
-                        for value in ((plan.get("issues") if isinstance(plan, dict) else None) or [])
-                        if str(value or "").strip()
-                    ]
-                    if not plan or issues:
-                        reason = f"整理计划有冲突：{issues[0][:120]}" if issues else "无法生成整理计划"
+                    if not plan:
                         for prepared_item in group:
                             left.append(
                                 {
                                     "name": str(prepared_item["item"].get("name", "") or ""),
                                     "reason_code": "plan_conflict",
-                                    "reason": reason,
+                                    "reason": "无法生成整理计划",
                                 }
                             )
                         continue
@@ -1265,11 +1384,34 @@ def run_quick_import(
                         for summary in plan_items
                         if isinstance(summary, dict)
                     }
-                    ready_count = max(0, parse_int(plan.get("ready_count", 0), 0))
+                    # 同一批里某个条目冲突时只留它自己：它的动作不提交，其他条目照常整理分发。
+                    blocked_reasons = _plan_blocked_item_reasons(plan)
+                    for prepared_item in group:
+                        reason = blocked_reasons.get(int(prepared_item["index"]))
+                        if reason is None:
+                            continue
+                        left.append(
+                            {
+                                "name": str(prepared_item["item"].get("name", "") or ""),
+                                "reason_code": "plan_conflict",
+                                "reason": f"整理计划有冲突：{str(reason)[:120]}",
+                            }
+                        )
+                    executable_actions = [
+                        action
+                        for action in (plan.get("actions") if isinstance(plan.get("actions"), list) else [])
+                        if isinstance(action, dict)
+                        and max(0, parse_int(action.get("item_index", 0), 0)) not in blocked_reasons
+                    ]
+                    group_plan = {**plan, "actions": executable_actions}
+                    ready_count = sum(
+                        1 for action in executable_actions if action.get("ready") and not action.get("issue")
+                    )
+                    group_plan["ready_count"] = ready_count
                     job_id = 0
                     if ready_count > 0:
                         try:
-                            job = create_scraper_job_from_plan({"plan": plan})
+                            job = create_scraper_job_from_plan({"plan": group_plan})
                             job_id = max(0, parse_int(job.get("job_id", 0), 0))
                             if job_id > 0:
                                 submit_scraper_job(job_id).result(timeout=QUICK_IMPORT_JOB_WAIT_SECONDS)
@@ -1280,6 +1422,8 @@ def run_quick_import(
                                 if actual_status in {"failed", "partial", "rollback_failed"}:
                                     detail = str(actual.get("status_detail", "") or "整理动作未全部完成")
                                     for prepared_item in group:
+                                        if int(prepared_item["index"]) in blocked_reasons:
+                                            continue
                                         left.append(
                                             {
                                                 "name": str(prepared_item["item"].get("name", "") or ""),
@@ -1302,7 +1446,7 @@ def run_quick_import(
                                         category="remote",
                                         operation="organize",
                                         status="completed",
-                                        title=f"{len(group)} 个条目",
+                                        title=f"{max(0, len(group) - len(blocked_reasons))} 个条目",
                                         detail={
                                             "scraper_job_id": job_id,
                                             "succeeded_actions": int(actual.get("succeeded_actions", 0) or 0),
@@ -1311,6 +1455,8 @@ def run_quick_import(
                                     )
                         except Exception as exc:
                             for prepared_item in group:
+                                if int(prepared_item["index"]) in blocked_reasons:
+                                    continue
                                 left.append(
                                     {
                                         "name": str(prepared_item["item"].get("name", "") or ""),
@@ -1328,6 +1474,9 @@ def run_quick_import(
                             cancelled = True
                             break
                         index = int(prepared_item["index"])
+                        if index in blocked_reasons:
+                            # 这条自己冲突，已经记进「留在接收夹」；不要跟着本批一起整理分发。
+                            continue
                         item = prepared_item["item"]
                         target = prepared_item["target"]
                         original_entry = item.get("entry") if isinstance(item.get("entry"), dict) else {}
@@ -1338,6 +1487,18 @@ def run_quick_import(
                                     "name": str(item.get("name", "") or ""),
                                     "reason_code": "organize_failed",
                                     "reason": "整理计划缺少该条目，请人工确认",
+                                }
+                            )
+                            continue
+                        merged_into_folder = str(summary.get("merged_into_folder", "") or "").strip()
+                        if merged_into_folder:
+                            # 内容已经并进同一部影视的媒体文件夹、跟着那一条一起搬运：
+                            # 这里不参与定位/分发，只把它留在列表里等分发阶段按顺序登记结果。
+                            resolved_items.append(
+                                {
+                                    **prepared_item,
+                                    "original_entry": original_entry,
+                                    "merged_into_folder": merged_into_folder,
                                 }
                             )
                             continue
@@ -1381,6 +1542,8 @@ def run_quick_import(
                         break
                     dispatch_results: Dict[str, Dict[str, Any]] = {}
                     for resolved in resolved_items:
+                        if resolved.get("merged_into_folder"):
+                            continue
                         entry_id = str(resolved["entry_id"])
                         if entry_id in dispatch_results:
                             continue
@@ -1401,6 +1564,20 @@ def run_quick_import(
                         if _QUICK_IMPORT_CANCEL.is_set():
                             cancelled = True
                             break
+                        if resolved.get("merged_into_folder"):
+                            _record_merged_inbox_item(
+                                pending_moved=pending_moved,
+                                cleanup_leftovers=cleanup_leftovers,
+                                prepared_item=resolved,
+                                original_entry=resolved.get("original_entry")
+                                if isinstance(resolved.get("original_entry"), dict)
+                                else {},
+                                merged_into_folder=str(resolved.get("merged_into_folder", "") or ""),
+                                job_id=job_id,
+                                base_cid=base_cid,
+                                base_rel=base_rel,
+                            )
+                            continue
                         item = resolved["item"]
                         target = resolved["target"]
                         entry = resolved["entry"]

@@ -2582,6 +2582,69 @@ def _scraper_page_has_more(payload: Dict[str, Any], offset: int, page_size: int)
 # 就会再建一个"新"文件夹（实测：一个剧集目录被拆成 片名/片名(1)/片名(2)/片名(3)）。
 _SCRAPER_FOLDER_TMDB_SUFFIX_RE = re.compile(r"\s*\[(?:tmdb|tmdbid)[^\]]*\]\s*$", re.IGNORECASE)
 _SCRAPER_FOLDER_AUTO_INDEX_RE = re.compile(r"\s*\(\d{1,2}\)\s*$")
+# 同一部影视的多个版本（2160p/1080p 等）在标准命名下会算出同一个目标文件名，
+# 这时给后面的文件追加 ``(2)``/``(3)`` 序号让它并存；序号上限只是防御，避免死循环。
+SCRAPER_TARGET_NAME_SUFFIX_LIMIT = 20
+
+
+def _scraper_folder_tmdb_marker(value: str) -> str:
+    """取文件夹名里的 ``[tmdbid-123]`` 标记，用来判断两边是不是同一部影视。"""
+    matched = re.search(r"\[\s*(?:tmdb|tmdbid)\s*-?\s*(\d+)\s*\]", str(value or ""), re.IGNORECASE)
+    return matched.group(1) if matched else ""
+
+
+def _disambiguate_scraper_target_path(target_path: str, taken: Set[str]) -> str:
+    """目标路径已在用且来自别的条目时，给文件名追加 ``(2)``/``(3)`` 序号。
+
+    只改文件名、保留扩展名（``片名 (2026).mkv`` → ``片名 (2026) (2).mkv``），
+    和字幕同名去重用的是同一套写法。
+    """
+    normalized = normalize_relative_path(str(target_path or "").strip())
+    if not normalized:
+        return ""
+    parent, _, name = normalized.rpartition("/")
+    stem, ext = os.path.splitext(name)
+    if not stem:
+        return normalized
+    for index in range(2, SCRAPER_TARGET_NAME_SUFFIX_LIMIT + 1):
+        candidate_name = f"{stem} ({index}){ext}"
+        candidate = normalize_relative_path(f"{parent}/{candidate_name}") if parent else candidate_name
+        if candidate not in taken:
+            return candidate
+    return normalized
+
+
+def _claim_scraper_target_path(
+    target_path: str,
+    entry_id: str,
+    taken: Set[str],
+    owners: Dict[str, str],
+) -> Tuple[str, bool]:
+    """登记并返回可用目标路径。
+
+    - 路径已被**同批次其他条目**占用：自动加序号，让同一部影视的多个版本并存；
+    - 路径被**同一条目**重复占用：返回 ``True``，调用方仍按原来的"目标路径重复"报冲突。
+    """
+    normalized = normalize_relative_path(str(target_path or "").strip())
+    if not normalized:
+        return "", False
+    owner = owners.get(normalized, "")
+    if owner and owner == str(entry_id or ""):
+        return normalized, True
+    if owner:
+        normalized = _disambiguate_scraper_target_path(normalized, taken)
+    taken.add(normalized)
+    owners.setdefault(normalized, str(entry_id or ""))
+    return normalized, False
+
+
+def _reserve_scraper_target_path(target_path: str, entry_id: str, taken: Set[str], owners: Dict[str, str]) -> None:
+    """把"文件已经就位、不会产生动作"的目标路径也登记为占用，避免别的文件再撞上来。"""
+    normalized = normalize_relative_path(str(target_path or "").strip())
+    if not normalized:
+        return
+    taken.add(normalized)
+    owners.setdefault(normalized, str(entry_id or ""))
 
 
 def scraper_folder_name_key(value: str) -> str:
@@ -2785,35 +2848,40 @@ def _find_scraper_entry_by_name(
     return {}
 
 
-def _is_same_show_folder_conflict(
-    provider: str,
-    cookie: str,
-    parent_id: str,
+def _scraper_conflicting_folder_is_same_media(
+    conflicting: Dict[str, Any],
     old_name: str,
     new_name: str,
-    entry_id: str,
-    entries_cache: Optional[Dict[Tuple[str, bool], Dict[str, Any]]] = None,
+    *,
+    same_title_entry_ids: Optional[List[Any]] = None,
 ) -> bool:
-    """撞名的那个同名文件夹是否只是"同一部剧的另一个名字"（``[tmdbid-…]``/``(n)`` 装饰）。
+    """撞名的那个同名文件夹是不是"同一部影视的另一个文件夹"。
 
-    是的话就不该报"当前目录中已有同名文件夹"：改名本来就必然撞车，而两边都是这部剧——
-    就地整理文件、搬运/合并阶段再并成一个文件夹即可。
+    三种证据任意一条成立就算同一部影视，此时不该报"当前目录中已有同名文件夹"：
+
+    1. 它就是本批次里同一部影视的另一个条目（同一个 TMDB 条目）；
+    2. 两侧名字只差命名装饰（``[tmdbid-…]``/``(n)``）；
+    3. 两侧名字带的 ``[tmdbid-…]`` 标记相同（对方是之前整理留下的文件夹）。
+
+    同一部影视改名本来就必然撞车，正确做法是不改名、让文件就地整理进那个现成文件夹，
+    搬运/合并阶段再并成一个。
     """
-    if scraper_folder_name_key(old_name) != scraper_folder_name_key(new_name):
+    if not isinstance(conflicting, dict) or not bool(conflicting.get("is_dir")):
         return False
-    try:
-        conflicting = _find_scraper_entry_by_name(
-            provider,
-            cookie,
-            parent_id,
-            new_name,
-            same_entry_id=entry_id,
-            entries_cache=entries_cache,
-        )
-    except Exception:
-        # 查不到就退回老行为（照常报冲突），避免静默跳过用户期望的改名。
+    conflicting_id = str(conflicting.get("id", "") or "").strip()
+    sibling_ids = {
+        str(value).strip()
+        for value in (same_title_entry_ids or [])
+        if str(value or "").strip()
+    }
+    if conflicting_id and conflicting_id in sibling_ids:
+        return True
+    if scraper_folder_name_key(old_name) == scraper_folder_name_key(new_name):
+        return True
+    marker = _scraper_folder_tmdb_marker(new_name)
+    if not marker:
         return False
-    return bool(conflicting) and bool(conflicting.get("is_dir"))
+    return marker == _scraper_folder_tmdb_marker(str(conflicting.get("name", "") or ""))
 
 
 def _is_scraper_folder_rename_affecting_path(folder_path: str, target_path: str) -> bool:
@@ -3028,6 +3096,7 @@ def build_scraper_rename_plan(
     issues: List[str] = list(scan_issues)
     warnings: List[str] = []
     target_paths: Set[str] = set()
+    target_path_owners: Dict[str, str] = {}
     target_folder_names: Set[str] = set()
     preview_entries_cache = entries_cache if isinstance(entries_cache, dict) else {}
     preview_folder_path_cache = path_cache if isinstance(path_cache, dict) else {}
@@ -3037,6 +3106,9 @@ def build_scraper_rename_plan(
     unchanged_rows: List[Dict[str, Any]] = []
     delete_actions: List[Dict[str, Any]] = []
     subtitle_seen: Dict[Tuple[str, str], int] = {}
+    # 内容被并进"同一部影视已存在的媒体文件夹"时记录那个文件夹名：
+    # 调用方（接收夹）据此不再单独分发这个条目，只清理留下的空壳目录。
+    merged_into_folder = ""
     season_pack_mode = bool(plan_options.get("season_pack"))
     if folder_mode and bool(plan_options.get("rename_selected_folders", True)):
         _, _, target_folder_name = _build_scraper_media_titles(tmdb, plan_options, "")
@@ -3071,18 +3143,29 @@ def build_scraper_rename_plan(
             if new_name in target_folder_names:
                 action_issue = "本批次内目标文件夹重复"
             target_folder_names.add(new_name)
-            if _target_name_exists(
-                provider,
-                cookie,
-                old_parent_id,
-                new_name,
-                same_entry_id=str(entry.get("id", "") or ""),
-                entries_cache=preview_entries_cache,
-            ):
-                if _is_same_show_folder_conflict(provider, cookie, old_parent_id, old_name, new_name, str(entry.get("id", "") or ""), preview_entries_cache):
-                    # 同目录里已经有同一部剧的媒体文件夹（只是名字带 [tmdbid-…]/(n) 装饰）：
-                    # 改名一定撞车，但两边本来就是同一部剧——不改名，文件就地整理进自己的
-                    # Season 子目录，等搬运/合并阶段并进那个现成文件夹即可。
+            try:
+                conflicting_folder = _find_scraper_entry_by_name(
+                    provider,
+                    cookie,
+                    old_parent_id,
+                    new_name,
+                    same_entry_id=str(entry.get("id", "") or ""),
+                    entries_cache=preview_entries_cache,
+                )
+            except Exception:
+                # 查不到就退回老行为（照常报冲突），避免静默跳过用户期望的改名。
+                conflicting_folder = {}
+            if conflicting_folder:
+                if _scraper_conflicting_folder_is_same_media(
+                    conflicting_folder,
+                    old_name,
+                    new_name,
+                    same_title_entry_ids=plan_options.get("same_title_entry_ids"),
+                ):
+                    # 同目录里已经有同一部影视的媒体文件夹（本批次另一个条目 / 装饰名差异 /
+                    # 同一个 [tmdbid-…] 标记）：改名必然撞车，但两边本来就是同一部影视——
+                    # 不改名，文件就地整理进那个现成文件夹，等搬运/合并阶段并成一个。
+                    merged_into_folder = str(conflicting_folder.get("name", "") or new_name).strip() or new_name
                     continue
                 action_issue = "当前目录中已有同名文件夹"
             action = {
@@ -3166,12 +3249,17 @@ def build_scraper_rename_plan(
                 )
                 continue
             if pack_target_path:
-                if pack_target_path in target_paths:
+                pack_target_path, same_entry_duplicate = _claim_scraper_target_path(
+                    pack_target_path,
+                    str(entry.get("id", "") or ""),
+                    target_paths,
+                    target_path_owners,
+                )
+                if same_entry_duplicate:
                     action_issue = "本批次内目标路径重复"
-                else:
-                    target_paths.add(pack_target_path)
             else:
                 action_issue = "无法生成目标路径"
+            pack_target_name = os.path.basename(pack_target_path) if pack_target_path else entry_name
             pack_target_parent = (
                 normalize_relative_path(os.path.dirname(pack_target_path).replace("\\", "/"))
                 if pack_target_path
@@ -3185,7 +3273,7 @@ def build_scraper_rename_plan(
                 "old_name": entry_name,
                 "old_path": old_path,
                 "new_parent_id": "",
-                "new_name": entry_name,
+                "new_name": pack_target_name,
                 "new_path": pack_target_path,
                 "target_parent_path": pack_target_parent,
                 "file_size": file_size,
@@ -3264,6 +3352,7 @@ def build_scraper_rename_plan(
         )
         action_issue = issue
         if target_path and target_path == old_path:
+            _reserve_scraper_target_path(target_path, str(entry.get("id", "") or ""), target_paths, target_path_owners)
             unchanged_count += 1
             unchanged_rows.append(
                 {
@@ -3278,6 +3367,7 @@ def build_scraper_rename_plan(
         if _is_scraper_folder_prefix_only_change(old_path, target_path, folder_rename_paths):
             # 文件本身没变，只是外层文件夹被重命名（目录 ID 不变）：
             # 网盘侧只需一次文件夹改名，文件不应作为独立可执行动作。
+            _reserve_scraper_target_path(target_path, str(entry.get("id", "") or ""), target_paths, target_path_owners)
             unchanged_count += 1
             unchanged_rows.append(
                 {
@@ -3300,9 +3390,15 @@ def build_scraper_rename_plan(
         new_name = os.path.basename(execution_target_path) if execution_target_path else ""
         existing_parent_id = ""
         if target_path:
-            if target_path in target_paths:
+            target_path, same_entry_duplicate = _claim_scraper_target_path(
+                target_path,
+                str(entry.get("id", "") or ""),
+                target_paths,
+                target_path_owners,
+            )
+            if same_entry_duplicate:
                 action_issue = action_issue or "本批次内目标路径重复"
-            target_paths.add(target_path)
+            new_name = os.path.basename(target_path) or new_name
             existing_parent_id, exists = _walk_existing_folder(
                 provider,
                 cookie,
@@ -3400,6 +3496,7 @@ def build_scraper_rename_plan(
         "unchanged_count": unchanged_count,
         "unchanged_rows": unchanged_rows,
         "ignored_count": len(ignored_names),
+        "merged_into_folder": merged_into_folder,
         "tmdb": tmdb,
         "options": plan_options,
     }
@@ -6110,6 +6207,16 @@ def _resolve_batch_tmdb_binding(tmdb: Dict[str, Any], cfg: Dict[str, Any]) -> Di
     return build_tmdb_task_binding(detail, media_type=media_type)
 
 
+def _scraper_batch_title_key(binding: Dict[str, Any]) -> Tuple[str, int]:
+    """批量计划里判断"同一部影视"的键：媒体类型 + TMDB ID。"""
+    data = binding if isinstance(binding, dict) else {}
+    tmdb_id = max(0, parse_int(data.get("tmdb_id") or data.get("id") or 0, 0))
+    media_type = normalize_tmdb_media_type(data.get("tmdb_media_type") or data.get("media_type"), "")
+    if tmdb_id <= 0 or media_type not in ("movie", "tv"):
+        return "", 0
+    return media_type, tmdb_id
+
+
 def build_scraper_batch_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
     provider = normalize_scraper_provider(payload.get("provider", "115")) or "115"
     _require_scraper_operation(provider, "scrape", "执行")
@@ -6128,6 +6235,32 @@ def build_scraper_batch_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
     issues: List[str] = []
     warnings: List[str] = []
     item_summaries: List[Dict[str, Any]] = []
+    item_issue_messages: Dict[int, List[str]] = {}
+    item_title_keys: Dict[int, Tuple[str, int]] = {}
+
+    def record_item_issue(index: int, name: str, text: str) -> None:
+        normalized_index = max(0, parse_int(index, 0))
+        item_issue_messages.setdefault(normalized_index, []).append(str(text))
+        issues.append(f"条目 #{normalized_index} {name or '--'}：{text}")
+
+    # 先解决 TMDB 绑定，并按"同一部影视"把条目归组：同一组条目（电影的多版本、同一剧集的多季包）
+    # 整理时会落到同一个媒体文件夹，必须让每个条目的计划都知道同组还有谁，才能合并而不是互相报冲突。
+    item_bindings: Dict[int, Dict[str, Any]] = {}
+    title_entry_ids: Dict[Tuple[str, int], Set[str]] = {}
+    for raw_item in raw_items:
+        item = raw_item if isinstance(raw_item, dict) else {}
+        entry = item.get("entry") if isinstance(item.get("entry"), dict) else {}
+        tmdb = item.get("tmdb") if isinstance(item.get("tmdb"), dict) else {}
+        if not entry.get("id"):
+            continue
+        item_index = max(0, parse_int(item.get("item_index", 0), 0))
+        binding = _resolve_batch_tmdb_binding(tmdb, cfg)
+        item_bindings[item_index] = binding
+        title_key = _scraper_batch_title_key(binding)
+        entry_id = str(entry.get("id", "") or "").strip()
+        if title_key and entry_id:
+            title_entry_ids.setdefault(title_key, set()).add(entry_id)
+
     # 批量条目共享目录/路径缓存：同一父目录（尤其大目录）只扫一次，避免每个条目重复扫描。
     shared_entries_cache: Dict[Tuple[str, bool, int, int], Dict[str, Any]] = {}
     shared_path_cache: Dict[Tuple[str, str], Tuple[str, bool]] = {}
@@ -6142,15 +6275,25 @@ def build_scraper_batch_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
         tmdb = item.get("tmdb") if isinstance(item.get("tmdb"), dict) else {}
         item_name = str(item.get("name") or entry.get("name") or "")
         if not entry.get("id"):
-            issues.append(f"条目 #{item_index} {item_name or '--'}：缺少网盘条目信息")
+            record_item_issue(item_index, item_name, "缺少网盘条目信息")
             continue
-        binding = _resolve_batch_tmdb_binding(tmdb, cfg)
+        binding = item_bindings.get(item_index) or {}
         if not binding:
-            issues.append(f"条目 #{item_index} {item_name or '--'}：未绑定 TMDB 或详情获取失败")
+            record_item_issue(item_index, item_name, "未绑定 TMDB 或详情获取失败")
             continue
+        title_key = _scraper_batch_title_key(binding)
+        item_title_keys[item_index] = title_key
         item_options = dict(options)
         item_overrides = item.get("options") if isinstance(item.get("options"), dict) else {}
         item_options.update(item_overrides)
+        same_title_ids = sorted(
+            title_entry_ids.get(title_key) or set()
+        ) if title_key else []
+        own_entry_id = str(entry.get("id", "") or "").strip()
+        if len(same_title_ids) > 1 and own_entry_id:
+            item_options["same_title_entry_ids"] = [
+                value for value in same_title_ids if value != own_entry_id
+            ]
         if bool(entry.get("is_dir")):
             item_options["selection_mode"] = "folder"
             # 发布式整季文件夹（Show.S09.1080p…）不能当成“一个作品文件夹”整体改名，
@@ -6192,13 +6335,14 @@ def build_scraper_batch_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
                 path_cache=shared_path_cache,
             )
         except Exception as exc:
-            issues.append(f"条目 #{item_index} {item_name or '--'}：{exc}")
+            record_item_issue(item_index, item_name, str(exc))
             continue
         plan_actions = [action for action in plan.get("actions", []) if isinstance(action, dict)]
         item_issues = [str(value) for value in plan.get("issues", []) if str(value or "").strip()]
         item_warnings = [str(value) for value in plan.get("warnings", []) if str(value or "").strip()]
         item_ignored = max(0, int(plan.get("ignored_count", 0) or 0))
-        issues.extend(f"条目 #{item_index} {item_name or '--'}：{text}" for text in item_issues)
+        for text in item_issues:
+            record_item_issue(item_index, item_name, text)
         warnings.extend(f"条目 #{item_index} {item_name or '--'}：{text}" for text in item_warnings)
         unchanged_count += max(0, int(plan.get("unchanged_count", 0) or 0))
         ignored_count += item_ignored
@@ -6234,11 +6378,36 @@ def build_scraper_batch_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "issue_count": len(item_issues),
                 "unchanged": max(0, int(plan.get("unchanged_count", 0) or 0)),
                 "ignored": item_ignored,
+                "merged_into_folder": str(plan.get("merged_into_folder", "") or "").strip(),
             }
         )
 
     # 跨条目目标冲突检测：同一批内不同条目不能落到同一个目标路径。
-    seen_targets: Dict[str, str] = {}
+    # 例外是"同一部影视的多个版本"（接收夹实测：同一部片的高码版 + 普通版）：
+    #   - 文件夹撞名：后来的那个不再单独改名，内容并进先出现的那个媒体文件夹；
+    #   - 文件撞名：给后来的文件加 (2) 序号让两个版本并存，而不是把整批留在接收夹。
+    items_with_file_actions = {
+        max(0, parse_int(action.get("item_index", 0), 0))
+        for action in actions
+        if not action.get("is_dir")
+    }
+    seen_targets: Dict[str, Dict[str, Any]] = {}
+    # 已经就位（不改名）的文件同样占着目标路径：同一部影视的另一个版本不能再撞上它。
+    for row in unchanged_rows:
+        target = normalize_relative_path(str(row.get("new_path", "") or ""))
+        if not target:
+            continue
+        row_index = max(0, parse_int(row.get("item_index", 0), 0))
+        seen_targets.setdefault(
+            target,
+            {
+                "entry_id": "",
+                "item_index": row_index,
+                "item_name": str(row.get("item_name", "") or ""),
+                "title_key": item_title_keys.get(row_index) or ("", 0),
+            },
+        )
+    dropped_action_indexes: Set[int] = set()
     for action in actions:
         if action.get("issue"):
             continue
@@ -6246,25 +6415,70 @@ def build_scraper_batch_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
         if not target:
             continue
         entry_id = str(action.get("entry_id", "") or "")
-        previous_entry = seen_targets.get(target, "")
-        if previous_entry and previous_entry != entry_id:
-            action["issue"] = "目标路径与本批次其他条目重复"
-            action["ready"] = False
-            issues.append(
-                f"条目 #{action.get('item_index', 0)} {action.get('item_name') or '--'}："
-                f"目标路径 {target} 与本批次其他条目重复"
-            )
-        elif not previous_entry:
-            seen_targets[target] = entry_id
+        item_index = max(0, parse_int(action.get("item_index", 0), 0))
+        current = {
+            "entry_id": entry_id,
+            "item_index": item_index,
+            "item_name": str(action.get("item_name", "") or ""),
+            "title_key": item_title_keys.get(item_index) or ("", 0),
+        }
+        previous = seen_targets.get(target)
+        if not previous:
+            seen_targets[target] = current
+            continue
+        previous_entry = str(previous.get("entry_id", "") or "")
+        if previous_entry and previous_entry == entry_id:
+            continue
+        same_title = bool(current["title_key"][1]) and current["title_key"] == previous.get("title_key")
+        if same_title and bool(action.get("is_dir")):
+            if item_index in items_with_file_actions:
+                dropped_action_indexes.add(max(0, parse_int(action.get("action_index", 0), 0)))
+                merged_name = os.path.basename(target)
+                for summary in item_summaries:
+                    if max(0, parse_int(summary.get("item_index", 0), 0)) == item_index:
+                        summary["merged_into_folder"] = merged_name
+                warnings.append(
+                    f"条目 #{item_index} {current['item_name'] or '--'}：与同一部影视的另一个条目合并，"
+                    f"内容并入「{merged_name}」"
+                )
+                continue
+            # 没有可并入的文件动作（空文件夹 / 只有非影视文件）：保持原来的冲突提示。
+        elif same_title:
+            new_target = _disambiguate_scraper_target_path(target, set(seen_targets.keys()))
+            if new_target and new_target != target:
+                action["new_path"] = new_target
+                action["new_name"] = os.path.basename(new_target)
+                seen_targets[new_target] = current
+                warnings.append(
+                    f"条目 #{item_index} {current['item_name'] or '--'}：与同一部影视的其他版本同名，"
+                    f"目标文件名改为「{os.path.basename(new_target)}」"
+                )
+                continue
+        action["issue"] = "目标路径与本批次其他条目重复"
+        action["ready"] = False
+        record_item_issue(
+            item_index,
+            current["item_name"],
+            f"目标路径 {target} 与本批次其他条目重复",
+        )
+    if dropped_action_indexes:
+        actions = [
+            action
+            for action in actions
+            if max(0, parse_int(action.get("action_index", 0), 0)) not in dropped_action_indexes
+        ]
 
-    # 冲突标记后重算每个条目的可执行数，避免汇总与最终 ready_count 不一致。
-    item_ready_counts: Dict[int, int] = {}
-    for action in actions:
-        if action.get("ready") and not action.get("issue"):
-            item_index = max(0, int(action.get("item_index", 0) or 0))
-            item_ready_counts[item_index] = item_ready_counts.get(item_index, 0) + 1
+    # 冲突/合并处理完再重算每个条目的可执行数与问题数，避免汇总和最终 ready_count 不一致。
     for summary in item_summaries:
-        summary["ready"] = item_ready_counts.get(max(0, int(summary.get("item_index", 0) or 0)), 0)
+        index = max(0, parse_int(summary.get("item_index", 0), 0))
+        related = [
+            action
+            for action in actions
+            if max(0, parse_int(action.get("item_index", 0), 0)) == index
+        ]
+        summary["total"] = len(related)
+        summary["ready"] = sum(1 for action in related if action.get("ready") and not action.get("issue"))
+        summary["issue_count"] = len(item_issue_messages.get(index, []))
 
     ready_count = sum(1 for action in actions if action.get("ready") and not action.get("issue"))
     return {

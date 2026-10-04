@@ -779,6 +779,241 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
             self.assertEqual(options["selection_mode"], "contents")
             self.assertTrue(options["force_media_folder"])
 
+    def test_batch_plan_merges_same_movie_versions_into_one_folder(self):
+        """同一部电影的两个条目（发行组命名 + 已带 TMDB 装饰名）要并进同一个媒体文件夹。
+
+        实测（2026-10-04 运行记录）：接收夹里同时有 `功夫女足(2026)[tmdbid-1491920]` 和发行组
+        命名的另一个版本，旧逻辑判「目标路径与本批次其他条目重复」，把两条都留在接收夹。
+        """
+        junk = (
+            "【高清影视之家发布 www.BBQDDQ.com】功夫女足[60帧率版本][高码版][国语配音+中文字幕]."
+            "Kung.Fu.Soccer.2026.2160p.YK.WEB-DL.H.265.HFR.HQ.DTS5.1-PandaQT"
+        )
+        named = "功夫女足(2026)[tmdbid-1491920]"
+        tree = {
+            "inbox": [
+                {"id": "d-named", "name": named, "is_dir": True, "parent_id": "inbox"},
+                {"id": "d-junk", "name": junk, "is_dir": True, "parent_id": "inbox"},
+            ],
+            "d-named": [
+                {
+                    "id": "f-named",
+                    "name": "Kung.Fu.Soccer.2026.1080p.WEB-DL.H.264.mkv",
+                    "is_dir": False,
+                    "parent_id": "d-named",
+                    "size": 5_000_000_000,
+                }
+            ],
+            "d-junk": [
+                {
+                    "id": "f-junk",
+                    "name": "功夫女足.2026.2160p.HFR.H265.DTS5.1.mkv",
+                    "is_dir": False,
+                    "parent_id": "d-junk",
+                    "size": 9_000_000_000,
+                }
+            ],
+        }
+
+        def fake_list(provider, cookie, cid, folders_only=False, offset=0, limit=0):
+            return {"entries": [dict(item) for item in tree.get(str(cid), [])]}
+
+        def fake_binding(binding, cfg):
+            return {
+                **binding,
+                "tmdb_id": 1491920,
+                "tmdb_media_type": "movie",
+                "tmdb_title": "功夫女足",
+                "tmdb_year": "2026",
+                "tmdb_original_title": "Kung Fu Soccer",
+                "tmdb_localized_title": "功夫女足",
+                "tmdb_aliases": [],
+                "tmdb_total_episodes": 0,
+                "tmdb_total_seasons": 0,
+                "tmdb_season_episode_map": {},
+                "tmdb_episode_mode": "seasonal",
+            }
+
+        def folder_item(index, entry_id, name):
+            return {
+                "item_index": index,
+                "name": name,
+                "entry": {
+                    "id": entry_id,
+                    "name": name,
+                    "is_dir": True,
+                    "parent_id": "inbox",
+                    "parent_path": "最近接收",
+                    "path": f"最近接收/{name}",
+                },
+                "tmdb": {"tmdb_id": 1491920, "media_type": "movie"},
+            }
+
+        payload = {
+            "provider": "115",
+            "base_cid": "inbox",
+            "base_path": "最近接收",
+            "options": {
+                "title_language": "zh",
+                "file_name_mode": "standard",
+                "rename_selected_folders": True,
+                "include_tmdb_id": True,
+                "use_season_subfolder": True,
+                "force_media_folder": True,
+            },
+            "items": [folder_item(1, "d-named", named), folder_item(2, "d-junk", junk)],
+        }
+
+        with (
+            patch.object(scraper, "_require_scraper_operation"),
+            patch.object(scraper, "_require_provider_cookie", return_value="cookie"),
+            patch.object(scraper, "_resolve_batch_tmdb_binding", side_effect=fake_binding),
+            patch.object(scraper, "_list_provider_entries_payload", side_effect=fake_list),
+            patch.object(
+                scraper,
+                "get_config",
+                return_value={"tmdb_enabled": True, "tmdb_api_key": "key", "tmdb_language": "zh-CN"},
+            ),
+        ):
+            plan = scraper.build_scraper_batch_plan(payload)
+
+        # 两个条目都不再被"目标路径重复"判死。
+        self.assertEqual(plan["issues"], [])
+        self.assertEqual(plan["ready_count"], 3)
+        # 文件夹改名只保留先出现的那个条目；第二个条目的文件夹不改名，内容并进去。
+        folder_actions = [action for action in plan["actions"] if action["is_dir"]]
+        self.assertEqual([action["item_index"] for action in folder_actions], [1])
+        second_item_files = {
+            action["new_path"]
+            for action in plan["actions"]
+            if action["item_index"] == 2 and not action["is_dir"]
+        }
+        self.assertEqual(
+            second_item_files,
+            {"最近接收/功夫女足 (2026) [tmdbid-1491920]/功夫女足 (2026) (2).mkv"},
+        )
+        summaries = {item["item_index"]: item for item in plan["items"]}
+        self.assertEqual(summaries[1]["merged_into_folder"], "")
+        self.assertEqual(summaries[2]["merged_into_folder"], "功夫女足 (2026) [tmdbid-1491920]")
+        self.assertEqual(summaries[2]["issue_count"], 0)
+
+    def test_rename_plan_disambiguates_same_episode_versions(self):
+        """同一集的两个版本（1080p/2160p）不该判"目标路径重复"，第二个文件加 (2) 并存。"""
+        tmdb = self._tmdb_binding(title="Show", year="2024", media_type="tv")
+        plan = self._rename_plan_with_files(
+            [
+                "Show.S01E01.1080p.WEB-DL.mkv",
+                "Show.S01E01.2160p.WEB-DL.mkv",
+            ],
+            tmdb,
+            folder_name="Show",
+            options={
+                "force_media_folder": True,
+                "include_tmdb_id": True,
+                "use_season_subfolder": True,
+            },
+        )
+
+        self.assertEqual(plan["issues"], [])
+        targets = sorted(
+            action["new_path"] for action in plan["actions"] if not action["is_dir"]
+        )
+        self.assertEqual(
+            targets,
+            [
+                "影视/Show (2024) [tmdbid-100]/Season 01/Show (2024) - S01E01 (2).mkv",
+                "影视/Show (2024) [tmdbid-100]/Season 01/Show (2024) - S01E01.mkv",
+            ],
+        )
+        self.assertTrue(all(action["ready"] for action in plan["actions"]))
+
+    def test_folder_conflict_with_same_tmdb_folder_merges_instead_of_blocking(self):
+        """目标文件夹同名、且带同一个 [tmdbid-…] 标记时按同一部影视合并，不再判冲突。"""
+        target_folder = "功夫女足 (2026) [tmdbid-1491920]"
+        own_folder = "功夫女足(2026)"
+        inbox_children = [
+            {"id": "existing", "name": target_folder, "is_dir": True, "parent_id": "inbox"},
+            {"id": "own", "name": own_folder, "is_dir": True, "parent_id": "inbox"},
+        ]
+        own_files = [
+            {
+                "id": "f1",
+                "name": "功夫女足.2026.1080p.WEB-DL.H.264.mkv",
+                "is_dir": False,
+                "parent_id": "own",
+                "size": 5_000_000_000,
+            }
+        ]
+
+        def fake_list(provider, cookie, cid, folders_only=False, offset=0, limit=0):
+            if str(cid) == "own":
+                return {"entries": [dict(item) for item in own_files]}
+            return {"entries": [dict(item) for item in inbox_children]}
+
+        tmdb = {
+            "tmdb_id": 1491920,
+            "tmdb_media_type": "movie",
+            "tmdb_title": "功夫女足",
+            "tmdb_localized_title": "功夫女足",
+            "tmdb_original_title": "Kung Fu Soccer",
+            "tmdb_aliases": [],
+            "tmdb_year": "2026",
+            "tmdb_season_episode_map": {},
+            "tmdb_episode_mode": "seasonal",
+        }
+        with (
+            patch.object(scraper, "_require_scraper_operation"),
+            patch.object(scraper, "_require_provider_cookie", return_value="cookie"),
+            patch.object(scraper, "_walk_existing_folder", return_value=("existing", True)),
+            patch.object(scraper, "_list_provider_entries_payload", side_effect=fake_list),
+            patch.object(
+                scraper,
+                "_get_scraper_entries_page",
+                side_effect=lambda provider, cookie, cid, folders_only, offset, limit, cache=None: fake_list(
+                    provider, cookie, cid, folders_only, offset, limit
+                ),
+            ),
+            patch.object(
+                scraper,
+                "get_config",
+                return_value={"tmdb_enabled": True, "tmdb_api_key": "key", "tmdb_language": "zh-CN"},
+            ),
+        ):
+            plan = scraper.build_scraper_rename_plan(
+                {
+                    "provider": "115",
+                    "base_cid": "inbox",
+                    "base_path": "最近接收",
+                    "entries": [
+                        {
+                            "id": "own",
+                            "name": own_folder,
+                            "is_dir": True,
+                            "parent_id": "inbox",
+                            "parent_path": "最近接收",
+                            "path": f"最近接收/{own_folder}",
+                        }
+                    ],
+                    "tmdb": tmdb,
+                    "options": {
+                        "title_language": "zh",
+                        "file_name_mode": "standard",
+                        "rename_selected_folders": True,
+                        "include_tmdb_id": True,
+                        "use_season_subfolder": True,
+                        "force_media_folder": True,
+                    },
+                }
+            )
+
+        self.assertEqual(plan["issues"], [])
+        self.assertFalse(any(action["is_dir"] for action in plan["actions"]))
+        self.assertEqual(plan["merged_into_folder"], target_folder)
+        self.assertEqual(
+            plan["actions"][0]["new_path"],
+            f"最近接收/{target_folder}/功夫女足 (2026).mkv",
+        )
+
     def test_batch_plan_reports_unbound_item_as_issue(self):
         payload = {
             "provider": "115",
