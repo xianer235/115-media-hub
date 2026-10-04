@@ -273,6 +273,48 @@ class MonitorDirScanTest(unittest.TestCase):
             )
         )
 
+    def test_manual_dir_scan_skips_auto_scrape(self):
+        """「扫描监控」的指定目录扫描只刷新 STRM，不能顺手整理文件。"""
+        task = self._task(sync_clean=False, skip_by_dir_mtime=False)
+        task["auto_scrape_on_new"] = True
+        path_results = {
+            "/115/Library": ("t1", [_dir_item("SeriesA", "t1")]),
+            "/115/Library/SeriesA": ("t1", [_file_item("E01.mkv", "t1")]),
+        }
+
+        with patch.object(monitor, "_auto_scrape_new_media_items") as auto_scrape:
+            self._run_monitor(
+                path_results,
+                task=task,
+                trigger="manual",
+                payload={"provider": "115", "savepaths": ["Library/SeriesA"]},
+            )
+
+        auto_scrape.assert_not_called()
+        self.assertTrue(
+            os.path.exists(
+                strm_files.managed_strm_file_path("Library/SeriesA/E01.mkv", root=self.strm_root)
+            )
+        )
+
+    def test_full_manual_scan_still_auto_scrapes(self):
+        """卡片「运行」的整任务扫描保持原行为：开启开关就自动整理新增媒体。"""
+        task = self._task(sync_clean=False, skip_by_dir_mtime=False)
+        task["auto_scrape_on_new"] = True
+        path_results = {
+            "/115/Library": ("t1", [_dir_item("SeriesA", "t1")]),
+            "/115/Library/SeriesA": ("t1", [_file_item("E01.mkv", "t1")]),
+        }
+
+        with patch.object(
+            monitor,
+            "_auto_scrape_new_media_items",
+            return_value="已自动整理 1 项（任务 #1）",
+        ) as auto_scrape:
+            self._run_monitor(path_results, task=task, trigger="manual")
+
+        auto_scrape.assert_called_once()
+
     def test_savepaths_cleanup_and_index_bounded_to_union(self):
         task = self._task(sync_clean=True, skip_by_dir_mtime=True)
         self._insert_monitor_file(

@@ -969,6 +969,16 @@ async def run_monitor_task(
         refresh_source_label = ""
         hinted_path = ""
         resolved_paths: List[str] = []
+        # 「扫描监控」按钮的指定目录扫描只负责同步 STRM：内容通常是用户已经整理好、
+        # 手动放回库里的文件夹，再跑一次自动整理会把它们重新套进「片名 (年份)/」里，
+        # 造成多层同名嵌套（历史 job 106/110 就是这么来的）。系统补扫（auto_rescan）
+        # 与接收夹分发（inbox_dispatch）保持原有行为，不受这里影响。
+        dir_scan_only = (
+            str(trigger or "").strip().lower() == "manual"
+            and isinstance(payload, dict)
+            and bool(payload.get("savepaths"))
+            and str(run_source or "").strip().lower() in ("", "manual")
+        )
         if trigger in ("webhook", "resource") and payload:
             hinted_path = extract_webhook_refresh_path(task, payload, cfg)
             source_label = "Webhook" if trigger == "webhook" else "资源导入"
@@ -1502,7 +1512,15 @@ async def run_monitor_task(
             )
 
         auto_summary = "-"
-        if bool(task.get("auto_scrape_on_new")) and new_media_items:
+        if bool(task.get("auto_scrape_on_new")) and new_media_items and dir_scan_only:
+            await write_monitor_log(
+                (
+                    f"指定目录扫描只刷新 STRM，跳过自动整理 {len(new_media_items)} 个新增文件"
+                    "（如需整理，请在刮削页勾选后手动整理）"
+                ),
+                "info",
+            )
+        elif bool(task.get("auto_scrape_on_new")) and new_media_items:
             try:
                 auto_message = await asyncio.to_thread(
                     _auto_scrape_new_media_items,

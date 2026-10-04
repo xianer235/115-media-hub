@@ -867,7 +867,7 @@ function renderSelection() {
         monitorScanButton.disabled = state.loading || !canMonitorScan;
         monitorScanButton.classList.toggle('btn-disabled', state.loading || !canMonitorScan);
         monitorScanButton.title = canMonitorScan
-            ? '对勾选的文件夹（或文件所在目录）执行监控扫描并刷新 STRM'
+            ? '对勾选的文件夹（或文件所在目录）执行监控扫描并刷新 STRM（只同步 STRM，不整理文件）'
             : (hasPlan ? '退出预览后再扫描监控' : '请先勾选要扫描的文件夹或文件');
     }
     const batchButton = document.querySelector('[data-scraper-action="open-batch"]');
@@ -3384,7 +3384,7 @@ async function scanMonitorDir() {
         ? scopes.join(' / ')
         : `${scopes.slice(0, 3).join(' / ')} 等 ${scopes.length} 个目录`;
     const confirmed = await showConfirm(
-        `将对以下目录执行监控扫描并刷新 STRM：\n${preview}\n\n继续？`,
+        `将对以下目录执行监控扫描并刷新 STRM（只同步 STRM，不整理文件）：\n${preview}\n\n继续？`,
         { title: '扫描监控', confirmText: '开始扫描' },
     );
     if (!confirmed) return;
