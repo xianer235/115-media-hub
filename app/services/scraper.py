@@ -2393,6 +2393,16 @@ def _build_scraper_target_path(
         str(options.get("base_path", "") or ""),
     )
     if media_type == "tv":
+        # 文件已经在「剧目录/Season NN/」里、且剧目录名就是这部剧时，剧目录本身就是媒体文件夹，
+        # 不能在它里面再套一层「片名 (年份)」（订阅按 savepath/Season NN 落盘、用户手动归位都属于
+        # 这种输入；监控自动整理会把季目录当成条目，锚点落在剧目录上）。
+        if existing_media_root is None:
+            existing_media_root = _scraper_season_show_folder_root(
+                str(entry.get("path", "") or ""),
+                folder_title,
+                str(options.get("base_path", "") or ""),
+                folder_parent_path,
+            )
         task = _build_task_from_tmdb(tmdb, options)
         resolved_episode_info = episode_info if isinstance(episode_info, dict) else {}
         episode_issue = ""
@@ -2514,6 +2524,83 @@ def _scraper_existing_media_folder_root(
                 return matched[len(normalized_base):].lstrip("/")
             return matched
     return None
+
+
+# 剧目录名与媒体名的比对键：把「仙逆」「仙逆 (2023)」「仙逆(2023)」「仙逆 (2023) [tmdbid-1]」
+# 都归到同一部剧，避免剧目录已经存在、却因为年份写法或空格差异被判成"另一部"而再套一层。
+_SCRAPER_FOLDER_YEAR_SUFFIX_RE = re.compile(r"\s*[\(（]\s*(?:19|20)\d{2}\s*[\)）]\s*$")
+
+
+def _scraper_folder_compact_key(value: str) -> str:
+    """文件夹名压缩键：去掉 ``[tmdbid-…]`` / 网盘追加的 ``(n)`` 装饰与全部空格后小写比较。"""
+    name = str(value or "").strip()
+    if not name:
+        return ""
+    while True:
+        stripped = _SCRAPER_FOLDER_TMDB_SUFFIX_RE.sub("", name).strip()
+        stripped = _SCRAPER_FOLDER_AUTO_INDEX_RE.sub("", stripped).strip()
+        if stripped == name:
+            break
+        name = stripped
+    return "".join(name.split()).casefold()
+
+
+def _scraper_show_folder_keys(folder_title: str) -> Set[str]:
+    """一部剧可接受的剧目录写法键：带年份、不带年份、带 ``[tmdbid-…]`` 装饰都算同一部。"""
+    keys: Set[str] = set()
+    values = [
+        str(folder_title or "").strip(),
+        _SCRAPER_FOLDER_TMDB_SUFFIX_RE.sub("", str(folder_title or "")).strip(),
+    ]
+    for value in values:
+        if not value:
+            continue
+        for candidate in (value, _SCRAPER_FOLDER_YEAR_SUFFIX_RE.sub("", value).strip()):
+            key = _scraper_folder_compact_key(candidate)
+            if key:
+                keys.add(key)
+    return keys
+
+
+def _scraper_season_show_folder_root(
+    entry_path: str,
+    folder_title: str,
+    base_path: str,
+    folder_parent_path: str = "",
+) -> Optional[str]:
+    """文件已在「剧目录/Season NN/」里、且剧目录名对得上媒体名时，返回剧目录（相对 base_path）。
+
+    监控自动整理与面板整理面对的条目经常是「新集所在的季目录」（订阅按 ``savepath/Season NN``
+    落盘、用户手动把新集归位到季目录也一样）。此时如果仍按「所选文件夹的父目录 + 片名」算目标，
+    就会在剧目录里再套一层同名媒体文件夹（真实案例：``115连载中/仙逆/Season 01/x.mkv``
+    → ``115连载中/仙逆/仙逆 (2023)/x.mkv``，之后每整理一次还会继续加深）。剧目录本身就是这部剧的
+    媒体文件夹，直接复用它，让文件原地留在 ``剧目录/Season NN/`` 里整理。
+
+    只在「选中的正是季目录」（整理锚点 ``folder_parent_path`` 就是剧目录）时成立：如果用户选中的
+    是剧目录本身，「同步重命名文件夹」会把它改成 ``片名 (年份) [tmdbid-…]``，这时文件仍要跟到改名后
+    的目录里，不能复用它。
+    """
+    title_keys = _scraper_show_folder_keys(folder_title)
+    normalized_path = normalize_relative_path(str(entry_path or "").strip())
+    if not title_keys or not normalized_path:
+        return None
+    parent_path = normalize_relative_path(os.path.dirname(normalized_path.replace("\\", "/")))
+    if not parent_path or not is_subscription_season_folder_name(os.path.basename(parent_path)):
+        return None
+    show_path = normalize_relative_path(os.path.dirname(parent_path))
+    if not show_path or not os.path.basename(show_path):
+        return None
+    if _scraper_folder_compact_key(os.path.basename(show_path)) not in title_keys:
+        return None
+    normalized_base = normalize_relative_path(str(base_path or "").strip())
+    show_rel = show_path
+    if normalized_base and (show_path == normalized_base or show_path.startswith(f"{normalized_base}/")):
+        show_rel = show_path[len(normalized_base):].lstrip("/")
+    if normalize_relative_path(
+        _relative_parent_path_from_base(str(folder_parent_path or ""), normalized_base)
+    ) != show_rel:
+        return None
+    return show_rel
 
 
 def _scraper_folder_organize_root(folder_parent_path: str, options: Dict[str, Any], folder_title: str) -> str:

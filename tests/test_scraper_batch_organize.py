@@ -3274,6 +3274,119 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
             "影视/百花杀 (2026) [tmdbid-100]/Season 01/百花杀 (2026) - S01E01.mkv",
         )
 
+    def _season_folder_plan_in_show_folder(
+        self,
+        files,
+        tmdb,
+        *,
+        show_folder,
+        parent_path="115连载中",
+        mode="clean",
+        base_path="",
+    ):
+        """监控自动整理口径的计划：选中的条目是「新集所在的季目录」，文件在 剧目录/Season NN/ 里。"""
+        show_path = f"{parent_path}/{show_folder}" if parent_path else show_folder
+        season_path = f"{show_path}/Season 01"
+        folder_entry = {
+            "id": "s1",
+            "name": "Season 01",
+            "is_dir": True,
+            "parent_id": "d1",
+            "parent_path": show_path,
+            "path": season_path,
+        }
+        file_entries = [
+            {
+                "id": f"f{index}",
+                "name": name,
+                "is_dir": False,
+                "parent_id": "s1",
+                "parent_path": season_path,
+                "path": f"{season_path}/{name}",
+                "size": 1024,
+            }
+            for index, name in enumerate(files, start=1)
+        ]
+        with (
+            patch.object(scraper, "_require_scraper_operation"),
+            patch.object(scraper, "_require_provider_cookie", return_value="cookie"),
+            patch.object(scraper, "_expand_selected_scraper_entries", return_value=(file_entries, [])),
+            patch.object(scraper, "_walk_existing_folder", return_value=("", False)),
+            patch.object(scraper, "_target_name_exists", return_value=False),
+            patch.object(scraper, "_collect_scraper_action_warning", return_value=""),
+        ):
+            return scraper.build_scraper_rename_plan(
+                {
+                    "provider": "115",
+                    "base_cid": "0",
+                    "base_path": base_path,
+                    "entries": [folder_entry],
+                    "tmdb": tmdb,
+                    "options": {
+                        "selection_mode": "folder",
+                        "season": 1,
+                        "title_language": "zh",
+                        "file_name_mode": mode,
+                        "force_media_folder": True,
+                        "use_season_subfolder": True,
+                    },
+                }
+            )
+
+    def test_new_episode_in_show_season_folder_is_left_in_place(self):
+        """订阅把新集放进 剧目录/Season 01 后，监控自动整理不能再套一层「片名 (年份)」（真实案例：仙逆）。"""
+        tmdb = self._tmdb_binding(title="仙逆", year="2023", media_type="tv")
+        plan = self._season_folder_plan_in_show_folder(
+            ["仙逆(2023)– S01E001.mp4"],
+            tmdb,
+            show_folder="仙逆",
+        )
+        self.assertEqual([action for action in plan["actions"] if action["ready"]], [])
+        self.assertEqual(plan["unchanged_count"], 1)
+
+    def test_new_episode_in_show_season_folder_renames_file_only(self):
+        tmdb = self._tmdb_binding(title="仙逆", year="2023", media_type="tv")
+        plan = self._season_folder_plan_in_show_folder(
+            ["仙逆(2023)– S01E001.mp4"],
+            tmdb,
+            show_folder="仙逆",
+            mode="standard",
+        )
+        ready = [action for action in plan["actions"] if action["ready"]]
+        self.assertEqual(len(ready), 1)
+        self.assertEqual(
+            ready[0]["new_path"],
+            "115连载中/仙逆/Season 01/仙逆 (2023) - S01E01.mp4",
+        )
+
+    def test_show_folder_year_spelling_variants_are_reused(self):
+        """「仙逆」「仙逆 (2023)」「仙逆(2023)」都算同一部剧，历史套出来的目录不会再被继续加深。"""
+        tmdb = self._tmdb_binding(title="仙逆", year="2023", media_type="tv")
+        for show_folder in ("仙逆", "仙逆 (2023)", "仙逆(2023)", "仙逆 (2023) [tmdbid-100]"):
+            plan = self._season_folder_plan_in_show_folder(
+                ["仙逆(2023)– S01E001.mp4"],
+                tmdb,
+                show_folder=show_folder,
+            )
+            self.assertEqual(
+                [action for action in plan["actions"] if action["ready"]], [], show_folder
+            )
+            self.assertEqual(plan["unchanged_count"], 1, show_folder)
+
+    def test_season_folder_of_other_show_still_creates_media_folder(self):
+        """季目录的父目录不是这部剧时保持原逻辑：仍按「父目录 + 片名 (年份)」归档。"""
+        tmdb = self._tmdb_binding(title="仙逆", year="2023", media_type="tv")
+        plan = self._season_folder_plan_in_show_folder(
+            ["仙逆(2023)– S01E001.mp4"],
+            tmdb,
+            show_folder="别的剧",
+        )
+        ready = [action for action in plan["actions"] if action["ready"]]
+        self.assertEqual(
+            ready[0]["new_path"],
+            "115连载中/别的剧/仙逆 (2023)/仙逆(2023)– S01E001.mp4",
+        )
+
     def test_batch_folder_rename_with_tmdb_id_applies_to_multiple_folders(self):
         tmdb = self._tmdb_binding(title="逐玉", year="2026", media_type="tv")
         options = {"include_tmdb_id": True, "rename_selected_folders": True}
