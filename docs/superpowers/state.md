@@ -12,12 +12,13 @@
 
 - **更新日期**: 2026-10-06
 - **分支**: `main`，与 `origin/main` 同步
-- **版本**: `0.13.3`（`version.json` 是唯一真源，与 `CHANGELOG.md` 顶部一致）
-- **最近提交**: `9f5212c` 修复季目录内容被自动整理时再套一层片名文件夹（2026-10-06），工作区另有 0.13.3 发布元数据未提交改动
-- **工作区**: 有未提交改动（0.13.3 发布元数据：`version.json` / `CHANGELOG.md` / `README.md`；最近条目见 `handoff.md`）
+- **版本**: `0.13.4`（`version.json` 是唯一真源，与 `CHANGELOG.md` 顶部一致）
+- **最近提交**: `f6d0c46` 修复季目录内容被自动整理时再套一层片名文件夹（2026-10-06，0.13.3 元数据已随提交入库）
+- **工作区**: 有未提交改动（0.13.4 发布准备：集数识别补「片名 + 破折号/空格 + 裸数字」写法 `app/services/subscription_episode.py` + 2 项回归 + `version.json` / `CHANGELOG.md` / `README.md` / 文档；最近条目见 `handoff.md`）
 
 ## 最近一次验证
 
+- 完整 `unittest discover -s tests -p 'test_*.py'` **1172 项零失败**（2026-10-06，0.13.4 集数识别修复：破折号 + 空格两种末尾裸数字）；`version.json` 解析通过且与 `CHANGELOG.md` 顶部版本号一致；`compileall app main.py`、`git diff --check` 通过。
 - 完整 `unittest discover -s tests -p 'test_*.py'` **1169 项零失败**（2026-10-06，「`剧名/Season NN` 不再重复套层」修复）；`compileall app main.py`、`git diff --check` 通过。
 - 完整 `unittest discover -s tests -p 'test_*.py'` **1165 项零失败**（2026-10-06，0.13.2 影视广告识别补充整句式推广话术与“伪装视频”判定）；
   `compileall app main.py`、`git diff --check` 通过。
@@ -29,6 +30,7 @@
 
 ## 待办 / 未完成
 
+- 容器重建后用真实 115 订阅复核：`Renegade Immortal – 仙逆 Xian NI – 154.mkv`（破折号）与 `仙逆 154.mp4`（空格）这类「片名 + 分隔符 + 裸数字」文件都能被解析成第 154 集并被选中入库（旧口径下解析为空集、文件被直接跳过）。
 - 容器重建后用真实 115 / 订阅链复核：订阅落进 `仙逆/Season 01` 的新集不再被自动整理搬进 `仙逆 (2023)/`；历史遗留的 `仙逆/仙逆 (2023)/Season 01/…` 是否需要回搬待用户确认。
 - 0.13.3 的代码修复（`scraper.py` + 4 项回归）、文档与发布元数据已就绪，待提交 / 推送 / 打 tag，之后重建容器部署。
 - 容器重建后用真实接收夹复核：整段名字只有推广话术的假 `.mkv/.mp4` 只被忽略（开启“删除广告文件”时才删除），不再被识别成正片。

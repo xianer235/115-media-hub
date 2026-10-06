@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.13.4] - 2026-10-06
+
+### 集数识别补齐「片名 + 分隔符 + 裸数字」
+
+本版解决「订阅扫描认不出集数、整个文件被跳过」的问题。真实案例：分享里的文件叫 `Renegade Immortal – 仙逆 Xian NI – 154.mkv`，订阅扫描解析出的集数是空集，被 `subscription_share_selection` 的 `if not matched_episodes: continue` 直接跳过，第 154 集永远选不中；同一文件名在刮削页也会显示「无法识别集数」，只能靠「手动集数」兜底。中文分享常见的 `仙逆 154.mp4`（空格分隔）也是同一个洞。
+
+#### 1. 根源：裸数字只认两种写法，且不认识全角破折号
+
+- `app/services/subscription_episode.py` 的 `_extract_numeric_episode_from_filename()` 原来只认「整个文件名就是数字」（`154.mkv`）和「数字在前 + 分隔符 + 单集标题」（`01 - Title.mkv`）两种裸数字写法，没有「片名在前、数字在后」这一支。
+- 另一条通用解析 `parse_resource_episode_meta()` 只认 `SxxEyy` / `第N集` / `EPxx` / 区间，裸数字必须带「第 / 集 / 更新至」之类的上下文。两条路都不成立，集数就是 0。
+- 顺带发现这些解析用到的分隔符字符类里从来只有半角 `-`：全角破折号 `–`（U+2013）、`—`（U+2014）、`－`（U+FF0D）完全没有覆盖，而中文站点导出/重命名经常用它们。
+
+#### 2. 改动
+
+- 新增 `_TRAILING_NUMERIC_EPISODE_REGEX`（片名 + 破折号 + 裸数字）与 `_TRAILING_SPACED_NUMERIC_EPISODE_REGEX`（片名 + 空格 + 裸数字），在 `_extract_numeric_episode_from_filename()` 末尾生效，和已有的「数字在前」写法互为镜像。
+- 同一个函数被订阅分享扫描、刮削命名预览、接收夹自动整理共用，所以两条链路一起修好：订阅能选中该集，刮削页这类文件也不再需要手动集数。
+
+#### 3. 不越界
+
+- 破折号前必须是空白或中日韩文字：`仙逆-154` 认，英文连字符 `X-Men-2` 不认。
+- 数字必须落在文件名结尾，后面最多跟一段画质后缀（后缀要过 `_is_subscription_numeric_episode_quality_suffix()`）：`Show - 1080p` 不会被当成第 1080 集。
+- 数字本身排除 1900–2099（年份）、>5000，以及画质常用的裸分辨率 `360 / 480 / 540 / 576 / 720 / 1080 / 1440 / 2160 / 4320`：`Blade Runner 2049`、`Show 1080` 仍然不识别（这几种集号请用 `第N集` 或破折号写法）。
+- `12 Monkeys`、`2012.1080p` 这类数字在前的名字行为不变。
+
+### 验证
+
+- 新增回归：`tests/test_scraper_batch_organize.py` 2 项——`test_extract_numeric_episode_handles_title_plus_trailing_number`、`test_extract_numeric_episode_handles_title_plus_spaced_number`，并在 `test_subscription_file_entry_recognizes_title_plus_trailing_number` 里补订阅入口用例（覆盖全角 / 半角破折号、空格分隔、无空格中文、画质后缀，以及 `12 Monkeys` / `Blade Runner 2049` / `X-Men-2` / `Show 1080` / `Movie 2024 1080p` 反例）。
+- 完整 `unittest discover -s tests -p 'test_*.py'` **1172 项零失败**；`compileall app main.py`、`git diff --check` 通过。
+- 未做：容器重建与真实 115 订阅复核（需要在部署环境确认第 154 集能被选中并入库）。
+
 ## [0.13.3] - 2026-10-06
 
 ### 整理不再在剧目录里重复套一层媒体文件夹

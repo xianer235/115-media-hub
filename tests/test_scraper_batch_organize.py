@@ -3553,6 +3553,56 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         self.assertEqual(scraper._extract_numeric_episode_from_filename("2012.1080p.mkv"), 0)
         self.assertEqual(scraper._extract_numeric_episode_from_filename("2012.mkv"), 0)
 
+    def test_extract_numeric_episode_handles_title_plus_trailing_number(self):
+        """片名 + 破折号 + 裸数字（真实案例：仙逆分享文件）。"""
+        self.assertEqual(scraper._extract_numeric_episode_from_filename("Renegade Immortal – 仙逆 Xian NI – 154.mkv"), 154)
+        self.assertEqual(scraper._extract_numeric_episode_from_filename("Renegade Immortal - 仙逆 Xian NI - 154.mkv"), 154)
+        self.assertEqual(scraper._extract_numeric_episode_from_filename("仙逆 - 154.mkv"), 154)
+        self.assertEqual(scraper._extract_numeric_episode_from_filename("仙逆-154.mkv"), 154)
+        self.assertEqual(scraper._extract_numeric_episode_from_filename("仙逆 – 155 – 1080p.mkv"), 155)
+        # 年份、英文连字符、画质数字都不该被当成集数。
+        self.assertEqual(scraper._extract_numeric_episode_from_filename("Blade Runner - 2049.mkv"), 0)
+        self.assertEqual(scraper._extract_numeric_episode_from_filename("X-Men-2.mkv"), 0)
+        self.assertEqual(scraper._extract_numeric_episode_from_filename("Show - 1080p.mkv"), 0)
+        self.assertEqual(scraper._extract_numeric_episode_from_filename("Movie.2024.www.ad.com.1080p.mkv"), 0)
+
+    def test_extract_numeric_episode_handles_title_plus_spaced_number(self):
+        """片名 + 空格 + 裸数字（中文分享常见的「仙逆 154.mp4」）。"""
+        self.assertEqual(scraper._extract_numeric_episode_from_filename("仙逆 154.mkv"), 154)
+        self.assertEqual(scraper._extract_numeric_episode_from_filename("仙逆 154 1080p.mkv"), 154)
+        self.assertEqual(scraper._extract_numeric_episode_from_filename("Renegade Immortal Xian NI 154.mkv"), 154)
+        # 空格写法比破折号弱，裸分辨率与年份都要排除。
+        self.assertEqual(scraper._extract_numeric_episode_from_filename("Show 1080.mkv"), 0)
+        self.assertEqual(scraper._extract_numeric_episode_from_filename("Show 720.mkv"), 0)
+        self.assertEqual(scraper._extract_numeric_episode_from_filename("Blade Runner 2049.mkv"), 0)
+        self.assertEqual(scraper._extract_numeric_episode_from_filename("Movie 2024 1080p.mkv"), 0)
+        self.assertEqual(scraper._extract_numeric_episode_from_filename("12 Monkeys.mkv"), 0)
+        # 明确标记的写法仍走各自的老路径（这里只测裸数字兜底函数本身）。
+        self.assertEqual(scraper._extract_numeric_episode_from_filename("仙逆 第154集.mkv"), 0)
+
+    def test_subscription_file_entry_recognizes_title_plus_trailing_number(self):
+        """订阅分享扫描：仙逆这类「片名 – 数字」文件必须能识别出集数。"""
+        task = {
+            "media_type": "tv",
+            "title": "仙逆",
+            "season": 1,
+            "multi_season_mode": True,
+            "anime_mode": True,
+            "tmdb_total_episodes": 154,
+            "tmdb_total_seasons": 1,
+            "tmdb_season_episode_map": {"1": 154},
+            "tmdb_episode_mode": "absolute",
+        }
+        name = "Renegade Immortal – 仙逆 Xian NI – 154.mkv"
+        self.assertEqual(scraper._extract_task_episodes_from_file_entry(task, name, "仙逆/Season 01"), {154})
+        self.assertEqual(scraper._extract_task_episodes_from_file_entry(task, name, ""), {154})
+        self.assertEqual(scraper._extract_task_episodes_from_file_entry(task, "仙逆 - 155.mkv", "仙逆"), {155})
+        # 空格分隔（没有破折号）也认；`第N集` / `E154` 走的是上游明确标记路径。
+        self.assertEqual(scraper._extract_task_episodes_from_file_entry(task, "仙逆 154.mkv", "仙逆/Season 01"), {154})
+        self.assertEqual(scraper._extract_task_episodes_from_file_entry(task, "仙逆 153.mkv", ""), {153})
+        self.assertEqual(scraper._extract_task_episodes_from_file_entry(task, "仙逆 第154集.mkv", "仙逆/Season 01"), {154})
+        self.assertEqual(scraper._extract_task_episodes_from_file_entry(task, "仙逆 E154.mkv", "仙逆/Season 01"), {154})
+
     def test_scraper_auto_episode_info_parses_numbered_episode_title(self):
         task = {
             "media_type": "tv",

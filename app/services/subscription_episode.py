@@ -306,6 +306,36 @@ def _extract_task_episodes_from_name(task: Dict[str, Any], name: str, max_expand
     return normalized.episodes
 
 
+# “片名 + 破折号 + 裸数字”（仙逆 - 154 / Renegade Immortal – 仙逆 Xian NI – 154）：
+# 破折号前必须是空白或中日韩文字，挡住 X-Men-2 这类英文连字符；数字后最多跟一段画质后缀。
+_TRAILING_NUMERIC_EPISODE_REGEX = re.compile(
+    r"^(?:.+?[\s\u4e00-\u9fff])"
+    r"\s*[-–—－]\s*"
+    r"0*(\d{1,4})"
+    r"(?P<suffix>[\s._\-+(){}\[\]<>【】（）「」《》].*)?$"
+)
+
+# “片名 + 空格 + 裸数字”（仙逆 154 / Renegade Immortal Xian NI 154）：
+# 末尾数字是唯一判据，所以额外排除画质常用的裸分辨率（Show 1080 → 0），
+# 需要认这些集号时用「第N集」或破折号写法。
+_TRAILING_SPACED_NUMERIC_EPISODE_REGEX = re.compile(
+    r"^(?:.+?[^\s\d])\s+"
+    r"0*(\d{1,4})"
+    r"(?P<suffix>[\s._\-+(){}\[\]<>【】（）「」《》].*)?$"
+)
+
+_NON_EPISODE_RESOLUTION_NUMBERS = frozenset({360, 480, 540, 576, 720, 1080, 1440, 2160, 4320})
+
+
+def _is_plausible_trailing_episode_number(value: int) -> bool:
+    """末尾裸数字的通用门槛：排除年份、超范围值与画质分辨率。"""
+    return (
+        0 < value <= 5000
+        and not (1900 <= value <= 2099)
+        and value not in _NON_EPISODE_RESOLUTION_NUMBERS
+    )
+
+
 def _extract_numeric_episode_from_filename(file_name: str) -> int:
     normalized_name = str(file_name or "").strip()
     if not normalized_name:
@@ -353,6 +383,21 @@ def _extract_numeric_episode_from_filename(file_name: str) -> int:
         value = max(0, int(title_prefix_match.group(1) or 0))
         if value > 0 and not (1900 <= value <= 2099):
             return value
+
+    # “片名 + 破折号/空格 + 裸数字”（仙逆 - 154 / 仙逆 154 / Renegade Immortal – 仙逆 Xian NI – 154）：
+    # 与上面“数字在前”的写法互为镜像；数字必须落在结尾（后面最多跟一段画质后缀），
+    # 且排除年份、超范围值与裸分辨率，避免把 12 Monkeys、Blade Runner 2049、Show 1080 当成集数。
+    for trailing_pattern in (_TRAILING_NUMERIC_EPISODE_REGEX, _TRAILING_SPACED_NUMERIC_EPISODE_REGEX):
+        trailing_match = trailing_pattern.match(stem_tail_numeric)
+        if not trailing_match:
+            continue
+        value = max(0, int(trailing_match.group(1) or 0))
+        if not _is_plausible_trailing_episode_number(value):
+            continue
+        suffix = str(trailing_match.group("suffix") or "")
+        if suffix and not _is_subscription_numeric_episode_quality_suffix(suffix):
+            continue
+        return value
     return 0
 
 
