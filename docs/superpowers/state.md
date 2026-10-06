@@ -18,6 +18,8 @@
 
 ## 最近一次验证
 
+- 完整 `unittest discover -s tests -p 'test_*.py'` **1165 项零失败**（2026-10-06，影视广告识别补充整句式推广话术与“伪装视频”判定）；
+  `compileall app main.py`、`git diff --check` 通过。
 - 完整 `unittest discover -s tests -p 'test_*.py'` **1163 项零失败**（2026-10-04，0.13.1 接收夹同片多版本合并）；
   另有 `tests.test_quick_import` / `test_scraper_batch_organize` / `test_scraper_folder_reuse` 单跑通过；`version.json` 解析与 CHANGELOG 顶部版本号一致。
 - 完整 `unittest discover -s tests -p 'test_*.py'` **1142 项零失败**（2026-09-29，随 0.13.0 元数据同步）。这是当时的快照，不是长期基线，改动后需重跑。
@@ -26,6 +28,7 @@
 
 ## 待办 / 未完成
 
+- 容器重建后用真实接收夹复核：整段名字只有推广话术的假 `.mkv/.mp4` 只被忽略（开启“删除广告文件”时才删除），不再被识别成正片。
 - 容器重建后手动触发一次接收夹整理，确认同一部影视的多个版本/多个条目合并进同一个媒体文件夹（第二条文件名带 `(2)`），发行组命名的空壳目录被清理。
 - 真实 115 重跑确认 `Curb.Your.Enthusiasm` S09/S10/S11 整季包落季与季包残留（`RARBG.txt`/空 `Subs`）清理。
 - job #145 的 40 条错名字幕是否需要回改，待用户确认。

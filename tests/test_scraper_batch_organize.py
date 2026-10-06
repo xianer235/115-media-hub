@@ -1531,6 +1531,60 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         self.assertEqual(plan["ignored_count"], 2)
         self.assertTrue(any("已保留" in warning and "广告" in warning for warning in plan["warnings"]))
 
+    def test_promo_only_video_names_are_treated_as_ads(self):
+        """真实案例：接收夹里整段名字都是“更多无水印高品质资源请访问”的假 mkv/mp4，要按广告处理。"""
+        promo_names = (
+            "【更多无水印高品质资源请访问 】【更多无水印高品质资源请访问 】.mkv",
+            "【更多无水印高品质资源请访问 】【更多无水印高品质资源请访问 】.mp4",
+            "【更多无水印高品质资源请访问 】【更多无水印高品质资源请访问 】(1).mkv",
+            "【更多无水印高品质资源请访问 】【更多无水印高品质资源请访问 】(1).mp4",
+            "更多无水印高清资源请访问.mp4",
+            "无水印高清资源.mkv",
+            "最新地址请收藏本站.mp4",
+        )
+        for name in promo_names:
+            self.assertTrue(scraper._is_scraper_promotional_only(name), name)
+            self.assertTrue(scraper._is_scraper_ad_file(name, 622 * 1024), name)
+            # 整段只有推广话术，必须在识别阶段就失去关键词，不能再拿去搜 TMDB 凑出一个片名。
+            self.assertEqual(scraper._extract_scraper_title_candidates(name), [], name)
+            self.assertEqual(
+                scraper._batch_item_query_payload({"name": name, "is_dir": False}, [{"name": name}])[0],
+                "",
+                name,
+            )
+        # 整句被清理干净的名字，连“噪声关键词”判定也要命中（残一个连接字的变体由上面的空查询兜住）。
+        for name in (
+            "【更多无水印高品质资源请访问 】【更多无水印高品质资源请访问 】.mkv",
+            "【更多无水印高品质资源请访问 】【更多无水印高品质资源请访问 】(1).mp4",
+            "无水印高清资源.mkv",
+        ):
+            self.assertTrue(scraper._is_scraper_noise_keyword(scraper._clean_search_title(name)), name)
+        # 正片不能误判：推广词只是名字一部分，或根本没有推广词。
+        for name in (
+            "更多资源请访问官方网站.The.Matrix.1999.1080p.mkv",
+            "The.Matrix.1999.1080p.BluRay.x264-GROUP.mkv",
+            "更多.2024.1080p.WEB-DL.mkv",
+            "2012.2009.1080p.BluRay.mkv",
+        ):
+            self.assertFalse(scraper._is_scraper_promotional_only(name), name)
+            self.assertFalse(scraper._is_scraper_ad_file(name, 5 * 1024 * 1024), name)
+        self.assertEqual(scraper._extract_scraper_title_candidates("更多.2024.1080p.WEB-DL.mkv"), ["更多"])
+
+    def test_build_rename_plan_treats_promo_only_video_as_ad(self):
+        tmdb = self._tmdb_binding()
+        ad_name = "【更多无水印高品质资源请访问 】【更多无水印高品质资源请访问 】.mkv"
+        files = ["Skurkarnas skurk (2026) [1080p WEBRip H.264].mp4", ad_name]
+
+        plan = self._rename_plan_with_files(files, tmdb)
+        renamed = [action["old_name"] for action in plan["actions"]]
+        self.assertNotIn(ad_name, renamed)
+        self.assertEqual(plan["ignored_count"], 1)
+
+        delete_plan = self._rename_plan_with_files(files, tmdb, options={"delete_ad_files": True})
+        delete_names = [action["old_name"] for action in delete_plan["actions"] if action.get("delete")]
+        self.assertEqual(delete_names, [ad_name])
+        self.assertTrue(all(action.get("ready") for action in delete_plan["actions"]))
+
     def test_build_rename_plan_multiple_same_language_subtitles_get_unique_names(self):
         tmdb = self._tmdb_binding()
         plan = self._rename_plan_with_files(

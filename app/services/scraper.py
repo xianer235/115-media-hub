@@ -1250,6 +1250,9 @@ SCRAPER_CN_AD_PROMO_PHRASES = (
     # 长词在前，短词在后，避免 “官网” 抢先匹配掉 “官方网站 / 官方网址”。
     "官方网站", "官方网址", "官网", "请访问", "访问网站", "更多剧集", "更多电影",
     "更多资源", "更多精彩", "免费下载", "在线观看",
+    # 站点引流整句：真实案例是文件名/文件夹名整段只有这句推广话术，没有任何片名。
+    "更多无水印高品质资源请访问", "无水印高品质资源", "高品质资源",
+    "无水印高清资源", "更多高清资源", "高清资源", "更多无水印",
     "最新域名", "备用域名", "永久域名", "更换域名", "备用网址", "永久网址",
     # 社交引流 / 版权声明式水印：词形明确，不会出现在正常片名里。
     "扫码关注", "关注公众号", "微信公众号", "二维码", "加入群聊",
@@ -1362,6 +1365,37 @@ def _strip_scraper_cn_ad_phrases(value: str, *, leading_only: bool = False) -> s
     for fragment in matches:
         text = text.replace(fragment, " ")
     return re.sub(r"\s+", " ", text).strip(" -_.")
+
+
+# 网盘/下载工具给重名文件追加的序号与副本标记：判断“整段都是广告词”时要忽略这些残留。
+_SCRAPER_AD_NAME_RESIDUE_RE = re.compile(
+    r"[\[\(（【]\s*(?:copy|复件|副本|复制|\d{1,3})\s*[\]\)）】]"
+    r"|(?:复件|副本|复制)"
+    r"|(?<![a-z0-9])copy(?![a-z])",
+    re.IGNORECASE,
+)
+
+
+def _is_scraper_promotional_only(value: str) -> bool:
+    """名字是否“只由广告推广话术组成”（去掉话术、序号、括号后没有任何片名残留）。
+
+    站点引流会把广告文件伪装成 .mkv/.mp4 并直接用推广整句命名
+    （真实案例：`【更多无水印高品质资源请访问 】【更多无水印高品质资源请访问 】.mkv`）。
+    这类名字没有任何可用来识别影片的信息，只有判成广告，才不会把广告当成正片整理进媒体库。
+    """
+    stem = os.path.splitext(str(value or "").strip())[0]
+    text = unicodedata.normalize("NFKC", stem).strip()
+    if not text:
+        return False
+    # 必须先命中明确的广告/推广词，避免把“只有年份”之类的正常短名误判成广告。
+    if not (_SCRAPER_CN_AD_PROMO_RE.search(text) or _scraper_cn_ad_site_matches(text)):
+        return False
+    common_re, _, _ = _get_scraper_noise_rules()
+    residue = common_re.sub(" ", text)
+    residue = _SCRAPER_AD_NAME_RESIDUE_RE.sub(" ", residue)
+    residue = re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", " ", residue)
+    # 允许残留一个连接字（如“最新地址请收藏本站”里的“请”），但片名至少要有 2 个字才算正常名字。
+    return len(_normalize_scraper_keyword_compact(residue)) <= 1
 
 
 def _strip_scraper_site_prefix(text: str) -> str:
@@ -1720,6 +1754,9 @@ def _is_scraper_generic_keyword(value: str) -> bool:
     for fragment in _scraper_cn_ad_site_matches(value):
         if _normalize_scraper_keyword_compact(fragment) == key:
             return True
+    # 整段只有推广话术的名字（如“更多无水印高品质资源请访问”）不含片名，按通用词处理。
+    if _is_scraper_promotional_only(value):
+        return True
     return bool(
         re.fullmatch(
             r"(?:电影|影片|影视|影視|电视剧|剧集|动漫|动画|動畫|番剧|新番|综艺|纪录片|紀錄片|纪录|紀錄|资源|資源|下载|下載|媒体|视频|高清|蓝光|藍光)"
@@ -5168,12 +5205,18 @@ def _is_scraper_ad_image(name: str, size: int = 0) -> bool:
 
 
 def _is_scraper_ad_file(name: str, size: int = 0) -> bool:
-    """判断是否广告类文件：广告扩展名（txt/url/html 等）或广告图片。NFO 是媒体信息，不算广告。"""
+    """判断是否广告类文件：广告扩展名（txt/url/html 等）、广告图片、或“片名全是推广话术”的伪装视频。
+
+    NFO 是媒体信息，不算广告。
+    """
     category = _scraper_file_category(name)
     if category == "ad":
         return True
     if category == "image":
         return _is_scraper_ad_image(name, size)
+    if category == "video":
+        # 站点会把广告片伪装成 .mkv/.mp4；文件名去掉推广话术后没有片名残留时按广告处理。
+        return _is_scraper_promotional_only(name)
     return False
 
 
