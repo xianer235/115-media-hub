@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.13.3] - 2026-10-06
+
+### 整理不再在剧目录里重复套一层媒体文件夹
+
+本版解决「新集已经在 `剧名/Season NN/` 里，却被整理再套一层」的问题。真实案例：订阅任务按 `savepath/Season NN` 把新集落进 `115连载中/仙逆/Season 01/`，监控任务的「新增资源自动刮削整理」又把它搬进 `115连载中/仙逆/仙逆 (2023)/`；用户手动移回季目录后，下一次整理（含「网盘变更同步」链路）又把它搬走，而且每跑一次都会继续加深一层。
+
+#### 1. 根源：整理锚点落在剧目录上
+
+- 监控自动整理按「新文件所在父目录」建识别条目（`app/services/monitor.py` 的 `parent_rel`），命中的是季目录；`force_media_folder` 又把目标锚在「所选文件夹的父目录 + 片名」，于是剧目录里又建一层媒体文件夹。
+- 已有的「已在同名媒体文件夹里就就地整理」判定（`_scraper_existing_media_folder_root`）只认「名字等于媒体文件夹名」的祖先目录，剧目录名 `仙逆` 与 `仙逆 (2023)` 对不上，所以漏判；又因为文件本就在季目录里，整理时不再补 `Season NN`，落点就成了 `仙逆/仙逆 (2023)/文件`。
+
+#### 2. 改动
+
+- 新增 `_scraper_season_show_folder_root()`：当「文件已经在 `剧目录/Season NN/` + 剧目录名对得上媒体名 + 整理锚点正是该剧目录」三条同时成立时，把剧目录当成媒体文件夹根，文件**原地整理**——`standard` 命名方式只在原地改名，`keep` / `clean` 完全不移动文件。
+- 新增 `_scraper_folder_compact_key()` / `_scraper_show_folder_keys()`：剧名比对忽略年份写法与空格、`[tmdbid-…]` 与网盘追加的 `(n)` 装饰，`仙逆` / `仙逆 (2023)` / `仙逆(2023)` / `仙逆 (2023) [tmdbid-100]` 视为同一部剧，历史上已经套出来的目录不会被继续加深。
+- 这条判定对「订阅导入完成 / 定时 / Webhook / 资源导入 / 接收夹分发」和「网盘变更同步（用户在面板里移动 / 重命名）」都一样生效，因为判据是文件的实际位置，不是"谁触发的整理"。
+
+#### 3. 不越界
+
+- 只对「选中的是季目录」生效：用户选中剧目录本身并勾了「同步重命名文件夹」时，文件夹仍按设置改成 `片名 (年份) [tmdbid-…]`，文件跟到改名后的目录里。
+- 季目录的父目录不是这部剧时（如 `别的剧/Season 01/仙逆(2023)– S01E001.mp4`）保持原逻辑，照常按「父目录 + 片名 (年份)」归档。
+- 不会自动回搬历史遗留的 `仙逆/仙逆 (2023)/Season 01/…`：本版只保证不再继续套层，是否回搬另行确认。
+
+### 验证
+
+- 新增回归：`tests/test_scraper_batch_organize.py` 4 项——`test_new_episode_in_show_season_folder_is_left_in_place`、`test_new_episode_in_show_season_folder_renames_file_only`、`test_show_folder_year_spelling_variants_are_reused`、`test_season_folder_of_other_show_still_creates_media_folder`。
+- 完整 `unittest discover -s tests -p 'test_*.py'` **1169 项零失败**；`compileall app main.py`、`git diff --check` 通过。
+- 未做：容器重建与真实 115 / 订阅链复核（需要在部署环境确认订阅落进 `仙逆/Season 01` 的新集不再被搬进 `仙逆 (2023)/`）。
+
 ## [0.13.2] - 2026-10-06
 
 ### 影视广告识别：整句式推广话术与“伪装视频”
