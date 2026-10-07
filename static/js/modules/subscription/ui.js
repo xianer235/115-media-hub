@@ -1407,6 +1407,9 @@
             if (tvFields) tvFields.classList.toggle('hidden', mediaType !== 'tv');
             const animeModeWrap = document.getElementById('subscription-anime-mode-wrap');
             if (animeModeWrap) animeModeWrap.classList.toggle('hidden', mediaType !== 'tv');
+            // 电影订阅 v1 一律不改名，整理开关只对电视剧有意义。
+            const organizeBlock = document.getElementById('subscription-organize-block');
+            if (organizeBlock) organizeBlock.classList.toggle('hidden', mediaType !== 'tv');
             const seasonInput = document.getElementById('subscription_season');
             const multiSeasonMode = !!document.getElementById('subscription_anime_mode')?.checked;
             if (seasonInput) {
@@ -1422,8 +1425,36 @@
                     : '电视剧会直接保存到所选目录；请把目录设在剧集父文件夹下。';
             }
             syncSubscriptionProviderUI();
+            syncSubscriptionOrganizeUI();
             suggestSubscriptionTotalEpisodesFromTmdb({ force: !!forceSuggestTotal });
             renderSubscriptionTmdbBinding();
+        }
+
+        function syncSubscriptionOrganizeUI() {
+            const enabled = !!document.getElementById('subscription_organize_on_import')?.checked;
+            const options = document.getElementById('subscription-organize-options');
+            if (options) options.classList.toggle('hidden', !enabled);
+        }
+
+        function applySubscriptionOrganizeOptions(options = {}) {
+            const payload = options && typeof options === 'object' ? options : {};
+            const titleLanguage = String(payload.title_language || 'zh').trim().toLowerCase();
+            const fileNameMode = String(payload.file_name_mode || 'standard').trim().toLowerCase();
+            const titleEl = document.getElementById('subscription_organize_title_language');
+            if (titleEl) titleEl.value = ['auto', 'zh', 'en'].includes(titleLanguage) ? titleLanguage : 'zh';
+            const modeEl = document.getElementById('subscription_organize_file_name_mode');
+            if (modeEl) modeEl.value = ['standard', 'clean', 'keep'].includes(fileNameMode) ? fileNameMode : 'standard';
+            const deleteAdEl = document.getElementById('subscription_organize_delete_ad_files');
+            if (deleteAdEl) deleteAdEl.checked = !!payload.delete_ad_files;
+            syncSubscriptionOrganizeUI();
+        }
+
+        function collectSubscriptionOrganizeOptions() {
+            return {
+                title_language: String(document.getElementById('subscription_organize_title_language')?.value || 'zh'),
+                file_name_mode: String(document.getElementById('subscription_organize_file_name_mode')?.value || 'standard'),
+                delete_ad_files: !!document.getElementById('subscription_organize_delete_ad_files')?.checked,
+            };
         }
 
         function setSubscriptionSavepath(folderId = '0', displayPath = '', { trail = null } = {}) {
@@ -1525,6 +1556,8 @@
                 tmdb_total_seasons: tmdbBinding.tmdb_total_seasons,
                 tmdb_season_episode_map: tmdbBinding.tmdb_season_episode_map,
                 tmdb_episode_mode: tmdbBinding.tmdb_episode_mode,
+                organize_on_import: !!document.getElementById('subscription_organize_on_import')?.checked,
+                organize_options: collectSubscriptionOrganizeOptions(),
             };
         }
 
@@ -1548,6 +1581,9 @@
             document.getElementById('subscription_season').value = 1;
             document.getElementById('subscription_total_episodes').value = 0;
             document.getElementById('subscription_anime_mode').checked = false;
+            const organizeToggleEl = document.getElementById('subscription_organize_on_import');
+            if (organizeToggleEl) organizeToggleEl.checked = true;
+            applySubscriptionOrganizeOptions({});
             setSubscriptionSavepath('0', '');
             const shareLinkInput = document.getElementById('subscription_share_link_url');
             if (shareLinkInput) shareLinkInput.value = '';
@@ -1759,6 +1795,9 @@
             document.getElementById('subscription_season').value = task.season || 1;
             document.getElementById('subscription_total_episodes').value = task.total_episodes || 0;
             document.getElementById('subscription_anime_mode').checked = resolveTaskMultiSeasonMode(task);
+            const organizeToggleEl = document.getElementById('subscription_organize_on_import');
+            if (organizeToggleEl) organizeToggleEl.checked = task.organize_on_import !== false;
+            applySubscriptionOrganizeOptions(task.organize_options || {});
             subscriptionFolderTrail = [{ id: '0', name: '根目录' }];
             setSubscriptionSavepath('0', task.savepath || '');
             const shareLinkInput = document.getElementById('subscription_share_link_url');

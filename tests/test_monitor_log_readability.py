@@ -48,23 +48,14 @@ class MonitorScopeLineTest(unittest.TestCase):
 
 
 class MonitorConclusionLineTest(unittest.TestCase):
-    def test_conclusion_extracts_auto_scrape_count(self):
-        stats = {"generated": 13, "skipped": 39, "deleted_files": 2}
-        line = monitor.build_monitor_conclusion_line(stats, "已自动整理 7 项（任务 #80）")
-        self.assertEqual(line, "结论: 新增/更新 13 | 跳过 39 | 自动整理 7 项 | 清理 2")
-
-    def test_conclusion_without_auto_scrape(self):
+    def test_conclusion_line_drops_auto_organize_column(self):
+        """监控回归纯扫描后，结论行不再有永远为「-」的自动整理一列。"""
         line = monitor.build_monitor_conclusion_line(
-            {"generated": 1, "skipped": 0, "deleted_files": 0}
+            {"generated": 13, "skipped": 39, "deleted_files": 2}
         )
-        self.assertEqual(line, "结论: 新增/更新 1 | 跳过 0 | 自动整理 - | 清理 0")
 
-    def test_conclusion_with_non_count_auto_message(self):
-        line = monitor.build_monitor_conclusion_line(
-            {"generated": 0, "skipped": 0, "deleted_files": 0},
-            "新增条目无高置信度自动匹配",
-        )
-        self.assertEqual(line, "结论: 新增/更新 0 | 跳过 0 | 自动整理 已执行 | 清理 0")
+        self.assertEqual(line, "结论: 新增/更新 13 | 跳过 39 | 清理 2")
+        self.assertNotIn("自动整理", line)
 
 
 class MonitorRunSummaryTextTest(unittest.TestCase):
@@ -86,14 +77,6 @@ class MonitorRunSummaryTextTest(unittest.TestCase):
 
         self.assertIn("1 个目录读取失败", line)
         self.assertIn("未执行过期清理", line)
-
-    def test_scan_summary_mentions_auto_organize(self):
-        line = monitor.build_monitor_run_summary(
-            {"generated": 12, "skipped": 0, "deleted_files": 0},
-            "已自动整理 7 项（任务 #80）",
-        )
-
-        self.assertEqual(line, "检查完成：新增或更新 12 个本地播放文件，已自动整理 7 项。")
 
     def test_change_summary_is_prose(self):
         line = monitor.build_monitor_change_run_summary(

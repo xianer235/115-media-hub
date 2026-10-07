@@ -1,5 +1,4 @@
 import logging
-import re
 
 from ..background import submit_background
 from ..core import *  # noqa: F401,F403
@@ -199,30 +198,16 @@ def build_monitor_scope_line(
     return f"范围: 全任务 {scan_path}"
 
 
-def build_monitor_conclusion_line(stats: Dict[str, Any], auto_summary: Any = "") -> str:
-    """构建执行成功前的结论摘要行。"""
-    auto_text = "-"
-    auto_raw = str(auto_summary or "").strip()
-    if auto_raw:
-        matched = re.search(r"已自动整理\s*(\d+)\s*项", auto_raw)
-        auto_text = f"{matched.group(1)} 项" if matched else "已执行"
+def build_monitor_conclusion_line(stats: Dict[str, Any]) -> str:
+    """构建执行成功前的结论摘要行（监控只做扫描，没有自动整理一列）。"""
     return (
         f"结论: 新增/更新 {max(0, int((stats or {}).get('generated', 0) or 0))} | "
         f"跳过 {max(0, int((stats or {}).get('skipped', 0) or 0))} | "
-        f"自动整理 {auto_text} | "
         f"清理 {max(0, int((stats or {}).get('deleted_files', 0) or 0))}"
     )
 
 
-def _auto_organize_phrase(auto_summary: Any) -> str:
-    auto_raw = str(auto_summary or "").strip()
-    if not auto_raw or auto_raw == "-":
-        return ""
-    matched = re.search(r"已自动整理\s*(\d+)\s*项", auto_raw)
-    return f"已自动整理 {matched.group(1)} 项" if matched else "已自动整理"
-
-
-def build_monitor_run_summary(stats: Dict[str, Any], auto_summary: Any = "") -> str:
+def build_monitor_run_summary(stats: Dict[str, Any]) -> str:
     """构建运行记录用的中文结论。
 
     运行记录直接呈现这句话，所以不能再复用文本日志的 `结论: … | …` 行；数值交给
@@ -232,14 +217,11 @@ def build_monitor_run_summary(stats: Dict[str, Any], auto_summary: Any = "") -> 
     generated = max(0, int(payload.get("generated", 0) or 0))
     deleted = max(0, int(payload.get("deleted_files", 0) or 0))
     failed_dirs = max(0, int(payload.get("failed_dirs", 0) or 0))
-    auto_phrase = _auto_organize_phrase(auto_summary)
     changes = []
     if generated:
         changes.append(f"新增或更新 {generated} 个本地播放文件")
     if deleted:
         changes.append(f"清理 {deleted} 个")
-    if auto_phrase:
-        changes.append(auto_phrase)
     detail = "，".join(changes)
     if failed_dirs:
         sentence = f"{failed_dirs} 个目录读取失败，本轮未完整检查"
@@ -630,204 +612,6 @@ def _bump_missing_monitor_dir(cursor: sqlite3.Cursor, task_name: str, dir_rel_pa
     return next_missing
 
 
-def _auto_scrape_new_media_items(
-    cfg: Dict[str, Any],
-    task: Dict[str, Any],
-    new_media_items: List[Dict[str, Any]],
-    run_id: str = "",
-) -> str:
-    """新增媒体文件自动刮削整理：只对高置信度自动匹配条目执行一次，失败仅记录。"""
-    from .scraper import (
-        _normalize_scraper_batch_preferences,
-        _walk_existing_folder,
-        build_scraper_organize_plan,
-        create_scraper_job_from_plan,
-        get_scraper_jobs_state,
-        run_scraper_job,
-    )
-
-    if not new_media_items:
-        return "没有新增媒体文件"
-    cookie = str(cfg.get("cookie_115", "") or "").strip()
-    parent_cid_cache: Dict[str, str] = {}
-    parent_items: Dict[str, List[Dict[str, Any]]] = {}
-    scan_rel = ""
-    try:
-        _scan_provider, scan_rel = resolve_provider_relative_path(
-            cfg,
-            normalize_remote_path(task.get("scan_path", "")),
-            expected_provider="115",
-        )
-        scan_rel = normalize_relative_path(scan_rel)
-    except Exception:
-        scan_rel = ""
-    # 直接躺在监控根目录下的散文件：不能把"监控目录本身"当成条目去改名，
-    # 而要按文件条目整理（后续按片名归档成文件夹）。
-    root_file_items: List[Dict[str, Any]] = []
-    for item in new_media_items:
-        fid = str(item.get("fid") or item.get("id") or "").strip()
-        rel_path = normalize_relative_path(str(item.get("remote_rel", "") or ""))
-        if not fid or not rel_path:
-            continue
-        try:
-            full_remote_path = join_remote_path(
-                normalize_remote_path(task.get("scan_path", "")),
-                rel_path,
-            )
-            _provider, mount_rel = resolve_provider_relative_path(cfg, full_remote_path, expected_provider="115")
-        except Exception:
-            continue
-        if not mount_rel:
-            continue
-        parent_rel = normalize_relative_path(os.path.dirname(mount_rel))
-        if not parent_rel:
-            continue
-        if scan_rel and parent_rel == scan_rel:
-            root_file_items.append({"item": item, "fid": fid, "mount_rel": mount_rel, "parent_rel": parent_rel})
-            continue
-        parent_cid = parent_cid_cache.get(parent_rel, "")
-        if not parent_cid:
-            try:
-                parent_cid, _exists = _walk_existing_folder("115", cookie, "0", parent_rel)
-            except Exception:
-                parent_cid = ""
-            parent_cid_cache[parent_rel] = parent_cid
-        if not parent_cid:
-            continue
-        parent_items.setdefault(parent_rel, []).append(item)
-    if not parent_items and not root_file_items:
-        return f"新增文件无法解析网盘路径，跳过 {len(new_media_items)} 项"
-    entries: List[Dict[str, Any]] = []
-    for root_item in root_file_items:
-        item = root_item["item"] if isinstance(root_item.get("item"), dict) else {}
-        parent_rel = str(root_item.get("parent_rel", "") or "")
-        parent_cid = parent_cid_cache.get(parent_rel, "")
-        if not parent_cid:
-            try:
-                parent_cid, _exists = _walk_existing_folder("115", cookie, "0", parent_rel)
-            except Exception:
-                parent_cid = ""
-            parent_cid_cache[parent_rel] = parent_cid
-        if not parent_cid:
-            continue
-        mount_rel = str(root_item.get("mount_rel", "") or "")
-        entries.append(
-            {
-                "id": str(root_item.get("fid", "") or ""),
-                "cid": str(root_item.get("fid", "") or ""),
-                "name": str(item.get("name", "") or "").strip() or os.path.basename(mount_rel),
-                "is_dir": False,
-                "parent_id": parent_cid,
-                "parent_path": parent_rel,
-                "path": mount_rel,
-            }
-        )
-    for parent_rel in sorted(parent_items):
-        folder_name = os.path.basename(parent_rel)
-        grandparent_rel = normalize_relative_path(os.path.dirname(parent_rel))
-        grandparent_cid = parent_cid_cache.get(grandparent_rel, "")
-        if grandparent_rel and not grandparent_cid:
-            try:
-                grandparent_cid, _exists = _walk_existing_folder("115", cookie, "0", grandparent_rel)
-            except Exception:
-                grandparent_cid = ""
-            parent_cid_cache[grandparent_rel] = grandparent_cid
-        if grandparent_rel and not grandparent_cid:
-            continue
-        entries.append(
-            {
-                "id": parent_cid_cache[parent_rel],
-                "cid": parent_cid_cache[parent_rel],
-                "name": folder_name,
-                "is_dir": True,
-                "parent_id": grandparent_cid or "0",
-                "parent_path": grandparent_rel,
-                "path": parent_rel,
-            }
-        )
-    raw_auto_options = task.get("auto_scrape_options") if isinstance(task.get("auto_scrape_options"), dict) else {}
-    auto_options = {"title_language": "zh", "delete_ad_files": False}
-    if raw_auto_options:
-        auto_options.update(_normalize_scraper_batch_preferences(raw_auto_options))
-    # 散文件（监控根目录下的文件）也要归档进「片名 (年份)/」，与接收夹快捷导入保持一致。
-    auto_options["force_media_folder"] = True
-    # 与接收夹快捷导入共用同一套整理流程：识别口径、命名选项、置信度门槛完全一致。
-    outcome = build_scraper_organize_plan("115", entries, auto_options)
-    plan = outcome.get("plan") if isinstance(outcome.get("plan"), dict) else {}
-    if not plan:
-        return "新增条目无高置信度自动匹配，已跳过（可在刮削页手动整理）"
-    ready_count = max(0, int(plan.get("ready_count", 0) or 0))
-    if ready_count <= 0:
-        return "高置信度条目无可执行动作"
-    job = create_scraper_job_from_plan({"plan": plan})
-    job_id = max(0, int(job.get("job_id", 0) or 0))
-    run_scraper_job(job_id)
-    jobs = get_scraper_jobs_state(job_id=job_id).get("jobs", []) if job_id > 0 else []
-    actual = jobs[0] if isinstance(jobs, list) and jobs else {}
-    status = str(actual.get("status", "") or "").strip()
-    succeeded = max(0, int(actual.get("succeeded_actions", 0) or 0))
-    failed = max(0, int(actual.get("failed_actions", 0) or 0))
-    identified_folder_paths = [
-        normalize_relative_path(str(entry.get("path", "") or ""))
-        for entry in entries
-        if isinstance(entry, dict) and entry.get("is_dir") and str(entry.get("path", "") or "").strip()
-    ]
-
-    def _action_entry_type(action: Dict[str, Any], old_path: str) -> str:
-        """这条动作来自整目录识别还是单文件识别（用于运行记录区分条目类型）。"""
-        if bool(action.get("is_dir")):
-            return "folder"
-        normalized_old = normalize_relative_path(str(old_path or ""))
-        if any(
-            normalized_old == folder_path or normalized_old.startswith(folder_path + "/")
-            for folder_path in identified_folder_paths
-        ):
-            return "folder"
-        return "file"
-
-    if run_id and isinstance(actual, dict):
-        for action in actual.get("actions") if isinstance(actual.get("actions"), list) else []:
-            if not isinstance(action, dict):
-                continue
-            old_path = str(action.get("old_path", "") or "").strip()
-            new_path = str(action.get("new_path", "") or "").strip()
-            old_name = str(action.get("old_name", "") or "").strip()
-            new_name = str(action.get("new_name", "") or "").strip()
-            if not old_path and not new_path:
-                continue
-            action_status = str(action.get("status", "") or "").strip() or "completed"
-            same_parent = (
-                str(action.get("old_parent_id", "") or "").strip()
-                and str(action.get("old_parent_id", "") or "").strip()
-                == str(action.get("new_parent_id", "") or "").strip()
-            )
-            record_monitor_run_event(
-                run_id,
-                category="remote",
-                operation="rename" if same_parent else "move",
-                status=action_status,
-                title=old_name or new_name or "自动整理",
-                detail={
-                    "step": "自动整理",
-                    "operation_label": "网盘重命名" if same_parent else "网盘移动",
-                    "old_name": old_name,
-                    "new_name": new_name,
-                    "old_path": old_path,
-                    "new_path": new_path,
-                    "entry_type": _action_entry_type(action, old_path),
-                    "scraper_job_id": job_id,
-                },
-            )
-    if status == "completed":
-        return f"已自动整理 {succeeded} 项（任务 #{job_id}）"
-    if status == "partial":
-        return f"自动整理部分完成：成功 {succeeded} 项，失败 {failed} 项（任务 #{job_id}）"
-    if status in {"failed", "rollback_failed"}:
-        return f"自动整理失败：{str(actual.get('status_detail', '') or '任务执行失败')[:120]}（任务 #{job_id}）"
-    # Mocks and older job stores may not expose the just-created job.  The
-    # production path always has a durable job row, so retain a useful result.
-    return f"已自动整理 {ready_count} 项（任务 #{job_id}）"
-
 
 async def run_monitor_task(
     task_name: str,
@@ -898,7 +682,7 @@ async def run_monitor_task(
         "rescan_branches": 0,
     }
     generated_strm_paths: List[str] = []
-    new_media_items: List[Dict[str, Any]] = []
+    # 监控不再自动整理：扫描只负责生成 / 同步 STRM（自动整理入口收敛到订阅与接收夹）。
     force_strm_rewrite = str(task.get("strm_write_mode", "incremental") or "incremental").strip().lower() == "full"
     process_event_count = 0
     process_event_truncated = False
@@ -969,16 +753,6 @@ async def run_monitor_task(
         refresh_source_label = ""
         hinted_path = ""
         resolved_paths: List[str] = []
-        # 「扫描监控」按钮的指定目录扫描只负责同步 STRM：内容通常是用户已经整理好、
-        # 手动放回库里的文件夹，再跑一次自动整理会把它们重新套进「片名 (年份)/」里，
-        # 造成多层同名嵌套（历史 job 106/110 就是这么来的）。系统补扫（auto_rescan）
-        # 与接收夹分发（inbox_dispatch）保持原有行为，不受这里影响。
-        dir_scan_only = (
-            str(trigger or "").strip().lower() == "manual"
-            and isinstance(payload, dict)
-            and bool(payload.get("savepaths"))
-            and str(run_source or "").strip().lower() in ("", "manual")
-        )
         if trigger in ("webhook", "resource") and payload:
             hinted_path = extract_webhook_refresh_path(task, payload, cfg)
             source_label = "Webhook" if trigger == "webhook" else "资源导入"
@@ -1294,17 +1068,6 @@ async def run_monitor_task(
                     stats["skipped"] += 1
 
                 remote_rel = normalize_relative_path(os.path.relpath(item_remote_path, task_scan_path))
-                if item_local_rel not in previous_file_keys:
-                    new_media_items.append(
-                        {
-                            "id": str(item.get("id", "") or "").strip(),
-                            "fid": str(item.get("fid", "") or "").strip(),
-                            "name": name,
-                            "size": size,
-                            "remote_rel": remote_rel,
-                            "local_rel": item_local_rel,
-                        }
-                    )
                 cursor.execute(
                     """
                     INSERT OR REPLACE INTO current_scan(local_rel_path, remote_rel_path, remote_modified, file_size)
@@ -1511,32 +1274,9 @@ async def run_monitor_task(
                 "success",
             )
 
-        auto_summary = "-"
-        if bool(task.get("auto_scrape_on_new")) and new_media_items and dir_scan_only:
-            await write_monitor_log(
-                (
-                    f"指定目录扫描只刷新 STRM，跳过自动整理 {len(new_media_items)} 个新增文件"
-                    "（如需整理，请在刮削页勾选后手动整理）"
-                ),
-                "info",
-            )
-        elif bool(task.get("auto_scrape_on_new")) and new_media_items:
-            try:
-                auto_message = await asyncio.to_thread(
-                    _auto_scrape_new_media_items,
-                    cfg,
-                    task,
-                    list(new_media_items),
-                    run_id=run_id,
-                )
-                auto_summary = auto_message
-                await write_monitor_log(f"自动整理: {auto_message}", "success")
-            except Exception as exc:
-                await write_monitor_log(f"自动整理失败: {exc}", "error")
-
         await write_monitor_section("执行结果")
         await write_monitor_task_summary(stats, cleanup_enabled=cleanup_enabled)
-        await write_monitor_log(build_monitor_conclusion_line(stats, auto_summary), "success")
+        await write_monitor_log(build_monitor_conclusion_line(stats), "success")
         try:
             notify_result = await push_monitor_success_notification(
                 cfg=cfg,
@@ -1571,10 +1311,9 @@ async def run_monitor_task(
             "deleted": stats["deleted_files"], "failed_dirs": stats["failed_dirs"],
             "scanned_dirs": stats["success_dirs"], "skipped_dirs": stats["skipped_dirs"],
             "rescan_branches": stats["rescan_branches"],
-            "auto_summary": auto_summary,
         }
         final_status = "partial" if stats["failed_dirs"] else ("no_change" if not stats["generated"] and not stats["deleted_files"] else "completed")
-        finish_monitor_run(run_id, status=final_status, summary=build_monitor_run_summary(stats, auto_summary), result=final_result)
+        finish_monitor_run(run_id, status=final_status, summary=build_monitor_run_summary(stats), result=final_result)
         update_monitor_summary("任务完成", f"{task_name} 执行结束")
     except asyncio.CancelledError:
         try:
@@ -1883,35 +1622,6 @@ async def run_monitor_change_task(
                             title=os.path.basename(str(item.get("path", "") or "")),
                             detail=item_detail,
                         )
-        new_media_items = result.get("new_media_items", [])
-        if bool(task.get("auto_scrape_on_new")) and isinstance(new_media_items, list) and new_media_items:
-            try:
-                auto_message = await asyncio.to_thread(
-                    _auto_scrape_new_media_items,
-                    cfg,
-                    task,
-                    list(new_media_items),
-                    run_id=run_id,
-                )
-                await write_monitor_log(f"自动整理: {auto_message}", "success")
-                record_monitor_run_event(
-                    run_id,
-                    category="remote",
-                    operation="auto_organize",
-                    status="failed" if "失败" in auto_message else ("partial" if "部分完成" in auto_message else "completed"),
-                    title="自动整理",
-                    detail={"summary": auto_message},
-                )
-            except Exception as exc:
-                await write_monitor_log(f"自动整理失败: {exc}", "error")
-                record_monitor_run_event(
-                    run_id,
-                    category="problem",
-                    operation="auto_organize",
-                    status="failed",
-                    title="自动整理失败",
-                    detail={"error": str(exc)},
-                )
         auto_rescan_run_ids: List[str] = []
         # 接收夹分发过来的每个条目都有自己的独立目录同步任务（“电影 · 片名 /
         # 电视剧 · 片名”），变更同步不再把它们挂成下游等待；这里只负责按来源
@@ -2690,19 +2400,24 @@ def _queue_auto_rescan_for_manual_required(
 def queue_inbox_dispatch_scan(
     cfg: Dict[str, Any],
     path: str,
+    provider: str = "115",
 ) -> str:
     """接收夹分发条目后，登记对应的目录同步范围。
 
     同一个监控任务下的多个分发范围会合并进同一条队列任务，避免 144 个条目
     产生 144 次目录扫描。任务不挂接收夹父运行，来源标注「接收夹分发」。
+    只有 115 上的分发才生成 STRM；其他网盘的接收夹只搬运、不刷新。
     """
     normalized = normalize_relative_path(str(path or "").strip())
     if not normalized:
         return ""
+    scan_provider = normalize_mount_provider(provider) or "115"
+    if scan_provider != "115":
+        return ""
     try:
         result = queue_monitor_dir_scan(
             cfg,
-            "115",
+            scan_provider,
             [normalized],
             run_source="inbox_dispatch",
             force_new=False,

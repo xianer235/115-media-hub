@@ -88,6 +88,39 @@
                         <input type="checkbox" id="subscription_anime_mode" class="ui-checkbox">
                         多季合一（跨季追更，关闭时按当前季订阅）
                     </label>
+                    <div id="subscription-organize-block" class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 space-y-3">
+                        <label class="flex items-start gap-3 cursor-pointer text-sm">
+                            <input type="checkbox" id="subscription_organize_on_import" class="ui-checkbox mt-0.5" checked onchange="syncSubscriptionOrganizeUI()">
+                            <span class="min-w-0">
+                                <span class="block font-bold text-slate-100">入库后整理（电视剧）</span>
+                                <span class="block text-[11px] text-slate-500 mt-1 leading-5">只用现有刮削引擎把新集原地改名成「片名 - S01E02」这类标准名，不建目录、不移动文件；没有绑定 TMDB、或识别不出集数时保留原名。</span>
+                            </span>
+                        </label>
+                        <div id="subscription-organize-options" class="space-y-3">
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">标题语言</span>
+                                    <select id="subscription_organize_title_language" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none">
+                                        <option value="zh">中文名</option>
+                                        <option value="auto">跟随 TMDB 配置</option>
+                                        <option value="en">英文名</option>
+                                    </select>
+                                </label>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">文件命名方式</span>
+                                    <select id="subscription_organize_file_name_mode" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none">
+                                        <option value="standard">按识别结果重命名</option>
+                                        <option value="clean">仅清理广告信息（保留原始命名）</option>
+                                        <option value="keep">保持原名（不重命名）</option>
+                                    </select>
+                                </label>
+                            </div>
+                            <label class="flex items-center gap-3 cursor-pointer text-sm">
+                                <input type="checkbox" id="subscription_organize_delete_ad_files" class="ui-checkbox">
+                                <span>整理时删除广告文件（图片/网页/文本，删除进入网盘回收站）</span>
+                            </label>
+                        </div>
+                    </div>
                     <div class="space-y-2">
                         <div id="subscription-savepath-provider-label" class="text-xs text-slate-500">115 保存目录</div>
                         <div class="resource-save-path-grid">

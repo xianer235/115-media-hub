@@ -1143,13 +1143,18 @@ def normalize_task_type(value: Any) -> str:
 
 
 def normalize_distribute_targets(value: Any) -> Dict[str, str]:
-    """接收夹任务的分发目标：``{"movie": 监控任务名, "tv": 监控任务名}``。"""
+    """接收夹任务的分发目标：``{"movie": 远程文件夹路径, "tv": 远程文件夹路径}``。
+
+    值语义是「带网盘挂载前缀的远程路径」（例如 ``/115/自存影视``），不再是监控任务名；
+    旧配置里的任务名由 ``ensure_inbox_task`` 在能看到任务全表的地方迁移成该任务的
+    ``scan_path``，这里只做去空与去空白。
+    """
     raw = value if isinstance(value, dict) else {}
     targets: Dict[str, str] = {}
     for key in ("movie", "tv"):
-        name = str(raw.get(key, "") or "").strip()
-        if name:
-            targets[key] = name
+        target = str(raw.get(key, "") or "").strip()
+        if target:
+            targets[key] = target
     return targets
 
 
@@ -1176,7 +1181,18 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
     if strm_write_mode not in {"incremental", "full"}:
         strm_write_mode = "incremental"
     raw_auto_scrape_options = task.get("auto_scrape_options")
-    auto_scrape_options = raw_auto_scrape_options if isinstance(raw_auto_scrape_options, dict) else {}
+    # 接收夹的整理选项沿用接收夹任务自己的字段；扫描任务的「新增资源自动整理」已废弃，
+    # 旧配置里残留的开关与选项直接丢弃。
+    auto_scrape_options = (
+        raw_auto_scrape_options
+        if task_type == MONITOR_TASK_TYPE_INBOX and isinstance(raw_auto_scrape_options, dict)
+        else {}
+    )
+    provider = normalize_mount_provider(task.get("provider", ""))
+    if task_type == MONITOR_TASK_TYPE_INBOX and not provider:
+        provider = "115"
+    if task_type != MONITOR_TASK_TYPE_INBOX:
+        provider = ""
     quick_import_target = str(task.get("quick_import_target", "") or "").strip().lower()
     if quick_import_target not in ("movie", "tv"):
         quick_import_target = ""
@@ -1191,10 +1207,10 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "name": name,
         "task_type": task_type,
+        "provider": provider,
         "enabled": enabled,
         "distribute_targets": normalize_distribute_targets(task.get("distribute_targets")),
         "webhook_enabled": normalize_bool(task.get("webhook_enabled", False), default=False),
-        "auto_scrape_on_new": normalize_bool(task.get("auto_scrape_on_new", False), default=False),
         "auto_scrape_options": auto_scrape_options,
         "quick_import_target": quick_import_target,
         "scan_path": normalize_remote_path(task.get("scan_path", "")),
@@ -1212,6 +1228,51 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         "inbox_max_items_per_run": max(1, min(500, inbox_max_items_per_run)),
         "inbox_batch_pause_seconds": max(0, min(300, inbox_batch_pause_seconds)),
     }
+
+
+def _is_remote_folder_target(cfg: Dict[str, Any], value: str) -> bool:
+    """分发目标是否已经是合法远程路径（带网盘挂载前缀）。"""
+    remote = normalize_remote_path(str(value or "").strip())
+    if not remote or remote == "/":
+        return False
+    try:
+        resolve_provider_relative_path(cfg, remote)
+    except Exception:
+        return False
+    return True
+
+
+def _migrate_inbox_distribute_targets(
+    cfg: Dict[str, Any],
+    raw_targets: Dict[str, str],
+    tasks: List[Dict[str, Any]],
+) -> Dict[str, str]:
+    """把接收夹分发目标从「监控任务名」迁移成「远程文件夹路径」。
+
+    幂等：值已经是合法远程路径就原样保留；能匹配到某个扫描任务名就换成该任务的
+    ``scan_path``；两者都不是（任务被删了 / 名字写错）就清空，让校验提示用户重选。
+    """
+    scan_task_paths = {
+        str(task.get("name", "") or "").strip(): normalize_remote_path(
+            str(task.get("scan_path", "") or "").strip()
+        )
+        for task in tasks
+        if isinstance(task, dict)
+        and normalize_task_type(task.get("task_type")) == MONITOR_TASK_TYPE_SCAN
+        and str(task.get("name", "") or "").strip()
+    }
+    migrated: Dict[str, str] = {}
+    for key, value in raw_targets.items():
+        target = str(value or "").strip()
+        if not target:
+            continue
+        if _is_remote_folder_target(cfg, target):
+            migrated[key] = normalize_remote_path(target)
+            continue
+        scan_path = scan_task_paths.get(target, "")
+        if scan_path and scan_path != "/":
+            migrated[key] = scan_path
+    return migrated
 
 
 def ensure_inbox_task(cfg: Dict[str, Any]) -> None:
@@ -1270,10 +1331,10 @@ def ensure_inbox_task(cfg: Dict[str, Any]) -> None:
         inbox["scan_path"] = legacy_inbox
     if legacy_enabled:
         inbox["enabled"] = True
-    targets = normalize_distribute_targets(inbox.get("distribute_targets"))
+    raw_targets = normalize_distribute_targets(inbox.get("distribute_targets"))
     for key, task_name in legacy_targets.items():
-        targets.setdefault(key, task_name)
-    inbox["distribute_targets"] = targets
+        raw_targets.setdefault(key, task_name)
+    inbox["distribute_targets"] = _migrate_inbox_distribute_targets(cfg, raw_targets, tasks)
     if legacy_keys_present or legacy_targets:
         # 旧接收夹入口本身常开，但迁移时遵循“有签名密钥才开 webhook”的新口径；
         # 没有密钥就保持关闭，让用户在编辑弹窗里看到提示后自行开启。
@@ -2058,6 +2119,27 @@ def normalize_subscription_scan_settings(task: Dict[str, Any], provider: Any = "
     }
 
 
+# 订阅「入库后整理」的默认选项：有意覆盖引擎默认（引擎默认 title_language=auto）。
+SUBSCRIPTION_ORGANIZE_OPTION_DEFAULTS: Dict[str, Any] = {
+    "title_language": "zh",
+    "file_name_mode": "standard",
+    "episode_mode": "auto",
+    "delete_ad_files": False,
+}
+
+
+def _normalize_subscription_organize_options(raw: Any) -> Dict[str, Any]:
+    """订阅「入库后整理」选项：复用刮削引擎的批量偏好归一化，只补默认值。
+
+    默认中文标题 / standard 命名是有意覆盖引擎默认 `auto` 的（见 plans 的订阅自理整理），
+    用户显式保存过的字段以用户值为准。
+    """
+    from .services.scraper import _normalize_scraper_batch_preferences
+
+    payload = raw if isinstance(raw, dict) else {}
+    return _normalize_scraper_batch_preferences({**SUBSCRIPTION_ORGANIZE_OPTION_DEFAULTS, **payload})
+
+
 def normalize_subscription_task(task: Dict[str, Any]) -> Dict[str, Any]:
     media_type = str(task.get("media_type", "") or task.get("type", "movie")).strip().lower()
     if media_type not in ("movie", "tv"):
@@ -2217,10 +2299,15 @@ def normalize_subscription_task(task: Dict[str, Any]) -> Dict[str, Any]:
     if not share_subdir:
         share_subdir_cid = ""
     scan_settings = normalize_subscription_scan_settings(task, provider)
+    organize_on_import = normalize_bool(task.get("organize_on_import", True), default=True)
+    raw_organize_options = task.get("organize_options")
+    organize_options = _normalize_subscription_organize_options(raw_organize_options)
     return {
         "name": name,
         "provider": provider,
         "media_type": media_type,
+        "organize_on_import": organize_on_import,
+        "organize_options": organize_options,
         "title": title,
         "aliases": aliases,
         "exclude_keywords": exclude_keywords,

@@ -81,6 +81,8 @@
         let monitorFolderTrail = [{ id: '0', name: '根目录' }];
         // 文件夹选择弹窗当前要写回哪个输入框（监控扫描路径 / 快捷导入接收夹）。
         let monitorFolderPickerTargetId = 'monitor_scan_path';
+        // 文件夹选择弹窗当前浏览的网盘（扫描任务固定 115，接收夹跟随所选 provider）。
+        let monitorFolderProvider = '115';
         let monitorFolderEntries = [];
         let monitorFolderSummary = { folder_count: 0, file_count: 0 };
         let monitorFolderLoading = false;
@@ -2266,7 +2268,7 @@
         const SCRAPER_FILTER_HELP_HTML = `
             <div class="help-rich-section">
                 <div class="help-rich-title">用在哪里</div>
-                <div class="help-rich-text">批量整理（刮削页）、监控任务的「新增资源自动刮削整理」、接收夹分发整理，都会先从文件名里提取片名，再拿片名去搜 TMDB；提取这一步用的就是这份词表。</div>
+                <div class="help-rich-text">批量整理（刮削页）、接收夹分发整理、订阅入库后的整理，都会先从文件名里提取片名，再拿片名去搜 TMDB；提取这一步用的就是这份词表。</div>
                 <div class="help-rich-text">提取结果还会用于：TMDB 搜索关键词、识别不到时按清理后的名字兜底命名、刮削页的关键词建议，以及「这个候选词算不算通用词」的判断（整个文件夹名就叫「国语音轨」时不会被当成片名）。</div>
                 <div class="help-rich-text">它只影响识别与命名判断，不会改动网盘里的源文件；删除广告文件是整理选项里的另一个开关。</div>
             </div>
@@ -2413,6 +2415,33 @@
                 : normalizeMountPointsInput([]);
             const matched = points.find(item => normalizeMountProviderInput(item.provider) === providerKey);
             return matched ? normalizeRemotePathInput(matched.prefix || '') : '';
+        }
+
+        function getProviderLabel(provider) {
+            const providerKey = normalizeMountProviderInput(provider) || '115';
+            const matched = (window.providerMeta || []).find(item => String(item?.name || '') === providerKey);
+            return String(matched?.label || providerKey).trim() || providerKey;
+        }
+
+        function isProviderAuthConfigured(provider) {
+            // 与 applyConfig 里计算 cookie_configured_<provider> 的口径保持一致。
+            const providerKey = normalizeMountProviderInput(provider) || '115';
+            const matched = (window.providerMeta || []).find(item => String(item?.name || '') === providerKey);
+            const configKeys = Array.isArray(matched?.config_keys) && matched.config_keys.length
+                ? matched.config_keys
+                : ['cookie_' + providerKey];
+            const authType = String(matched?.auth_type || '').trim();
+            if (authType === 'password') {
+                return configKeys.every((key) => !!sensitiveConfigMeta[key]);
+            }
+            if (authType === 'password_cookie') {
+                const cookieKey = configKeys[0] || '';
+                const usernameKey = configKeys[1] || '';
+                const passwordKey = configKeys[2] || '';
+                return !!sensitiveConfigMeta[cookieKey]
+                    || (!!sensitiveConfigMeta[usernameKey] && !!sensitiveConfigMeta[passwordKey]);
+            }
+            return !!sensitiveConfigMeta[configKeys[0] || ('cookie_' + providerKey)];
         }
 
         async function resetExtensions() {
@@ -4082,44 +4111,42 @@
             await refreshMonitorState();
         }
 
-        function syncMonitorAutoScrapeOptions() {
-            const enabled = !!document.getElementById('monitor_auto_scrape_on_new')?.checked;
-            const optionsEl = document.getElementById('monitor-auto-scrape-options');
-            if (optionsEl) optionsEl.classList.toggle('hidden', !enabled);
-            const standard = String(document.getElementById('monitor_asc_file_name_mode')?.value || 'standard') === 'standard';
-            const standardWrap = document.getElementById('monitor-asc-standard-wrap');
+        function syncMonitorInboxOrganizeUI() {
+            // 接收夹整理选项只在文件命名方式为「标准重命名」时才需要标题语言 / 季集识别。
+            const standard = String(document.getElementById('monitor_inbox_asc_file_name_mode')?.value || 'standard') === 'standard';
+            const standardWrap = document.getElementById('monitor-inbox-asc-standard-wrap');
             if (standardWrap) {
                 standardWrap.classList.toggle('hidden', !standard);
                 standardWrap.querySelectorAll('input, select').forEach((control) => {
                     control.disabled = !standard;
                 });
             }
-            const preserve = !!document.getElementById('monitor_asc_preserve_file_info')?.checked;
-            document.querySelectorAll('[data-monitor-asc-tag]').forEach((input) => {
-                input.disabled = !preserve;
+            const preserve = !!document.getElementById('monitor_inbox_asc_preserve_file_info')?.checked;
+            document.querySelectorAll('[data-monitor-inbox-asc-tag]').forEach((input) => {
+                input.disabled = !standard || !preserve;
             });
         }
 
-        function collectMonitorAutoScrapeOptions() {
+        function collectMonitorInboxOrganizeOptions() {
             const preserveTags = {};
-            document.querySelectorAll('[data-monitor-asc-tag]').forEach((input) => {
-                preserveTags[String(input.dataset.monitorAscTag || '').trim()] = !!input.checked;
+            document.querySelectorAll('[data-monitor-inbox-asc-tag]').forEach((input) => {
+                preserveTags[String(input.dataset.monitorInboxAscTag || '').trim()] = !!input.checked;
             });
             return {
-                file_name_mode: String(document.getElementById('monitor_asc_file_name_mode')?.value || 'standard'),
-                title_language: String(document.getElementById('monitor_asc_title_language')?.value || 'auto'),
-                season: Math.max(1, Number(document.getElementById('monitor_asc_season')?.value || 1) || 1),
-                episode_mode: String(document.getElementById('monitor_asc_episode_mode')?.value || 'auto'),
-                include_tmdb_id: !!document.getElementById('monitor_asc_include_tmdb_id')?.checked,
-                use_season_subfolder: document.getElementById('monitor_asc_season_subfolder')?.checked !== false,
-                rename_selected_folders: document.getElementById('monitor_asc_rename_folders')?.checked !== false,
-                delete_ad_files: !!document.getElementById('monitor_asc_delete_ad_files')?.checked,
-                preserve_file_info: !!document.getElementById('monitor_asc_preserve_file_info')?.checked,
+                file_name_mode: String(document.getElementById('monitor_inbox_asc_file_name_mode')?.value || 'standard'),
+                title_language: String(document.getElementById('monitor_inbox_asc_title_language')?.value || 'zh'),
+                season: Math.max(1, Number(document.getElementById('monitor_inbox_asc_season')?.value || 1) || 1),
+                episode_mode: String(document.getElementById('monitor_inbox_asc_episode_mode')?.value || 'auto'),
+                include_tmdb_id: !!document.getElementById('monitor_inbox_asc_include_tmdb_id')?.checked,
+                use_season_subfolder: document.getElementById('monitor_inbox_asc_season_subfolder')?.checked !== false,
+                rename_selected_folders: document.getElementById('monitor_inbox_asc_rename_folders')?.checked !== false,
+                delete_ad_files: !!document.getElementById('monitor_inbox_asc_delete_ad_files')?.checked,
+                preserve_file_info: !!document.getElementById('monitor_inbox_asc_preserve_file_info')?.checked,
                 preserve_tags: preserveTags,
             };
         }
 
-        function applyMonitorAutoScrapeOptions(options = {}) {
+        function applyMonitorInboxOrganizeOptions(options = {}) {
             const opts = options && typeof options === 'object' ? options : {};
             const setCheck = (id, value) => {
                 const el = document.getElementById(id);
@@ -4129,38 +4156,38 @@
                 const el = document.getElementById(id);
                 if (el) el.value = allowed.includes(String(value || '')) ? String(value) : allowed[0];
             };
-            setCheck('monitor_asc_rename_folders', opts.rename_selected_folders !== false);
-            setCheck('monitor_asc_season_subfolder', opts.use_season_subfolder !== false);
-            setCheck('monitor_asc_include_tmdb_id', opts.include_tmdb_id);
-            setCheck('monitor_asc_delete_ad_files', opts.delete_ad_files);
-            setCheck('monitor_asc_preserve_file_info', opts.preserve_file_info);
-            setSelect('monitor_asc_file_name_mode', opts.file_name_mode, ['standard', 'clean', 'keep']);
-            setSelect('monitor_asc_title_language', opts.title_language, ['auto', 'zh', 'en']);
-            setSelect('monitor_asc_episode_mode', opts.episode_mode, ['auto', 'seasonal', 'absolute']);
-            const seasonEl = document.getElementById('monitor_asc_season');
+            setCheck('monitor_inbox_asc_rename_folders', opts.rename_selected_folders !== false);
+            setCheck('monitor_inbox_asc_season_subfolder', opts.use_season_subfolder !== false);
+            setCheck('monitor_inbox_asc_include_tmdb_id', opts.include_tmdb_id);
+            setCheck('monitor_inbox_asc_delete_ad_files', opts.delete_ad_files);
+            setCheck('monitor_inbox_asc_preserve_file_info', opts.preserve_file_info);
+            setSelect('monitor_inbox_asc_file_name_mode', opts.file_name_mode, ['standard', 'clean', 'keep']);
+            setSelect('monitor_inbox_asc_title_language', opts.title_language, ['auto', 'zh', 'en']);
+            setSelect('monitor_inbox_asc_episode_mode', opts.episode_mode, ['auto', 'seasonal', 'absolute']);
+            const seasonEl = document.getElementById('monitor_inbox_asc_season');
             if (seasonEl) seasonEl.value = String(Math.max(1, Math.min(99, Number(opts.season || 1) || 1)));
             const tags = (opts.preserve_tags && typeof opts.preserve_tags === 'object') ? opts.preserve_tags : {};
-            document.querySelectorAll('[data-monitor-asc-tag]').forEach((input) => {
-                const key = String(input.dataset.monitorAscTag || '').trim();
+            document.querySelectorAll('[data-monitor-inbox-asc-tag]').forEach((input) => {
+                const key = String(input.dataset.monitorInboxAscTag || '').trim();
                 if (Object.prototype.hasOwnProperty.call(tags, key)) input.checked = !!tags[key];
             });
-            syncMonitorAutoScrapeOptions();
+            syncMonitorInboxOrganizeUI();
         }
 
-        function resetMonitorAutoScrapeOptions() {
-            document.getElementById('monitor_asc_rename_folders').checked = true;
-            document.getElementById('monitor_asc_season_subfolder').checked = true;
-            document.getElementById('monitor_asc_include_tmdb_id').checked = false;
-            document.getElementById('monitor_asc_delete_ad_files').checked = false;
-            document.getElementById('monitor_asc_preserve_file_info').checked = false;
-            document.getElementById('monitor_asc_file_name_mode').value = 'standard';
-            document.getElementById('monitor_asc_title_language').value = 'auto';
-            document.getElementById('monitor_asc_episode_mode').value = 'auto';
-            document.getElementById('monitor_asc_season').value = '1';
-            document.querySelectorAll('[data-monitor-asc-tag]').forEach((input) => {
+        function resetMonitorInboxOrganizeOptions() {
+            document.getElementById('monitor_inbox_asc_rename_folders').checked = true;
+            document.getElementById('monitor_inbox_asc_season_subfolder').checked = true;
+            document.getElementById('monitor_inbox_asc_include_tmdb_id').checked = false;
+            document.getElementById('monitor_inbox_asc_delete_ad_files').checked = false;
+            document.getElementById('monitor_inbox_asc_preserve_file_info').checked = false;
+            document.getElementById('monitor_inbox_asc_file_name_mode').value = 'standard';
+            document.getElementById('monitor_inbox_asc_title_language').value = 'zh';
+            document.getElementById('monitor_inbox_asc_episode_mode').value = 'auto';
+            document.getElementById('monitor_inbox_asc_season').value = '1';
+            document.querySelectorAll('[data-monitor-inbox-asc-tag]').forEach((input) => {
                 input.checked = true;
             });
-            syncMonitorAutoScrapeOptions();
+            syncMonitorInboxOrganizeUI();
         }
 
         function currentMonitorFormData() {
@@ -4171,6 +4198,9 @@
             return {
                 name: document.getElementById('monitor_name').value.trim(),
                 task_type: taskType,
+                provider: taskType === 'inbox'
+                    ? (normalizeMountProviderInput(document.getElementById('monitor_inbox_provider')?.value || '') || '115')
+                    : '',
                 enabled: document.getElementById('monitor_enabled')?.checked !== false,
                 distribute_targets: taskType === 'inbox'
                     ? {
@@ -4184,9 +4214,8 @@
                 skip_by_dir_mtime: document.getElementById('monitor_skip_by_dir_mtime').checked,
                 strm_write_mode: document.getElementById('monitor_strm_write_mode')?.value || 'incremental',
                 sync_clean: document.getElementById('monitor_sync_clean').checked,
-                auto_scrape_on_new: document.getElementById('monitor_auto_scrape_on_new').checked,
                 quick_import_target: '',
-                auto_scrape_options: collectMonitorAutoScrapeOptions(),
+                auto_scrape_options: taskType === 'inbox' ? collectMonitorInboxOrganizeOptions() : {},
                 incremental: !document.getElementById('monitor_sync_clean').checked,
                 retries: parseInt(document.getElementById('monitor_retries').value || '3', 10) || 3,
                 list_delay_ms: document.getElementById('monitor_list_delay_ms').value === ''
@@ -4207,22 +4236,27 @@
             };
         }
 
-        function getMonitorMountPrefix() {
-            return normalizeRemotePathInput(getMountPrefixByProvider('115') || '/115');
+        function getMonitorMountPrefix(provider = '115') {
+            const providerKey = normalizeMountProviderInput(provider) || '115';
+            return normalizeRemotePathInput(getMountPrefixByProvider(providerKey) || `/${providerKey}`);
         }
 
         function updateMonitorScanPathHint(scanPath = '') {
             const hintEl = document.getElementById('monitor_scan_path_hint');
             if (!hintEl) return;
             const normalized = normalizeRemotePathInput(scanPath || '');
+            const providerKey = monitorFormTaskType() === 'inbox'
+                ? (normalizeMountProviderInput(document.getElementById('monitor_inbox_provider')?.value || '115') || '115')
+                : '115';
+            const providerLabel = getProviderLabel(providerKey);
             hintEl.textContent = normalized && normalized !== '/'
-                ? `当前保存路径：${normalized}。保存的是 115 路径字符串；即使 Cookie 暂时失效，路径也会保留，恢复后可继续使用。`
-                : '保存的是 115 路径字符串；即使 Cookie 暂时失效，路径也会保留，恢复后可继续使用。';
+                ? `当前保存路径：${normalized}。保存的是 ${providerLabel} 路径字符串；即使认证暂时失效，路径也会保留，恢复后可继续使用。`
+                : `保存的是 ${providerLabel} 路径字符串；即使认证暂时失效，路径也会保留，恢复后可继续使用。`;
         }
 
-        function getMonitorScanPathRelative(scanPath = '') {
+        function getMonitorScanPathRelative(scanPath = '', provider = '115') {
             const normalized = normalizeRemotePathInput(scanPath || '');
-            const mountPrefix = getMonitorMountPrefix();
+            const mountPrefix = getMonitorMountPrefix(provider);
             if (!normalized || normalized === '/' || normalized === mountPrefix) return '';
             if (normalized.startsWith(`${mountPrefix}/`)) {
                 return normalizeRelativePathInput(normalized.slice(mountPrefix.length));
@@ -4232,7 +4266,7 @@
 
         function buildMonitorScanPathFromTrail(trail = []) {
             const relativePath = buildResourceFolderDisplayPathFromTrail(trail);
-            return normalizeRemotePathInput(joinRelativePathInput(getMonitorMountPrefix(), relativePath));
+            return normalizeRemotePathInput(joinRelativePathInput(getMonitorMountPrefix(monitorFolderProvider), relativePath));
         }
 
         function renderMonitorFolderBreadcrumbs() {
@@ -4275,7 +4309,7 @@
                     : `当前目录下共有 ${folderCount} 个文件夹 / ${fileCount} 个文件，这里只展示文件夹，方便精确选择监控范围。`;
             }
             if (monitorFolderLoading && !monitorFolderEntries.length) {
-                container.innerHTML = renderEmpty('正在读取 115 目录...');
+                container.innerHTML = renderEmpty(`正在读取 ${getProviderLabel(monitorFolderProvider)} 目录...`);
                 return;
             }
             if (!monitorFolderEntries.length) {
@@ -4356,7 +4390,7 @@
             renderMonitorFolderList();
             try {
                 const result = await fetchResourceFolderData(targetCid, {
-                    provider: '115',
+                    provider: monitorFolderProvider,
                     foldersOnly: true,
                     forceRefresh,
                     offset: 0,
@@ -4400,7 +4434,7 @@
             renderMonitorFolderList();
             try {
                 const result = await fetchResourceFolderData(currentCid, {
-                    provider: '115',
+                    provider: monitorFolderProvider,
                     foldersOnly: true,
                     offset: monitorFolderNextOffset || 0,
                     limit: RESOURCE_FOLDER_PAGE_LIMIT
@@ -4426,7 +4460,7 @@
         }
 
         async function resolveMonitorFolderTrailByPath(scanPath = '') {
-            const relativePath = getMonitorScanPathRelative(scanPath);
+            const relativePath = getMonitorScanPathRelative(scanPath, monitorFolderProvider);
             const resolvedTrail = [{ id: '0', name: '根目录' }];
             if (!relativePath) return resolvedTrail;
 
@@ -4434,7 +4468,7 @@
             const parts = relativePath.split('/').filter(Boolean);
             for (const part of parts) {
                 const result = await fetchResourceFolderData(parentCid, {
-                    provider: '115',
+                    provider: monitorFolderProvider,
                     foldersOnly: true,
                 });
                 const entries = Array.isArray(result.entries) ? result.entries : [];
@@ -4448,16 +4482,35 @@
             return resolvedTrail;
         }
 
-        async function openMonitorFolderModal(targetInputId = 'monitor_scan_path') {
+        function resolveMonitorFolderProvider(targetInputId = '') {
+            // 扫描路径固定 115；接收夹路径 / 分发目标跟随接收夹任务所选的网盘。
+            if (String(targetInputId || '').startsWith('monitor_inbox')) {
+                return normalizeMountProviderInput(document.getElementById('monitor_inbox_provider')?.value || '115') || '115';
+            }
+            if (monitorFormTaskType() === 'inbox') {
+                return normalizeMountProviderInput(document.getElementById('monitor_inbox_provider')?.value || '115') || '115';
+            }
+            return '115';
+        }
+
+        async function openMonitorFolderModal(targetInputId = 'monitor_scan_path', provider = '') {
             monitorFolderPickerTargetId = String(targetInputId || 'monitor_scan_path');
-            const hasConfiguredCookie = !!(resourceState.cookie_configured || sensitiveConfigMeta.cookie_115);
-            if (!hasConfiguredCookie) {
-                showToast('请先在参数配置中填写 115 Cookie', {
+            const providerKey = normalizeMountProviderInput(provider) || resolveMonitorFolderProvider(monitorFolderPickerTargetId);
+            monitorFolderProvider = providerKey || '115';
+            const providerLabel = getProviderLabel(monitorFolderProvider);
+            if (!isProviderAuthConfigured(monitorFolderProvider)) {
+                showToast(`请先在参数配置中填写 ${providerLabel} 认证信息`, {
                     tone: 'warn',
                     duration: 2800,
                     placement: 'top-center'
                 });
                 return;
+            }
+            const titleEl = document.getElementById('monitor-folder-modal-title');
+            if (titleEl) titleEl.textContent = `选择 ${providerLabel} 文件夹`;
+            const summaryEl = document.getElementById('monitor-folder-summary');
+            if (summaryEl) {
+                summaryEl.textContent = `这里只展示 ${providerLabel} 当前目录下的子文件夹，选择后会直接保存成完整路径。`;
             }
             showLockedModal('monitor-folder-modal');
             renderMonitorFolderBreadcrumbs();
@@ -4507,7 +4560,7 @@
             const targetInputId = monitorFolderPickerTargetId || 'monitor_scan_path';
             const inputEl = document.getElementById(targetInputId);
             if (inputEl) inputEl.value = scanPath;
-            updateMonitorScanPathHint(scanPath);
+            if (targetInputId === 'monitor_scan_path') updateMonitorScanPathHint(scanPath);
             monitorFolderPickerTargetId = 'monitor_scan_path';
             closeMonitorFolderModal();
         }
@@ -4516,27 +4569,60 @@
             return String(document.getElementById('monitor_task_type')?.value || 'scan').trim() === 'inbox' ? 'inbox' : 'scan';
         }
 
-        function populateMonitorInboxTargetSelects(task = {}) {
+        function populateMonitorInboxProviderSelect(task = {}) {
+            const el = document.getElementById('monitor_inbox_provider');
+            if (!el) return;
+            const providers = (window.providerMeta || []).filter((p) => !!p?.supports_folder_browse);
+            const usable = providers.length ? providers : [{ name: '115', label: '115' }];
+            el.innerHTML = usable.map((p) => (
+                `<option value="${escapeHtml(String(p.name || ''))}">${escapeHtml(String(p.label || p.name || ''))}</option>`
+            )).join('');
+            const current = normalizeMountProviderInput(task?.provider || '') || '115';
+            if (!usable.some((p) => String(p.name || '') === current)) {
+                el.insertAdjacentHTML('afterbegin', `<option value="${escapeHtml(current)}">${escapeHtml(getProviderLabel(current))}</option>`);
+            }
+            el.value = current;
+        }
+
+        function populateMonitorInboxTargetFields(task = {}) {
             const targets = task && typeof task.distribute_targets === 'object' && task.distribute_targets
                 ? task.distribute_targets
                 : {};
-            const currentName = String(task?.name || '').trim();
-            const scanTasks = (monitorState.tasks || []).filter((item) => {
-                const type = String(item?.task_type || 'scan').trim();
-                return type !== 'inbox' && String(item?.name || '').trim() !== currentName;
-            });
             [['monitor_inbox_target_movie', 'movie'], ['monitor_inbox_target_tv', 'tv']].forEach(([elementId, key]) => {
                 const el = document.getElementById(elementId);
                 if (!el) return;
-                const selectedName = String(targets[key] || '').trim();
-                const options = ['<option value="">不分发</option>'].concat(scanTasks.map((item) => {
-                    const name = String(item?.name || '').trim();
-                    const suffix = item?.enabled === false ? '（已停用）' : '';
-                    return `<option value="${escapeHtml(name)}"${name === selectedName ? ' selected' : ''}>${escapeHtml(name)}${suffix}</option>`;
-                }));
-                el.innerHTML = options.join('');
-                el.value = selectedName;
+                el.value = String(targets[key] || '').trim();
             });
+        }
+
+        function syncMonitorInboxProviderUI() {
+            if (monitorFormTaskType() !== 'inbox') return;
+            const provider = normalizeMountProviderInput(document.getElementById('monitor_inbox_provider')?.value || '') || '115';
+            const mountPrefix = getMonitorMountPrefix(provider);
+            const pathInput = document.getElementById('monitor_scan_path');
+            if (pathInput) {
+                pathInput.placeholder = `${mountPrefix}/接收`;
+                const currentPath = normalizeRemotePathInput(pathInput.value || '');
+                if (currentPath && currentPath !== '/' && currentPath !== mountPrefix && !currentPath.startsWith(`${mountPrefix}/`)) {
+                    pathInput.value = '';
+                }
+            }
+            [['monitor_inbox_target_movie', 'movie'], ['monitor_inbox_target_tv', 'tv']].forEach(([elementId]) => {
+                const el = document.getElementById(elementId);
+                if (!el) return;
+                const currentValue = normalizeRemotePathInput(String(el.value || '').trim());
+                if (currentValue && currentValue !== '/' && currentValue !== mountPrefix && !currentValue.startsWith(`${mountPrefix}/`)) {
+                    el.value = '';
+                }
+            });
+            updateMonitorScanPathHint(pathInput?.value || '');
+        }
+
+        function openMonitorInboxTargetFolder(kind) {
+            const key = String(kind || '').trim() === 'tv' ? 'tv' : 'movie';
+            const targetInputId = key === 'tv' ? 'monitor_inbox_target_tv' : 'monitor_inbox_target_movie';
+            const provider = normalizeMountProviderInput(document.getElementById('monitor_inbox_provider')?.value || '') || '115';
+            void openMonitorFolderModal(targetInputId, provider);
         }
 
         function applyMonitorTaskTypeUI() {
@@ -4547,7 +4633,10 @@
             document.getElementById('monitor-inbox-path-label')?.classList.toggle('hidden', !isInbox);
             const pathInput = document.getElementById('monitor_scan_path');
             if (pathInput) {
-                pathInput.placeholder = isInbox ? '/115/接收' : '/115/自存影视/115自存电视剧';
+                const inboxPrefix = getMonitorMountPrefix(
+                    normalizeMountProviderInput(document.getElementById('monitor_inbox_provider')?.value || '') || '115'
+                );
+                pathInput.placeholder = isInbox ? `${inboxPrefix}/接收` : '/115/自存影视/115自存电视剧';
             }
             renderMonitorWebhookUrl();
             refreshWebhookHint();
@@ -4604,8 +4693,7 @@
             document.getElementById('monitor_skip_by_dir_mtime').checked = false;
             document.getElementById('monitor_strm_write_mode').value = 'incremental';
             document.getElementById('monitor_sync_clean').checked = true;
-            document.getElementById('monitor_auto_scrape_on_new').checked = false;
-            resetMonitorAutoScrapeOptions();
+            resetMonitorInboxOrganizeOptions();
             document.getElementById('monitor_retries').value = 3;
             document.getElementById('monitor_list_delay_ms').value = 250;
             document.getElementById('monitor_min_file_size_mb').value = 0;
@@ -4614,7 +4702,8 @@
             document.getElementById('monitor_inbox_idle_seconds').value = 120;
             document.getElementById('monitor_inbox_max_items_per_run').value = 100;
             document.getElementById('monitor_inbox_batch_pause_seconds').value = 5;
-            populateMonitorInboxTargetSelects({});
+            populateMonitorInboxTargetFields({});
+            populateMonitorInboxProviderSelect({});
             syncMonitorTaskTypeOptions();
             applyMonitorTaskTypeUI();
         }
@@ -4692,11 +4781,11 @@
             const items = isInbox
                 ? [
                     `webhook 地址：IP:容器端口/webhook/${escapeHtml(name)}（任务名用于绑定这个接收夹任务）`,
-                    '接收夹是分类前的中转文件夹，也是可选的便捷入口：先统一落这里，再按识别结果归到电影 / 电视剧分发目标的目录，不用每次保存前挑分类；不用它也能照旧把 savepath 填到分类监控任务的目录',
+                    '接收夹是分类前的中转文件夹，也是可选的便捷入口：先统一落这里，再按识别结果归到同盘的电影 / 电视剧目标文件夹，不用每次保存前挑分类；不用它也能照旧把 savepath 填到分类监控任务的目录',
                     '只接磁力：magnet 或 link_url；分享转存落到接收夹后同样会自动整理分发',
-                    'savepath 填 115 根目录下的相对路径（例如 接收 或 接收/子目录）；留空默认落到接收夹',
-                    '面板里的 /115/接收 这类路径照抄也能识别，推荐只写根目录相对路径',
-                    '整理规则沿用分发目标任务的自动整理选项；识别不准的留在接收夹并写明原因',
+                    'savepath 填所选网盘根目录下的相对路径（例如 接收 或 接收/子目录）；留空默认落到接收夹',
+                    '面板里的 /115/接收 这类带挂载前缀的路径照抄也能识别，推荐只写根目录相对路径',
+                    '整理规则用接收夹自己的整理选项；只有 115 上、且目标落在某个目录同步任务扫描范围内时才会刷新 STRM；识别不准的留在接收夹并写明原因',
                     '签名校验（可选，与普通监控任务共用同一个全局密钥）：X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign 或 X-Webhook-Token',
                 ]
                 : [
@@ -4733,13 +4822,21 @@
                 return showToast(isInbox ? '接收夹路径不能为空' : '扫描路径不能为空', { tone: 'warn', duration: 2600, placement: 'top-center' });
             }
             if (!isInbox && !task.target_path) return showToast('目标路径不能为空', { tone: 'warn', duration: 2600, placement: 'top-center' });
-            const mountPrefix = getMonitorMountPrefix();
+            const mountPrefix = getMonitorMountPrefix(isInbox ? task.provider : '115');
             if (task.scan_path !== mountPrefix && !task.scan_path.startsWith(`${mountPrefix}/`)) {
                 return showToast(`${isInbox ? '接收夹路径' : '扫描路径'}必须位于 ${mountPrefix} 下`, { tone: 'warn', duration: 3200, placement: 'top-center' });
             }
             if (isInbox) {
                 if (!task.distribute_targets.movie && !task.distribute_targets.tv) {
                     return showToast('接收夹任务至少要指定一个电影 / 电视剧分发目标', { tone: 'warn', duration: 3200, placement: 'top-center' });
+                }
+                const offMount = ['movie', 'tv'].find((key) => {
+                    const target = String(task.distribute_targets[key] || '').trim();
+                    if (!target) return false;
+                    return target !== mountPrefix && !target.startsWith(`${mountPrefix}/`);
+                });
+                if (offMount) {
+                    return showToast(`分发目标必须和接收夹在同一个网盘（${mountPrefix} 下）`, { tone: 'warn', duration: 3400, placement: 'top-center' });
                 }
                 const otherInbox = (monitorState.tasks || []).find((item) => (
                     item.name !== editingMonitorName && String(item.task_type || 'scan') === 'inbox'
@@ -4790,9 +4887,10 @@
             document.getElementById('monitor_sync_clean').checked = Object.prototype.hasOwnProperty.call(task, 'sync_clean')
                 ? !!task.sync_clean
                 : !task.incremental;
-            document.getElementById('monitor_auto_scrape_on_new').checked = !!task.auto_scrape_on_new;
-            populateMonitorInboxTargetSelects(task);
-            applyMonitorAutoScrapeOptions(task.auto_scrape_options);
+            populateMonitorInboxTargetFields(task);
+            populateMonitorInboxProviderSelect(task);
+            applyMonitorInboxOrganizeOptions(task.auto_scrape_options);
+            syncMonitorInboxProviderUI();
             document.getElementById('monitor_retries').value = task.retries ?? 3;
             document.getElementById('monitor_list_delay_ms').value = task.list_delay_ms ?? 250;
             document.getElementById('monitor_min_file_size_mb').value = task.min_file_size_mb ?? 0;
@@ -4985,13 +5083,16 @@
 
         function renderMonitorTasks() {
             const container = document.getElementById('monitor-task-list');
+            // 页面分区：上部只渲染接收夹（inbox），下部只渲染目录同步（scan）。
+            const inboxContainer = document.getElementById('monitor-inbox-task-list');
             const tasks = monitorState.tasks || [];
             if (!tasks.length) {
                 container.innerHTML = `<div class="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">还没有文件夹监控任务，点击“新增任务”即可创建。</div>`;
+                if (inboxContainer) inboxContainer.innerHTML = '';
                 return;
             }
 
-            container.innerHTML = tasks.map(task => {
+            const renderTaskCard = (task) => {
                 const taskName = String(task?.name || '').trim();
                 const taskKey = encodeURIComponent(taskName);
                 const isInboxTask = String(task?.task_type || 'scan') === 'inbox';
@@ -5110,7 +5211,15 @@
                         ${introExpanded ? `<div class="mt-3 text-xs text-slate-300 leading-6 rounded-xl border border-slate-700/90 bg-slate-950/45 px-3 py-2">${escapeHtml(introText)}</div>` : ''}
                     </div>
                 `;
-            }).join('');
+            };
+            const inboxTasks = tasks.filter((task) => String(task?.task_type || 'scan') === 'inbox');
+            const scanTasks = tasks.filter((task) => String(task?.task_type || 'scan') !== 'inbox');
+            const inboxHtml = inboxTasks.map(renderTaskCard).join('');
+            const scanHtml = scanTasks.map(renderTaskCard).join('');
+            container.innerHTML = scanHtml || `<div class="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">还没有文件夹监控任务，点击“新增任务”即可创建。</div>`;
+            if (inboxContainer) {
+                inboxContainer.innerHTML = inboxHtml || `<div class="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">接收夹任务未加载，请刷新页面或检查配置。</div>`;
+            }
         }
 
         const monitorRunStatusLabels = window.MonitorRunView.statuses;

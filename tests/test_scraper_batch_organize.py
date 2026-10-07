@@ -2745,314 +2745,78 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         from app.core import normalize_task
 
         base = {"name": "影视监控", "scan_path": "/115/一级", "target_path": "媒体库"}
-        self.assertFalse(normalize_task(base)["auto_scrape_on_new"])
-        self.assertTrue(normalize_task({**base, "auto_scrape_on_new": True})["auto_scrape_on_new"])
-        self.assertEqual(normalize_task(base)["auto_scrape_options"], {})
+        scan = normalize_task(base)
+        # 扫描任务的「新增资源自动整理」已废弃：旧开关与选项不再归一化输出，直接丢弃。
+        self.assertNotIn("auto_scrape_on_new", scan)
+        self.assertEqual(scan["auto_scrape_options"], {})
         self.assertEqual(
-            normalize_task({**base, "auto_scrape_options": {"file_name_mode": "keep"}})["auto_scrape_options"],
-            {"file_name_mode": "keep"},
+            normalize_task(
+                {**base, "auto_scrape_on_new": True, "auto_scrape_options": {"file_name_mode": "keep"}}
+            )["auto_scrape_options"],
+            {},
         )
+        # 接收夹任务自己的整理选项要保留（接收夹整理是新的入口）。
+        inbox = normalize_task(
+            {
+                "name": "接收",
+                "task_type": "inbox",
+                "scan_path": "/115/接收",
+                "auto_scrape_options": {"file_name_mode": "keep"},
+            }
+        )
+        self.assertEqual(inbox["task_type"], "inbox")
+        self.assertEqual(inbox["auto_scrape_options"], {"file_name_mode": "keep"})
         self.assertEqual(
-            normalize_task({**base, "auto_scrape_options": "not-a-dict"})["auto_scrape_options"],
+            normalize_task(
+                {"name": "接收", "task_type": "inbox", "auto_scrape_options": "not-a-dict"}
+            )["auto_scrape_options"],
             {},
         )
 
-    def test_auto_scrape_uses_task_auto_scrape_options(self):
-        cfg = self._cfg()
-        items = [
-            {
-                "id": "f1",
-                "fid": "f1",
-                "name": "逐玉.S01E01.mkv",
-                "size": 1024,
-                "remote_rel": "一级/逐玉.S01E01.mkv",
-                "local_rel": "媒体库/一级/逐玉.S01E01.mkv",
-            }
-        ]
-        scan_item = {
-            "item_index": 1,
-            "name": "逐玉",
-            "entry": {
-                "id": "f1",
-                "name": "逐玉.S01E01.mkv",
-                "is_dir": False,
-                "parent_id": "cid1",
-                "parent_path": "一级",
-                "path": "一级/逐玉.S01E01.mkv",
-            },
-            "files": [{"id": "f1"}],
-        }
-        captured_options = []
-
-        def fake_plan(payload):
-            captured_options.append(dict(payload.get("options", {})))
-            return {"ready_count": 1}
-
-        with (
-            patch.object(scraper, "_walk_existing_folder", return_value=("cid1", True)),
-            patch.object(scraper, "scan_scraper_batch_items", return_value={"items": [scan_item]}),
-            patch.object(
-                scraper,
-                "identify_scraper_batch_items",
-                return_value={
-                    "results": [
-                        {
-                            "item_index": 1,
-                            "status": "auto",
-                            "auto_pick": {"id": 1, "media_type": "tv", "title": "逐玉", "year": "2026"},
-                        }
-                    ]
-                },
-            ),
-            patch.object(scraper, "build_scraper_batch_plan", side_effect=fake_plan),
-            patch.object(scraper, "create_scraper_job_from_plan", return_value={"job_id": 9}),
-            patch.object(scraper, "run_scraper_job"),
-        ):
-            message = monitor._auto_scrape_new_media_items(
-                cfg,
-                self._task(auto_scrape_options={"file_name_mode": "keep", "delete_ad_files": True}),
-                items,
-            )
-        self.assertIn("已自动整理 1 项", message)
-        self.assertEqual(captured_options[0]["file_name_mode"], "keep")
-        self.assertEqual(captured_options[0]["delete_ad_files"], True)
-
-        captured_options.clear()
-        with (
-            patch.object(scraper, "_walk_existing_folder", return_value=("cid1", True)),
-            patch.object(scraper, "scan_scraper_batch_items", return_value={"items": [scan_item]}),
-            patch.object(
-                scraper,
-                "identify_scraper_batch_items",
-                return_value={
-                    "results": [
-                        {
-                            "item_index": 1,
-                            "status": "auto",
-                            "auto_pick": {"id": 1, "media_type": "tv", "title": "逐玉", "year": "2026"},
-                        }
-                    ]
-                },
-            ),
-            patch.object(scraper, "build_scraper_batch_plan", side_effect=fake_plan),
-            patch.object(scraper, "create_scraper_job_from_plan", return_value={"job_id": 9}),
-            patch.object(scraper, "run_scraper_job"),
-        ):
-            monitor._auto_scrape_new_media_items(cfg, self._task(), items)
-        self.assertEqual(captured_options[0]["title_language"], "zh")
-        self.assertEqual(captured_options[0]["delete_ad_files"], False)
-        self.assertNotIn("file_name_mode", captured_options[0])
-
-    def test_auto_scrape_records_per_action_events(self):
-        """自动整理要把每条重命名/移动写进运行记录，概览的过程时间线才有内容。"""
-        from app.services import monitor_runs
-
-        cfg = self._cfg()
-        run_id = monitor_runs.create_run(run_kind="scan", task_name="影视监控", source="manual")
-        items = [
-            {
-                "id": "f1",
-                "fid": "f1",
-                "name": "逐玉.S01E01.mkv",
-                "size": 1024,
-                "remote_rel": "一级/逐玉.S01E01.mkv",
-                "local_rel": "媒体库/一级/逐玉.S01E01.mkv",
-            }
-        ]
-        scan_item = {
-            "item_index": 1,
-            "name": "逐玉",
-            "entry": {
-                "id": "f1",
-                "name": "逐玉.S01E01.mkv",
-                "is_dir": False,
-                "parent_id": "cid1",
-                "parent_path": "一级",
-                "path": "一级/逐玉.S01E01.mkv",
-            },
-            "files": [{"id": "f1"}],
-        }
-        job_state = {
-            "jobs": [
-                {
-                    "id": 9,
-                    "status": "completed",
-                    "succeeded_actions": 1,
-                    "failed_actions": 0,
-                    "actions": [
-                        {
-                            "id": 1,
-                            "job_id": 9,
-                            "status": "completed",
-                            "is_dir": False,
-                            "old_parent_id": "cid1",
-                            "new_parent_id": "cid2",
-                            "old_name": "逐玉.S01E01.mkv",
-                            "new_name": "逐玉 (2026) - S01E01.mkv",
-                            "old_path": "Media/一级/逐玉.S01E01.mkv",
-                            "new_path": "媒体库/逐玉 (2026)/Season 01/逐玉 (2026) - S01E01.mkv",
-                        }
-                    ],
-                }
-            ]
-        }
-        with (
-            patch.object(scraper, "_walk_existing_folder", return_value=("cid1", True)),
-            patch.object(scraper, "scan_scraper_batch_items", return_value={"items": [scan_item]}),
-            patch.object(
-                scraper,
-                "identify_scraper_batch_items",
-                return_value={
-                    "results": [
-                        {
-                            "item_index": 1,
-                            "status": "auto",
-                            "auto_pick": {"id": 1, "media_type": "tv", "title": "逐玉", "year": "2026"},
-                        }
-                    ]
-                },
-            ),
-            patch.object(scraper, "build_scraper_batch_plan", return_value={"ready_count": 1}),
-            patch.object(scraper, "create_scraper_job_from_plan", return_value={"job_id": 9}),
-            patch.object(scraper, "run_scraper_job"),
-            patch.object(scraper, "get_scraper_jobs_state", return_value=job_state),
-        ):
-            message = monitor._auto_scrape_new_media_items(cfg, self._task(), items, run_id=run_id)
-
-        self.assertIn("已自动整理 1 项", message)
-        detail = monitor_runs.get_run_detail(run_id)
-        organize_events = [
-            event
-            for event in detail["events"]
-            if event.get("category") == "remote" and event.get("operation") in ("move", "rename")
-        ]
-        self.assertEqual(len(organize_events), 1)
-        self.assertEqual(
-            organize_events[0]["detail"]["new_path"],
-            "媒体库/逐玉 (2026)/Season 01/逐玉 (2026) - S01E01.mkv",
-        )
-        self.assertEqual(organize_events[0]["detail"]["entry_type"], "folder")
-
-    def test_auto_scrape_helper_skips_non_auto_and_runs_auto(self):
-        cfg = self._cfg()
-        items = [
-            {
-                "id": "f1",
-                "fid": "f1",
-                "name": "逐玉.S01E01.mkv",
-                "size": 1024,
-                "remote_rel": "一级/逐玉.S01E01.mkv",
-                "local_rel": "媒体库/一级/逐玉.S01E01.mkv",
-            }
-        ]
-        scan_item = {
-            "item_index": 1,
-            "name": "逐玉",
-            "entry": {
-                "id": "f1",
-                "name": "逐玉.S01E01.mkv",
-                "is_dir": False,
-                "parent_id": "cid1",
-                "parent_path": "一级",
-                "path": "一级/逐玉.S01E01.mkv",
-            },
-            "files": [{"id": "f1"}],
-        }
-        walk_calls = []
-        scan_entries_calls = []
-
-        def fake_walk(provider, cookie, base_cid, folder_path, **kwargs):
-            walk_calls.append(folder_path)
-            return ("cid1", True)
-
-        def fake_scan(provider, base_cid, base_path, entries, **kwargs):
-            scan_entries_calls.append(list(entries))
-            return {"items": [scan_item]}
-
-        with (
-            patch.object(scraper, "_walk_existing_folder", side_effect=fake_walk),
-            patch.object(scraper, "scan_scraper_batch_items", side_effect=fake_scan),
-            patch.object(
-                scraper,
-                "identify_scraper_batch_items",
-                return_value={"results": [{"item_index": 1, "status": "manual", "auto_pick": None}]},
-            ),
-            patch.object(scraper, "build_scraper_batch_plan") as plan_mock,
-            patch.object(scraper, "create_scraper_job_from_plan") as job_mock,
-            patch.object(scraper, "run_scraper_job") as run_mock,
-        ):
-            message = monitor._auto_scrape_new_media_items(cfg, self._task(), items)
-        self.assertIn("无高置信度", message)
-        plan_mock.assert_not_called()
-        job_mock.assert_not_called()
-        run_mock.assert_not_called()
-        self.assertEqual(walk_calls, ["Media/一级", "Media"])
-        self.assertTrue(scan_entries_calls)
-        folder_entry = scan_entries_calls[0][0]
-        self.assertTrue(folder_entry["is_dir"])
-        self.assertEqual(folder_entry["name"], "一级")
-        self.assertEqual(folder_entry["path"], "Media/一级")
-        self.assertEqual(folder_entry["parent_id"], "cid1")
-
-        with (
-            patch.object(scraper, "_walk_existing_folder", return_value=("cid1", True)),
-            patch.object(scraper, "scan_scraper_batch_items", return_value={"items": [scan_item]}),
-            patch.object(
-                scraper,
-                "identify_scraper_batch_items",
-                return_value={
-                    "results": [
-                        {
-                            "item_index": 1,
-                            "status": "auto",
-                            "auto_pick": {"id": 1, "media_type": "tv", "title": "逐玉", "year": "2026"},
-                        }
-                    ]
-                },
-            ),
-            patch.object(scraper, "build_scraper_batch_plan", return_value={"ready_count": 2}),
-            patch.object(scraper, "create_scraper_job_from_plan", return_value={"job_id": 9}),
-            patch.object(scraper, "run_scraper_job") as run_mock_auto,
-        ):
-            message = monitor._auto_scrape_new_media_items(cfg, self._task(), items)
-        self.assertIn("已自动整理 2 项", message)
-        run_mock_auto.assert_called_once_with(9)
-
-    def test_monitor_task_modal_has_auto_scrape_toggle(self):
+    def test_monitor_modal_moves_organize_ui_to_inbox(self):
+        """监控表单不再有「新增资源自动整理」；整理选项迁到接收夹卡片。"""
         html = (ROOT / "templates/partials/modals/monitor.html").read_text(encoding="utf-8")
-        self.assertIn('id="monitor_auto_scrape_on_new"', html)
-        self.assertIn('id="monitor-auto-scrape-options"', html)
-        self.assertIn('id="monitor_asc_file_name_mode"', html)
-        self.assertIn('id="monitor_asc_rename_folders"', html)
-        self.assertIn('id="monitor_asc_season_subfolder"', html)
-        self.assertIn('id="monitor_asc_include_tmdb_id"', html)
-        self.assertIn('id="monitor_asc_delete_ad_files"', html)
-        self.assertIn('data-monitor-asc-tag="audio"', html)
+        # 扫描任务的旧自动整理开关与选项整块删除。
+        self.assertNotIn('id="monitor_auto_scrape_on_new"', html)
+        self.assertNotIn('id="monitor-auto-scrape-options"', html)
+        # 接收夹卡片带上了自己的整理选项与网盘 / 分发目标字段。
+        self.assertIn('id="monitor_inbox_provider"', html)
+        self.assertIn('id="monitor_inbox_target_movie"', html)
+        self.assertIn('id="monitor_inbox_target_tv"', html)
+        for option_id in (
+            "monitor_inbox_asc_file_name_mode",
+            "monitor_inbox_asc_rename_folders",
+            "monitor_inbox_asc_season_subfolder",
+            "monitor_inbox_asc_include_tmdb_id",
+            "monitor_inbox_asc_delete_ad_files",
+        ):
+            self.assertIn(f'id="{option_id}"', html)
         index_source = (ROOT / "static/js/index.js").read_text(encoding="utf-8")
-        self.assertIn("auto_scrape_on_new: document.getElementById('monitor_auto_scrape_on_new').checked", index_source)
-        self.assertIn("auto_scrape_options: collectMonitorAutoScrapeOptions()", index_source)
-        self.assertIn("monitor_auto_scrape_on_new').checked = !!task.auto_scrape_on_new", index_source)
-        self.assertIn("applyMonitorAutoScrapeOptions(task.auto_scrape_options)", index_source)
-        self.assertIn("function syncMonitorAutoScrapeOptions(", index_source)
-        self.assertIn("function collectMonitorAutoScrapeOptions(", index_source)
+        self.assertNotIn("collectMonitorAutoScrapeOptions", index_source)
+        self.assertNotIn("applyMonitorAutoScrapeOptions", index_source)
+        self.assertIn("function syncMonitorInboxOrganizeUI(", index_source)
+        self.assertIn("function collectMonitorInboxOrganizeOptions(", index_source)
+        self.assertIn("function applyMonitorInboxOrganizeOptions(", index_source)
+        self.assertIn("auto_scrape_options: taskType === 'inbox' ? collectMonitorInboxOrganizeOptions() : {}", index_source)
 
-    def test_monitor_auto_scrape_option_groups_share_naming_style(self):
-        """监控任务的自动整理选项复用批量整理的分组样式，分类分界同样明显。"""
+    def test_monitor_inbox_organize_option_groups_share_naming_style(self):
+        """接收夹整理选项复用批量整理的分组样式，分类分界同样明显。"""
         html = (ROOT / "templates/partials/modals/monitor.html").read_text(encoding="utf-8")
         self.assertEqual(html.count('class="organize-option-group"'), 3)
         for title in ("文件夹", "文件命名", "文件清理"):
             self.assertIn(f'<div class="organize-option-group-title">{title}</div>', html)
         # 旧的浅灰小标题已被分组块取代，外层不再套第二层边框。
         self.assertNotIn("text-[11px] font-bold text-slate-500 uppercase tracking-wide", html)
-        self.assertIn('id="monitor-auto-scrape-options" class="hidden space-y-3"', html)
+        self.assertIn('id="monitor-inbox-fields" class="hidden space-y-4"', html)
         for option_id in (
-            "monitor_asc_rename_folders",
-            "monitor_asc_season_subfolder",
-            "monitor_asc_include_tmdb_id",
-            "monitor_asc_file_name_mode",
-            "monitor_asc_delete_ad_files",
+            "monitor_inbox_asc_rename_folders",
+            "monitor_inbox_asc_season_subfolder",
+            "monitor_inbox_asc_include_tmdb_id",
+            "monitor_inbox_asc_file_name_mode",
+            "monitor_inbox_asc_delete_ad_files",
         ):
             self.assertIn(f'id="{option_id}"', html)
+        self.assertIn('data-monitor-inbox-asc-tag="audio"', html)
 
     def test_manual_required_scopes_include_path_details(self):
         from app.services.monitor_changes import get_manual_required_monitor_scopes

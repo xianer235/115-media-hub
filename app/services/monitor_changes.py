@@ -1514,54 +1514,6 @@ def _build_committed_change_detail(
     return {"kind": "file", "changes": changes} if changes else {}
 
 
-def _event_added_media_items(
-    cfg: Dict[str, Any],
-    task: Dict[str, Any],
-    plan: Dict[str, Any],
-) -> List[Dict[str, Any]]:
-    """收集变更同步实际新增的媒体文件，供自动刮削复用（不要求真实 fid，路径占位即可）。"""
-    if not plan.get("add_new"):
-        return []
-    if not bool(task.get("auto_scrape_on_new", False)):
-        return []
-    if bool(plan.get("is_dir", False)):
-        sources = plan.get("indexed_files", [])
-    else:
-        provider_path = str(plan.get("new_path", "") or "")
-        sources = (
-            [
-                {
-                    "target_path": provider_path,
-                    "size": _nonnegative_int(plan.get("size", 0)),
-                }
-            ]
-            if provider_path
-            else []
-        )
-    items: List[Dict[str, Any]] = []
-    seen: Set[str] = set()
-    for source in sources if isinstance(sources, list) else []:
-        provider_path = str(source.get("target_path", "") or "")
-        if not provider_path:
-            continue
-        context = _task_path_context(cfg, task, provider_path)
-        if not context:
-            continue
-        remote_rel = str(context.get("remote_rel_path", "") or "")
-        if not remote_rel or remote_rel in seen:
-            continue
-        seen.add(remote_rel)
-        items.append(
-            {
-                "fid": provider_path,
-                "name": os.path.basename(provider_path.replace("\\", "/")),
-                "size": _nonnegative_int(source.get("size", 0)),
-                "remote_rel": remote_rel,
-            }
-        )
-    return items
-
-
 def _event_strm_path_pairs(
     cfg: Dict[str, Any],
     task: Dict[str, Any],
@@ -1694,11 +1646,6 @@ async def _apply_precise_event(
 
     _sync_event_baselines(conn, cfg, task, plan)
     stats["change_detail"] = _build_committed_change_detail(plan, stats)
-    stats["new_media_items"] = (
-        _event_added_media_items(cfg, task, plan)
-        if int(stats.get("generated", 0) or 0) > 0
-        else []
-    )
     stats["manual_required_path"] = (
         str(plan.get("new_path", "") or "")
         if int(stats.get("manual_required", 0) or 0) > 0
@@ -1891,11 +1838,6 @@ async def _reconcile_event(
         stats,
         effective_new_context=add_context,
     )
-    stats["new_media_items"] = (
-        _event_added_media_items(cfg, task, effective_plan)
-        if int(stats.get("generated", 0) or 0) > 0
-        else []
-    )
     stats["manual_required_path"] = (
         str(effective_plan.get("new_path", "") or plan.get("new_path", "") or "")
         if int(stats.get("manual_required", 0) or 0) > 0
@@ -1935,20 +1877,6 @@ def _load_ready_events(
         tuple(values),
     )
     return [sqlite_row_to_dict(row) for row in cursor.fetchall()]
-
-
-def _collect_event_new_media_items(event: Dict[str, Any], stats: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """只把「非刮削任务自己造成」的新增媒体计入自动刮削候选。
-
-    刮削任务（含接收夹快捷导入搬进去的条目）产生的变更 source_action 以 ``scraper-job:`` 开头，
-    这类条目已经被整理过，不能再被目标监控任务二次自动刮削。
-    """
-    new_media_items = (stats or {}).get("new_media_items", [])
-    if not isinstance(new_media_items, list):
-        return []
-    if str((event or {}).get("source_action", "") or "").strip().startswith("scraper-job:"):
-        return []
-    return new_media_items
 
 
 def _is_one_shot_scraper_sync(event: Dict[str, Any]) -> bool:
@@ -1991,7 +1919,6 @@ async def process_monitor_change_events(
         "discarded": 0,
         "errors": [],
         "change_details": [],
-        "new_media_items": [],
         "manual_required_paths": [],
         "dispatched_item_paths": [],
         "source_actions": [],
@@ -2093,7 +2020,6 @@ async def process_monitor_change_events(
                     else:
                         strm_state[path] = "generated"
                         result["generated"] += 1
-                result["new_media_items"].extend(_collect_event_new_media_items(event, stats))
                 manual_path = str(stats.get("manual_required_path", "") or "").strip()
                 if manual_path and manual_path not in result["manual_required_paths"]:
                     result["manual_required_paths"].append(manual_path)

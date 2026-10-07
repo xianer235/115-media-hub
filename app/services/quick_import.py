@@ -5,8 +5,9 @@
 - 接收夹就是 ``monitor_tasks`` 里的一个 ``task_type='inbox'`` 任务，和扫描任务共用同一套
   任务 / 路径 / webhook 口径（旧版的 ``quick_import_enabled`` / ``quick_import_inbox_path``
   会在 ``normalize_config`` 里迁移成这个任务）；
-- 分发目标写在该任务的 ``distribute_targets``（movie / tv → 扫描任务名）；
-- 整理选项一律取自目标监控任务的 ``auto_scrape_options``，避免两边规则不一致来回改；
+- 分发目标写在该任务的 ``distribute_targets``（movie / tv → 远程文件夹路径，带网盘挂载前缀）；
+- 接收夹可以挂在任意网盘（任务上的 ``provider``，默认 115），整理选项取自任务自己的
+  ``auto_scrape_options``；
 - 搬运带 ``scraper-job:`` 来源标记，复用监控侧既有守卫——搬到监控目录后只生成 STRM，
   不会再被目标监控任务自动刮削一遍，同一条目一生只整理一次。
 """
@@ -36,7 +37,7 @@ from .monitor_runs import start_run as start_monitor_run
 from .monitor_runs import update_run as update_monitor_run
 
 
-QUICK_IMPORT_PROVIDER = "115"
+QUICK_IMPORT_DEFAULT_PROVIDER = "115"
 QUICK_IMPORT_TARGET_KEYS = ("movie", "tv")
 QUICK_IMPORT_TARGET_LABELS = {"movie": "电影", "tv": "电视剧"}
 QUICK_IMPORT_SOURCE_ACTION_PREFIX = "quick-import"
@@ -212,6 +213,22 @@ def _inbox_remote_path(cfg: Dict[str, Any]) -> str:
     return "" if remote == "/" else remote
 
 
+def _inbox_provider(cfg: Dict[str, Any]) -> str:
+    """接收夹所在网盘：任务上的 ``provider``，缺省回退 115。"""
+    task = get_inbox_task(cfg)
+    provider = normalize_mount_provider(task.get("provider", "")) if isinstance(task, dict) else ""
+    return provider or QUICK_IMPORT_DEFAULT_PROVIDER
+
+
+def _inbox_scrape_options(inbox: Dict[str, Any]) -> Dict[str, Any]:
+    """接收夹整理选项：取自接收夹任务自己，缺省按中文标题 + 不删广告文件起步。"""
+    options: Dict[str, Any] = {"title_language": "zh", "delete_ad_files": False}
+    raw_options = inbox.get("auto_scrape_options") if isinstance(inbox, dict) else None
+    if isinstance(raw_options, dict) and raw_options:
+        options.update(_normalize_scraper_batch_preferences(raw_options))
+    return options
+
+
 def _inbox_rel_path(cfg: Dict[str, Any]) -> str:
     remote = _inbox_remote_path(cfg)
     if not remote:
@@ -220,14 +237,14 @@ def _inbox_rel_path(cfg: Dict[str, Any]) -> str:
         _provider, relative = resolve_provider_relative_path(
             cfg,
             remote,
-            expected_provider=QUICK_IMPORT_PROVIDER,
+            expected_provider=_inbox_provider(cfg),
         )
     except Exception:
         return ""
     return normalize_relative_path(relative)
 
 
-def _task_rel_path(cfg: Dict[str, Any], scan_path: Any) -> str:
+def _task_rel_path(cfg: Dict[str, Any], scan_path: Any, provider: str = "") -> str:
     remote = normalize_remote_path(str(scan_path or "").strip())
     if not remote:
         return ""
@@ -235,7 +252,7 @@ def _task_rel_path(cfg: Dict[str, Any], scan_path: Any) -> str:
         _provider, relative = resolve_provider_relative_path(
             cfg,
             remote,
-            expected_provider=QUICK_IMPORT_PROVIDER,
+            expected_provider=provider or _inbox_provider(cfg),
         )
     except Exception:
         return normalize_relative_path(remote.lstrip("/"))
@@ -244,33 +261,26 @@ def _task_rel_path(cfg: Dict[str, Any], scan_path: Any) -> str:
 
 def build_quick_import_config(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """接收夹配置：接收夹本身是 ``monitor_tasks`` 里的一个 inbox 任务，分发目标写在它的
-    ``distribute_targets`` 上，和扫描任务共用同一套任务/路径/webhook 口径。"""
+    ``distribute_targets`` 上（同盘远程文件夹路径），整理选项也取自它自己。"""
     active_cfg = cfg if isinstance(cfg, dict) else get_config()
     inbox = get_inbox_task(active_cfg)
+    provider = _inbox_provider(active_cfg)
+    inbox_options = _inbox_scrape_options(inbox)
     targets: Dict[str, Dict[str, Any]] = {key: {} for key in QUICK_IMPORT_TARGET_KEYS}
-    tasks_by_name = {
-        str(task.get("name", "") or "").strip(): task
-        for task in active_cfg.get("monitor_tasks", []) or []
-        if isinstance(task, dict) and str(task.get("name", "") or "").strip()
-    }
     distribute_targets = (
         inbox.get("distribute_targets") if isinstance(inbox.get("distribute_targets"), dict) else {}
     )
     for key in QUICK_IMPORT_TARGET_KEYS:
-        task = tasks_by_name.get(str(distribute_targets.get(key, "") or "").strip())
-        if not task:
+        remote = normalize_remote_path(str(distribute_targets.get(key, "") or "").strip())
+        if not remote or remote == "/":
             continue
-        scan_path = normalize_remote_path(str(task.get("scan_path", "") or "").strip())
-        rel_path = _task_rel_path(active_cfg, scan_path)
-        if not scan_path or not rel_path:
+        rel_path = _task_rel_path(active_cfg, remote, provider)
+        if not rel_path:
             continue
         targets[key] = {
-            "task_name": str(task.get("name", "") or "").strip(),
-            "scan_path": scan_path,
+            "scan_path": remote,
             "scan_rel": rel_path,
-            "auto_scrape_options": (
-                task.get("auto_scrape_options") if isinstance(task.get("auto_scrape_options"), dict) else {}
-            ),
+            "auto_scrape_options": dict(inbox_options),
         }
     raw_inbox_max_items = inbox.get("inbox_max_items_per_run", 100)
     inbox_max_items_per_run = (
@@ -281,6 +291,7 @@ def build_quick_import_config(cfg: Optional[Dict[str, Any]] = None) -> Dict[str,
     return {
         "task_name": str(inbox.get("name", "") or "").strip(),
         "enabled": bool(inbox.get("enabled")) if inbox else False,
+        "provider": provider,
         "inbox_path": _inbox_remote_path(active_cfg),
         "inbox_rel": _inbox_rel_path(active_cfg),
         "targets": targets,
@@ -291,7 +302,11 @@ def build_quick_import_config(cfg: Optional[Dict[str, Any]] = None) -> Dict[str,
 
 
 def is_quick_import_savepath(cfg: Dict[str, Any], savepath: Any) -> bool:
-    """导入落点是否落在接收夹内（savepath 是网盘相对路径，如 ``接收/xxx``）。"""
+    """导入落点是否落在接收夹内（savepath 是网盘相对路径，如 ``接收/xxx``）。
+
+    网盘从接收夹任务内部推导（``build_quick_import_config`` 已有 inbox provider），
+    调用方不需要传：savepath 是相对路径、本身不带 provider 信息。
+    """
     conf = build_quick_import_config(cfg)
     if not conf["enabled"]:
         return False
@@ -304,9 +319,43 @@ def is_quick_import_savepath(cfg: Dict[str, Any], savepath: Any) -> bool:
     return relative == inbox_rel or relative.startswith(inbox_rel + "/")
 
 
+def _cross_provider_target_hint(
+    cfg: Dict[str, Any],
+    provider: str,
+) -> str:
+    """分发目标落在别的网盘时给出明确提示。
+
+    跨盘目标解析不到接收夹网盘的相对路径，会退化成「去掉挂载前缀的相对路径」
+    （``/115/电影`` → ``115/电影``），分发时被当成接收夹网盘根目录下的子目录；这里
+    直接拦下并说清「必须和接收夹同盘」。
+    """
+    inbox = get_inbox_task(cfg)
+    raw_targets = normalize_distribute_targets(
+        inbox.get("distribute_targets") if isinstance(inbox, dict) else None
+    )
+    provider_key = normalize_mount_provider(provider)
+    for key in QUICK_IMPORT_TARGET_KEYS:
+        raw_value = str(raw_targets.get(key, "") or "").strip()
+        if not raw_value:
+            continue
+        try:
+            target_provider, _target_rel = resolve_provider_relative_path(
+                cfg,
+                normalize_remote_path(raw_value),
+            )
+        except Exception:
+            continue
+        if normalize_mount_provider(target_provider) == provider_key:
+            continue
+        label = QUICK_IMPORT_TARGET_LABELS.get(key, key)
+        return f"「{label}」分发目标必须和接收夹在同一网盘（接收夹当前在 {provider} 网盘）"
+    return ""
+
+
 def validate_quick_import_config(cfg: Optional[Dict[str, Any]] = None) -> Optional[str]:
     active_cfg = cfg if isinstance(cfg, dict) else get_config()
     conf = build_quick_import_config(active_cfg)
+    provider = str(conf.get("provider", "") or "") or QUICK_IMPORT_DEFAULT_PROVIDER
     if not conf["task_name"]:
         return "没有找到内置的接收夹任务，请重启服务或检查配置（接收夹是内置固定任务，不需要新增）"
     if not conf["enabled"]:
@@ -315,7 +364,10 @@ def validate_quick_import_config(cfg: Optional[Dict[str, Any]] = None) -> Option
         return f"请先给接收夹任务「{conf['task_name']}」选择文件夹"
     inbox_rel = str(conf.get("inbox_rel", "") or "").strip()
     if not inbox_rel:
-        return "接收文件夹必须位于 115 网盘前缀下"
+        return f"接收文件夹必须位于 {provider} 网盘前缀下"
+    cross_provider = _cross_provider_target_hint(active_cfg, provider)
+    if cross_provider:
+        return cross_provider
     if not any(conf["targets"].get(key) for key in QUICK_IMPORT_TARGET_KEYS):
         return "还没有在接收夹任务里指定「电影 / 电视剧」分发目标"
     for task in active_cfg.get("monitor_tasks", []) or []:
@@ -323,7 +375,17 @@ def validate_quick_import_config(cfg: Optional[Dict[str, Any]] = None) -> Option
             continue
         if normalize_task_type(task.get("task_type")) != MONITOR_TASK_TYPE_SCAN:
             continue
-        scan_rel = _task_rel_path(active_cfg, task.get("scan_path", ""))
+        # 只比较同 provider 的扫描任务：跨盘路径本来就不该判重叠。
+        try:
+            task_provider, _task_rel = resolve_provider_relative_path(
+                active_cfg,
+                normalize_remote_path(str(task.get("scan_path", "") or "").strip()),
+            )
+        except Exception:
+            continue
+        if normalize_mount_provider(task_provider) != provider:
+            continue
+        scan_rel = _task_rel_path(active_cfg, task.get("scan_path", ""), provider)
         if not scan_rel:
             continue
         overlap = (
@@ -345,8 +407,8 @@ def _target_scrape_options(target: Dict[str, Any]) -> Dict[str, Any]:
     return options
 
 
-def _list_inbox_children(base_cid: str) -> List[Dict[str, Any]]:
-    payload = scraper_service.list_scraper_entries(QUICK_IMPORT_PROVIDER, base_cid, True)
+def _list_inbox_children(base_cid: str, provider: str = QUICK_IMPORT_DEFAULT_PROVIDER) -> List[Dict[str, Any]]:
+    payload = scraper_service.list_scraper_entries(provider, base_cid, True)
     entries = payload.get("entries") if isinstance(payload, dict) else []
     return [entry for entry in (entries or []) if isinstance(entry, dict)]
 
@@ -355,10 +417,11 @@ def _resolve_entry_after_organize(
     base_cid: str,
     plan_summary: Dict[str, Any],
     original_entry: Dict[str, Any],
+    provider: str = QUICK_IMPORT_DEFAULT_PROVIDER,
 ) -> Dict[str, Any]:
     """整理后重新定位条目：文件夹按 ID 找；散文件按计划生成的片名文件夹兜底。"""
     try:
-        children = _list_inbox_children(base_cid)
+        children = _list_inbox_children(base_cid, provider)
     except Exception:
         return {}
     original_id = str(original_entry.get("id", "") or "").strip()
@@ -469,11 +532,15 @@ def _record_merged_inbox_item(
         )
     is_ai = str(candidate.get("source") or "").strip() == "ai"
     target_rel = str(target.get("scan_rel", "") or "")
+    target_path = str(target.get("scan_path", "") or "")
     pending_moved.append(
         {
             "name": name,
             "target_label": QUICK_IMPORT_TARGET_LABELS.get(media_type, ""),
-            "task_name": str(target.get("task_name", "") or ""),
+            "target_path": target_path,
+            # 内容跟着拥有该媒体文件夹的条目一起搬运：同一个 STRM 范围在这里去重即可。
+            "scope_rel": normalize_relative_path(join_relative_path(target_rel, merged_into_folder)),
+            "target": target_path,
             "job_id": job_id,
             "monitor_sync_events": 0,
             "title": name,
@@ -496,7 +563,7 @@ def _record_merged_inbox_item(
                 "old_path": entry_path,
                 "new_path": normalize_relative_path(join_relative_path(target_rel, merged_into_folder)),
                 "target": target_rel,
-                "task_name": str(target.get("task_name", "") or ""),
+                "task_name": target_path,
                 "scraper_job_id": job_id,
                 "monitor_sync_events": 0,
                 "merged_into_folder": merged_into_folder,
@@ -646,8 +713,8 @@ def get_quick_import_status() -> Dict[str, Any]:
         "config_error": validate_quick_import_config(cfg) or "",
         "targets": {
             key: {
-                "task_name": (conf["targets"].get(key) or {}).get("task_name", ""),
-                "scan_path": (conf["targets"].get(key) or {}).get("scan_path", ""),
+                "target_path": (conf["targets"].get(key) or {}).get("scan_path", ""),
+                "scan_rel": (conf["targets"].get(key) or {}).get("scan_rel", ""),
             }
             for key in QUICK_IMPORT_TARGET_KEYS
         },
@@ -684,9 +751,13 @@ def _quick_import_source_action(job_id: int, monitor_run_id: str = "") -> str:
     return f"scraper-job:{max(0, int(job_id or 0))}:{QUICK_IMPORT_SOURCE_ACTION_PREFIX}"
 
 
-def _folder_children_payload(folder_id: str, folder_rel: str) -> List[Dict[str, Any]]:
+def _folder_children_payload(
+    folder_id: str,
+    folder_rel: str,
+    provider: str = QUICK_IMPORT_DEFAULT_PROVIDER,
+) -> List[Dict[str, Any]]:
     """列出整理结果文件夹的直接子项，并补上完整挂载路径（监控同步事件要用）。"""
-    payload = scraper_service.list_scraper_entries(QUICK_IMPORT_PROVIDER, folder_id, True)
+    payload = scraper_service.list_scraper_entries(provider, folder_id, True)
     children = payload.get("entries") if isinstance(payload, dict) else []
     result: List[Dict[str, Any]] = []
     for child in children or []:
@@ -708,6 +779,7 @@ def _folder_contains_files(
     folder_id: str,
     folder_rel: str,
     *,
+    provider: str = QUICK_IMPORT_DEFAULT_PROVIDER,
     depth: int = 0,
     max_depth: int = 3,
 ) -> bool:
@@ -719,7 +791,7 @@ def _folder_contains_files(
     if not normalized_id or depth > max_depth:
         return True
     try:
-        children = _folder_children_payload(normalized_id, folder_rel)
+        children = _folder_children_payload(normalized_id, folder_rel, provider)
     except Exception:
         return True
     for child in children:
@@ -727,6 +799,7 @@ def _folder_contains_files(
             if _folder_contains_files(
                 str(child.get("id", "") or ""),
                 str(child.get("path", "") or ""),
+                provider=provider,
                 depth=depth + 1,
                 max_depth=max_depth,
             ):
@@ -740,6 +813,7 @@ def _retry_inbox_cleanup(
     leftovers: List[Dict[str, Any]],
     *,
     monitor_run_id: str,
+    provider: str = QUICK_IMPORT_DEFAULT_PROVIDER,
 ) -> List[Dict[str, Any]]:
     """全部搬运结束后再清一次接收夹残留：清掉的记过程事件，仍残留的返回给调用方。
 
@@ -756,12 +830,12 @@ def _retry_inbox_cleanup(
         if not entry_id:
             remaining.append({**leftover, "reason": "缺少目录 ID，无法自动清理"})
             continue
-        if _folder_contains_files(entry_id, path):
+        if _folder_contains_files(entry_id, path, provider=provider):
             remaining.append({**leftover, "reason": "目录内仍有内容，未自动清理"})
             continue
         try:
             scraper_service.delete_scraper_entries(
-                QUICK_IMPORT_PROVIDER,
+                provider,
                 [entry_id],
                 parent_id=parent_id,
                 entries=[{"id": entry_id, "name": name, "is_dir": True, "path": path, "parent_id": parent_id}],
@@ -780,14 +854,18 @@ def _retry_inbox_cleanup(
     return remaining
 
 
-def _folder_entry_names(folder_id: str, cache: Dict[str, Set[str]]) -> Set[str]:
+def _folder_entry_names(
+    folder_id: str,
+    cache: Dict[str, Set[str]],
+    provider: str = QUICK_IMPORT_DEFAULT_PROVIDER,
+) -> Set[str]:
     """目标文件夹里已有的条目名（一个文件夹只列一次，合并时用来挡同名文件）。"""
     normalized_id = str(folder_id or "").strip()
     if not normalized_id:
         return set()
     if normalized_id not in cache:
         payload = scraper_service.list_scraper_entries(
-            QUICK_IMPORT_PROVIDER,
+            provider,
             normalized_id,
             True,
             limit=QUICK_IMPORT_MERGE_LIST_LIMIT,
@@ -809,12 +887,13 @@ def _move_entries_into_folder(
     target_rel: str,
     job_id: int,
     monitor_run_id: str = "",
+    provider: str = QUICK_IMPORT_DEFAULT_PROVIDER,
 ) -> Dict[str, Any]:
     entry_ids = [str(item.get("id", "") or "").strip() for item in entries if str(item.get("id", "") or "").strip()]
     if not entry_ids:
         return {"monitor_sync": {"event_count": 0}}
     return scraper_service.move_scraper_entries(
-        QUICK_IMPORT_PROVIDER,
+        provider,
         entry_ids,
         target_cid,
         source_cid=source_cid,
@@ -834,6 +913,7 @@ def _merge_organized_folder_into_existing(
     job_id: int,
     monitor_run_id: str = "",
     name_cache: Dict[str, Set[str]],
+    provider: str = QUICK_IMPORT_DEFAULT_PROVIDER,
     depth: int = 0,
 ) -> Dict[str, Any]:
     """把整理结果文件夹的内容并入目标监控目录里已有的同名文件夹。
@@ -853,13 +933,13 @@ def _merge_organized_folder_into_existing(
     skipped: List[str] = []
     cleanup_pending: List[Dict[str, str]] = []
     pending_moves: List[Dict[str, Any]] = []
-    target_names = _folder_entry_names(target_id, name_cache)
-    for child in _folder_children_payload(source_id, source_rel):
+    target_names = _folder_entry_names(target_id, name_cache, provider)
+    for child in _folder_children_payload(source_id, source_rel, provider):
         child_id = str(child.get("id", "") or "").strip()
         child_name = str(child.get("name", "") or "").strip()
         if bool(child.get("is_dir")):
             matched = scraper_service.find_scraper_media_folder(
-                QUICK_IMPORT_PROVIDER,
+                provider,
                 target_id,
                 child_name,
             )
@@ -874,6 +954,7 @@ def _merge_organized_folder_into_existing(
                     job_id=job_id,
                     monitor_run_id=monitor_run_id,
                     name_cache=name_cache,
+                    provider=provider,
                     depth=depth + 1,
                 )
                 moved_count += int(nested.get("moved_count", 0) or 0)
@@ -884,7 +965,7 @@ def _merge_organized_folder_into_existing(
                     # 内容已经并过去了，删空目录只是收尾：失败不能连累搬运结果。
                     try:
                         scraper_service.delete_scraper_entries(
-                            QUICK_IMPORT_PROVIDER,
+                            provider,
                             [child_id],
                             parent_id=source_id,
                             entries=[child],
@@ -913,6 +994,7 @@ def _merge_organized_folder_into_existing(
             target_rel=target_rel,
             job_id=job_id,
             monitor_run_id=monitor_run_id,
+            provider=provider,
         )
         moved_count += len(pending_moves)
         monitor_sync_events += max(0, int(((move_result.get("monitor_sync") or {}).get("event_count", 0) or 0)))
@@ -934,6 +1016,7 @@ def _dispatch_organized_entry(
     job_id: int,
     monitor_run_id: str = "",
     name_cache: Optional[Dict[str, Set[str]]] = None,
+    provider: str = QUICK_IMPORT_DEFAULT_PROVIDER,
 ) -> Dict[str, Any]:
     """把整理好的条目分发到监控目录：目标已有同名文件夹时并进去。
 
@@ -948,7 +1031,7 @@ def _dispatch_organized_entry(
         raise RuntimeError("整理后的条目缺少 ID 或名称")
     cache = name_cache if isinstance(name_cache, dict) else {}
     lookup_name = entry_name if is_dir else os.path.splitext(entry_name)[0]
-    existing = scraper_service.find_scraper_media_folder(QUICK_IMPORT_PROVIDER, target_cid, lookup_name)
+    existing = scraper_service.find_scraper_media_folder(provider, target_cid, lookup_name)
     existing_id = str((existing or {}).get("id", "") or "").strip()
     if not existing_id or existing_id == entry_id:
         move_result = _move_entries_into_folder(
@@ -974,6 +1057,7 @@ def _dispatch_organized_entry(
             target_rel=merged_target_rel,
             job_id=job_id,
             monitor_run_id=monitor_run_id,
+            provider=provider,
         )
         return {"merged": True, "skipped": [], "target_folder": existing_name, "moved_count": 1, "monitor_sync_events": max(0, int(((move_result.get("monitor_sync") or {}).get("event_count", 0) or 0)))}
 
@@ -986,6 +1070,7 @@ def _dispatch_organized_entry(
         job_id=job_id,
         monitor_run_id=monitor_run_id,
         name_cache=cache,
+        provider=provider,
     )
     skipped = list(outcome.get("skipped") or [])
     cleanup_pending = list(outcome.get("cleanup_pending") or [])
@@ -994,7 +1079,7 @@ def _dispatch_organized_entry(
         # “待清理”，不能把已经成功的搬运判成失败。
         try:
             scraper_service.delete_scraper_entries(
-                QUICK_IMPORT_PROVIDER,
+                provider,
                 [entry_id],
                 parent_id=source_cid,
                 entries=[entry],
@@ -1036,6 +1121,7 @@ def _dispatch_scan_scope_rel(
 
 def _queue_dispatch_child_run(
     cfg: Dict[str, Any],
+    provider: str,
     target_rel: str,
     entry_name: str,
     is_dir: bool,
@@ -1045,21 +1131,32 @@ def _queue_dispatch_child_run(
 
     接收夹整理只负责识别与移动；搬进监控目录后的 STRM 生成是独立的文件夹监控任务，
     各自留下自己的运行记录，来源统一标注「接收夹分发」。
+
+    只有接收夹在 115 上、且目标落在某个监控任务扫描范围内时才有 STRM 可言；
+    其他网盘只搬运、不生成 STRM（v1 明确不做跨盘 STRM）。
     """
+    if normalize_mount_provider(provider) != QUICK_IMPORT_DEFAULT_PROVIDER:
+        return ""
     scope_rel = _dispatch_scan_scope_rel(target_rel, entry_name, is_dir, dispatch)
     if not scope_rel:
         return ""
     try:
         from .monitor import queue_inbox_dispatch_scan
 
-        return queue_inbox_dispatch_scan(cfg, scope_rel)
+        return queue_inbox_dispatch_scan(cfg, scope_rel, provider)
     except Exception:
         logging.exception("接收夹分发子任务排队失败: %s", scope_rel)
         return ""
 
 
-def _queue_dispatch_child_runs(cfg: Dict[str, Any], scopes: List[str]) -> Dict[str, str]:
-    """把本轮所有分发范围按监控任务合并入队，返回 task_name -> run_id。"""
+def _queue_dispatch_child_runs(
+    cfg: Dict[str, Any],
+    provider: str,
+    scopes: List[str],
+) -> Dict[str, str]:
+    """把本轮所有分发范围按监控任务合并入队，返回 scope_rel -> run_id。"""
+    if normalize_mount_provider(provider) != QUICK_IMPORT_DEFAULT_PROVIDER:
+        return {}
     unique_scopes: List[str] = []
     for raw_scope in scopes if isinstance(scopes, list) else []:
         scope = normalize_relative_path(str(raw_scope or "").strip())
@@ -1067,18 +1164,30 @@ def _queue_dispatch_child_runs(cfg: Dict[str, Any], scopes: List[str]) -> Dict[s
             unique_scopes.append(scope)
     if not unique_scopes:
         return {}
+    task_by_scope: Dict[str, str] = {}
+    for scope in unique_scopes:
+        try:
+            matched = match_monitor_task_for_savepath(cfg, scope, provider=provider)
+        except Exception:
+            matched = {}
+        task_name = str((matched or {}).get("task_name", "") or "").strip()
+        if task_name:
+            task_by_scope[scope] = task_name
+    if not task_by_scope:
+        return {}
+    queue_scopes = [scope for scope in unique_scopes if scope in task_by_scope]
     try:
         from .monitor import queue_monitor_dir_scan
     except Exception:
         logging.exception("加载监控扫描队列失败")
         return {}
     run_ids: Dict[str, str] = {}
-    for index in range(0, len(unique_scopes), QUICK_IMPORT_SCAN_SCOPE_CHUNK):
-        chunk = unique_scopes[index : index + QUICK_IMPORT_SCAN_SCOPE_CHUNK]
+    for index in range(0, len(queue_scopes), QUICK_IMPORT_SCAN_SCOPE_CHUNK):
+        chunk = queue_scopes[index : index + QUICK_IMPORT_SCAN_SCOPE_CHUNK]
         try:
             result = queue_monitor_dir_scan(
                 cfg,
-                QUICK_IMPORT_PROVIDER,
+                provider,
                 chunk,
                 run_source="inbox_dispatch",
                 force_new=False,
@@ -1086,11 +1195,16 @@ def _queue_dispatch_child_runs(cfg: Dict[str, Any], scopes: List[str]) -> Dict[s
         except Exception:
             logging.exception("接收夹分发扫描合并入队失败：%s", "、".join(chunk[:3]))
             continue
+        task_run_ids: Dict[str, str] = {}
         for task in result.get("tasks") if isinstance(result.get("tasks"), list) else []:
             task_name = str((task or {}).get("task_name", "") or "").strip()
             run_id = str((task or {}).get("run_id", "") or "").strip()
             if task_name and run_id:
-                run_ids[task_name] = run_id
+                task_run_ids[task_name] = run_id
+        for scope in chunk:
+            run_id = task_run_ids.get(task_by_scope.get(scope, ""), "")
+            if run_id:
+                run_ids[scope] = run_id
     return run_ids
 
 
@@ -1124,6 +1238,7 @@ def run_quick_import(
         if config_error:
             raise RuntimeError(config_error)
         conf = build_quick_import_config(cfg)
+        provider = str(conf.get("provider", "") or "") or QUICK_IMPORT_DEFAULT_PROVIDER
         inbox_rel = conf["inbox_rel"]
         normalized_sub = normalize_relative_path(str(sub_path or "").strip())
         base_rel = normalize_relative_path(
@@ -1192,9 +1307,9 @@ def run_quick_import(
         dispatch_name_cache: Dict[str, Set[str]] = {}
         write_inbox_divider("任务开始", format_monitor_trigger(trigger))
         try:
-            base_cid = resolve_scraper_dest_folder_id(QUICK_IMPORT_PROVIDER, base_rel)
+            base_cid = resolve_scraper_dest_folder_id(provider, base_rel)
             identified = identify_scraper_batch_entries(
-                QUICK_IMPORT_PROVIDER,
+                provider,
                 None,
                 base_cid=base_cid,
                 base_path=base_rel,
@@ -1276,7 +1391,7 @@ def run_quick_import(
                     options["force_media_folder"] = True
                     try:
                         target_cid = resolve_scraper_dest_folder_id(
-                            QUICK_IMPORT_PROVIDER,
+                            provider,
                             target["scan_rel"],
                         )
                     except Exception as exc:
@@ -1312,7 +1427,7 @@ def run_quick_import(
                     if bool(source_entry.get("is_dir")) and source_entry_name and not season_pack:
                         try:
                             existing_target_folder = scraper_service.find_scraper_media_folder(
-                                QUICK_IMPORT_PROVIDER,
+                                provider,
                                 target_cid,
                                 source_entry_name,
                             )
@@ -1345,7 +1460,7 @@ def run_quick_import(
                 for prepared_item in prepared:
                     key = (
                         str(prepared_item["media_type"]),
-                        str(prepared_item["target"].get("task_name", "") or ""),
+                        str(prepared_item["target"].get("scan_path", "") or ""),
                         bool(prepared_item["options"].get("rename_selected_folders", True)),
                     )
                     groups.setdefault(key, []).append(prepared_item)
@@ -1359,7 +1474,7 @@ def run_quick_import(
                         continue
                     group_options = dict(group[0]["options"])
                     plan = build_scraper_plan_for_batch(
-                        QUICK_IMPORT_PROVIDER,
+                        provider,
                         group_items,
                         group_picked,
                         group_options,
@@ -1509,6 +1624,7 @@ def run_quick_import(
                             base_cid,
                             summary,
                             {} if season_pack else original_entry,
+                            provider,
                         )
                         entry_id = str(entry.get("id", "") or "").strip()
                         if not entry_id:
@@ -1557,6 +1673,7 @@ def run_quick_import(
                                 job_id=job_id,
                                 name_cache=dispatch_name_cache,
                                 monitor_run_id=monitor_run_id,
+                                provider=provider,
                             )
                         except Exception as exc:
                             dispatch_results[entry_id] = {"__dispatch_error__": str(exc)[:120]}
@@ -1644,7 +1761,8 @@ def run_quick_import(
                             {
                                 "name": str(item.get("name", "") or ""),
                                 "target_label": QUICK_IMPORT_TARGET_LABELS[resolved["media_type"]],
-                                "task_name": str(target.get("task_name", "") or ""),
+                                "target_path": str(target.get("scan_path", "") or ""),
+                                "scope_rel": scope_rel,
                                 "job_id": job_id,
                                 "monitor_sync_events": int(dispatch.get("monitor_sync_events", 0) or 0),
                                 "title": str(item.get("name", "") or ""),
@@ -1667,7 +1785,7 @@ def run_quick_import(
                                         str(dispatch.get("target_folder", "") or entry_name),
                                     )),
                                     "target": target.get("scan_rel", ""),
-                                    "task_name": target.get("task_name", ""),
+                                    "task_name": str(target.get("scan_path", "") or ""),
                                     "scraper_job_id": job_id,
                                     "monitor_sync_events": int(dispatch.get("monitor_sync_events", 0) or 0),
                                 },
@@ -1680,15 +1798,15 @@ def run_quick_import(
                         cancelled = True
                         break
 
-            run_id_by_task = _queue_dispatch_child_runs(cfg, dispatch_scan_scopes)
+            run_id_by_scope = _queue_dispatch_child_runs(cfg, provider, dispatch_scan_scopes)
             for pending in pending_moved:
-                child_run_id = run_id_by_task.get(str(pending.get("task_name", "") or ""), "")
+                child_run_id = run_id_by_scope.get(str(pending.get("scope_rel", "") or ""), "")
                 detail = {**pending["detail"], "child_run_id": child_run_id}
                 moved.append(
                     {
                         "name": pending["name"],
                         "target": pending["target_label"],
-                        "task_name": pending["task_name"],
+                        "task_name": pending["target_path"],
                         "job_id": pending["job_id"],
                         "run_id": child_run_id,
                         "monitor_sync_events": pending["monitor_sync_events"],
@@ -1712,11 +1830,12 @@ def run_quick_import(
                     if not _folder_contains_files(
                         str(entry.get("id", "") or ""),
                         str(entry.get("path", "") or ""),
+                        provider=provider,
                     ):
                         # 整理残留的空壳目录（内容已经搬走）：直接清掉，不再报“识别失败、留在接收夹”。
                         try:
                             scraper_service.delete_scraper_entries(
-                                QUICK_IMPORT_PROVIDER,
+                                provider,
                                 [str(entry.get("id", "") or "")],
                                 parent_id=str(entry.get("parent_id", "") or base_cid),
                                 entries=[entry],
@@ -1774,7 +1893,11 @@ def run_quick_import(
             if cleanup_leftovers:
                 # 搬运全部结束，再统一重试一次接收夹残留清理：清掉的只记过程事件，
                 # 仍然残留的才写“待清理”，不再把已经清掉的目录显示成删除失败。
-                for leftover in _retry_inbox_cleanup(cleanup_leftovers, monitor_run_id=monitor_run_id):
+                for leftover in _retry_inbox_cleanup(
+                    cleanup_leftovers,
+                    monitor_run_id=monitor_run_id,
+                    provider=provider,
+                ):
                     name = str(leftover.get("name", "") or leftover.get("path", "") or "接收夹残留")
                     record_monitor_run_event(
                         monitor_run_id,

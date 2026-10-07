@@ -664,7 +664,9 @@ class ScraperMonitorSyncTest(unittest.TestCase):
             status = conn.execute("SELECT status FROM monitor_change_events").fetchone()[0]
         self.assertEqual(status, "manual_required")
 
-    def test_folder_move_collects_new_media_items_for_auto_scrape(self):
+    def test_folder_move_no_longer_collects_auto_scrape_items(self):
+        """监控回归纯扫描：变更同步不再产出自动整理条目（整理改由接收夹 / 订阅自理）。"""
+        # 旧开关即便还写在配置里，也会在归一化时被丢弃，不再触发整理。
         cfg = self._cfg(self._task(auto_scrape_on_new=True))
         old_local = "媒体库/Media/Source/Episode.mkv"
         self._insert_monitor_file("影视监控", old_local, "Source/Episode.mkv", size=4096)
@@ -687,11 +689,9 @@ class ScraperMonitorSyncTest(unittest.TestCase):
         )
 
         self.assertEqual(result["completed"], 1)
-        new_items = result.get("new_media_items", [])
-        self.assertEqual(len(new_items), 1)
-        self.assertEqual(new_items[0]["remote_rel"], "Moved/Episode.mkv")
-        self.assertIn("Episode.mkv", new_items[0]["name"])
-        self.assertEqual(new_items[0]["size"], 4096)
+        self.assertNotIn("new_media_items", result)
+        # STRM 仍按变更正常刷新（扫描本职不受影响）。
+        self.assertTrue(os.path.isfile(self._strm_path("媒体库/Media/Moved/Episode.mkv")))
 
     def test_scraper_job_change_events_skip_auto_scrape_items(self):
         cfg = self._cfg(self._task(auto_scrape_on_new=True))
@@ -717,7 +717,7 @@ class ScraperMonitorSyncTest(unittest.TestCase):
         )
 
         self.assertEqual(result["completed"], 1)
-        self.assertEqual(result.get("new_media_items", []), [])
+        self.assertNotIn("new_media_items", result)
 
     def test_folder_move_plus_file_rename_reports_net_strm_counts(self):
         cfg = self._cfg()
@@ -795,7 +795,7 @@ class ScraperMonitorSyncTest(unittest.TestCase):
         )
 
         self.assertEqual(result["completed"], 1)
-        self.assertEqual(result.get("new_media_items", []), [])
+        self.assertNotIn("new_media_items", result)
 
     def test_unknown_folder_move_collects_manual_required_path(self):
         cfg = self._cfg()
@@ -2146,7 +2146,6 @@ class ScraperMonitorSyncTest(unittest.TestCase):
                         "manual_required": 0,
                         "errors": [],
                         "change_details": [],
-                        "new_media_items": [],
                         "manual_required_paths": [],
                     }
                 ),
@@ -2226,7 +2225,6 @@ class ScraperMonitorSyncTest(unittest.TestCase):
                         "manual_required": 0,
                         "errors": [],
                         "change_details": [],
-                        "new_media_items": [],
                         "manual_required_paths": [],
                         "monitor_run_ids": [],
                     }

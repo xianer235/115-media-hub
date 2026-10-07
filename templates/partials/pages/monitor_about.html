@@ -3,9 +3,23 @@
                 <div class="monitor-page-head">
                     <div class="monitor-head-copy">
                         <h3 class="group-title mb-0 monitor-head-title">
+                            接收夹整理
+                            <button type="button" class="info-dot" aria-label="接收夹说明" title="接收夹说明" onclick="showMonitorHelp()">i</button>
+                        </h3>
+                        <div class="text-xs text-slate-400 mt-2">接收夹是中转入口：识别 → 按接收夹自己的整理选项重命名 → 搬到同盘的目标文件夹。</div>
+                    </div>
+                </div>
+                <div id="monitor-inbox-task-list" class="space-y-3 mt-5"></div>
+            </div>
+
+            <div class="group-card">
+                <div class="monitor-page-head">
+                    <div class="monitor-head-copy">
+                        <h3 class="group-title mb-0 monitor-head-title">
                             文件夹监控任务列表
                             <button type="button" class="info-dot" aria-label="文件夹监控说明" title="文件夹监控说明" onclick="showMonitorHelp()">i</button>
                         </h3>
+                        <div class="text-xs text-slate-400 mt-2">目录同步只扫描目录、生成 / 同步 STRM，不整理文件。</div>
                     </div>
                     <div class="monitor-head-actions">
                         <div id="monitor-summary-pill" class="monitor-status-pill" title="当前状态：空闲 / 等待监控任务" aria-label="当前状态：空闲 / 等待监控任务">

@@ -29,7 +29,9 @@ def _inbox_task(name="接收", path="/115/接收", enabled=True, targets=None, *
         "task_type": "inbox",
         "enabled": enabled,
         "scan_path": path,
-        "distribute_targets": dict(targets) if isinstance(targets, dict) else {"movie": "电影", "tv": "电视剧"},
+        "distribute_targets": (
+            dict(targets) if isinstance(targets, dict) else {"movie": "/115/电影", "tv": "/115/电视剧"}
+        ),
     }
     task.update(extra)
     return task
@@ -113,7 +115,8 @@ class QuickImportConfigTest(unittest.TestCase):
         inbox = core.get_inbox_task(cfg)
         self.assertEqual(inbox["name"], "我的接收")
         self.assertEqual(inbox["scan_path"], "/115/临时")
-        self.assertEqual(inbox["distribute_targets"], {"movie": "电影"})
+        # 旧值「电影」是监控任务名：归一化迁移成该任务的扫描路径。
+        self.assertEqual(inbox["distribute_targets"], {"movie": "/115/电影"})
         # 用户手动关掉的 webhook 不会被归一化重新打开。
         self.assertFalse(inbox["webhook_enabled"])
 
@@ -178,9 +181,26 @@ class QuickImportConfigTest(unittest.TestCase):
             }
         )
         inbox = core.get_inbox_task(cfg)
-        self.assertEqual(inbox["distribute_targets"], {"movie": "电影", "tv": "电视剧"})
+        # 迁移把「任务名」换算成任务 scan_path（带 /115 前缀的远程路径）。
+        self.assertEqual(inbox["distribute_targets"], {"movie": "/115/电影", "tv": "/115/电视剧"})
         for task in cfg["monitor_tasks"]:
             self.assertEqual(task["quick_import_target"], "")
+
+    def test_migration_clears_unknown_target_name(self):
+        """目标既不是远程路径、也匹配不到任何扫描任务时清空，交给校验提示用户重选。"""
+        cfg = core.normalize_config(
+            {
+                "monitor_tasks": [
+                    {
+                        "name": "我的接收",
+                        "task_type": "inbox",
+                        "scan_path": "/115/接收",
+                        "distribute_targets": {"movie": "已经被删掉的任务"},
+                    }
+                ]
+            }
+        )
+        self.assertEqual(core.get_inbox_task(cfg)["distribute_targets"], {})
 
     def test_migration_enables_webhook_only_when_secret_is_set(self):
         base = {"quick_import_enabled": True, "quick_import_inbox_path": "/115/接收"}
@@ -210,10 +230,12 @@ class QuickImportConfigTest(unittest.TestCase):
         conf = quick_import.build_quick_import_config(_cfg())
         self.assertEqual(conf["task_name"], "接收")
         self.assertTrue(conf["enabled"])
+        self.assertEqual(conf["provider"], "115")
         self.assertEqual(conf["inbox_rel"], "接收")
-        self.assertEqual(conf["targets"]["movie"]["task_name"], "电影")
+        self.assertEqual(conf["targets"]["movie"]["scan_path"], "/115/电影")
         self.assertEqual(conf["targets"]["movie"]["scan_rel"], "电影")
-        self.assertEqual(conf["targets"]["tv"]["task_name"], "电视剧")
+        self.assertEqual(conf["targets"]["tv"]["scan_path"], "/115/电视剧")
+        self.assertEqual(conf["targets"]["tv"]["scan_rel"], "电视剧")
 
     def test_is_quick_import_savepath(self):
         cfg = _cfg()
@@ -234,21 +256,63 @@ class QuickImportConfigTest(unittest.TestCase):
     def test_validate_rejects_overlapping_scan_path(self):
         overlap = _cfg(
             tasks=[_task("接收子目录", "/115/接收/电影")],
-            inbox=_inbox_task(targets={"movie": "接收子目录"}),
+            inbox=_inbox_task(targets={"movie": "/115/接收/电影"}),
         )
         self.assertIn("重叠", quick_import.validate_quick_import_config(overlap) or "")
         same = _cfg(
             tasks=[_task("就是接收夹", "/115/接收")],
-            inbox=_inbox_task(targets={"movie": "就是接收夹"}),
+            inbox=_inbox_task(targets={"movie": "/115/接收"}),
         )
         self.assertIn("重叠", quick_import.validate_quick_import_config(same) or "")
 
-    def test_target_scrape_options_come_from_task(self):
-        conf = quick_import.build_quick_import_config(_cfg())
+    def test_target_scrape_options_come_from_inbox_task(self):
+        # 整理选项不再继承扫描任务；用接收夹任务自己的 auto_scrape_options。
+        inbox = _inbox_task(auto_scrape_options={"file_name_mode": "keep", "title_language": "en"})
+        conf = quick_import.build_quick_import_config(_cfg(inbox=inbox))
         options = quick_import._target_scrape_options(conf["targets"]["tv"])
         self.assertEqual(options["file_name_mode"], "keep")
-        self.assertIn("title_language", options)
+        self.assertEqual(options["title_language"], "en")
         self.assertIn("delete_ad_files", options)
+
+    def test_inbox_provider_drives_targets_and_savepath(self):
+        """接收夹可以挂在任意网盘：provider 决定路径解析与 savepath 归属。"""
+        cfg = {
+            "mount_points": [dict(item) for item in MOUNT_POINTS] + [{"provider": "quark", "prefix": "/quark"}],
+            "monitor_tasks": [
+                _task("电影", "/115/电影"),
+                _inbox_task(
+                    name="夸克接收",
+                    path="/quark/接收",
+                    provider="quark",
+                    targets={"movie": "/quark/电影"},
+                ),
+            ],
+        }
+        conf = quick_import.build_quick_import_config(cfg)
+        self.assertEqual(conf["provider"], "quark")
+        self.assertEqual(conf["inbox_rel"], "接收")
+        self.assertEqual(conf["targets"]["movie"]["scan_rel"], "电影")
+        # savepath 是网盘相对路径，provider 由接收夹任务内部决定。
+        self.assertTrue(quick_import.is_quick_import_savepath(cfg, "接收/片名"))
+        self.assertFalse(quick_import.is_quick_import_savepath(cfg, "电影/片名"))
+
+    def test_cross_provider_target_reports_same_provider_hint(self):
+        """目标落在别的网盘时要说清「必须和接收夹同盘」，不能只说「没指定目标」。"""
+        cfg = {
+            "mount_points": [dict(item) for item in MOUNT_POINTS] + [{"provider": "quark", "prefix": "/quark"}],
+            "monitor_tasks": [
+                _inbox_task(
+                    name="夸克接收",
+                    path="/quark/接收",
+                    provider="quark",
+                    targets={"movie": "/115/电影", "tv": "/quark/电视剧"},
+                ),
+            ],
+        }
+        message = quick_import.validate_quick_import_config(cfg) or ""
+        self.assertIn("同一网盘", message)
+        self.assertIn("电影", message)
+        self.assertIn("quark", message)
 
 
 class MonitorTaskTypeConstraintTest(unittest.TestCase):
@@ -769,25 +833,6 @@ class SharedOrganizeFlowTest(unittest.TestCase):
 class QuickImportNoDoubleScrapeGuardTest(unittest.TestCase):
     """防重复：刮削任务/快捷导入搬运产生的事件不能触发监控二次自动刮削。"""
 
-    def test_scraper_job_events_are_ignored_for_auto_scrape(self):
-        stats = {"new_media_items": [{"id": "1"}]}
-        self.assertEqual(
-            monitor_changes._collect_event_new_media_items({"source_action": "scraper-job:7:quick-import"}, stats),
-            [],
-        )
-        self.assertEqual(
-            monitor_changes._collect_event_new_media_items({"source_action": "scraper-job:1:forward"}, stats),
-            [],
-        )
-
-    def test_direct_move_events_still_count(self):
-        stats = {"new_media_items": [{"id": "1"}]}
-        self.assertEqual(
-            monitor_changes._collect_event_new_media_items({"source_action": "scraper:entry:move"}, stats),
-            [{"id": "1"}],
-        )
-        self.assertEqual(monitor_changes._collect_event_new_media_items({}, stats), [{"id": "1"}])
-
     def test_move_source_action_is_forwarded(self):
         with mock.patch.object(scraper, "_prepare_scraper_monitor_sync", return_value={}) as prepare, \
                 mock.patch.object(scraper, "_require_provider_cookie", return_value="cookie"), \
@@ -815,43 +860,24 @@ class QuickImportNoDoubleScrapeGuardTest(unittest.TestCase):
         self.assertEqual(prepare.call_args.kwargs["source_action"], "scraper:entry:move")
 
 
-class MonitorAutoScrapeRootFileTest(unittest.TestCase):
-    """监控根目录下的散文件不能把监控目录本身当成条目去改名。"""
+class MonitorAutoScrapeRemovedTest(unittest.TestCase):
+    """监控不再自动整理：旧的自动刮削入口整段删除，整理改由接收夹 / 订阅自理。"""
 
-    def _run(self, scan_path, new_items):
-        cfg = {"mount_points": [dict(item) for item in MOUNT_POINTS]}
-        task = {"name": "电影", "scan_path": scan_path, "auto_scrape_options": {}}
-        captured = {}
+    def test_monitor_module_has_no_auto_scrape_helper(self):
+        self.assertFalse(hasattr(monitor_service, "_auto_scrape_new_media_items"))
 
-        def fake_scan(provider, base_cid, base_path, entries, *args, **kwargs):
-            captured["entries"] = entries
-            return {"items": []}
-
-        with mock.patch.object(scraper, "_walk_existing_folder", return_value=("cid", True)), \
-                mock.patch.object(scraper, "scan_scraper_batch_items", side_effect=fake_scan):
-            monitor_service._auto_scrape_new_media_items(cfg, task, new_items)
-        return captured.get("entries") or []
-
-    def test_root_level_loose_file_becomes_file_entry(self):
-        entries = self._run(
-            "/115/115自存电影",
-            [{"id": "f1", "fid": "f1", "name": "追杀51号(2025).mkv", "remote_rel": "追杀51号(2025).mkv"}],
+    def test_normalize_task_drops_scan_auto_scrape_fields(self):
+        scan = core.normalize_task(
+            {
+                "name": "电影",
+                "scan_path": "/115/电影",
+                "auto_scrape_on_new": True,
+                "auto_scrape_options": {"file_name_mode": "keep"},
+            }
         )
-        self.assertEqual(len(entries), 1)
-        self.assertFalse(entries[0]["is_dir"])
-        self.assertEqual(entries[0]["parent_path"], "115自存电影")
-        self.assertEqual(entries[0]["path"], "115自存电影/追杀51号(2025).mkv")
-        self.assertEqual(entries[0]["id"], "f1")
-
-    def test_subfolder_new_file_still_uses_folder_entry(self):
-        entries = self._run(
-            "/115/115自存电影",
-            [{"id": "f2", "fid": "f2", "name": "片名.mkv", "remote_rel": "某片/片名.mkv"}],
-        )
-        self.assertEqual(len(entries), 1)
-        self.assertTrue(entries[0]["is_dir"])
-        self.assertEqual(entries[0]["name"], "某片")
-        self.assertEqual(entries[0]["parent_path"], "115自存电影")
+        self.assertEqual(scan["task_type"], "scan")
+        self.assertNotIn("auto_scrape_on_new", scan)
+        self.assertEqual(scan["auto_scrape_options"], {})
 
 
 class QuickImportRunTest(unittest.TestCase):
@@ -881,7 +907,7 @@ class QuickImportRunTest(unittest.TestCase):
         self.tmpdir.cleanup()
 
     def test_moves_movie_and_keeps_unmatched(self):
-        cfg = _cfg()
+        cfg = _cfg(inbox=_inbox_task(auto_scrape_options={"file_name_mode": "standard"}))
         identified = {
             "items": [_item(1, "电影A"), _item(2, "乱七八糟")],
             "picked": {1: {"id": 603, "media_type": "movie"}},
@@ -928,14 +954,14 @@ class QuickImportRunTest(unittest.TestCase):
                 mock.patch.object(quick_import, "build_scraper_plan_for_batch", side_effect=plan_side_effect), \
                 mock.patch.object(quick_import, "create_scraper_job_from_plan", return_value={"job_id": 11}), \
                 mock.patch.object(quick_import, "submit_scraper_job", return_value=self._Future()), \
-                mock.patch.object(quick_import, "_resolve_entry_after_organize", side_effect=lambda cid, summary, entry: entry), \
+                mock.patch.object(quick_import, "_resolve_entry_after_organize", side_effect=lambda cid, summary, entry, provider: entry), \
                 mock.patch.object(scraper, "find_scraper_media_folder", return_value={}), \
                 mock.patch.object(scraper, "move_scraper_entries", side_effect=lambda *args, **kwargs: move_record.append(kwargs) or {}):
             result = quick_import.run_quick_import("test")
 
         self.assertEqual(len(result["moved"]), 1)
         self.assertEqual(result["moved"][0]["target"], "电影")
-        self.assertEqual(result["moved"][0]["task_name"], "电影")
+        self.assertEqual(result["moved"][0]["task_name"], "/115/电影")
         self.assertEqual(len(result["left"]), 1)
         self.assertIn("未匹配", result["left"][0]["reason"])
         self.assertEqual(move_record[0]["source_action"], "scraper-job:11:quick-import")
@@ -974,7 +1000,7 @@ class QuickImportRunTest(unittest.TestCase):
                     mock.patch.object(quick_import, "build_scraper_plan_for_batch", side_effect=plan_side_effect), \
                     mock.patch.object(quick_import, "create_scraper_job_from_plan", return_value={"job_id": 11}), \
                     mock.patch.object(quick_import, "submit_scraper_job", return_value=self._Future()), \
-                    mock.patch.object(quick_import, "_resolve_entry_after_organize", side_effect=lambda cid, summary, entry: entry), \
+                    mock.patch.object(quick_import, "_resolve_entry_after_organize", side_effect=lambda cid, summary, entry, provider: entry), \
                     mock.patch.object(scraper, "find_scraper_media_folder", return_value={}), \
                     mock.patch.object(scraper, "move_scraper_entries", return_value={}):
                 result = quick_import.run_quick_import("test")
@@ -1022,7 +1048,7 @@ class QuickImportRunTest(unittest.TestCase):
                 }), \
                 mock.patch.object(quick_import, "create_scraper_job_from_plan", return_value={"job_id": 11}), \
                 mock.patch.object(quick_import, "submit_scraper_job", return_value=self._Future()), \
-                mock.patch.object(quick_import, "_resolve_entry_after_organize", side_effect=lambda cid, summary, entry: entry), \
+                mock.patch.object(quick_import, "_resolve_entry_after_organize", side_effect=lambda cid, summary, entry, provider: entry), \
                 mock.patch.object(scraper, "find_scraper_media_folder", return_value={}), \
                 mock.patch.object(scraper, "move_scraper_entries", return_value={}), \
                 mock.patch.object(quick_import, "record_monitor_run_event", side_effect=lambda *args, **kwargs: events.append(kwargs)):
@@ -1064,7 +1090,7 @@ class QuickImportRunTest(unittest.TestCase):
                 }), \
                 mock.patch.object(quick_import, "create_scraper_job_from_plan", return_value={"job_id": 11}), \
                 mock.patch.object(quick_import, "submit_scraper_job", return_value=self._Future()), \
-                mock.patch.object(quick_import, "_resolve_entry_after_organize", side_effect=lambda cid, summary, entry: entry), \
+                mock.patch.object(quick_import, "_resolve_entry_after_organize", side_effect=lambda cid, summary, entry, provider: entry), \
                 mock.patch.object(scraper, "find_scraper_media_folder", return_value={}), \
                 mock.patch.object(scraper, "move_scraper_entries", return_value={"monitor_sync": {"event_count": 1}}), \
                 mock.patch.object(quick_import, "finish_monitor_run", wraps=monitor_runs.finish_run) as finish_run:
@@ -1098,7 +1124,7 @@ class QuickImportRunTest(unittest.TestCase):
                 }), \
                 mock.patch.object(quick_import, "create_scraper_job_from_plan", return_value={"job_id": 11}), \
                 mock.patch.object(quick_import, "submit_scraper_job", return_value=self._Future()), \
-                mock.patch.object(quick_import, "_resolve_entry_after_organize", side_effect=lambda cid, summary, entry: entry), \
+                mock.patch.object(quick_import, "_resolve_entry_after_organize", side_effect=lambda cid, summary, entry, provider: entry), \
                 mock.patch.object(scraper, "find_scraper_media_folder", return_value={}), \
                 mock.patch.object(scraper, "move_scraper_entries", return_value={"monitor_sync": {"event_count": 1}}), \
                 mock.patch.object(quick_import, "finish_monitor_run", wraps=monitor_runs.finish_run) as finish_run:
@@ -1110,8 +1136,9 @@ class QuickImportRunTest(unittest.TestCase):
         self.assertEqual(stored["status"], "completed")
         self.assertEqual(result["moved"][0]["run_id"], "")
 
-    def test_tv_uses_tv_task_options(self):
-        cfg = _cfg()
+    def test_tv_uses_inbox_organize_options(self):
+        # 电视剧整理选项取自接收夹任务，不再继承电视剧扫描任务的旧开关。
+        cfg = _cfg(inbox=_inbox_task(auto_scrape_options={"file_name_mode": "keep"}))
         identified = {
             "items": [_item(1, "剧集A")],
             "picked": {1: {"id": 1399, "media_type": "tv"}},
@@ -1129,7 +1156,7 @@ class QuickImportRunTest(unittest.TestCase):
                 mock.patch.object(quick_import, "build_scraper_plan_for_batch", side_effect=plan_side_effect), \
                 mock.patch.object(quick_import, "create_scraper_job_from_plan", return_value={"job_id": 21}), \
                 mock.patch.object(quick_import, "submit_scraper_job", return_value=self._Future()), \
-                mock.patch.object(quick_import, "_resolve_entry_after_organize", side_effect=lambda cid, summary, entry: entry), \
+                mock.patch.object(quick_import, "_resolve_entry_after_organize", side_effect=lambda cid, summary, entry, provider: entry), \
                 mock.patch.object(scraper, "find_scraper_media_folder", return_value={}), \
                 mock.patch.object(scraper, "move_scraper_entries", return_value={}) as move:
             result = quick_import.run_quick_import("test")
@@ -1139,7 +1166,7 @@ class QuickImportRunTest(unittest.TestCase):
         self.assertEqual(move.call_args.args[2], "cid:电视剧")
 
     def test_missing_target_keeps_item_in_inbox(self):
-        cfg = _cfg(tasks=[_task("电影", "/115/电影")], inbox=_inbox_task(targets={"movie": "电影"}))
+        cfg = _cfg(tasks=[_task("电影", "/115/电影")], inbox=_inbox_task(targets={"movie": "/115/电影"}))
         identified = {
             "items": [_item(1, "剧集A")],
             "picked": {1: {"id": 1399, "media_type": "tv"}},
@@ -1301,7 +1328,7 @@ class QuickImportRunTest(unittest.TestCase):
                 mock.patch.object(
                     quick_import,
                     "_resolve_entry_after_organize",
-                    side_effect=lambda cid, summary, entry: entry,
+                    side_effect=lambda cid, summary, entry, provider: entry,
                 ), \
                 mock.patch.object(quick_import, "_dispatch_organized_entry", side_effect=dispatch_side_effect):
             result = quick_import.run_quick_import("test")
@@ -1391,7 +1418,7 @@ class QuickImportRunTest(unittest.TestCase):
                 mock.patch.object(
                     quick_import,
                     "_resolve_entry_after_organize",
-                    side_effect=lambda cid, summary, entry: entry,
+                    side_effect=lambda cid, summary, entry, provider: entry,
                 ), \
                 mock.patch.object(quick_import, "_dispatch_organized_entry", side_effect=dispatch_side_effect), \
                 mock.patch.object(quick_import, "_retry_inbox_cleanup", side_effect=cleanup_side_effect):
@@ -1468,7 +1495,7 @@ class QuickImportRunTest(unittest.TestCase):
         dispatch_calls = []
         cleanup_inputs = []
 
-        def resolve_side_effect(cid, summary, entry):
+        def resolve_side_effect(cid, summary, entry, provider):
             return dict(show_folder) if not entry else entry
 
         def dispatch_side_effect(entry, **kwargs):
@@ -1529,7 +1556,7 @@ class QuickImportRunTest(unittest.TestCase):
                 ), \
                 mock.patch.object(quick_import, "create_scraper_job_from_plan", return_value={"job_id": 5}), \
                 mock.patch.object(quick_import, "submit_scraper_job", return_value=self._Future()), \
-                mock.patch.object(quick_import, "_resolve_entry_after_organize", side_effect=lambda cid, summary, entry: entry), \
+                mock.patch.object(quick_import, "_resolve_entry_after_organize", side_effect=lambda cid, summary, entry, provider: entry), \
                 mock.patch.object(scraper, "find_scraper_media_folder", return_value={}), \
                 mock.patch.object(scraper, "move_scraper_entries", side_effect=RuntimeError("boom")):
             result = quick_import.run_quick_import("test")
@@ -1991,6 +2018,7 @@ class InboxDispatchChildRunTest(unittest.TestCase):
         with mock.patch("app.services.monitor.queue_inbox_dispatch_scan", return_value="child-1") as queued:
             run_id = quick_import._queue_dispatch_child_run(
                 config,
+                "115",
                 "电视剧",
                 "示例剧",
                 True,
@@ -1998,27 +2026,59 @@ class InboxDispatchChildRunTest(unittest.TestCase):
             )
 
         self.assertEqual(run_id, "child-1")
-        queued.assert_called_once_with(config, "电视剧/示例剧")
+        queued.assert_called_once_with(config, "电视剧/示例剧", "115")
 
     def test_queue_failure_does_not_break_dispatch(self):
         with mock.patch("app.services.monitor.queue_inbox_dispatch_scan", side_effect=RuntimeError("boom")):
             self.assertEqual(
-                quick_import._queue_dispatch_child_run({}, "电影", "片名", True, {"merged": False}),
+                quick_import._queue_dispatch_child_run({}, "115", "电影", "片名", True, {"merged": False}),
                 "",
             )
 
+    def test_non_115_provider_never_refreshes_strm(self):
+        """只有 115 才生成 STRM：其他网盘分发后只搬文件，不排队扫描。"""
+        config = {"mount_points": [dict(item) for item in MOUNT_POINTS]}
+        with mock.patch("app.services.monitor.queue_inbox_dispatch_scan") as queued:
+            run_id = quick_import._queue_dispatch_child_run(
+                config,
+                "quark",
+                "电视剧",
+                "示例剧",
+                True,
+                {"merged": False},
+            )
+            mapping = quick_import._queue_dispatch_child_runs(config, "quark", ["电视剧/示例剧/S01"])
+        self.assertEqual(run_id, "")
+        self.assertEqual(mapping, {})
+        queued.assert_not_called()
+
+    def test_unmatched_scope_is_not_queued(self):
+        """115 上但没命中任何监控任务扫描范围时同样不刷 STRM。"""
+        config = {"mount_points": [dict(item) for item in MOUNT_POINTS]}
+        with mock.patch.object(quick_import, "match_monitor_task_for_savepath", return_value={}), \
+                mock.patch("app.services.monitor.queue_monitor_dir_scan") as queued:
+            mapping = quick_import._queue_dispatch_child_runs(config, "115", ["随便/示例剧/S01"])
+        self.assertEqual(mapping, {})
+        queued.assert_not_called()
+
     def test_batch_scan_merges_scopes_before_queueing(self):
         config = {"mount_points": [dict(item) for item in MOUNT_POINTS]}
-        with mock.patch(
+        with mock.patch.object(
+            quick_import, "match_monitor_task_for_savepath", return_value={"task_name": "电视剧"},
+        ), mock.patch(
             "app.services.monitor.queue_monitor_dir_scan",
             return_value={"tasks": [{"task_name": "电视剧", "run_id": "child-batch-1"}]},
         ) as queued:
             mapping = quick_import._queue_dispatch_child_runs(
                 config,
+                "115",
                 ["电视剧/示例剧/S01", "电视剧/示例剧/S02", "电视剧/示例剧/S01"],
             )
 
-        self.assertEqual(mapping, {"电视剧": "child-batch-1"})
+        self.assertEqual(
+            mapping,
+            {"电视剧/示例剧/S01": "child-batch-1", "电视剧/示例剧/S02": "child-batch-1"},
+        )
         queued.assert_called_once_with(
             config,
             "115",

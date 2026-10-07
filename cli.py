@@ -885,8 +885,6 @@ def cmd_monitor(args, c: Client):
             "retries": args.retries or 3,
             "list_delay_ms": args.list_delay_ms or 250,
             "min_file_size_mb": args.min_file_size_mb or 0,
-            "auto_scrape_on_new": args.auto_scrape_on_new,
-            "auto_scrape_options": _parse_auto_scrape_options(args.auto_scrape_options_json),
         }
         tasks.append(new_task)
         cfg["monitor_tasks"] = tasks
@@ -1438,19 +1436,6 @@ def _build_scrape_plan_options(args) -> Dict[str, Any]:
             sys.exit("--options-json 必须是 JSON 对象")
         options.update(extra)
     return options
-
-
-def _parse_auto_scrape_options(raw: str) -> Dict[str, Any]:
-    """解析 monitor add 的 --auto-scrape-options-json，非法 JSON 直接报错退出。"""
-    if not raw:
-        return {}
-    try:
-        parsed = json.loads(raw)
-    except (ValueError, TypeError):
-        sys.exit("--auto-scrape-options-json 必须是合法 JSON 对象")
-    if not isinstance(parsed, dict):
-        sys.exit("--auto-scrape-options-json 必须是 JSON 对象")
-    return parsed
 
 
 def cmd_scrape(args, c: Client):
@@ -2220,8 +2205,6 @@ def _build_parser() -> argparse.ArgumentParser:
     sp_mon.add_argument("--retries", type=int, default=3, help="最大重试次数 (add)")
     sp_mon.add_argument("--list-delay-ms", type=int, default=250, help="列表请求延迟毫秒数 (add)")
     sp_mon.add_argument("--min-file-size-mb", type=float, default=0.0, help="最小文件大小 MB (add)")
-    sp_mon.add_argument("--auto-scrape-on-new", action="store_true", help="新增资源自动刮削整理 (add)")
-    sp_mon.add_argument("--auto-scrape-options-json", default="", help="自动整理选项 JSON 对象 (add)，如 {\"file_name_mode\":\"keep\"}")
 
     # tree
     sp_tree = sp.add_parser("tree", help="目录树同步")

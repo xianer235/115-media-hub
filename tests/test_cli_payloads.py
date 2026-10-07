@@ -222,25 +222,26 @@ class CliPayloadTest(unittest.TestCase):
             c.requests,
         )
 
-    def test_monitor_add_auto_scrape_options(self):
-        c = _RecordingClient({
-            ("GET", "/get_settings"): {"monitor_tasks": []},
-        })
-        cli.cmd_monitor(
+    def test_monitor_add_no_longer_accepts_auto_scrape_options(self):
+        """监控回归纯扫描：`monitor add` 移除自动整理开关与选项参数。"""
+        with self.assertRaises(SystemExit):
             _parse(
                 [
                     "monitor", "add", "影视监控", "--scan-path", "/115/一级",
                     "--auto-scrape-on-new",
-                    "--auto-scrape-options-json", '{"file_name_mode":"keep","delete_ad_files":true}',
                 ]
-            ),
+            )
+        c = _RecordingClient({
+            ("GET", "/get_settings"): {"monitor_tasks": []},
+        })
+        cli.cmd_monitor(
+            _parse(["monitor", "add", "影视监控", "--scan-path", "/115/一级"]),
             c,
         )
         saved = next(body for method, path, body in c.requests if path == "/save_settings")
         task = saved["monitor_tasks"][0]
-        self.assertTrue(task["auto_scrape_on_new"])
-        self.assertEqual(task["auto_scrape_options"]["file_name_mode"], "keep")
-        self.assertEqual(task["auto_scrape_options"]["delete_ad_files"], True)
+        self.assertNotIn("auto_scrape_on_new", task)
+        self.assertNotIn("auto_scrape_options", task)
 
     def test_scraper_jobs_create_runs_identify_then_plan(self):
         plan = {

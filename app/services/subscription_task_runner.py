@@ -1029,6 +1029,186 @@ def _select_subscription_offline_entries(
     }
 
 
+# 订阅「入库后整理」改名任务的等待上限：先于计划执行，阻塞也不该拖死整轮订阅。
+SUBSCRIPTION_ORGANIZE_JOB_WAIT_SECONDS = max(
+    30,
+    int(os.environ.get("SUBSCRIPTION_ORGANIZE_JOB_WAIT_SECONDS", 300) or 300),
+)
+
+
+async def _locate_subscription_imported_files(
+    provider_meta: Any,
+    cookie: str,
+    target_cid: str,
+    target_savepath: str,
+    imported_entries: Any,
+) -> List[Dict[str, Any]]:
+    """在目标目录里按「文件名 + 大小」定位本次新入库的文件。
+
+    转存 / 移动都可能换掉原来的 fid，不能沿用源条目的 id；必须回目标目录重新取一条，
+    再把单文件条目交给刮削引擎做原地改名。
+    """
+    wanted: List[Tuple[str, int]] = []
+    for entry in imported_entries if isinstance(imported_entries, list) else []:
+        if not isinstance(entry, dict) or bool(entry.get("is_dir", False)):
+            continue
+        name = str(entry.get("name", "") or "").strip()
+        if not name:
+            continue
+        wanted.append((name, max(0, int(entry.get("size", 0) or 0))))
+    if not wanted or not provider_meta:
+        return []
+    try:
+        listed = await asyncio.to_thread(provider_meta.list_entries, cookie, target_cid)
+    except Exception:
+        return []
+    by_key: Dict[Tuple[str, int], Dict[str, Any]] = {}
+    for item in listed if isinstance(listed, list) else []:
+        if not isinstance(item, dict) or bool(item.get("is_dir", False)):
+            continue
+        name = str(item.get("name", "") or "").strip()
+        if not name:
+            continue
+        by_key[(name, max(0, int(item.get("size", 0) or 0)))] = item
+    normalized_parent = normalize_relative_path(str(target_savepath or "").strip())
+    located: List[Dict[str, Any]] = []
+    for name, size in wanted:
+        item = by_key.get((name, size))
+        if not item:
+            continue
+        fid = str(item.get("fid", "") or item.get("id", "") or "").strip()
+        if not fid:
+            continue
+        located.append(
+            {
+                "id": fid,
+                "cid": fid,
+                "name": name,
+                "is_dir": False,
+                "size": size,
+                "parent_id": str(target_cid or "").strip() or "0",
+                "parent_path": normalized_parent,
+            }
+        )
+    return located
+
+
+async def _organize_subscription_imported_files(
+    *,
+    task: Dict[str, Any],
+    provider_meta: Any,
+    cookie: str,
+    provider: str,
+    target_cid: str,
+    target_savepath: str,
+    imported_entries: Any,
+) -> bool:
+    """订阅电视剧新集「入库后整理」：只原地改文件名，不建目录、不移动。
+
+    触发条件：电视剧 + ``organize_on_import`` + ``tmdb_id > 0``，任一不满足直接跳过。
+    识别失败 / 计划为空 / 执行失败都只写订阅日志、保留原名，不阻塞入库。
+    返回是否真的提交过改名任务。
+    """
+    if str(task.get("media_type", "movie") or "movie").strip().lower() != "tv":
+        return False
+    if not bool(task.get("organize_on_import", False)):
+        return False
+    tmdb_id = max(0, int(task.get("tmdb_id", 0) or 0))
+    if tmdb_id <= 0:
+        return False
+    normalized_cid = str(target_cid or "").strip()
+    normalized_savepath = normalize_relative_path(str(target_savepath or "").strip())
+    if not normalized_cid or not normalized_savepath:
+        return False
+    target_files = await _locate_subscription_imported_files(
+        provider_meta,
+        cookie,
+        normalized_cid,
+        normalized_savepath,
+        imported_entries,
+    )
+    if not target_files:
+        await write_subscription_log(
+            "入库后整理：未在目标目录找到本次新入库的文件，保留原名",
+            "info",
+        )
+        return False
+    payload = {
+        "provider": normalize_mount_provider(provider) or "115",
+        "base_cid": normalized_cid,
+        "base_path": normalized_savepath,
+        "entries": target_files,
+        "tmdb": {
+            "tmdb_id": tmdb_id,
+            "tmdb_media_type": str(task.get("tmdb_media_type", "") or "tv").strip() or "tv",
+            "tmdb_title": str(task.get("tmdb_title", "") or "").strip(),
+            "tmdb_year": str(task.get("tmdb_year", "") or "").strip(),
+            "tmdb_season_episode_map": task.get("tmdb_season_episode_map", {}),
+        },
+        "options": dict(task.get("organize_options", {}) or {}),
+    }
+    try:
+        from .scraper import (
+            build_scraper_rename_plan,
+            create_scraper_job_from_plan,
+            get_scraper_jobs_state,
+            submit_scraper_job,
+        )
+
+        plan = await asyncio.to_thread(build_scraper_rename_plan, payload)
+    except Exception as exc:
+        await write_subscription_log(
+            f"入库后整理：生成改名计划失败（{str(exc)[:120]}），保留原名",
+            "warn",
+        )
+        return False
+    actions = [
+        action
+        for action in (plan.get("actions") if isinstance(plan.get("actions"), list) else [])
+        if isinstance(action, dict) and action.get("ready") and not action.get("issue")
+    ]
+    if not actions:
+        await write_subscription_log("入库后整理：没有可执行的改名动作，保留原名", "info")
+        return False
+    executable_plan = {**plan, "actions": actions, "ready_count": len(actions)}
+    job_id = 0
+    try:
+        created = await asyncio.to_thread(create_scraper_job_from_plan, {"plan": executable_plan})
+        job_id = max(0, int((created or {}).get("job_id", 0) or 0))
+        if job_id <= 0:
+            raise RuntimeError("创建改名任务失败")
+        await asyncio.to_thread(
+            lambda: submit_scraper_job(job_id).result(timeout=SUBSCRIPTION_ORGANIZE_JOB_WAIT_SECONDS)
+        )
+        state = get_scraper_jobs_state(job_id=job_id)
+        jobs = state.get("jobs") if isinstance(state, dict) else []
+        actual = jobs[0] if isinstance(jobs, list) and jobs else {}
+    except Exception as exc:
+        await write_subscription_log(
+            f"入库后整理：执行改名失败（{str(exc)[:120]}），保留原名",
+            "warn",
+        )
+        return False
+    status = str((actual or {}).get("status", "") or "").strip()
+    succeeded = max(0, int((actual or {}).get("succeeded_actions", 0) or 0))
+    failed = max(0, int((actual or {}).get("failed_actions", 0) or 0))
+    if status == "completed":
+        await write_subscription_log(
+            f"入库后整理：已原地改名 {succeeded} 个文件（任务 #{job_id}）",
+            "success",
+        )
+        return True
+    if status == "partial":
+        await write_subscription_log(
+            f"入库后整理：部分完成，成功 {succeeded} 个 / 失败 {failed} 个（任务 #{job_id}）",
+            "warn",
+        )
+        return True
+    detail = str((actual or {}).get("status_detail", "") or "改名未完成").strip()
+    await write_subscription_log(f"入库后整理：改名未完成（{detail[:120]}），保留原名", "warn")
+    return False
+
+
 async def _run_subscription_manual_offline_import(
     *,
     task: Dict[str, Any],
@@ -1302,6 +1482,8 @@ async def _run_subscription_manual_offline_import(
             return result_base
 
         moved_savepaths: List[str] = []
+        # 每个目标目录本次真正搬进去的条目：入库后原地改名要按目录批量处理。
+        moved_targets: Dict[str, Dict[str, Any]] = {}
         moved_count = 0
         skipped_duplicates = 0
         selected_savepath = effective_savepath
@@ -1362,6 +1544,12 @@ async def _run_subscription_manual_offline_import(
             moved_count += 1
             if target_savepath not in moved_savepaths:
                 moved_savepaths.append(target_savepath)
+            target_bucket = moved_targets.setdefault(
+                target_savepath,
+                {"cid": target_cid, "entries": []},
+            )
+            target_bucket["cid"] = target_cid
+            target_bucket["entries"].append(entry)
             selected_savepath = target_savepath
             await write_subscription_log(
                 f"已移动命中文件：{str(entry.get('rel_path', '') or entry.get('name', '') or '').strip()} → {target_savepath}",
@@ -1379,6 +1567,18 @@ async def _run_subscription_manual_offline_import(
                 finished_at=now_text(),
             )
             return result_base
+
+        # 先原地改名、再刷新 STRM：监控扫描要按改名后的文件名生成播放文件。
+        for savepath, target in moved_targets.items():
+            await _organize_subscription_imported_files(
+                task=task,
+                provider_meta=provider_meta,
+                cookie=cookie,
+                provider="115",
+                target_cid=str(target.get("cid", "") or ""),
+                target_savepath=savepath,
+                imported_entries=list(target.get("entries", []) or []),
+            )
 
         auto_refresh = False
         for savepath in moved_savepaths:
@@ -5551,6 +5751,25 @@ async def run_subscription_task(
                             job_id=success_job_id,
                         )
                         ledger_updated = True
+            if task["media_type"] == "tv":
+                # 转存完成后按「文件名 + 大小」回目标目录定位新文件，原地改名。
+                # 115 的 STRM 刷新统一在批次收口做，所以改名必须排在它之前。
+                for success_record in candidate_success_records:
+                    success_job_id = max(0, int(success_record.get("job_id", 0) or 0))
+                    if success_job_id <= 0:
+                        continue
+                    latest_job_meta = get_resource_job(success_job_id, include_private=True)
+                    if not isinstance(latest_job_meta, dict):
+                        continue
+                    await _organize_subscription_imported_files(
+                        task=task,
+                        provider_meta=provider_meta,
+                        cookie=cookie_115,
+                        provider=provider,
+                        target_cid=str(latest_job_meta.get("folder_id", "") or ""),
+                        target_savepath=str(success_record.get("savepath", "") or ""),
+                        imported_entries=latest_job_meta.get("selected_entries", []),
+                    )
             if existing_episode_scan_ready:
                 existing_episode_count = len(existing_folder_episodes)
                 existing_episode_scan_stats["existing_episode_count"] = existing_episode_count

@@ -8,6 +8,7 @@ from app import core
 from app.routes import subscription as subscription_routes
 from app.services import subscription_task_runner as runner
 from app.services import subscription_runner as runner_module
+from app.services import scraper as scraper_service
 
 
 MAGNET_LINK = "magnet:?xt=urn:btih:AF33BD45B385B16A4BEF434C760E0182&dn=test"
@@ -559,8 +560,169 @@ process.stdout.write(JSON.stringify(result));
     return json.loads(completed.stdout)
 
 
+class SubscriptionOrganizeDefaultsTest(unittest.TestCase):
+    """订阅「入库后整理」默认口径：默认开启、standard 命名、中文标题（覆盖引擎默认 auto）。"""
+
+    def test_defaults_enable_tv_organize_with_chinese_standard_naming(self):
+        task = core.normalize_subscription_task({"name": "剧集", "media_type": "tv", "title": "示例剧"})
+        self.assertTrue(task["organize_on_import"])
+        options = task["organize_options"]
+        self.assertEqual(options["title_language"], "zh")
+        self.assertEqual(options["file_name_mode"], "standard")
+        self.assertEqual(options["episode_mode"], "auto")
+        self.assertFalse(options["delete_ad_files"])
+
+    def test_explicit_options_win_over_defaults(self):
+        task = core.normalize_subscription_task(
+            {
+                "name": "剧集",
+                "media_type": "tv",
+                "title": "示例剧",
+                "organize_on_import": False,
+                "organize_options": {"title_language": "en", "file_name_mode": "keep", "delete_ad_files": True},
+            }
+        )
+        self.assertFalse(task["organize_on_import"])
+        self.assertEqual(task["organize_options"]["title_language"], "en")
+        self.assertEqual(task["organize_options"]["file_name_mode"], "keep")
+        self.assertTrue(task["organize_options"]["delete_ad_files"])
+
+
+class SubscriptionOrganizeRunnerTest(unittest.IsolatedAsyncioTestCase):
+    class _Future:
+        def result(self, timeout=None):
+            return None
+
+    def _task(self, **overrides):
+        base = {
+            "media_type": "tv",
+            "organize_on_import": True,
+            "tmdb_id": 1234,
+            "tmdb_media_type": "tv",
+            "tmdb_title": "示例剧",
+            "tmdb_year": "2024",
+        }
+        base.update(overrides)
+        return base
+
+    def _provider(self, files):
+        provider = mock.MagicMock()
+        provider.list_entries.return_value = list(files)
+        return provider
+
+    async def _organize(self, task, provider, imported_entries):
+        with mock.patch.object(runner, "write_subscription_log", new_callable=mock.AsyncMock):
+            return await runner._organize_subscription_imported_files(
+                task=task,
+                provider_meta=provider,
+                cookie="cookie",
+                provider="115",
+                target_cid="target-cid",
+                target_savepath="电视剧/示例剧",
+                imported_entries=imported_entries,
+            )
+
+    async def test_tv_renames_imported_files_in_place(self):
+        provider = self._provider(
+            [{"fid": "f1", "name": "示例剧.S01E01.mkv", "size": 1000, "is_dir": False}]
+        )
+        captured = {}
+
+        def fake_plan(payload):
+            captured["payload"] = payload
+            return {
+                "actions": [{"ready": True, "issue": "", "entry_id": "f1"}],
+                "ready_count": 1,
+            }
+
+        with mock.patch.object(scraper_service, "build_scraper_rename_plan", side_effect=fake_plan), \
+                mock.patch.object(scraper_service, "create_scraper_job_from_plan", return_value={"job_id": 9}), \
+                mock.patch.object(scraper_service, "submit_scraper_job", return_value=self._Future()), \
+                mock.patch.object(
+                    scraper_service,
+                    "get_scraper_jobs_state",
+                    return_value={"jobs": [{"status": "completed", "succeeded_actions": 1, "failed_actions": 0}]},
+                ):
+            organized = await self._organize(
+                self._task(),
+                provider,
+                [{"name": "示例剧.S01E01.mkv", "size": 1000, "is_dir": False}],
+            )
+
+        self.assertTrue(organized)
+        payload = captured["payload"]
+        self.assertEqual(payload["provider"], "115")
+        self.assertEqual(payload["base_cid"], "target-cid")
+        self.assertEqual(payload["base_path"], "电视剧/示例剧")
+        self.assertEqual(payload["tmdb"]["tmdb_id"], 1234)
+        self.assertEqual(payload["tmdb"]["tmdb_media_type"], "tv")
+        # 单文件条目落在目标目录里：原地改名的输入。
+        self.assertEqual(len(payload["entries"]), 1)
+        entry = payload["entries"][0]
+        self.assertEqual(entry["id"], "f1")
+        self.assertEqual(entry["parent_id"], "target-cid")
+        self.assertEqual(entry["parent_path"], "电视剧/示例剧")
+        self.assertFalse(entry["is_dir"])
+
+    async def test_movie_subscription_is_not_renamed(self):
+        with mock.patch.object(scraper_service, "build_scraper_rename_plan") as plan:
+            organized = await self._organize(
+                self._task(media_type="movie", tmdb_media_type="movie"),
+                self._provider([{"fid": "f1", "name": "示例电影.mkv", "size": 1000, "is_dir": False}]),
+                [{"name": "示例电影.mkv", "size": 1000, "is_dir": False}],
+            )
+        self.assertFalse(organized)
+        plan.assert_not_called()
+
+    async def test_disabled_switch_skips_rename(self):
+        with mock.patch.object(scraper_service, "build_scraper_rename_plan") as plan:
+            organized = await self._organize(
+                self._task(organize_on_import=False),
+                self._provider([{"fid": "f1", "name": "示例剧.S01E01.mkv", "size": 1000, "is_dir": False}]),
+                [{"name": "示例剧.S01E01.mkv", "size": 1000, "is_dir": False}],
+            )
+        self.assertFalse(organized)
+        plan.assert_not_called()
+
+    async def test_missing_tmdb_id_skips_rename(self):
+        with mock.patch.object(scraper_service, "build_scraper_rename_plan") as plan:
+            organized = await self._organize(
+                self._task(tmdb_id=0),
+                self._provider([{"fid": "f1", "name": "示例剧.S01E01.mkv", "size": 1000, "is_dir": False}]),
+                [{"name": "示例剧.S01E01.mkv", "size": 1000, "is_dir": False}],
+            )
+        self.assertFalse(organized)
+        plan.assert_not_called()
+
+    async def test_missing_target_file_keeps_original_name(self):
+        with mock.patch.object(scraper_service, "build_scraper_rename_plan") as plan:
+            organized = await self._organize(
+                self._task(),
+                self._provider([]),
+                [{"name": "示例剧.S01E01.mkv", "size": 1000, "is_dir": False}],
+            )
+        self.assertFalse(organized)
+        plan.assert_not_called()
+
+    async def test_empty_plan_keeps_original_name(self):
+        provider = self._provider(
+            [{"fid": "f1", "name": "示例剧.S01E01.mkv", "size": 1000, "is_dir": False}]
+        )
+        with mock.patch.object(scraper_service, "build_scraper_rename_plan", return_value={"actions": []}), \
+                mock.patch.object(scraper_service, "create_scraper_job_from_plan") as create:
+            organized = await self._organize(
+                self._task(),
+                provider,
+                [{"name": "示例剧.S01E01.mkv", "size": 1000, "is_dir": False}],
+            )
+        self.assertFalse(organized)
+        create.assert_not_called()
+
+
 class SubscriptionOfflineFrontendTest(unittest.TestCase):
     def test_multiline_magnet_paste_returns_all_entries(self):
+        provider_meta = [{"name": "115", "label": "115网盘", "link_type": "115share"}]
+        text = f"{MAGNET_LINK}\n{MAGNET_LINK_B}"
         provider_meta = [{"name": "115", "label": "115网盘", "link_type": "115share"}]
         text = f"{MAGNET_LINK}\n{MAGNET_LINK_B}"
         result = run_subscription_ui(

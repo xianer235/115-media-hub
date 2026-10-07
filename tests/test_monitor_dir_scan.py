@@ -273,47 +273,32 @@ class MonitorDirScanTest(unittest.TestCase):
             )
         )
 
-    def test_manual_dir_scan_skips_auto_scrape(self):
-        """「扫描监控」的指定目录扫描只刷新 STRM，不能顺手整理文件。"""
+    def test_monitor_scan_never_auto_organizes(self):
+        """监控回归纯扫描：指定目录扫描和整任务扫描都只刷新 STRM，不再自动整理。"""
+        # 旧的自动刮削入口整段删除（含 dir_scan_only 相关跳过逻辑）。
+        self.assertFalse(hasattr(monitor, "_auto_scrape_new_media_items"))
         task = self._task(sync_clean=False, skip_by_dir_mtime=False)
-        task["auto_scrape_on_new"] = True
         path_results = {
             "/115/Library": ("t1", [_dir_item("SeriesA", "t1")]),
             "/115/Library/SeriesA": ("t1", [_file_item("E01.mkv", "t1")]),
         }
 
-        with patch.object(monitor, "_auto_scrape_new_media_items") as auto_scrape:
-            self._run_monitor(
-                path_results,
-                task=task,
-                trigger="manual",
-                payload={"provider": "115", "savepaths": ["Library/SeriesA"]},
-            )
+        # 指定目录扫描（原「扫描监控」按钮）与整任务扫描都不应产生整理结果。
+        self._run_monitor(
+            path_results,
+            task=task,
+            trigger="manual",
+            payload={"provider": "115", "savepaths": ["Library/SeriesA"]},
+        )
+        self._run_monitor(path_results, task=task, trigger="manual")
 
-        auto_scrape.assert_not_called()
         self.assertTrue(
             os.path.exists(
                 strm_files.managed_strm_file_path("Library/SeriesA/E01.mkv", root=self.strm_root)
             )
         )
-
-    def test_full_manual_scan_still_auto_scrapes(self):
-        """卡片「运行」的整任务扫描保持原行为：开启开关就自动整理新增媒体。"""
-        task = self._task(sync_clean=False, skip_by_dir_mtime=False)
-        task["auto_scrape_on_new"] = True
-        path_results = {
-            "/115/Library": ("t1", [_dir_item("SeriesA", "t1")]),
-            "/115/Library/SeriesA": ("t1", [_file_item("E01.mkv", "t1")]),
-        }
-
-        with patch.object(
-            monitor,
-            "_auto_scrape_new_media_items",
-            return_value="已自动整理 1 项（任务 #1）",
-        ) as auto_scrape:
-            self._run_monitor(path_results, task=task, trigger="manual")
-
-        auto_scrape.assert_called_once()
+        # 运行结论不再包含“自动整理”结果。
+        self.assertNotIn("已自动整理", monitor.build_monitor_run_summary({"generated": 1}))
 
     def test_savepaths_cleanup_and_index_bounded_to_union(self):
         task = self._task(sync_clean=True, skip_by_dir_mtime=True)
