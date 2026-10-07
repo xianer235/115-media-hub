@@ -1605,6 +1605,12 @@
             min-width: 0;
             gap: 0.85rem;
         }
+        /* 只有新增按钮的标题行（接收夹整理）：不要占满整条 42rem，按钮按内容宽度右对齐。 */
+        .monitor-head-actions--solo {
+            grid-template-columns: auto;
+            justify-self: end;
+            width: auto;
+        }
         .monitor-status-pill {
             display: flex;
             align-items: center;

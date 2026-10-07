@@ -22,6 +22,8 @@
         let cookieHealthCheckBusy = false;
         let resourceState = { sources: [], quick_links: [], favorite_dirs: { '115': [], quark: [] }, items: [], jobs: [], active_jobs: [], job_counts: {}, job_pagination: {}, channel_sections: [], channel_profiles: {}, subscription_channel_support: {}, search_sections: [], last_syncs: {}, channel_sync: {}, monitor_tasks: [], stats: { source_count: 0, item_count: 0, filtered_item_count: 0, completed_job_count: 0 }, cookie_configured: false, quark_cookie_configured: false, cookie_health: null, setup_status: null, search: '', search_source: 'tg', provider_filter: 'all', default_magnet_provider: '115', search_meta: {} };
         let editingMonitorName = null;
+        // 任务类型不再由弹窗里的下拉决定：从「接收夹整理」列表进来就是 inbox，从「文件夹监控」列表进来就是 scan。
+        let monitorFormType = 'scan';
         let editingSubscriptionName = null;
         let editingResourceSourceIndex = null;
         let selectedResourceId = null;
@@ -2354,7 +2356,66 @@
             </div>
         `;
 
-        function showMonitorHelp() {
+        // 接收夹整理是另一套链路（识别 → 整理 → 分发），和文件夹监控（纯扫描生成 STRM）不是一回事，
+        // 两个「i」各自弹自己的说明，不要共用同一份文案。
+        const INBOX_HELP_HTML = `
+            <div class="help-rich-section">
+                <div class="help-rich-title">这块在做什么</div>
+                <div class="help-rich-text">接收夹是<b>分类前的中转文件夹</b>：不想每次保存前先挑电影还是电视剧时，先把磁力 / 分享统一落进来，系统识别类型后按<b>接收夹任务自己的整理选项</b>重命名，再搬进同一个网盘的电影 / 电视剧文件夹。</div>
+                <div class="help-rich-text">它只是可选入口，不是强制流程：照旧把保存路径填到分类监控任务的目录也完全有效。</div>
+            </div>
+            <div class="help-rich-section">
+                <div class="help-rich-title">什么时候会跑</div>
+                <div class="help-rich-row">
+                    <span class="help-rich-key">手动</span>
+                    <span class="help-rich-text">任务里的「立即整理并分发」，不受整理节流的等待时间限制。</span>
+                </div>
+                <div class="help-rich-row">
+                    <span class="help-rich-key">定时</span>
+                    <span class="help-rich-text">任务自己的「定时执行」（按分钟，0 为关闭）。</span>
+                </div>
+                <div class="help-rich-row">
+                    <span class="help-rich-key">推送</span>
+                    <span class="help-rich-text">115 接收夹的 Webhook（油猴脚本上报保存路径后整理一次）；其他网盘的接收夹不能开 webhook，只能用上面的手动 / 定时。</span>
+                </div>
+                <div class="help-rich-row">
+                    <span class="help-rich-key">自动</span>
+                    <span class="help-rich-text">115 离线下载完成后的回调。</span>
+                </div>
+            </div>
+            <div class="help-rich-section">
+                <div class="help-rich-title">整理与分发规则</div>
+                <div class="help-rich-text">每个网盘只能有一个接收夹；电影 / 电视剧的分发目标必须和接收夹在<b>同一个网盘</b>，v1 不做跨盘分发。</div>
+                <div class="help-rich-text">同一部影视的多个条目 / 多个版本会合并进同一个媒体文件夹：文件夹撞名只保留一次改名，文件同名给后面的加 <code>(2)</code>；某个条目自己的冲突不会连累同批其他条目。</div>
+                <div class="help-rich-text">只有 115 上、且目标落在某条目录同步任务扫描范围内的条目才会刷新 STRM；其他网盘只搬运文件，不生成 STRM。</div>
+                <div class="help-rich-text">识别不准、重名冲突、搬运失败会留在接收夹并写明原因，不会被强行塞进库里。</div>
+            </div>
+            <div class="help-rich-section">
+                <div class="help-rich-title">整理节流</div>
+                <div class="help-rich-row">
+                    <span class="help-rich-key">无新文件等待</span>
+                    <span class="help-rich-text">有新保存就重新计时，连续这段时间没有新文件才统一整理，避免边下边搬。</span>
+                </div>
+                <div class="help-rich-row">
+                    <span class="help-rich-key">单批条目数</span>
+                    <span class="help-rich-text">只控制同一轮内的执行批次，不会重新扫描接收夹。</span>
+                </div>
+                <div class="help-rich-row">
+                    <span class="help-rich-key">轮间暂停</span>
+                    <span class="help-rich-text">批次之间的额外缓冲，降低网盘风控概率。</span>
+                </div>
+            </div>
+            <div class="help-rich-section">
+                <div class="help-rich-title">不做什么</div>
+                <div class="help-rich-text">不下载、不转存（磁力 / 分享的落盘还是走原有的导入链路）；自己不是扫描目录，也不会顺手扫描别的目录；文件夹监控是纯扫描，不会替你整理文件——自动整理只有接收夹（分类归档）和订阅（电视剧新集原地改名）两个入口。</div>
+            </div>
+        `;
+
+        function showMonitorHelp(kind = 'scan') {
+            if (String(kind || '').trim() === 'inbox') {
+                showHelpHtml('接收夹整理说明', INBOX_HELP_HTML);
+                return;
+            }
             showHelpHtml('文件夹监控说明', MONITOR_HELP_HTML);
         }
 
@@ -4212,9 +4273,7 @@
 
         function currentMonitorFormData() {
             const rawScanPath = document.getElementById('monitor_scan_path').value.trim();
-            const taskType = String(document.getElementById('monitor_task_type')?.value || 'scan').trim() === 'inbox'
-                ? 'inbox'
-                : 'scan';
+            const taskType = monitorFormType === 'inbox' ? 'inbox' : 'scan';
             const inboxProvider = taskType === 'inbox'
                 ? (normalizeMountProviderInput(document.getElementById('monitor_inbox_provider')?.value || '') || '115')
                 : '';
@@ -4589,7 +4648,29 @@
         }
 
         function monitorFormTaskType() {
-            return String(document.getElementById('monitor_task_type')?.value || 'scan').trim() === 'inbox' ? 'inbox' : 'scan';
+            // 类型跟着入口走：新建 / 编辑时由 openNewMonitorTask / openNewInboxTask / editMonitorTask 设好。
+            return monitorFormType === 'inbox' ? 'inbox' : 'scan';
+        }
+
+        function syncMonitorNameHint() {
+            // 任务名的示例文案跟着任务类型走：接收夹的「接收」和扫描任务的「自存影视」不是一回事，
+            // 非 115 的接收夹又用不上 webhook，所以标签里那段 webhook 说明也要跟着摘掉。
+            const input = document.getElementById('monitor_name');
+            const labelText = document.getElementById('monitor-name-label-text');
+            const isInbox = monitorFormTaskType() === 'inbox';
+            const provider = isInbox
+                ? (normalizeMountProviderInput(document.getElementById('monitor_inbox_provider')?.value || '') || '115')
+                : '';
+            if (input) {
+                input.placeholder = isInbox
+                    ? (provider === '115' ? '例如：接收' : `例如：${getProviderLabel(provider)}接收`)
+                    : '例如：自存影视';
+            }
+            if (labelText) {
+                labelText.textContent = isInbox && provider !== '115'
+                    ? '任务名'
+                    : '任务名 (用于 webhook 路径)';
+            }
         }
 
         function inboxProvidersTaken() {
@@ -4682,6 +4763,7 @@
                 }
             });
             updateMonitorScanPathHint(pathInput?.value || '');
+            syncMonitorNameHint();
             // 换网盘会决定这条任务能不能开 webhook，所以一起刷新开关状态。
             syncWebhookToggleState();
         }
@@ -4708,36 +4790,12 @@
                 pathInput.placeholder = isInbox ? `${inboxPrefix}/接收` : '/115/自存影视/115自存电视剧';
             }
             renderMonitorWebhookUrl();
+            syncMonitorNameHint();
             syncWebhookToggleState();
             if (isInbox) {
                 // 新建时表单里还没有任务名：只渲染占位说明，避免把已有接收夹的运行状态显示进来。
                 if (editingMonitorName) void refreshInboxTaskStatus();
                 else renderInboxTaskStatus({});
-            }
-        }
-
-        function syncMonitorTaskTypeOptions() {
-            // 任务类型只在新增时可选；已有任务的类型不可更改（接收夹按网盘各一个）。
-            const select = document.getElementById('monitor_task_type');
-            const hint = document.getElementById('monitor-task-type-hint');
-            if (!select) return;
-            const editingInbox = (monitorState.tasks || []).some((item) => (
-                String(item?.task_type || 'scan') === 'inbox' && item.name === editingMonitorName
-            ));
-            if (editingMonitorName) {
-                select.value = editingInbox ? 'inbox' : 'scan';
-                select.disabled = true;
-            } else {
-                select.disabled = false;
-            }
-            if (hint) {
-                if (editingInbox) {
-                    hint.textContent = '接收夹类型不能改：只有接收目录、分发目标和开关可以调整。';
-                } else if (editingMonitorName) {
-                    hint.textContent = '已有任务的类型不能改。';
-                } else {
-                    hint.textContent = '新增任务默认是扫描任务；要给别的网盘配接收夹，把类型选成「接收夹任务」（每个网盘一个）。';
-                }
             }
         }
 
@@ -4754,9 +4812,12 @@
             const checkbox = document.getElementById('monitor_webhook_enabled');
             const secretHint = document.getElementById('webhook-secret-hint');
             const providerHint = document.getElementById('webhook-provider-hint');
+            const webhookBlock = document.getElementById('inbox-webhook-block');
+            const providerOk = monitorWebhookProviderSupported();
+            // 非 115 的接收夹不支持 webhook：开关禁用的同时，连「推送地址」整块（地址 + 复制 + 油猴脚本说明）一起收起。
+            if (webhookBlock) webhookBlock.classList.toggle('hidden', !providerOk);
             if (!checkbox) return;
             const hasSecret = !!sensitiveConfigMeta.webhook_secret;
-            const providerOk = monitorWebhookProviderSupported();
             checkbox.disabled = !hasSecret || !providerOk;
             if ((!hasSecret || !providerOk) && checkbox.checked) checkbox.checked = false;
             if (secretHint) secretHint.classList.toggle('hidden', hasSecret);
@@ -4765,9 +4826,9 @@
 
         function resetMonitorForm() {
             editingMonitorName = null;
+            monitorFormType = 'scan';
             document.getElementById('monitor-modal-title').innerText = '新增监控任务';
             document.getElementById('monitor_name').value = '';
-            document.getElementById('monitor_task_type').value = 'scan';
             document.getElementById('monitor_enabled').checked = true;
             document.getElementById('monitor_webhook_enabled').checked = false;
             document.getElementById('monitor_scan_path').value = '';
@@ -4791,7 +4852,6 @@
             document.getElementById('monitor_inbox_batch_pause_seconds').value = 5;
             populateMonitorInboxTargetFields({});
             populateMonitorInboxProviderSelect({});
-            syncMonitorTaskTypeOptions();
             applyMonitorTaskTypeUI();
         }
 
@@ -4801,11 +4861,10 @@
         }
 
         function openNewInboxTask() {
-            // 接收夹按网盘各一个：这里只是把新增弹窗切成「接收夹任务」类型。
+            // 接收夹按网盘各一个：从「接收夹整理」列表进来，弹窗直接就是接收夹类型，不用再选。
             resetMonitorForm();
             document.getElementById('monitor-modal-title').innerText = '新增接收夹任务';
-            const select = document.getElementById('monitor_task_type');
-            if (select) select.value = 'inbox';
+            monitorFormType = 'inbox';
             applyMonitorTaskTypeUI();
             showLockedModal('monitor-modal');
         }
@@ -4936,9 +4995,10 @@
             const task = (monitorState.tasks || []).find(item => item.name === name);
             if (!task) return;
             editingMonitorName = task.name;
+            // 已有任务的类型不可改：编辑时按任务原本的类型渲染弹窗。
+            monitorFormType = String(task.task_type || 'scan') === 'inbox' ? 'inbox' : 'scan';
             document.getElementById('monitor-modal-title').innerText = `编辑监控任务：${task.name}`;
             document.getElementById('monitor_name').value = task.name || '';
-            document.getElementById('monitor_task_type').value = String(task.task_type || 'scan') === 'inbox' ? 'inbox' : 'scan';
             document.getElementById('monitor_enabled').checked = task.enabled !== false;
             document.getElementById('monitor_webhook_enabled').checked = !!task.webhook_enabled;
             document.getElementById('monitor_scan_path').value = task.scan_path || '';
@@ -4965,7 +5025,6 @@
             document.getElementById('monitor_inbox_idle_seconds').value = task.inbox_idle_seconds ?? 120;
             document.getElementById('monitor_inbox_max_items_per_run').value = task.inbox_max_items_per_run ?? 100;
             document.getElementById('monitor_inbox_batch_pause_seconds').value = task.inbox_batch_pause_seconds ?? 5;
-            syncMonitorTaskTypeOptions();
             applyMonitorTaskTypeUI();
             showLockedModal('monitor-modal');
             switchTab('monitor');
@@ -5075,7 +5134,11 @@
                     : {};
                 const movie = String(targets.movie || '').trim() || '未指定';
                 const tv = String(targets.tv || '').trim() || '未指定';
-                const webhookText = task?.webhook_enabled ? '已启用 Webhook 触发' : '未启用 Webhook';
+                const inboxProvider = normalizeMountProviderInput(task?.provider || '') || '115';
+                // 非 115 的接收夹没有 webhook（脚本上报的保存路径按 115 根目录解析），别只说“未启用”。
+                const webhookText = inboxProvider !== '115'
+                    ? '非 115 网盘不支持 Webhook'
+                    : (task?.webhook_enabled ? '已启用 Webhook 触发' : '未启用 Webhook');
                 const status = inboxStatusForTask(task?.name);
                 const count24h = Math.max(0, Number(status.recent_job_count_24h || 0) || 0);
                 const latest = status.latest && typeof status.latest === 'object' ? status.latest : {};

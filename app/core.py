@@ -1345,6 +1345,12 @@ def ensure_inbox_task(cfg: Dict[str, Any]) -> None:
         if str(inbox.get("scan_path", "") or "").strip() == "/":
             # 空路径保持为空，界面才会提示“请先选择接收文件夹”，而不是显示成根目录。
             inbox["scan_path"] = ""
+        if (
+            normalize_mount_provider(inbox.get("provider", "")) or MONITOR_INBOX_DEFAULT_PROVIDER
+        ) != MONITOR_INBOX_DEFAULT_PROVIDER:
+            # Webhook 只对 115 的接收夹开放：脚本上报的保存路径按 115 根目录解析，别的网盘配了也落不到本盘。
+            # 界面上开关本来就禁选 + 落库前清掉，这里再兜一次，手工改配置文件也不会留下一个可用的 webhook。
+            inbox["webhook_enabled"] = False
         if inbox is primary_inbox and legacy_inbox and not str(inbox.get("scan_path", "") or "").strip():
             inbox["scan_path"] = legacy_inbox
         if inbox is primary_inbox and legacy_enabled:

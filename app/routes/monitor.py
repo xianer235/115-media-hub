@@ -600,6 +600,17 @@ async def webhook(task_name: str, request: Request) -> JSONResponse:
     task = next((task for task in cfg["monitor_tasks"] if task["name"] == task_name), None)
     if not task:
         return JSONResponse(status_code=404, content={"ok": False, "msg": "未找到对应监控任务"})
+    if normalize_task_type(task.get("task_type")) == MONITOR_TASK_TYPE_INBOX:
+        inbox_provider = normalize_mount_provider(task.get("provider", "")) or MONITOR_INBOX_DEFAULT_PROVIDER
+        if inbox_provider != MONITOR_INBOX_DEFAULT_PROVIDER:
+            # 脚本上报的 savepath 按 115 根目录解析：挂到别的网盘上会指错目录，所以直接拒掉而不是当成该盘路径用。
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "ok": False,
+                    "msg": "Webhook 只支持 115 网盘的接收夹（脚本上报的保存路径按 115 根目录解析）；这个接收夹请用面板的「立即整理并分发」或定时执行",
+                },
+            )
     if not task.get("webhook_enabled"):
         return JSONResponse(status_code=400, content={"ok": False, "msg": "该任务未开启 webhook"})
     if normalize_task_type(task.get("task_type")) == MONITOR_TASK_TYPE_SCAN and task.get("enabled") is False:

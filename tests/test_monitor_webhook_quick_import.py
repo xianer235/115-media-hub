@@ -146,6 +146,15 @@ class QuickImportWebhookTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("接收夹", self._json(response)["msg"])
         submit.assert_not_called()
 
+    async def test_rejects_webhook_for_non_115_inbox(self):
+        """Webhook 只支持 115 的接收夹：挂到别的网盘上直接拒掉，不把 115 相对路径当成该盘路径用。"""
+        cfg = _cfg(inbox=_inbox_task(name="夸克接收", path="/quark/接收", provider="quark"))
+        response, submit = await self._call(_magnet_payload(savepath=""), cfg=cfg, task_name="夸克接收")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("只支持 115", self._json(response)["msg"])
+        submit.assert_not_called()
+
     async def test_rejects_when_no_target_task(self):
         cfg = _cfg(tasks=[_scan_task("电影", "/115/电影")], inbox=_inbox_task(targets={}))
         response, submit = await self._call(_magnet_payload(), cfg=cfg)

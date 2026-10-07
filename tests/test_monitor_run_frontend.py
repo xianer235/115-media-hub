@@ -1277,8 +1277,12 @@ class MonitorPageHelpTest(unittest.TestCase):
     def test_header_copy_moves_into_help_button(self):
         html = MONITOR_PAGE_PATH.read_text(encoding="utf-8")
         self.assertIn("文件夹监控任务列表", html)
-        self.assertIn('onclick="showMonitorHelp()"', html)
+        self.assertIn("接收夹整理", html)
+        # 两块列表各有各的说明按钮：别都指到同一份「文件夹监控说明」。
+        self.assertIn("onclick=\"showMonitorHelp('scan')\"", html)
+        self.assertIn("onclick=\"showMonitorHelp('inbox')\"", html)
         self.assertIn('title="文件夹监控说明"', html)
+        self.assertIn('title="接收夹整理说明"', html)
         self.assertIn("monitor-head-title", html)
         # 原正文文案不再直接铺在页面上
         self.assertNotIn("扫描 115 网盘目录，生成或刷新本地", html)
@@ -1287,13 +1291,29 @@ class MonitorPageHelpTest(unittest.TestCase):
     def test_help_modal_holds_monitor_copy(self):
         script = INDEX_JS_PATH.read_text(encoding="utf-8")
         self.assertIn("const MONITOR_HELP_HTML", script)
-        self.assertIn("function showMonitorHelp()", script)
+        self.assertIn("const INBOX_HELP_HTML", script)
+        self.assertIn("function showMonitorHelp(kind = 'scan')", script)
         self.assertIn("showHelpHtml('文件夹监控说明', MONITOR_HELP_HTML)", script)
+        self.assertIn("showHelpHtml('接收夹整理说明', INBOX_HELP_HTML)", script)
         self.assertIn("window.showMonitorHelp = showMonitorHelp;", script)
         # 说明本身保留在弹窗里：局部刷新 + 路径匹配 + 跳过条件
         self.assertIn("资源导入 / Webhook 命中 savepath 时会优先局部刷新", script)
         self.assertIn("savepath 必须落在某条任务的扫描路径内", script)
         self.assertIn("文件大小过滤", script)
+
+    def test_inbox_help_talks_about_inbox_not_scan(self):
+        """接收夹那份说明讲识别 / 整理 / 分发，不能抄文件夹监控的扫描口径。"""
+        script = INDEX_JS_PATH.read_text(encoding="utf-8")
+        inbox_block = script.split("const INBOX_HELP_HTML", 1)[1].split("function showMonitorHelp", 1)[0]
+        for marker in (
+            "分类前的中转文件夹",
+            "立即整理并分发",
+            "每个网盘只能有一个接收夹",
+            "只搬运文件，不生成 STRM",
+            "文件夹监控是纯扫描，不会替你整理文件",
+        ):
+            self.assertIn(marker, inbox_block)
+        self.assertNotIn("savepath 必须落在某条任务的扫描路径内", inbox_block)
 
 
 if __name__ == "__main__":

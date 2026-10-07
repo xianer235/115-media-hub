@@ -7,18 +7,10 @@
                 <div class="monitor-modal-body space-y-4">
                     <label class="block">
                         <span class="text-xs text-slate-500 inline-flex items-center gap-2">
-                            任务名 (用于 webhook 路径)
-                            <button type="button" class="info-dot" onclick="showHelp('任务名会用于 webhook 地址：/webhook/任务名。建议用中文短名，且保持唯一。')">i</button>
+                            <span id="monitor-name-label-text">任务名 (用于 webhook 路径)</span>
+                            <button type="button" class="info-dot" onclick="showHelp('任务名用于区分任务，也是 webhook 地址 /webhook/任务名 的一部分（Webhook 只对 115 网盘的接收夹开放）。建议用中文短名，且保持唯一。')">i</button>
                         </span>
                         <input id="monitor_name" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：自存影视">
-                    </label>
-                    <label class="block">
-                        <span class="text-xs text-slate-500">任务类型</span>
-                        <select id="monitor_task_type" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none" onchange="applyMonitorTaskTypeUI()">
-                            <option value="scan">扫描任务：扫描目录生成 STRM</option>
-                            <option value="inbox">接收夹任务：接收导入后识别分发</option>
-                        </select>
-                        <div id="monitor-task-type-hint" class="text-[11px] text-slate-500 leading-5 mt-1"></div>
                     </label>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                         <label class="flex items-center gap-3 cursor-pointer text-sm">
@@ -29,7 +21,7 @@
                         <label class="flex items-center gap-3 cursor-pointer text-sm">
                             <input type="checkbox" id="monitor_webhook_enabled" class="ui-checkbox">
                             <span>开启 webhook</span>
-                            <button type="button" class="info-dot" onclick="showHelp('Webhook 参数说明：\\n1) 接口地址：/webhook/任务名，任务名用于匹配这条任务（扫描任务或接收夹任务）；修改任务名会改变 webhook 地址，记得同步油猴脚本里的“请求地址”\\n2) 请求方式：POST + JSON\\n3) 磁力导入必填：magnet 或 link_url + savepath\\n4) 扫描任务的 savepath 填 115 根目录下的相对路径（例如 电影/新片），且必须落在本任务扫描路径内，导入成功后才会自动刷新并生成 strm；接收夹任务的 savepath 填接收夹或它的子目录（同样是所在网盘根目录下的相对路径），留空即接收夹，下载完成后自动识别整理再按类型分发\\n5) delayTime 可选，表示本次导入成功后延迟几秒再刷新 / 整理；不传则使用任务默认延迟\\n6) title / sharetitle 只用于日志或局部刷新提示\\n7) 签名校验可选：X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign，或 X-Webhook-Token；这是全站唯一密钥，扫描任务和接收夹任务共用，不用分开配。')">i</button>
+                            <button type="button" class="info-dot" onclick="showHelp('Webhook 参数说明：\\n1) 接口地址：/webhook/任务名，任务名用于匹配这条任务（扫描任务或 115 的接收夹任务）；修改任务名会改变 webhook 地址，记得同步油猴脚本里的“请求地址”\\n2) 请求方式：POST + JSON\\n3) 磁力导入必填：magnet 或 link_url + savepath\\n4) 扫描任务的 savepath 填 115 根目录下的相对路径（例如 电影/新片），且必须落在本任务扫描路径内，导入成功后才会自动刷新并生成 strm；115 接收夹任务的 savepath 填接收夹或它的子目录（按 115 根目录解析的相对路径），留空即接收夹，下载完成后自动识别整理再按类型分发\\n5) delayTime 可选，表示本次导入成功后延迟几秒再刷新 / 整理；不传则使用任务默认延迟\\n6) title / sharetitle 只用于日志或局部刷新提示\\n7) 签名校验可选：X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign，或 X-Webhook-Token；这是全站唯一密钥，扫描任务和接收夹任务共用，不用分开配；Webhook 只对 115 的接收夹开放，别的网盘用「立即整理并分发」或定时执行。')">i</button>
                         </label>
                     </div>
                     <div id="webhook-secret-hint" class="hidden text-xs text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-xl p-3 leading-5">
@@ -219,9 +211,12 @@
                         <div class="text-[11px] text-slate-500 leading-5">接收夹只是分类前的中转：识别为电影 / 电视剧的条目会按上面的接收夹整理选项重命名，再搬进同盘的目标文件夹；只有 115 上、且目标落在某个目录同步任务的扫描范围内时才会刷新 STRM；识别不准的留在接收夹并写明原因。</div>
                         <div class="rounded-xl border border-slate-700 bg-slate-900/60 p-3 space-y-3">
                             <div class="flex flex-wrap items-center justify-between gap-2">
-                                <div class="text-xs font-bold text-slate-300">推送地址</div>
+                                <div class="text-xs font-bold text-slate-300">手动整理</div>
                                 <button id="inbox-task-run-btn" type="button" onclick="toggleInboxTaskRun()" class="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold">立即整理并分发</button>
                             </div>
+                        </div>
+                        <div id="inbox-webhook-block" class="rounded-xl border border-slate-700 bg-slate-900/60 p-3 space-y-3">
+                            <div class="text-xs font-bold text-slate-300">推送地址</div>
                             <div class="resource-save-path-grid">
                                 <input id="monitor_inbox_webhook_url" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-xs font-mono" readonly value="保存任务后生成">
                                 <button type="button" onclick="copyMonitorWebhookUrl()" class="px-3 py-3 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold whitespace-nowrap">复制地址</button>

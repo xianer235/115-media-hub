@@ -4,11 +4,11 @@
                     <div class="monitor-head-copy">
                         <h3 class="group-title mb-0 monitor-head-title">
                             接收夹整理
-                            <button type="button" class="info-dot" aria-label="接收夹说明" title="接收夹说明" onclick="showMonitorHelp()">i</button>
+                            <button type="button" class="info-dot" aria-label="接收夹整理说明" title="接收夹整理说明" onclick="showMonitorHelp('inbox')">i</button>
                         </h3>
                         <div class="text-xs text-slate-400 mt-2">接收夹是中转入口：识别 → 按接收夹自己的整理选项重命名 → 搬到同盘的目标文件夹。</div>
                     </div>
-                    <div class="monitor-head-actions">
+                    <div class="monitor-head-actions monitor-head-actions--solo">
                         <button onclick="openNewInboxTask()" class="monitor-head-add-btn px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold min-h-[42px]">+ 新增接收夹</button>
                     </div>
                 </div>
@@ -20,7 +20,7 @@
                     <div class="monitor-head-copy">
                         <h3 class="group-title mb-0 monitor-head-title">
                             文件夹监控任务列表
-                            <button type="button" class="info-dot" aria-label="文件夹监控说明" title="文件夹监控说明" onclick="showMonitorHelp()">i</button>
+                            <button type="button" class="info-dot" aria-label="文件夹监控说明" title="文件夹监控说明" onclick="showMonitorHelp('scan')">i</button>
                         </h3>
                         <div class="text-xs text-slate-400 mt-2">目录同步只扫描目录、生成 / 同步 STRM，不整理文件。</div>
                     </div>

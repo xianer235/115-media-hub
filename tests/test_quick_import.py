@@ -126,6 +126,33 @@ class QuickImportConfigTest(unittest.TestCase):
         self.assertEqual(core.get_inbox_task(cfg, "夸克接收")["provider"], "quark")
         self.assertEqual(core.get_inbox_task(cfg, "不存在的接收夹"), {})
 
+    def test_non_115_inbox_cannot_keep_webhook_enabled(self):
+        """Webhook 只对 115 的接收夹开放：手工改配置文件也留不下一个可用的 webhook。"""
+        cfg = core.normalize_config(
+            {
+                "webhook_secret": "s3cret",
+                "mount_points": [dict(item) for item in MOUNT_POINTS] + [{"provider": "quark", "prefix": "/quark"}],
+                "monitor_tasks": [
+                    {
+                        "name": "接收",
+                        "task_type": "inbox",
+                        "provider": "115",
+                        "scan_path": "/115/接收",
+                        "webhook_enabled": True,
+                    },
+                    {
+                        "name": "夸克接收",
+                        "task_type": "inbox",
+                        "provider": "quark",
+                        "scan_path": "/quark/接收",
+                        "webhook_enabled": True,
+                    },
+                ],
+            }
+        )
+        self.assertTrue(core.get_inbox_task(cfg, "接收")["webhook_enabled"])
+        self.assertFalse(core.get_inbox_task(cfg, "夸克接收")["webhook_enabled"])
+
     def test_configured_inbox_task_survives_normalize(self):
         cfg = core.normalize_config(
             {
