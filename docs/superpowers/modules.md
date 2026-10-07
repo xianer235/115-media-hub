@@ -33,7 +33,7 @@
 ### 影视订阅（subscription）
 - **用途**：按片名/剧名周期找资源并入库，持续追更。
 - **入口**：页面「影视订阅」；`/subscription/...`；CLI `subscribe ...`。
-- **会做**：按名称搜索资源、按质量/集数筛选、转存或磁力离线入库、记录剧集台账、可选通知，并在入库后精准触发监控刷新（STRM + 该任务的自动整理开关）。
+- **会做**：按名称搜索资源、按质量/集数筛选、转存或磁力离线入库、记录剧集台账、可选通知，并在入库后精准触发监控刷新（STRM + 该任务的自动整理开关）；「扫描链接」弹窗支持一次粘贴多条（每行一条，115 可混排分享/磁力/电驴），每条链接各自排一次任务按顺序执行；磁力/电驴走 115 离线时，115 报「下载完成」后还会在**宽限期（30 秒 / 每 10 秒一次 / 最多 3 次）**重扫中转目录，避免 115 目录列表滞后于一瞬间把「文件刚到」判成「没有文件」。
 - **不会做**：不直接写 STRM 文件（生成交给文件夹监控 / 目录树），不整理你已有的库结构。
 - **相关代码**：`app/routes/subscription.py`、`app/services/subscription.py`；页面 `templates/partials/pages/subscription.html`
 - **细节**：README 的「方案三 / 方案四」；磁力 / 电驴手动离线入库的实现说明用 `rg "磁力/电驴离线入库" docs/superpowers/handoff-archive.md` 定位
@@ -101,7 +101,7 @@
 | `app/routes/recommendation.py` | 资源推荐状态与想看清单 |
 | `app/routes/scraper.py` | 网盘文件浏览 / 改名 / 移动 / 复制 / 删除、批量识别与命名计划、刮削任务创建与回滚、接收夹快捷导入触发 |
 | `app/routes/monitor.py` | 监控 Webhook 接收与签名校验、任务增删改、手动与指定目录扫描、运行记录（详情 / 重试 / 取消 / 清理）、日志、油猴任务列表 |
-| `app/routes/subscription.py` | 订阅任务增删改、手动开始（含磁力 / 电驴链接注入）、剧集台账、进度重建 |
+| `app/routes/subscription.py` | 订阅任务增删改、手动开始（含磁力 / 电驴链接注入，支持一次提交多条 `links`）、剧集台账、进度重建 |
 | `app/routes/tree.py` | 目录树任务增删改、运行 / 全量重写、全量同步、任务与日志查询 |
 | `app/routes/tmdb.py` | TMDB 搜索 / 详情 / 类型 / 排行榜 / discover 接口 |
 | `app/routes/strm.py` | 播放代理（`/strm/proxy`、`/strm/relay`）与孤儿刮削元数据清理 |
@@ -121,7 +121,7 @@
 | `app/services/ai_match.py` | OpenAI 兼容大模型辅助识别（关键词生成 + 候选选择，带缓存 / 重试 / 用量统计） |
 | `app/services/resource.py` | 资源导入任务执行（磁力离线、网盘转存 / 接收 / 保存） |
 | `app/services/subscription.py` | 订阅编排入口，聚合下列订阅子模块 |
-| `app/services/subscription_runner.py` | 订阅队列调度与并发控制 |
+| `app/services/subscription_runner.py` | 订阅队列调度与并发控制（支持一次追加多条手动候选、只触发一次调度） |
 | `app/services/subscription_task_runner.py` | 单个订阅任务的一次完整执行 |
 | `app/services/subscription_episode.py` | 剧集 / 集数识别与台账证据 |
 | `app/services/subscription_share_selection.py` | 分享内容筛选（剧集 / 标题 / 质量） |
@@ -174,4 +174,12 @@
 | 发布新版本 | `version.json`、`CHANGELOG.md`、`README.md`、`state.md` 一起对齐 |
 | 当前状态 / 待办变化 | `state.md` |
 
-校验命令：`.venv/bin/python -m unittest tests.test_modules_doc -v`（全量测试里也会跑到）。
+校验命令：`scripts/check.sh tests.test_modules_doc`（等价的原始命令是 `.venv/bin/python -m unittest tests.test_modules_doc -v`；全量测试里也会跑到）。
+
+工具约定（`AGENTS.md` 是本机文件、不入库，所以把常用约定同步在这里）：
+
+- 检索 `handoff-archive.md` / `handoff.md` / `CHANGELOG.md` 这类「一行一条超长记录」的文件时加 `--max-columns`：
+  `rg -n --max-columns 300 "关键词" docs/superpowers/handoff-archive.md`。
+  不加参数时一次 `rg "订阅" docs/superpowers/handoff-archive.md` 会吐出约 30 KB，加了只剩约 1.5 KB。
+- 本地验证统一走 `scripts/check.sh`（编译 + 改动 JS 的 `node --check` + 指定测试或 `--all` + `handoff.md` 体积预算 + `git diff --check`），用法见脚本头部注释。
+  `handoff.md` 是「每个会话开头都要读」的文件，超过 32768 字节即判定失败，提示运行 `scripts/rotate_handoff.py`；预算可用环境变量 `HANDOFF_BUDGET_BYTES` 覆盖。

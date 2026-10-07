@@ -36,6 +36,23 @@ class CliGrammarTest(unittest.TestCase):
         self.assertEqual(args.cron_minutes, 120)
         self.assertEqual(args.savepath, "")
 
+    def test_subscribe_start_with_link_accepts_repeated_links(self):
+        args = self._parse(
+            [
+                "subscribe",
+                "start-with-link",
+                "某美剧",
+                "--links",
+                "magnet:?xt=urn:btih:AF33BD45B385B16A4BEF434C760E0182",
+                "--links",
+                "ed2k://|file|a.mkv|1|0123456789abcdef0123456789abcdef|/",
+            ]
+        )
+        self.assertEqual(args.action, "start-with-link")
+        self.assertEqual(args.name, ["某美剧"])
+        self.assertEqual(args.link, "")
+        self.assertEqual(len(args.links), 2)
+
     def test_scrape_jobs_create_accepts_tmdb_args(self):
         args = self._parse(
             ["scrape", "jobs-create", "/电影/x.mkv", "--tmdb-id", "123", "--media-type", "tv"]

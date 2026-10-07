@@ -22,6 +22,9 @@ config/
 .cursor/
 .superpowers/
 
+# 历史 UI 备份（已移出仓库；目录名保留忽略，避免以后放回来又被跟踪/被搜索命中）
+backup/
+
 # preview runtime (local validation only)
 preview-runtime/
 

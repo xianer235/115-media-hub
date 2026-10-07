@@ -1838,19 +1838,36 @@
             await refreshSubscriptionState();
         }
 
-        function extractFirstHttpUrl(text = '') {
-            const raw = String(text || '').trim();
-            if (!raw) return '';
-            const links = raw.match(/https?:\/\/[^\s<>'"]+/gi) || [];
-            if (links.length) return String(links[0] || '').replace(/[，。；、]+$/g, '');
-            const compact = raw.replace(/\s+/g, '');
-            if (/^[a-z0-9.-]+\.[a-z]{2,}(?:\/[^\s]*)?$/i.test(compact)) return compact;
-            return '';
+        // 与后端 extract_resource_links 保持同序：同一位置优先取更精确的链接，
+        // 磁力/电驴用整段正则匹配，避免文件名里的空格把链接截断。
+        const SUBSCRIPTION_LINK_MATCHERS = [
+            /magnet:\?xt=urn:btih:[A-Za-z0-9]{32,40}[^\s<>'"]*/gi,
+            /ed2k:\/\/\|file\|[^\r\n|<>'"]+\|\d+\|[a-f0-9]{32}\|(?:[^/|\r\n<>'"][^|\r\n<>'"]*\|)*\//gi,
+            /(?:https?:\/\/)?(?:115cdn|115|anxia)\.com\/s\/[A-Za-z0-9]+(?:\?[^\s<>'"#]*)?(?:#[A-Za-z0-9]{1,16})?/gi,
+            /https?:\/\/[^\s<>'"]+/gi,
+        ];
+
+        function collectSubscriptionLinkMatches(text = '') {
+            const raw = String(text || '');
+            if (!raw.trim()) return [];
+            const matches = [];
+            SUBSCRIPTION_LINK_MATCHERS.forEach((pattern, priority) => {
+                const regex = new RegExp(pattern.source, pattern.flags);
+                let match = regex.exec(raw);
+                while (match) {
+                    const link = String(match[0] || '').replace(/[，。；、]+$/g, '').trim();
+                    if (link) matches.push({ index: match.index, priority, link });
+                    match = regex.exec(raw);
+                }
+            });
+            matches.sort((a, b) => (a.index - b.index) || (a.priority - b.priority));
+            return matches;
         }
 
-        function extractFirstSubscriptionShareUrl(text = '', provider = 'quark') {
-            const raw = String(text || '').trim();
-            if (!raw) return '';
+        function extractSubscriptionLinkEntries(text = '', provider = 'quark') {
+            const raw = String(text || '');
+            const matches = collectSubscriptionLinkMatches(raw);
+            if (!matches.length) return [];
             const normalizedProvider = normalizeSubscriptionProvider(provider, '115');
             const providerMeta = (window.providerMeta || []).find(m => m.name === normalizedProvider);
             const providerLinkType = String(providerMeta?.link_type || '').trim().toLowerCase();
@@ -1859,13 +1876,25 @@
                 allowedTypes.add('magnet');
                 allowedTypes.add('ed2k');
             }
-            const links = raw.match(/(?:https?:\/\/)?[^\s<>'"]+/gi) || [];
-            for (const link of links) {
-                const candidate = String(link || '').replace(/[，。；、]+$/g, '');
-                if (!candidate) continue;
-                if (allowedTypes.has(detectResourceLinkTypeByUrl(candidate))) return candidate;
+            const accepted = [];
+            const seen = new Set();
+            for (const item of matches) {
+                if (!item.link || seen.has(item.link)) continue;
+                if (!allowedTypes.has(detectResourceLinkTypeByUrl(item.link))) continue;
+                seen.add(item.link);
+                accepted.push(item);
             }
-            return extractFirstHttpUrl(raw);
+            // 每条链接只带“自己到下一段链接之间”的文本，提取码就不会串到别的链接上。
+            return accepted.map((item, index) => {
+                const nextIndex = index + 1 < accepted.length ? accepted[index + 1].index : raw.length;
+                const segment = raw.slice(item.index, Math.max(item.index, nextIndex)).trim();
+                return { link_url: item.link, raw_text: segment || item.link };
+            });
+        }
+
+        function extractFirstSubscriptionShareUrl(text = '', provider = 'quark') {
+            const entries = extractSubscriptionLinkEntries(text, provider);
+            return entries.length ? entries[0].link_url : '';
         }
 
         function setSubscriptionLinkScanError(message = '') {
@@ -1934,20 +1963,20 @@
             if (eyebrowEl) eyebrowEl.textContent = `${providerLabel} Link Scan`;
             if (taskNameEl) taskNameEl.value = name;
             if (taskLabelEl) taskLabelEl.textContent = `任务：${providerLabel} · ${String(task.title || name || '').trim() || name}`;
-            if (inputLabelEl) inputLabelEl.textContent = `${providerLabel} 分享链接或完整分享文本`;
+            if (inputLabelEl) inputLabelEl.textContent = `${providerLabel} 分享链接（每行一条，支持多条）`;
             if (textEl) {
                 textEl.value = '';
                 if (provider === '115') {
-                    textEl.placeholder = '粘贴 115 分享链接、磁力或电驴链接；磁力/电驴会离线下载到 115 中转目录后自动挑选入库';
+                    textEl.placeholder = '每行粘贴一条 115 分享链接、磁力或电驴链接；磁力/电驴会离线下载到 115 中转目录后自动挑选入库';
                 } else {
-                    textEl.placeholder = `粘贴 ${example}，或包含链接与提取码的整段分享文本`;
+                    textEl.placeholder = `每行粘贴一条 ${example}，或包含链接与提取码的整段分享文本`;
                 }
             }
             if (noteEl) {
                 if (provider === '115') {
-                    noteEl.textContent = '提交后会跳过资源搜索；磁力/电驴链接会先离线下载到 115 中转目录（云下载/磁力中转/任务名），下载完成后自动挑选命中文件入库并触发监控。';
+                    noteEl.textContent = '提交后会跳过资源搜索；每条链接按顺序排队执行。磁力/电驴链接会先离线下载到 115 中转目录（云下载/磁力中转/任务名），下载完成后自动挑选命中文件入库并触发监控。';
                 } else {
-                    noteEl.textContent = '提交后会跳过资源搜索，把这个链接当作已命中标题的候选资源，继续走订阅的集数识别、缺失判断和导入流程。';
+                    noteEl.textContent = '提交后会跳过资源搜索，把每条链接当作已命中标题的候选资源，按顺序继续走订阅的集数识别、缺失判断和导入流程。';
                 }
             }
             if (submitBtn) submitBtn.disabled = false;
@@ -1972,16 +2001,8 @@
             const normalizedRaw = String(rawText || '').trim();
             const task = getSubscriptionTaskByName(name);
             const provider = normalizeSubscriptionProvider(task?.provider || '115', '115');
-            const providerMeta = (window.providerMeta || []).find(m => m.name === provider);
-            const providerLinkType = String(providerMeta?.link_type || '').trim().toLowerCase();
-            const allowedTypes = new Set([providerLinkType]);
-            if (provider === '115') {
-                allowedTypes.add('magnet');
-                allowedTypes.add('ed2k');
-            }
-            const linkUrl = extractFirstSubscriptionShareUrl(normalizedRaw, provider);
-            const validLink = !!providerLinkType && allowedTypes.has(detectResourceLinkTypeByUrl(linkUrl));
-            if (!linkUrl || !validLink) {
+            const entries = extractSubscriptionLinkEntries(normalizedRaw, provider);
+            if (!entries.length) {
                 const exampleMap = {
                     '115': 'https://115.com/s/xxxxxxx?password=abcd',
                     quark: 'https://pan.quark.cn/s/xxxxxx',
@@ -1995,7 +2016,7 @@
                         ? `${getSubscriptionProviderLabel(provider)} 分享/磁力/电驴链接`
                         : `${getSubscriptionProviderLabel(provider)} 分享链接`;
                 const exampleText = provider === '115' ? '分享链接、磁力或电驴链接' : example;
-                setSubscriptionLinkScanError(`请粘贴有效的${providerText}，例如 ${exampleText}`);
+                setSubscriptionLinkScanError(`请粘贴有效的${providerText}（每行一条），例如 ${exampleText}`);
                 return;
             }
             let data = {};
@@ -2004,7 +2025,7 @@
                 setSubscriptionLinkScanError('');
                 data = await window.MediaHubApi.postJson('/subscription/start_with_link', {
                     name,
-                    link_url: linkUrl,
+                    links: entries,
                     raw_text: normalizedRaw,
                 });
             } catch (error) {
@@ -2025,7 +2046,17 @@
                     summary: { step: '准备执行', detail: `${name} (manual_link)` }
                 }, { forceRender: true });
             }
-            showToast('已提交扫描链接', { tone: 'success', duration: 2600, placement: 'top-center' });
+            const submittedCount = Math.max(1, Number(data.submitted || entries.length || 1) || 1);
+            const skippedCount = Array.isArray(data.skipped) ? data.skipped.length : 0;
+            const messages = [
+                submittedCount > 1 ? `已提交 ${submittedCount} 条链接，按顺序排队执行` : '已提交扫描链接',
+            ];
+            if (skippedCount > 0) messages.push(`${skippedCount} 条未能识别已跳过`);
+            showToast(messages.join('；'), {
+                tone: skippedCount > 0 ? 'warn' : 'success',
+                duration: 2600,
+                placement: 'top-center',
+            });
             await refreshSubscriptionState();
         }
 

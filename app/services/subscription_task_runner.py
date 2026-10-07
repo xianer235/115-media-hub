@@ -30,6 +30,11 @@ SUBSCRIPTION_OFFLINE_POLL_MAX_SECONDS = 43200
 SUBSCRIPTION_OFFLINE_RETENTION_DAYS = 7
 SUBSCRIPTION_OFFLINE_SCAN_MAX_DIRS = 300
 SUBSCRIPTION_OFFLINE_SCAN_MAX_ENTRIES = 3000
+# 115 报「下载完成」时文件可能还没出现在目录列表里（落盘/列表滞后），
+# 所以完成后再宽限一段时间重复扫描，避免把「刚到但没列出来」当成「没有文件」。
+SUBSCRIPTION_OFFLINE_STAGING_GRACE_SECONDS = 30
+SUBSCRIPTION_OFFLINE_STAGING_RESCAN_INTERVAL_SECONDS = 10
+SUBSCRIPTION_OFFLINE_STAGING_MAX_ATTEMPTS = 3
 
 
 def _format_subscription_matched_episode_summary(episodes: Any) -> str:
@@ -889,6 +894,50 @@ def _list_subscription_offline_staging_entries(
     }
 
 
+async def _wait_for_subscription_offline_staging_meta(
+    provider: Any,
+    cookie: str,
+    root_cid: str,
+    task: Dict[str, Any],
+    min_size_bytes: int = 0,
+) -> Dict[str, Any]:
+    """列出中转目录文件；扫空时在宽限期内重扫，应对 115 目录列表滞后。
+
+    返回最后一次 `_list_subscription_offline_staging_entries` 的结果；宽限期内一直
+    扫空就返回空结果，由调用方决定怎么报错（这里不抛异常，方便测试与复用）。
+    """
+    grace_seconds = max(0.0, float(SUBSCRIPTION_OFFLINE_STAGING_GRACE_SECONDS or 0))
+    interval_seconds = max(0.0, float(SUBSCRIPTION_OFFLINE_STAGING_RESCAN_INTERVAL_SECONDS or 0))
+    max_attempts = max(1, int(SUBSCRIPTION_OFFLINE_STAGING_MAX_ATTEMPTS or 1))
+    deadline = time.time() + grace_seconds
+    warned = False
+    attempt = 0
+    while True:
+        attempt += 1
+        meta = await asyncio.to_thread(
+            _list_subscription_offline_staging_entries,
+            provider,
+            cookie,
+            root_cid,
+            task,
+            min_size_bytes,
+        )
+        if isinstance(meta, dict) and meta.get("files"):
+            return meta
+        if attempt >= max_attempts:
+            return meta if isinstance(meta, dict) else {}
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            return meta if isinstance(meta, dict) else {}
+        if not warned:
+            warned = True
+            await write_subscription_log(
+                f"中转目录暂未出现文件，等待 115 落盘（最多 {max_attempts} 次 / {int(grace_seconds)} 秒）",
+                "warn",
+            )
+        await asyncio.sleep(min(interval_seconds, remaining) if interval_seconds > 0 else 0)
+
+
 def _select_subscription_offline_entries(
     task: Dict[str, Any],
     files: List[Dict[str, Any]],
@@ -1201,8 +1250,8 @@ async def _run_subscription_manual_offline_import(
             detail="正在识别并挑选中转文件",
         )
         min_size_bytes = max(0, int(float(task.get("min_file_size_mb", 0) or 0) * 1024 * 1024))
-        staging_meta = await asyncio.to_thread(
-            _list_subscription_offline_staging_entries,
+        staging_scan_started_at = time.time()
+        staging_meta = await _wait_for_subscription_offline_staging_meta(
             provider_meta,
             cookie,
             staging_cid,
@@ -1222,7 +1271,10 @@ async def _run_subscription_manual_offline_import(
         if bool(staging_meta.get("truncated", False)):
             await write_subscription_log("中转目录文件较多，本次扫描已截断，可能遗漏部分文件", "warn")
         if not files:
-            result_base["last_failed_detail"] = "115 离线下载完成，但中转目录未发现可入库媒体文件"
+            waited_seconds = max(0, int(round(time.time() - staging_scan_started_at)))
+            result_base["last_failed_detail"] = (
+                f"115 离线下载完成，但中转目录未发现可入库媒体文件（已等待 {waited_seconds} 秒）"
+            )
             raise RuntimeError(str(result_base.get("last_failed_detail", "")))
 
         selection = _select_subscription_offline_entries(

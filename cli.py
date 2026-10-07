@@ -528,12 +528,19 @@ def cmd_subscribe(args, c: Client):
 
     elif args.action == "start-with-link":
         link = args.link or ""
-        if not link:
-            sys.exit("请指定资源链接（--link 参数）")
+        links = [str(item or "").strip() for item in (args.links or []) if str(item or "").strip()]
+        if not link and not links:
+            sys.exit("请指定资源链接（--link 或 --links 参数）")
         name = " ".join(args.name) if args.name else ""
         if not name:
             sys.exit("请指定订阅名称")
-        data = c.json("POST", "/subscription/start_with_link", {"name": name, "link_url": link, "receive_code": args.receive_code or "", "savepath": args.savepath})
+        payload = {"name": name, "receive_code": args.receive_code or "", "savepath": args.savepath}
+        if links:
+            # 一次提交多条：后端按顺序排队执行，每条链接各自走一次扫描/离线入库
+            payload["links"] = [{"link_url": item} for item in links]
+        else:
+            payload["link_url"] = link
+        data = c.json("POST", "/subscription/start_with_link", payload)
         print(f"✅ 订阅已通过链接触发: {json.dumps(data, ensure_ascii=False)}")
 
 
@@ -2112,6 +2119,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sp_sub.add_argument("--savepath", default="", help="115 保存路径（留空自动按媒体类型从常用目录推断）")
     sp_sub.add_argument("--provider", default="115", choices=["115", "quark"], help="网盘提供商")
     sp_sub.add_argument("--link", default="", help="资源链接 (start-with-link)：115 分享/磁力/电驴")
+    sp_sub.add_argument("--links", action="append", default=[], help="资源链接，可重复 (start-with-link)：一次提交多条，按顺序排队执行")
     sp_sub.add_argument("--task-name", default="", help="订阅名称 (rebuild/episodes)")
     # 补充参数
     sp_sub.add_argument("--title", default="", help="订阅标题（用于显示，可与名称不同）")

@@ -301,13 +301,13 @@
                     <input id="subscription-link-scan-task-name" type="hidden" value="">
                     <label class="block">
                         <span class="flex items-center justify-between gap-2">
-                            <span id="subscription-link-scan-input-label" class="subscription-link-scan-label">分享链接或完整分享文本</span>
+                            <span id="subscription-link-scan-input-label" class="subscription-link-scan-label">分享链接（每行一条，支持多条）</span>
                             <button id="subscription-link-scan-paste-btn" type="button" onclick="pasteSubscriptionLinkScan()" class="resource-search-input-action resource-search-paste-btn subscription-link-scan-paste-btn" aria-label="粘贴剪贴板内容">粘贴</button>
                         </span>
-                        <textarea id="subscription-link-scan-text" class="subscription-link-scan-input" rows="6" placeholder="粘贴分享链接，或包含链接与提取码的整段分享文本"></textarea>
+                        <textarea id="subscription-link-scan-text" class="subscription-link-scan-input" rows="6" placeholder="每行粘贴一条分享链接，或包含链接与提取码的整段分享文本；支持一次粘贴多条"></textarea>
                     </label>
                     <div id="subscription-link-scan-error" class="subscription-link-scan-error hidden"></div>
-                    <div id="subscription-link-scan-note" class="subscription-link-scan-note">提交后会跳过资源搜索，把这个链接当作已命中标题的候选资源，继续走订阅的集数识别、缺失判断和导入流程。</div>
+                    <div id="subscription-link-scan-note" class="subscription-link-scan-note">提交后会跳过资源搜索，把每条链接当作已命中标题的候选资源，按顺序继续走订阅的集数识别、缺失判断和导入流程。</div>
                 </div>
                 <div class="subscription-link-scan-footer">
                     <button type="button" onclick="closeSubscriptionLinkScanModal()" class="subscription-link-scan-btn subscription-link-scan-btn-secondary">取消</button>
