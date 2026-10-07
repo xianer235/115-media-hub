@@ -1316,5 +1316,45 @@ class MonitorPageHelpTest(unittest.TestCase):
         self.assertNotIn("savepath 必须落在某条任务的扫描路径内", inbox_block)
 
 
+class MonitorFolderPickerTest(unittest.TestCase):
+    """目录选择弹窗：标题跟着网盘走，并且能就地新建文件夹。"""
+
+    def test_folder_modal_title_follows_provider(self):
+        html = MONITOR_MODAL_PATH.read_text(encoding="utf-8")
+        # 以前这个 h3 没有 id，JS 里的 monitor-folder-modal-title 永远找不到，
+        # 于是夸克接收夹选目录时也显示「选择 115 监控文件夹」。
+        self.assertIn('id="monitor-folder-modal-title"', html)
+        self.assertNotIn("选择 115 监控文件夹", html)
+        script = INDEX_JS_PATH.read_text(encoding="utf-8")
+        self.assertIn("document.getElementById('monitor-folder-modal-title')", script)
+        self.assertIn("`选择 ${providerLabel} 文件夹`", script)
+
+    def test_folder_modal_path_label_follows_target(self):
+        html = MONITOR_MODAL_PATH.read_text(encoding="utf-8")
+        self.assertIn('id="monitor-folder-path-label"', html)
+        script = INDEX_JS_PATH.read_text(encoding="utf-8")
+        self.assertIn("document.getElementById('monitor-folder-path-label')", script)
+        self.assertIn("当前接收夹路径", script)
+        self.assertIn("当前分发目标", script)
+
+    def test_folder_modal_can_create_folder(self):
+        html = MONITOR_MODAL_PATH.read_text(encoding="utf-8")
+        self.assertIn('id="monitor-folder-create-name"', html)
+        self.assertIn('onclick="createMonitorFolderInCurrent()"', html)
+        script = INDEX_JS_PATH.read_text(encoding="utf-8")
+        self.assertIn("async function createMonitorFolderInCurrent()", script)
+        # 复用资源导入那套 createResourceFolder，用当前弹窗的网盘而不是写死 115
+        self.assertIn("createResourceFolder(currentCid, folderName, { provider: monitorFolderProvider })", script)
+        self.assertIn("invalidateResourceFolderBranchCache(monitorFolderProvider)", script)
+
+    def test_monitor_name_help_follows_provider(self):
+        html = MONITOR_MODAL_PATH.read_text(encoding="utf-8")
+        self.assertIn('onclick="showMonitorNameHelp()"', html)
+        script = INDEX_JS_PATH.read_text(encoding="utf-8")
+        self.assertIn("function showMonitorNameHelp()", script)
+        # 非 115 的接收夹没有 webhook，这条提示不能再写死 webhook 路径
+        self.assertIn("非 115 网盘的接收夹没有 Webhook", script)
+
+
 if __name__ == "__main__":
     unittest.main()

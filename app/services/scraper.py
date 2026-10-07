@@ -885,18 +885,26 @@ def resolve_scraper_folder_path(provider: str, cid: str) -> Dict[str, Any]:
 
 
 def resolve_scraper_dest_folder_id(provider: str, dest: str) -> str:
-    """解析 move/copy 的目标目录路径为 115 目录 ID（仅支持 115）。"""
+    """解析 move/copy 的目标目录路径为目标网盘内的目录 ID。
+
+    115 走分页版 ``resolve_115_folder_id_by_path``（大目录不漏匹配）；其他网盘走
+    provider 自己的 ``resolve_folder_id_by_path``，按名字逐层向下找，找不到会抛出
+    带完整路径的错误。接收夹挂在非 115 网盘时，分发目标就是走这条分支。
+    """
     normalized = normalize_scraper_provider(provider)
-    if normalized != "115":
-        raise RuntimeError(f"目标路径操作当前仅支持 115，{normalized} 请改用 target_cid 参数")
-    cfg = get_config()
-    cookie = str(cfg.get("cookie_115", "") or "").strip()
-    if not cookie:
-        raise RuntimeError("115 Cookie 未配置")
     normalized_dest = normalize_relative_path(str(dest or "").strip())
     if not normalized_dest:
         raise RuntimeError("目标路径无效")
-    return resolve_115_folder_id_by_path(cookie, normalized_dest)
+    cookie = _require_provider_cookie(normalized)
+    if normalized == "115":
+        return resolve_115_folder_id_by_path(cookie, normalized_dest)
+    p = get_provider_or_none(normalized)
+    if not p:
+        raise RuntimeError("网盘类型无效")
+    resolved = str(p.resolve_folder_id_by_path(cookie, normalized_dest) or "").strip()
+    if not resolved:
+        raise RuntimeError(f"未找到目标目录：{normalized_dest}")
+    return resolved
 
 
 def _resolve_scraper_selected_paths(

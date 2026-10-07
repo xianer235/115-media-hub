@@ -716,6 +716,11 @@
             e.preventDefault();
             createResourceFolderInCurrent();
         });
+        document.getElementById('monitor-folder-create-name')?.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            createMonitorFolderInCurrent();
+        });
         document.getElementById('resource-favorite-dir-list')?.addEventListener('click', async (e) => {
             const btn = e.target.closest('[data-resource-favorite-dir-index]');
             if (!btn) return;

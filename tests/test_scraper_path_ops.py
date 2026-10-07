@@ -23,6 +23,25 @@ class _FakeRequest:
         return self._data
 
 
+class _FakeQuark:
+    """只实现 resolve_scraper_dest_folder_id 需要的部分。"""
+
+    name = "quark"
+    label = "夸克网盘"
+    supports_folder_browse = True
+
+    def __init__(self, resolved_id):
+        self._resolved_id = resolved_id
+        self.calls = []
+
+    def get_cookie(self, _cfg):
+        return "quark-ck"
+
+    def resolve_folder_id_by_path(self, cookie, relative_path):
+        self.calls.append((cookie, relative_path))
+        return self._resolved_id
+
+
 class ScraperPathEntryTest(unittest.TestCase):
     def test_resolve_scraper_path_entry_115(self):
         with patch.object(scraper_service, "get_config", return_value={"cookie_115": "ck"}), patch.object(
@@ -68,11 +87,25 @@ class ScraperPathEntryTest(unittest.TestCase):
         ):
             self.assertEqual(scraper_service.resolve_scraper_dest_folder_id("115", "/电影/新目录"), "cid88")
 
-    def test_resolve_scraper_dest_folder_id_rejects_non_115(self):
-        with patch.object(scraper_service, "get_config", return_value={"cookie_115": "ck"}):
+    def test_resolve_scraper_dest_folder_id_uses_provider_for_non_115(self):
+        """非 115 网盘改用 provider 自己的按路径解析（接收夹挂在夸克时要能分发）。"""
+        fake = _FakeQuark("quark-cid-9")
+        with patch.object(scraper_service, "get_config", return_value={"cookie_quark": "quark-ck"}), patch.object(
+            scraper_service, "get_provider_or_none", return_value=fake
+        ):
+            self.assertEqual(
+                scraper_service.resolve_scraper_dest_folder_id("quark", "/电影/新目录"),
+                "quark-cid-9",
+            )
+        self.assertEqual(fake.calls, [("quark-ck", "电影/新目录")])
+
+    def test_resolve_scraper_dest_folder_id_raises_when_dest_missing(self):
+        with patch.object(scraper_service, "get_config", return_value={"cookie_quark": "quark-ck"}), patch.object(
+            scraper_service, "get_provider_or_none", return_value=_FakeQuark("")
+        ):
             with self.assertRaises(RuntimeError) as ctx:
-                scraper_service.resolve_scraper_dest_folder_id("quark", "/电影/新目录")
-            self.assertIn("仅支持 115", str(ctx.exception))
+                scraper_service.resolve_scraper_dest_folder_id("quark", "/电影/不存在")
+            self.assertIn("未找到目标目录：电影/不存在", str(ctx.exception))
 
     def test_resolve_selected_paths_propagates_errors(self):
         def _raise(_provider, _path):

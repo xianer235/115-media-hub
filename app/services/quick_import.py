@@ -1087,6 +1087,7 @@ def _dispatch_organized_entry(
             target_rel=target_rel,
             job_id=job_id,
             monitor_run_id=monitor_run_id,
+            provider=provider,
         )
         return {"merged": False, "skipped": [], "monitor_sync_events": max(0, int(((move_result.get("monitor_sync") or {}).get("event_count", 0) or 0)))}
 
@@ -1094,7 +1095,7 @@ def _dispatch_organized_entry(
     merged_target_rel = normalize_relative_path(join_relative_path(target_rel, existing_name))
     if not is_dir:
         # 散文件（例如已经标准命名的电影）：直接放进已有文件夹，而不是再复制一份到目录里。
-        if entry_name in _folder_entry_names(existing_id, cache):
+        if entry_name in _folder_entry_names(existing_id, cache, provider):
             return {"merged": False, "skipped": [entry_name], "target_folder": existing_name}
         move_result = _move_entries_into_folder(
             [entry],

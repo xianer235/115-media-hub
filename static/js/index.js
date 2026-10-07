@@ -92,6 +92,7 @@
         let monitorFolderNextOffset = 0;
         let monitorFolderHasMore = false;
         let monitorFolderLoadingMore = false;
+        let monitorFolderCreateBusy = false;
         let resourceModalLinkType = '';
         let resourceShareEntriesByParent = { '0': [] };
         let resourceShareEntryIndex = {};
@@ -4590,10 +4591,19 @@
             }
             const titleEl = document.getElementById('monitor-folder-modal-title');
             if (titleEl) titleEl.textContent = `选择 ${providerLabel} 文件夹`;
+            const pathLabelEl = document.getElementById('monitor-folder-path-label');
+            if (pathLabelEl) {
+                pathLabelEl.textContent = String(monitorFolderPickerTargetId).startsWith('monitor_inbox_target')
+                    ? '当前分发目标'
+                    : (monitorFormTaskType() === 'inbox' ? '当前接收夹路径' : '当前监控路径');
+            }
             const summaryEl = document.getElementById('monitor-folder-summary');
             if (summaryEl) {
                 summaryEl.textContent = `这里只展示 ${providerLabel} 当前目录下的子文件夹，选择后会直接保存成完整路径。`;
             }
+            const createInput = document.getElementById('monitor-folder-create-name');
+            if (createInput) createInput.value = '';
+            setMonitorFolderCreateBusy(false);
             showLockedModal('monitor-folder-modal');
             renderMonitorFolderBreadcrumbs();
             renderMonitorFolderList();
@@ -4637,6 +4647,57 @@
             }
         }
 
+        function setMonitorFolderCreateBusy(loading) {
+            monitorFolderCreateBusy = !!loading;
+            const btn = document.getElementById('monitor-folder-create-btn');
+            const nameInput = document.getElementById('monitor-folder-create-name');
+            if (btn) {
+                btn.disabled = monitorFolderCreateBusy;
+                btn.classList.toggle('btn-disabled', monitorFolderCreateBusy);
+                btn.textContent = monitorFolderCreateBusy ? '新建中...' : '新建文件夹';
+            }
+            if (nameInput) nameInput.disabled = monitorFolderCreateBusy;
+        }
+
+        async function createMonitorFolderInCurrent() {
+            // 目录选择弹窗要能「新建 + 选择」：在这里建目录，避免让用户先回网盘客户端建好再回来找。
+            if (monitorFolderLoading || monitorFolderCreateBusy) return;
+            const nameInput = document.getElementById('monitor-folder-create-name');
+            const folderName = String(nameInput?.value || '').trim();
+            if (!folderName) {
+                showToast('请输入新文件夹名称', { tone: 'warn', duration: 2200, placement: 'top-center' });
+                return;
+            }
+            const current = monitorFolderTrail[monitorFolderTrail.length - 1] || { id: '0', name: '根目录' };
+            const currentCid = String(current.id || '0').trim() || '0';
+            try {
+                setMonitorFolderCreateBusy(true);
+                const result = await createResourceFolder(currentCid, folderName, { provider: monitorFolderProvider });
+                const folder = result?.folder || {};
+                const createdFolderId = String(folder.id || '').trim();
+                const createdFolderName = String(folder.name || folderName).trim() || folderName;
+                if (nameInput) nameInput.value = '';
+                // 刚建出来的目录不在前端分支缓存里，清掉本网盘缓存再重读，否则列表看不到它。
+                if (typeof invalidateResourceFolderBranchCache === 'function') {
+                    invalidateResourceFolderBranchCache(monitorFolderProvider);
+                }
+                if (createdFolderId) {
+                    monitorFolderTrail = monitorFolderTrail.concat([{ id: createdFolderId, name: createdFolderName }]);
+                }
+                await loadMonitorFolders(createdFolderId || currentCid, { forceRefresh: true });
+                showToast(
+                    createdFolderId
+                        ? `已创建并进入文件夹：${createdFolderName}，点「选择当前目录」即可保存`
+                        : `已创建文件夹：${createdFolderName}`,
+                    { tone: 'success', duration: 3200, placement: 'top-center' }
+                );
+            } catch (e) {
+                showToast(`新建文件夹失败：${e?.message || '请稍后重试'}`, { tone: 'error', duration: 3600, placement: 'top-center' });
+            } finally {
+                setMonitorFolderCreateBusy(false);
+            }
+        }
+
         function selectCurrentMonitorFolder() {
             const scanPath = buildMonitorScanPathFromTrail(monitorFolderTrail);
             const targetInputId = monitorFolderPickerTargetId || 'monitor_scan_path';
@@ -4650,6 +4711,20 @@
         function monitorFormTaskType() {
             // 类型跟着入口走：新建 / 编辑时由 openNewMonitorTask / openNewInboxTask / editMonitorTask 设好。
             return monitorFormType === 'inbox' ? 'inbox' : 'scan';
+        }
+
+        function showMonitorNameHelp() {
+            // 「任务名」那句提示原来写死了 webhook：非 115 的接收夹根本没有 webhook，点开就是错的，
+            // 这里跟着当前表单类型 / 网盘给对应说法。
+            const isInbox = monitorFormTaskType() === 'inbox';
+            const provider = isInbox
+                ? (normalizeMountProviderInput(document.getElementById('monitor_inbox_provider')?.value || '') || '115')
+                : '115';
+            if (isInbox && provider !== '115') {
+                showHelp('任务名用于区分任务，也是任务卡片上显示的名字。非 115 网盘的接收夹没有 Webhook，改名只影响显示，不涉及地址；建议用中文短名，且保持唯一。');
+                return;
+            }
+            showHelp('任务名用于区分任务，也是 webhook 地址 /webhook/任务名 的一部分（Webhook 只对 115 网盘的接收夹开放）。建议用中文短名，且保持唯一。');
         }
 
         function syncMonitorNameHint() {

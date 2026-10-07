@@ -1104,6 +1104,109 @@ class QuickImportRunTest(unittest.TestCase):
         # 接收夹里可能是散文件，必须强制整理进媒体文件夹
         self.assertTrue(seen_options[0]["force_media_folder"])
 
+    def test_quark_inbox_dispatch_moves_with_quark_provider(self):
+        """接收夹挂在夸克、目标目录里还没有同名文件夹时，整理搬运必须走夸克网盘。
+
+        历史 bug：这条分支漏传 provider，`_move_entries_into_folder` 退回默认的 115，
+        于是用夸克的文件 ID 去调 115 接口，分发必然失败。
+        """
+        quark_scan = {
+            "name": "夸克电影",
+            "task_type": "scan",
+            "enabled": True,
+            "scan_path": "/quark/电影",
+            "target_path": "夸克电影",
+        }
+        cfg = _cfg(
+            tasks=[quark_scan],
+            inbox=_inbox_task(
+                name="夸克接收",
+                path="/quark/接收",
+                provider="quark",
+                targets={"movie": "/quark/电影"},
+            ),
+            mount_points=[{"provider": "115", "prefix": "/115"}, {"provider": "quark", "prefix": "/quark"}],
+        )
+        identified = {
+            "items": [_item(1, "电影A")],
+            "picked": {1: {"id": 603, "media_type": "movie"}},
+            "results": [{"item_index": 1, "status": "auto"}],
+        }
+        move_providers = []
+
+        def fake_move(provider, *args, **kwargs):
+            move_providers.append(provider)
+            return {"monitor_sync": {"event_count": 0}}
+
+        with mock.patch.object(quick_import, "get_config", return_value=cfg), \
+                mock.patch.object(quick_import, "resolve_scraper_dest_folder_id", side_effect=lambda provider, path: f"cid:{path}"), \
+                mock.patch.object(quick_import, "identify_scraper_batch_entries", return_value=identified), \
+                mock.patch.object(quick_import, "build_scraper_plan_for_batch", return_value={
+                    "ok": True,
+                    "items": [{"title": "电影A", "year": "2024"}],
+                    "issues": [],
+                    "ready_count": 1,
+                }), \
+                mock.patch.object(quick_import, "create_scraper_job_from_plan", return_value={"job_id": 11}), \
+                mock.patch.object(quick_import, "submit_scraper_job", return_value=self._Future()), \
+                mock.patch.object(quick_import, "_resolve_entry_after_organize", side_effect=lambda cid, summary, entry, provider: entry), \
+                mock.patch.object(scraper, "find_scraper_media_folder", return_value={}), \
+                mock.patch.object(scraper, "move_scraper_entries", side_effect=fake_move):
+            result = quick_import.run_quick_import("test")
+
+        self.assertEqual(len(result["moved"]), 1)
+        self.assertEqual(move_providers, ["quark"])
+
+    def test_quark_inbox_merge_lists_existing_folder_with_quark_provider(self):
+        """夸克接收夹的一条散文件并入目标里已有的媒体文件夹时，列目标文件夹也要用夸克。"""
+        quark_scan = {
+            "name": "夸克电影",
+            "task_type": "scan",
+            "enabled": True,
+            "scan_path": "/quark/电影",
+            "target_path": "夸克电影",
+        }
+        cfg = _cfg(
+            tasks=[quark_scan],
+            inbox=_inbox_task(
+                name="夸克接收",
+                path="/quark/接收",
+                provider="quark",
+                targets={"movie": "/quark/电影"},
+            ),
+            mount_points=[{"provider": "115", "prefix": "/115"}, {"provider": "quark", "prefix": "/quark"}],
+        )
+        identified = {
+            "items": [_item(1, "电影A (2024).mkv", is_dir=False)],
+            "picked": {1: {"id": 603, "media_type": "movie"}},
+            "results": [{"item_index": 1, "status": "auto"}],
+        }
+        list_providers = []
+
+        def fake_list(provider, cid, folders_only=False, **kwargs):
+            list_providers.append(provider)
+            return {"entries": []}
+
+        with mock.patch.object(quick_import, "get_config", return_value=cfg), \
+                mock.patch.object(quick_import, "resolve_scraper_dest_folder_id", side_effect=lambda provider, path: f"cid:{path}"), \
+                mock.patch.object(quick_import, "identify_scraper_batch_entries", return_value=identified), \
+                mock.patch.object(quick_import, "build_scraper_plan_for_batch", return_value={
+                    "ok": True,
+                    "items": [{"title": "电影A", "year": "2024"}],
+                    "issues": [],
+                    "ready_count": 1,
+                }), \
+                mock.patch.object(quick_import, "create_scraper_job_from_plan", return_value={"job_id": 11}), \
+                mock.patch.object(quick_import, "submit_scraper_job", return_value=self._Future()), \
+                mock.patch.object(quick_import, "_resolve_entry_after_organize", side_effect=lambda cid, summary, entry, provider: entry), \
+                mock.patch.object(scraper, "find_scraper_media_folder", return_value={"id": "existing-cid", "name": "电影A (2024)"}), \
+                mock.patch.object(scraper, "move_scraper_entries", return_value={"monitor_sync": {"event_count": 0}}), \
+                mock.patch.object(scraper, "list_scraper_entries", side_effect=fake_list):
+            quick_import.run_quick_import("test")
+
+        self.assertTrue(list_providers)
+        self.assertEqual(set(list_providers), {"quark"})
+
     def test_batch_size_processes_all_items_without_rescan(self):
         cfg = _cfg(inbox=_inbox_task(inbox_max_items_per_run=1))
         identified = {

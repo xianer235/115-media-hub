@@ -8,7 +8,7 @@
                     <label class="block">
                         <span class="text-xs text-slate-500 inline-flex items-center gap-2">
                             <span id="monitor-name-label-text">任务名 (用于 webhook 路径)</span>
-                            <button type="button" class="info-dot" onclick="showHelp('任务名用于区分任务，也是 webhook 地址 /webhook/任务名 的一部分（Webhook 只对 115 网盘的接收夹开放）。建议用中文短名，且保持唯一。')">i</button>
+                            <button type="button" class="info-dot" onclick="showMonitorNameHelp()">i</button>
                         </span>
                         <input id="monitor_name" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：自存影视">
                     </label>
@@ -255,22 +255,27 @@
         <div id="monitor-folder-modal" class="hidden fixed inset-0 bg-black/60 z-[56] p-4">
             <div class="w-full max-w-2xl mx-auto mt-[8vh] max-h-[88vh] overflow-y-auto group-card modal-card">
                 <div class="flex items-center justify-between">
-                    <h3 class="group-title mb-0">选择 115 监控文件夹</h3>
+                    <h3 id="monitor-folder-modal-title" class="group-title mb-0">选择文件夹</h3>
                     <button onclick="closeMonitorFolderModal()" class="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm">关闭</button>
                 </div>
                 <div class="space-y-4 mt-4">
                     <div class="resource-folder-pathbar">
-                        <div class="resource-folder-path-label">当前监控路径</div>
+                        <div id="monitor-folder-path-label" class="resource-folder-path-label">当前监控路径</div>
                         <div id="monitor-folder-breadcrumbs" class="resource-folder-path-track">根目录</div>
                     </div>
                     <div id="monitor-folder-summary" class="text-xs text-slate-500">
-                        这里只展示 115 当前目录下的子文件夹，选择后会直接保存成完整监控路径。
+                        这里只展示当前目录下的子文件夹，选择后会直接保存成完整路径。
                     </div>
                     <div class="flex flex-wrap gap-2">
                         <button type="button" onclick="selectCurrentMonitorFolder()" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold">选择当前目录</button>
                         <button type="button" onclick="goMonitorFolderBack()" class="monitor-folder-secondary-btn">返回上一级</button>
                         <button id="monitor-folder-refresh-btn" type="button" onclick="refreshCurrentMonitorFolder()" class="monitor-folder-refresh-btn">刷新当前目录</button>
                     </div>
+                    <div class="flex flex-col sm:flex-row gap-2">
+                        <input id="monitor-folder-create-name" class="w-full sm:flex-1 bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm" placeholder="在当前目录新建文件夹（例如：自存影视、电影）">
+                        <button id="monitor-folder-create-btn" type="button" onclick="createMonitorFolderInCurrent()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold whitespace-nowrap">新建文件夹</button>
+                    </div>
+                    <div class="text-[11px] text-slate-500 leading-5">新建后会自动进入该文件夹，再点「选择当前目录」即可保存；也可以继续建下一层。</div>
                     <div id="monitor-folder-list" class="space-y-3"></div>
                 </div>
             </div>
