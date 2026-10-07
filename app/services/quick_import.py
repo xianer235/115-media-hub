@@ -62,17 +62,28 @@ QUICK_IMPORT_MAX_ITEMS = 500
 QUICK_IMPORT_DEFAULT_BATCH_PAUSE_SECONDS = 5
 QUICK_IMPORT_MAX_BATCH_PAUSE_SECONDS = 300
 QUICK_IMPORT_SCAN_SCOPE_CHUNK = 50
+# 接收夹整理前的落盘宽限：转存 / 离线任务返回成功时目录列表常常还没刷新，
+# 与订阅链路的 SUBSCRIPTION_OFFLINE_STAGING_* 对齐——扫空时按下面的参数重扫。
+INBOX_STAGING_GRACE_SECONDS = 30
+INBOX_STAGING_RESCAN_INTERVAL_SECONDS = 10
+INBOX_STAGING_MAX_ATTEMPTS = 3
 
 _QUICK_IMPORT_RUN_LOCK = threading.Lock()
 # 中断标记：接收夹整理是长任务，用户点「中断」后在下一条目开始前生效（已搬完的不会回滚）。
 _QUICK_IMPORT_CANCEL = threading.Event()
+# 被点「中断」的接收夹任务名；空串代表「中断当前整轮」。按网盘隔离后，
+# 一张卡片上点中断不能打断别的接收夹正在跑的整理。
+_QUICK_IMPORT_CANCEL_TASKS: Set[str] = set()
+# 当前正在整理的接收夹任务名（卡片上的「运行中 / 中断」按这个判断，而不是全局锁）。
+_INBOX_RUNNING_TASK: Dict[str, str] = {"name": ""}
 # 触发协调：整理正在执行时把后续触发记成「还需再跑一轮」，由工作线程在本轮结束后
 # 自动接着跑，任何触发都不会被丢掉。
 _INBOX_TRIGGER_LOCK = threading.Lock()
 _INBOX_TRIGGER_EVENT = threading.Event()
 _INBOX_TRIGGER_STATE: Dict[str, Any] = {
     "worker": None,
-    "pending": False,
+    # 待整理任务名集合；空集合 = 没有预约；含 "" = 全部启用的接收夹。
+    "pending_tasks": set(),
     "trigger": "",
     "source_ref": "",
     "last_arrival_at": 0.0,
@@ -80,26 +91,52 @@ _INBOX_TRIGGER_STATE: Dict[str, Any] = {
 _INBOX_TRIGGER_PRIORITY = {"manual": 5, "cron": 4, "offline": 3, "import": 2, "test": 1}
 
 
-def request_quick_import_cancel() -> bool:
-    """请求中断当前接收夹整理；没有在跑时返回 False。"""
+def request_quick_import_cancel(task_name: str = "") -> bool:
+    """请求中断指定接收夹（空串 = 中断当前整轮）；没有在跑时返回 False。"""
     if not _QUICK_IMPORT_RUN_LOCK.locked():
         return False
     with _INBOX_TRIGGER_LOCK:
         # 中断意味着用户不想再排队了：取消同时清掉「再跑一轮」预约。
-        _INBOX_TRIGGER_STATE["pending"] = False
+        _INBOX_TRIGGER_STATE["pending_tasks"] = set()
+        _QUICK_IMPORT_CANCEL_TASKS.add(str(task_name or "").strip())
     _INBOX_TRIGGER_EVENT.set()
     _QUICK_IMPORT_CANCEL.set()
     return True
+
+
+def _inbox_task_cancelled(task_name: str) -> bool:
+    """当前这一轮是否已经请求中断该接收夹（空串任务名表示整轮中断）。"""
+    if not _QUICK_IMPORT_CANCEL.is_set():
+        return False
+    with _INBOX_TRIGGER_LOCK:
+        wanted = str(task_name or "").strip()
+        return "" in _QUICK_IMPORT_CANCEL_TASKS or wanted in _QUICK_IMPORT_CANCEL_TASKS
+
+
+def _inbox_cancel_wait(seconds: float, task_name: str) -> bool:
+    """可被「本接收夹中断」打断的等待；返回 True 表示被中断。"""
+    deadline = time.monotonic() + max(0.0, float(seconds or 0))
+    while True:
+        if _inbox_task_cancelled(task_name):
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(0.25, remaining))
 
 
 def _inbox_trigger_priority(trigger: str) -> int:
     return _INBOX_TRIGGER_PRIORITY.get(str(trigger or "").strip().lower(), 0)
 
 
-def notify_quick_import(trigger: str = "queued", *, source_ref: str = "") -> Dict[str, Any]:
-    """登记一次接收夹整理请求；正在执行时预约下一轮，永不静默跳过。"""
+def notify_quick_import(trigger: str = "queued", *, source_ref: str = "", task_name: str = "") -> Dict[str, Any]:
+    """登记一次接收夹整理请求；正在执行时预约下一轮，永不静默跳过。
+
+    ``task_name`` 指定只整理某一个接收夹；空串表示全部启用的接收夹。
+    """
     normalized_trigger = str(trigger or "").strip().lower() or "queued"
     normalized_ref = str(source_ref or "").strip()
+    normalized_task = str(task_name or "").strip()
     started_worker: Optional[threading.Thread] = None
     with _INBOX_TRIGGER_LOCK:
         _INBOX_TRIGGER_STATE["last_arrival_at"] = time.monotonic()
@@ -109,16 +146,17 @@ def notify_quick_import(trigger: str = "queued", *, source_ref: str = "") -> Dic
             if _inbox_trigger_priority(normalized_trigger) >= _inbox_trigger_priority(current):
                 _INBOX_TRIGGER_STATE["trigger"] = normalized_trigger
                 _INBOX_TRIGGER_STATE["source_ref"] = normalized_ref
-            _INBOX_TRIGGER_STATE["pending"] = True
+            _INBOX_TRIGGER_STATE.setdefault("pending_tasks", set()).add(normalized_task)
             started = False
             running = True
         else:
-            _INBOX_TRIGGER_STATE["pending"] = False
+            # 新起一轮：当前轮的接收夹在 worker 参数里，pending 只记「执行中收到的新触发」。
+            _INBOX_TRIGGER_STATE["pending_tasks"] = set()
             _INBOX_TRIGGER_STATE["trigger"] = normalized_trigger
             _INBOX_TRIGGER_STATE["source_ref"] = normalized_ref
             started_worker = threading.Thread(
                 target=_inbox_worker_loop,
-                args=(normalized_trigger, normalized_ref),
+                args=(normalized_trigger, normalized_ref, {normalized_task}),
                 name="inbox-quick-import",
                 daemon=True,
             )
@@ -137,20 +175,23 @@ def notify_quick_import(trigger: str = "queued", *, source_ref: str = "") -> Dic
     }
 
 
-def _inbox_delay_seconds() -> int:
+def _inbox_delay_seconds(task_name: str = "") -> int:
     try:
-        conf = build_quick_import_config(get_config())
+        cfg = get_config()
+        wanted = str(task_name or "").strip()
+        inbox = get_inbox_task(cfg, wanted) if wanted else get_inbox_task(cfg)
+        conf = build_quick_import_config(cfg, inbox) if inbox else {}
     except Exception:
         conf = {}
     return max(0, int(conf.get("inbox_idle_seconds", QUICK_IMPORT_DEFAULT_IDLE_SECONDS) or 0))
 
 
-def _wait_for_inbox_next_run() -> None:
+def _wait_for_inbox_next_run(task_name: str = "") -> None:
     """等待下一次接收夹整理：新保存按静默窗口；手动触发立即放行。"""
-    idle_seconds = _inbox_delay_seconds()
+    idle_seconds = _inbox_delay_seconds(task_name)
     while True:
         with _INBOX_TRIGGER_LOCK:
-            if not _INBOX_TRIGGER_STATE.get("pending"):
+            if not _INBOX_TRIGGER_STATE.get("pending_tasks"):
                 return
             if str(_INBOX_TRIGGER_STATE.get("trigger", "") or "").strip() == "manual":
                 return
@@ -164,47 +205,78 @@ def _wait_for_inbox_next_run() -> None:
         _INBOX_TRIGGER_EVENT.wait(min(0.5, remaining))
 
 
-def _inbox_worker_loop(trigger: str, source_ref: str) -> None:
-    current_trigger, current_ref = trigger, source_ref
+def _inbox_worker_loop(trigger: str, source_ref: str, task_names: Set[str]) -> None:
+    """接收夹整理工作线程：一轮里只跑 ``task_names`` 指定的接收夹，产物交给下一轮排队。"""
+    current_trigger, current_ref, current_tasks = trigger, source_ref, set(task_names or set())
     while True:
         try:
-            result = run_quick_import(current_trigger, source_ref=current_ref, wait_for_lock=True)
+            all_inboxes = "" in current_tasks
+            wanted = {name for name in current_tasks if name}
+            result = run_quick_import(
+                current_trigger,
+                source_ref=current_ref,
+                task_names=None if all_inboxes else wanted,
+                wait_for_lock=True,
+            )
             if isinstance(result, dict) and result.get("skipped"):
-                # 极端情况下锁超时：不丢请求，稍后重试这一轮。
-                with _INBOX_TRIGGER_LOCK:
-                    _INBOX_TRIGGER_STATE["pending"] = True
-                _INBOX_TRIGGER_EVENT.set()
-                time.sleep(5)
-                continue
+                if str(result.get("reason", "") or "") != "no_targets":
+                    # 极端情况下锁超时：不丢请求，稍后重试这一轮。
+                    with _INBOX_TRIGGER_LOCK:
+                        _INBOX_TRIGGER_STATE.setdefault("pending_tasks", set()).update(current_tasks)
+                    _INBOX_TRIGGER_EVENT.set()
+                    time.sleep(5)
+                    continue
         except Exception:
             logging.exception("接收夹整理执行失败")
         with _INBOX_TRIGGER_LOCK:
-            if not _INBOX_TRIGGER_STATE.get("pending"):
+            pending = set(_INBOX_TRIGGER_STATE.get("pending_tasks") or set())
+            if not pending:
                 _INBOX_TRIGGER_STATE["worker"] = None
                 _INBOX_TRIGGER_STATE["trigger"] = ""
                 _INBOX_TRIGGER_STATE["source_ref"] = ""
                 _INBOX_TRIGGER_EVENT.clear()
                 return
+            current_tasks = pending
             current_trigger = str(_INBOX_TRIGGER_STATE.get("trigger", "") or "queued")
             current_ref = str(_INBOX_TRIGGER_STATE.get("source_ref", "") or "")
-        _wait_for_inbox_next_run()
+        _wait_for_inbox_next_run(next(iter(current_tasks), ""))
         with _INBOX_TRIGGER_LOCK:
-            if not _INBOX_TRIGGER_STATE.get("pending"):
+            pending = set(_INBOX_TRIGGER_STATE.get("pending_tasks") or set())
+            if not pending:
                 _INBOX_TRIGGER_STATE["worker"] = None
                 _INBOX_TRIGGER_STATE["trigger"] = ""
                 _INBOX_TRIGGER_STATE["source_ref"] = ""
                 _INBOX_TRIGGER_EVENT.clear()
                 return
+            current_tasks = pending
             current_trigger = str(_INBOX_TRIGGER_STATE.get("trigger", "") or current_trigger)
             current_ref = str(_INBOX_TRIGGER_STATE.get("source_ref", "") or current_ref)
-            _INBOX_TRIGGER_STATE["pending"] = False
+            _INBOX_TRIGGER_STATE["pending_tasks"] = set()
             _INBOX_TRIGGER_EVENT.clear()
 
 
-def pending_quick_import_rerun() -> bool:
-    """是否已经预约了下一轮整理（接收夹卡片展示用）。"""
+def pending_quick_import_rerun(task_name: str = "") -> bool:
+    """是否已经预约了下一轮整理（接收夹卡片展示用）；可按任务名查询。"""
+    normalized = str(task_name or "").strip()
     with _INBOX_TRIGGER_LOCK:
-        return bool(_INBOX_TRIGGER_STATE.get("pending"))
+        pending = set(_INBOX_TRIGGER_STATE.get("pending_tasks") or set())
+    if not pending:
+        return False
+    if not normalized:
+        return True
+    return normalized in pending or "" in pending
+
+
+def quick_import_task_running(task_name: str) -> bool:
+    """这个接收夹是不是正在整理（按任务名判断，别的网盘在跑不算）。"""
+    if not _QUICK_IMPORT_RUN_LOCK.locked():
+        return False
+    return str(_INBOX_RUNNING_TASK.get("name", "") or "").strip() == str(task_name or "").strip()
+
+
+def quick_import_task_cancelling(task_name: str) -> bool:
+    """这个接收夹是不是已经请求中断（还没到下一个安全点）。"""
+    return quick_import_task_running(task_name) and _inbox_task_cancelled(task_name)
 
 
 def _resolve_inbox(cfg: Dict[str, Any], inbox: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -314,21 +386,24 @@ def build_quick_import_config(
     }
 
 
-def is_quick_import_savepath(
+def match_quick_import_inbox(
     cfg: Dict[str, Any],
     savepath: Any,
-    inbox: Optional[Dict[str, Any]] = None,
-) -> bool:
-    """导入落点是否落在某个接收夹内（savepath 是网盘相对路径，如 ``接收/xxx``）。
+    provider: str = "",
+) -> Dict[str, Any]:
+    """返回 savepath 命中的接收夹任务；没命中返回空字典。
 
-    savepath 本身不带 provider 信息，所以只能按「同盘 + 相对路径落在接收夹内」判断。
-    传了 ``inbox`` 就只判这一个接收夹；否则任一启用的接收夹命中即算命中。
+    savepath 是网盘相对路径（不带 provider），能确定落盘网盘时必须传 ``provider``：
+    多个网盘都用 ``/接收`` 时，只有同盘那个接收夹算命中。
+    不传 provider 时退回「任一启用的接收夹命中即算命中」，只留给无法判定网盘的旧调用方。
     """
     relative = normalize_relative_path(str(savepath or "").strip())
     if not relative:
-        return False
-    candidates = [inbox] if isinstance(inbox, dict) and inbox else get_inbox_tasks(cfg)
-    for candidate in candidates:
+        return {}
+    provider_key = normalize_mount_provider(provider)
+    for candidate in get_inbox_tasks(cfg):
+        if provider_key and _inbox_provider(cfg, candidate) != provider_key:
+            continue
         conf = build_quick_import_config(cfg, candidate)
         if not conf["enabled"]:
             continue
@@ -336,8 +411,29 @@ def is_quick_import_savepath(
         if not inbox_rel:
             continue
         if relative == inbox_rel or relative.startswith(inbox_rel + "/"):
-            return True
-    return False
+            return candidate
+    return {}
+
+
+def is_quick_import_savepath(
+    cfg: Dict[str, Any],
+    savepath: Any,
+    inbox: Optional[Dict[str, Any]] = None,
+    provider: str = "",
+) -> bool:
+    """导入落点是否落在接收夹内（savepath 是网盘相对路径，如 ``接收/xxx``）。
+
+    传了 ``inbox`` 就只判这一个接收夹；否则按 ``provider`` 找命中的接收夹
+    （不传 provider 时任一启用的接收夹命中即算命中）。
+    """
+    if isinstance(inbox, dict) and inbox:
+        conf = build_quick_import_config(cfg, inbox)
+        if not conf["enabled"]:
+            return False
+        inbox_rel = str(conf.get("inbox_rel", "") or "").strip()
+        relative = normalize_relative_path(str(savepath or "").strip())
+        return bool(relative and inbox_rel and (relative == inbox_rel or relative.startswith(inbox_rel + "/")))
+    return bool(match_quick_import_inbox(cfg, savepath, provider))
 
 
 def _cross_provider_target_hint(
@@ -436,6 +532,30 @@ def _list_inbox_children(base_cid: str, provider: str = QUICK_IMPORT_DEFAULT_PRO
     payload = scraper_service.list_scraper_entries(provider, base_cid, True)
     entries = payload.get("entries") if isinstance(payload, dict) else []
     return [entry for entry in (entries or []) if isinstance(entry, dict)]
+
+
+def _wait_for_inbox_children(
+    base_cid: str,
+    provider: str,
+    *,
+    max_attempts: int = INBOX_STAGING_MAX_ATTEMPTS,
+    interval_seconds: float = INBOX_STAGING_RESCAN_INTERVAL_SECONDS,
+) -> List[Dict[str, Any]]:
+    """列接收夹内容；扫空时在宽限期内重扫，返回最后一次结果（可能仍为空）。
+
+    转存 / 115 离线任务返回成功时目录列表常常滞后，立刻整理会扫到空并直接收尾；
+    这里最多重扫 ``max_attempts`` 次，由调用方决定空扫时怎么记日志。
+    """
+    attempts = max(1, int(max_attempts or 1))
+    interval = max(0.0, float(interval_seconds or 0))
+    children: List[Dict[str, Any]] = []
+    for attempt in range(1, attempts + 1):
+        children = _list_inbox_children(base_cid, provider)
+        if children or attempt >= attempts:
+            return children
+        if interval > 0:
+            time.sleep(interval)
+    return children
 
 
 def _resolve_entry_after_organize(
@@ -652,65 +772,77 @@ def _finish_quick_import_run(
     retry_sqlite_locked(write)
 
 
-def list_quick_import_runs(limit: int = 20) -> List[Dict[str, Any]]:
+def list_quick_import_runs(limit: int = 20, inbox_path: str = "") -> List[Dict[str, Any]]:
+    """最近的接收夹整理运行记录；``inbox_path`` 非空时只取该接收夹的记录。"""
     normalized_limit = max(1, min(200, int(limit or 20)))
+    normalized_inbox = str(inbox_path or "").strip()
     ensure_db()
 
     def load() -> List[Dict[str, Any]]:
         with db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                "SELECT * FROM quick_import_runs ORDER BY id DESC LIMIT ?",
-                (normalized_limit,),
-            )
+            if normalized_inbox:
+                cursor.execute(
+                    "SELECT * FROM quick_import_runs WHERE inbox_path = ? ORDER BY id DESC LIMIT ?",
+                    (normalized_inbox, normalized_limit),
+                )
+            else:
+                cursor.execute(
+                    "SELECT * FROM quick_import_runs ORDER BY id DESC LIMIT ?",
+                    (normalized_limit,),
+                )
             columns = [item[0] for item in cursor.description]
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
     return retry_sqlite_locked(load)
 
 
-def list_inbox_recent_jobs(inbox_rel: str, limit: int = 3) -> List[Dict[str, Any]]:
-    """接收夹里最近落进来的离线导入任务（磁力 / 分享导入 finish 前都算“最近接收”）。"""
+def list_inbox_recent_jobs(inbox_rel: str, limit: int = 3, task_name: str = "") -> List[Dict[str, Any]]:
+    """接收夹里最近落进来的离线导入任务（磁力 / 分享导入 finish 前都算“最近接收”）。
+
+    ``task_name`` 非空时只统计归属这个接收夹的任务：不同网盘都用 ``/接收`` 时不能互相串账。
+    """
     prefix = normalize_relative_path(str(inbox_rel or "").strip())
     if not prefix:
         return []
     page_limit = max(1, min(int(limit or 3), 20))
+    wanted = str(task_name or "").strip()
     ensure_db()
 
     def load() -> List[Dict[str, Any]]:
         with db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT * FROM resource_jobs
-                WHERE savepath = ? OR savepath LIKE ?
-                ORDER BY id DESC LIMIT ?
-                """,
-                (prefix, f"{prefix}/%", page_limit),
-            )
+            sql = "SELECT * FROM resource_jobs WHERE (savepath = ? OR savepath LIKE ?)"
+            params: List[Any] = [prefix, f"{prefix}/%"]
+            if wanted:
+                sql += " AND inbox_task_name = ?"
+                params.append(wanted)
+            sql += " ORDER BY id DESC LIMIT ?"
+            params.append(page_limit)
+            cursor.execute(sql, tuple(params))
             return [serialize_resource_job_row(row) for row in cursor.fetchall()]
 
     return retry_sqlite_locked(load)
 
 
-def count_inbox_recent_jobs(inbox_rel: str, hours: int = 24) -> int:
+def count_inbox_recent_jobs(inbox_rel: str, hours: int = 24, task_name: str = "") -> int:
     prefix = normalize_relative_path(str(inbox_rel or "").strip())
     if not prefix:
         return 0
     window_hours = max(1, min(int(hours or 24), 24 * 30))
     cutoff = (datetime.now() - timedelta(hours=window_hours)).isoformat(timespec="seconds")
+    wanted = str(task_name or "").strip()
     ensure_db()
 
     def load() -> int:
         with db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT COUNT(*) FROM resource_jobs
-                WHERE (savepath = ? OR savepath LIKE ?) AND created_at >= ?
-                """,
-                (prefix, f"{prefix}/%", cutoff),
-            )
+            sql = "SELECT COUNT(*) FROM resource_jobs WHERE (savepath = ? OR savepath LIKE ?) AND created_at >= ?"
+            params: List[Any] = [prefix, f"{prefix}/%", cutoff]
+            if wanted:
+                sql += " AND inbox_task_name = ?"
+                params.append(wanted)
+            cursor.execute(sql, tuple(params))
             row = cursor.fetchone()
             return int(row[0] or 0) if row else 0
 
@@ -726,8 +858,14 @@ def _build_inbox_status(cfg: Dict[str, Any], inbox: Dict[str, Any]) -> Dict[str,
             active_run = latest_monitor_run_progress(run_kind="inbox", task_name=str(conf["task_name"]))
         except Exception:
             active_run = {}
+    inbox_path = str(conf.get("inbox_path", "") or "").strip()
+    inbox_rel = str(conf.get("inbox_rel", "") or "").strip()
+    task_name = str(conf.get("task_name", "") or "").strip()
+    runs = list_quick_import_runs(1, inbox_path=inbox_path) if inbox_path else []
+    latest = runs[0] if runs else {}
+    detail = safe_json_loads(latest.get("detail_json", "{}"), {}) if latest else {}
     return {
-        "task_name": conf["task_name"],
+        "task_name": task_name,
         "provider": conf["provider"],
         "task_path": conf["inbox_path"],
         "enabled": conf["enabled"],
@@ -741,6 +879,14 @@ def _build_inbox_status(cfg: Dict[str, Any], inbox: Dict[str, Any]) -> Dict[str,
             }
             for key in QUICK_IMPORT_TARGET_KEYS
         },
+        # 每个接收夹自己的一份：最近一次整理、最近接收统计、运行 / 中断 / 再跑一轮。
+        "latest": latest,
+        "latest_detail": detail,
+        "recent_jobs": list_inbox_recent_jobs(inbox_rel, 3, task_name=task_name),
+        "recent_job_count_24h": count_inbox_recent_jobs(inbox_rel, 24, task_name=task_name),
+        "running": quick_import_task_running(task_name),
+        "cancelling": quick_import_task_cancelling(task_name),
+        "pending_rerun": pending_quick_import_rerun(task_name),
         "active_run": active_run,
     }
 
@@ -764,9 +910,11 @@ def get_quick_import_status() -> Dict[str, Any]:
         "targets": primary.get("targets", {}),
         # 每个网盘一个接收夹：卡片按名字从这里取自己那份状态。
         "inboxes": inbox_statuses,
+        # 下面这些顶层字段只代表第一个接收夹，仅为兼容旧 CLI / 旧调用方保留，面板不要用它们。
         "running": _QUICK_IMPORT_RUN_LOCK.locked(),
         "cancelling": _QUICK_IMPORT_RUN_LOCK.locked() and _QUICK_IMPORT_CANCEL.is_set(),
         "pending_rerun": pending_quick_import_rerun(),
+        "running_task": str(_INBOX_RUNNING_TASK.get("name", "") or ""),
         "active_run": primary.get("active_run", {}),
         "latest": latest,
         "latest_detail": detail,
@@ -1268,6 +1416,8 @@ def _run_inbox_quick_import(
 
     低置信度 / 识别失败 / 计划冲突 / 搬运失败的条目都会留在该接收夹，并记录具体原因。
     """
+    # finally 里要按任务名清运行标记；先给默认值，避免校验失败时半路抛 NameError。
+    task_label = ""
     try:
         config_error = validate_quick_import_config(cfg, inbox)
         if config_error:
@@ -1282,6 +1432,7 @@ def _run_inbox_quick_import(
         started_at = now_text()
         run_id = _insert_quick_import_run(trigger, conf["inbox_path"], started_at)
         task_label = str(conf.get("task_name") or "接收夹").strip() or "接收夹"
+        _INBOX_RUNNING_TASK["name"] = task_label
         monitor_run_id = create_monitor_run(
             run_kind="inbox",
             task_name=task_label,
@@ -1350,6 +1501,22 @@ def _run_inbox_quick_import(
                 base_path=base_rel,
             )
             items = identified.get("items") or []
+            staged_empty = False
+            if not items:
+                # 识别扫不到条目：转存 / 离线任务刚返回成功时目录列表可能还没刷新，
+                # 先按宽限期确认接收夹是不是真的空（与订阅链路的落盘宽限对齐）。
+                # 只有「确认为空」才计入等待；有内容但识别不出条目时不要等。
+                children = _wait_for_inbox_children(base_cid, provider)
+                if not children:
+                    staged_empty = True
+                else:
+                    identified = identify_scraper_batch_entries(
+                        provider,
+                        None,
+                        base_cid=base_cid,
+                        base_path=base_rel,
+                    )
+                    items = identified.get("items") or []
             results = identified.get("results") or []
             picked = identified.get("picked") or {}
             subjects: List[str] = []
@@ -1376,7 +1543,18 @@ def _run_inbox_quick_import(
                 if isinstance(result, dict)
             }
             if not items:
-                summary = "接收夹没有可整理的内容"
+                if staged_empty:
+                    waited = INBOX_STAGING_RESCAN_INTERVAL_SECONDS * (INBOX_STAGING_MAX_ATTEMPTS - 1)
+                    summary = f"接收夹没有可整理的内容（已等待 {waited} 秒）"
+                    finish_run(
+                        "completed",
+                        0,
+                        0,
+                        summary,
+                        {"moved": [], "left": [], "staging_wait_seconds": waited},
+                    )
+                    return {"ok": True, "moved": [], "left": [], "summary": summary, "run_id": run_id}
+                summary = "接收夹有内容但没有可整理条目"
                 finish_run("completed", 0, 0, summary, {"moved": [], "left": []})
                 return {"ok": True, "moved": [], "left": [], "summary": summary, "run_id": run_id}
 
@@ -1394,7 +1572,7 @@ def _run_inbox_quick_import(
                 batch_indexes = ordered_indexes[batch_start : batch_start + max_items_per_run]
                 prepared: List[Dict[str, Any]] = []
                 for index in batch_indexes:
-                    if _QUICK_IMPORT_CANCEL.is_set():
+                    if _inbox_task_cancelled(task_label):
                         cancelled = True
                         break
                     processed_indexes.append(index)
@@ -1487,7 +1665,7 @@ def _run_inbox_quick_import(
                     if cancelled:
                         break
                     if batch_start + max_items_per_run < len(ordered_indexes) and batch_pause_seconds > 0:
-                        if _QUICK_IMPORT_CANCEL.wait(batch_pause_seconds):
+                        if _inbox_cancel_wait(batch_pause_seconds, task_label):
                             cancelled = True
                             break
                     continue
@@ -1620,7 +1798,7 @@ def _run_inbox_quick_import(
                     # 重复搬运会把已经移走的空壳当成新条目再搬一遍。
                     resolved_items: List[Dict[str, Any]] = []
                     for prepared_item in group:
-                        if _QUICK_IMPORT_CANCEL.is_set():
+                        if _inbox_task_cancelled(task_label):
                             cancelled = True
                             break
                         index = int(prepared_item["index"])
@@ -1713,7 +1891,7 @@ def _run_inbox_quick_import(
                         except Exception as exc:
                             dispatch_results[entry_id] = {"__dispatch_error__": str(exc)[:120]}
                     for resolved in resolved_items:
-                        if _QUICK_IMPORT_CANCEL.is_set():
+                        if _inbox_task_cancelled(task_label):
                             cancelled = True
                             break
                         if resolved.get("merged_into_folder"):
@@ -1829,7 +2007,7 @@ def _run_inbox_quick_import(
                 if cancelled:
                     break
                 if batch_start + max_items_per_run < len(ordered_indexes) and batch_pause_seconds > 0:
-                    if _QUICK_IMPORT_CANCEL.wait(batch_pause_seconds):
+                    if _inbox_cancel_wait(batch_pause_seconds, task_label):
                         cancelled = True
                         break
 
@@ -2019,7 +2197,8 @@ def _run_inbox_quick_import(
     finally:
         # 整理锁和取消标志由 run_quick_import 统一管理：这里不清理，这样一轮里点
         # 「中断」也能作用于后续网盘的接收夹。
-        pass
+        if str(_INBOX_RUNNING_TASK.get("name", "") or "").strip() == task_label:
+            _INBOX_RUNNING_TASK["name"] = ""
 
 
 def run_quick_import(
@@ -2029,8 +2208,12 @@ def run_quick_import(
     parent_run_id: str = "",
     source_ref: str = "",
     wait_for_lock: bool = False,
+    task_names: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
-    """对每个启用的接收夹各整理一轮（每个网盘一个接收夹，各自只整理同盘文件）。"""
+    """对每个启用的接收夹各整理一轮（每个网盘一个接收夹，各自只整理同盘文件）。
+
+    ``task_names=None`` 表示全部启用的接收夹；传集合时只整理集合里的接收夹。
+    """
     # 手动点击时不卡住请求：已有整理在跑就直接返回（卡片上会显示黄色的「中断」按钮）。
     if wait_for_lock:
         lock_wait_seconds = max(QUICK_IMPORT_LOCK_WAIT_SECONDS, 60)
@@ -2040,13 +2223,29 @@ def run_quick_import(
         return {
             "ok": True,
             "skipped": True,
+            "reason": "locked",
             "summary": "已有接收夹整理在执行，可在任务卡片上点「中断」后重试",
         }
     _QUICK_IMPORT_CANCEL.clear()
+    with _INBOX_TRIGGER_LOCK:
+        _QUICK_IMPORT_CANCEL_TASKS.clear()
     try:
         cfg = get_config()
         inboxes = [task for task in get_inbox_tasks(cfg) if task.get("enabled")]
+        if task_names is not None:
+            wanted = {str(name or "").strip() for name in task_names if str(name or "").strip()}
+            inboxes = [task for task in inboxes if str(task.get("name", "") or "").strip() in wanted]
         if not inboxes:
+            if task_names is not None:
+                return {
+                    "ok": True,
+                    "skipped": True,
+                    # 明确区别于「锁超时」：指定接收夹不存在 / 已停用时不重试，否则会每 5 秒空转。
+                    "reason": "no_targets",
+                    "moved": [],
+                    "left": [],
+                    "summary": "没有需要整理的接收夹（任务不存在、已停用或已被过滤）",
+                }
             # 一个启用的接收夹都没有：沿用旧行为，把配置问题抛给调用方。
             raise RuntimeError(validate_quick_import_config(cfg) or "没有启用的接收夹任务")
         results: List[Dict[str, Any]] = []
@@ -2084,4 +2283,6 @@ def run_quick_import(
         }
     finally:
         _QUICK_IMPORT_CANCEL.clear()
+        with _INBOX_TRIGGER_LOCK:
+            _QUICK_IMPORT_CANCEL_TASKS.clear()
         _QUICK_IMPORT_RUN_LOCK.release()

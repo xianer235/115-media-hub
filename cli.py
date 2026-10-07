@@ -848,7 +848,10 @@ def cmd_monitor(args, c: Client):
             path = str(t.get("scan_path", "") or "").strip()
             cron = t.get("cron_minutes", 0)
             enabled = "🟢" if t.get("enabled", True) else "🔴"
-            print(f"  {enabled} {name}  (扫描: {path}, 周期: {cron}分钟)")
+            kind = "接收夹" if str(t.get("task_type", "") or "scan") == "inbox" else "目录同步"
+            provider = str(t.get("provider", "") or "").strip() if kind == "接收夹" else ""
+            kind_text = f"{kind} · {provider}" if provider else kind
+            print(f"  {enabled} {name}  [{kind_text}]  (扫描: {path}, 周期: {cron}分钟)")
 
     elif args.action == "status":
         data = c.json("GET", "/monitor/status")
@@ -938,25 +941,37 @@ def cmd_monitor(args, c: Client):
 
     elif args.action == "quick-import-status":
         data = c.json("GET", "/scraper/quick-import/status")
-        enabled = "已启用" if data.get("enabled") else "未启用"
-        print(f"接收夹快捷导入：{enabled}")
-        print(f"  接收文件夹：{data.get('inbox_path') or '(未设置)'}")
-        targets = data.get("targets") if isinstance(data.get("targets"), dict) else {}
-        for key, label in (("movie", "电影"), ("tv", "电视剧")):
-            task_name = str((targets.get(key) or {}).get("task_name", "") or "").strip()
-            scan_path = str((targets.get(key) or {}).get("scan_path", "") or "").strip()
-            print(f"  {label}目标：{task_name or '(未标注)'}{f'  {scan_path}' if scan_path else ''}")
-        config_error = str(data.get("config_error", "") or "").strip()
-        if config_error:
-            print(f"  ⚠️ {config_error}")
-        latest = data.get("latest") if isinstance(data.get("latest"), dict) else {}
-        if latest:
-            print(f"  最近一次：{latest.get('summary') or '--'}（{latest.get('finished_at') or latest.get('started_at') or '--'}）")
-            detail = data.get("latest_detail") if isinstance(data.get("latest_detail"), dict) else {}
-            for item in (detail.get("left") or [])[:10]:
-                print(f"    · 留接收夹：{item.get('name') or '--'}：{item.get('reason') or ''}")
+        # 接收夹按网盘隔离：每个接收夹的状态、目标、最近接收各自一份，逐个打印。
+        inboxes = data.get("inboxes") if isinstance(data.get("inboxes"), list) else []
+        if not inboxes:
+            print("没有接收夹任务")
         else:
-            print("  尚未执行过")
+            print(f"共 {len(inboxes)} 个接收夹：")
+        for inbox in inboxes:
+            if not isinstance(inbox, dict):
+                continue
+            name = str(inbox.get("task_name", "") or "(未命名)").strip()
+            provider = str(inbox.get("provider", "") or "115").strip()
+            enabled_text = "已启用" if inbox.get("enabled") else "未启用"
+            print(f"接收夹「{name}」（{provider}，{enabled_text}）")
+            print(f"  接收文件夹：{inbox.get('inbox_path') or '(未设置)'}")
+            targets = inbox.get("targets") if isinstance(inbox.get("targets"), dict) else {}
+            for key, label in (("movie", "电影"), ("tv", "电视剧")):
+                path = str((targets.get(key) or {}).get("target_path", "") or "").strip()
+                print(f"  {label}目标：{path or '(未设置)'}")
+            latest = inbox.get("latest") if isinstance(inbox.get("latest"), dict) else {}
+            if latest:
+                when = latest.get("finished_at") or latest.get("started_at") or "--"
+                print(f"  最近一次：{latest.get('summary') or '--'}（{when}）")
+                detail = inbox.get("latest_detail") if isinstance(inbox.get("latest_detail"), dict) else {}
+                for item in (detail.get("left") or [])[:10]:
+                    print(f"    · 留接收夹：{item.get('name') or '--'}：{item.get('reason') or ''}")
+            else:
+                print("  尚未执行过")
+            print(f"  最近 24 小时接收：{int(inbox.get('recent_job_count_24h', 0) or 0)} 个")
+            config_error = str(inbox.get("config_error", "") or "").strip()
+            if config_error:
+                print(f"  ⚠️ {config_error}")
 
     elif args.action == "quick-import-run":
         data = c.json("POST", "/scraper/quick-import/run", {"trigger": "cli"})

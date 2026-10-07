@@ -218,7 +218,8 @@ def ensure_db() -> None:
                     finished_at TEXT NOT NULL DEFAULT '',
                     last_triggered_at TEXT NOT NULL DEFAULT '',
                     response_json TEXT NOT NULL DEFAULT '{}',
-                    extra_json TEXT NOT NULL DEFAULT '{}'
+                    extra_json TEXT NOT NULL DEFAULT '{}',
+                    inbox_task_name TEXT NOT NULL DEFAULT ''
                 )
                 """
             )
@@ -543,6 +544,8 @@ def ensure_db() -> None:
             job_columns = {str(row[1]) for row in cursor.fetchall()}
             if "extra_json" not in job_columns:
                 cursor.execute("ALTER TABLE resource_jobs ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'")
+            if "inbox_task_name" not in job_columns:
+                cursor.execute("ALTER TABLE resource_jobs ADD COLUMN inbox_task_name TEXT NOT NULL DEFAULT ''")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_local_files_scan_token ON local_files(scan_token)")
             cursor.execute(
                 """

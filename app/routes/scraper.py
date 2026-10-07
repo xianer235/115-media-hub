@@ -397,12 +397,15 @@ async def run_quick_import_endpoint(request: Request) -> Dict[str, Any]:
     payload = data if isinstance(data, dict) else {}
     trigger = str(payload.get("trigger", "manual") or "manual").strip() or "manual"
     sub_path = str(payload.get("sub_path", "") or "").strip()
+    task_name = str(payload.get("task_name", "") or "").strip()
+    task_names = {task_name} if task_name else None
     try:
         # 显式调用是同步语义：等当前整理结束再跑这一轮，请求不会被丢弃或跳过。
         result = await asyncio.to_thread(
             quick_import.run_quick_import,
             trigger,
             sub_path=sub_path,
+            task_names=task_names,
             wait_for_lock=True,
         )
         return {"ok": True, **result}

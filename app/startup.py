@@ -50,12 +50,12 @@ def _run_prune_step(callback) -> Dict[str, Any]:
         return {"error": str(exc)[:180]}
 
 
-async def _run_inbox_cron_import() -> None:
+async def _run_inbox_cron_import(task_name: str = "") -> None:
     """接收夹定时整理：只登记请求，实际整理在工作线程里串行执行。"""
     try:
         from .services.quick_import import notify_quick_import
 
-        notify_quick_import("cron")
+        notify_quick_import("cron", task_name=task_name)
     except Exception:
         logging.exception("接收夹定时整理失败")
 
@@ -183,7 +183,7 @@ async def startup() -> None:
                     if is_inbox:
                         # 接收夹任务的“定时执行”= 周期整理并分发一次（手动拖进接收夹的文件也能被收拾）。
                         monitor_last_run[name] = now
-                        asyncio.create_task(_run_inbox_cron_import())
+                        asyncio.create_task(_run_inbox_cron_import(name))
                     elif pending_offline_counts.get(name, 0) > 0:
                         monitor_last_run[name] = now
                         monitor_next_run[name] = datetime.fromtimestamp(

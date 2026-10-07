@@ -221,8 +221,15 @@ async def _apply_offline_task_state(job: Dict[str, Any], task: Dict[str, Any]) -
             # 不再触发监控刷新，也不阻塞离线轮询。
             from . import quick_import as quick_import_service
 
+            offline_inbox_task_name = str(
+                job.get("inbox_task_name", "") or job_extra.get("inbox_task_name", "") or ""
+            ).strip()
             try:
-                quick_import_service.notify_quick_import("offline", source_ref=f"resource:{job_id}")
+                quick_import_service.notify_quick_import(
+                    "offline",
+                    source_ref=f"resource:{job_id}",
+                    task_name=offline_inbox_task_name,
+                )
             except Exception as exc:
                 _mark_resource_job_failed(job_id, resource_id, f"115 已完成，但快捷导入失败：{exc}")
                 return
@@ -642,7 +649,7 @@ async def run_offline_resource_job_batch(
             _mark_resource_job_failed(job_id, resource_id, detail)
 
 
-async def _run_quick_import_after_delay(delay_seconds: int) -> None:
+async def _run_quick_import_after_delay(delay_seconds: int, task_name: str = "") -> None:
     """按导入任务配置的延迟等待后登记一次接收夹整理（分享转存落盘需要一点时间时用）。"""
     wait_seconds = max(0, int(delay_seconds or 0))
     if wait_seconds > 0:
@@ -650,7 +657,7 @@ async def _run_quick_import_after_delay(delay_seconds: int) -> None:
     from . import quick_import as quick_import_service
 
     try:
-        quick_import_service.notify_quick_import("import")
+        quick_import_service.notify_quick_import("import", task_name=str(task_name or "").strip())
     except Exception as exc:
         logging.warning("quick import after import finished failed: %s", exc)
 
@@ -1001,11 +1008,22 @@ async def run_resource_job(job_id: int) -> None:
             # 落点在接收夹：交给快捷导入（后台执行，不阻塞导入任务收尾）。
             from . import quick_import as quick_import_service
 
+            inbox_task_name = str(
+                job.get("inbox_task_name", "") or job_extra_for_trigger.get("inbox_task_name", "") or ""
+            ).strip()
             delay_seconds = max(0, int(job.get("refresh_delay_seconds", 0) or 0))
             if delay_seconds > 0:
-                submit_background(_run_quick_import_after_delay, delay_seconds, label="quick-import-delayed")
+                submit_background(
+                    _run_quick_import_after_delay,
+                    delay_seconds,
+                    inbox_task_name,
+                    label="quick-import-delayed",
+                )
             else:
-                submit_background(quick_import_service.notify_quick_import, "import", label="quick-import")
+                submit_background(
+                    lambda: quick_import_service.notify_quick_import("import", task_name=inbox_task_name),
+                    label="quick-import",
+                )
         elif (
             (not is_share_receive_link or bool(getattr(share_provider, "supports_monitor", False)))
             and bool(job.get("auto_refresh"))

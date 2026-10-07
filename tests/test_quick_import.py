@@ -388,7 +388,10 @@ class MultiInboxFanoutTest(unittest.TestCase):
 
     def test_status_snapshot_is_built_per_inbox(self):
         cfg = self._two_provider_cfg()
-        with mock.patch.object(quick_import, "latest_monitor_run_progress", return_value={}):
+        with mock.patch.object(quick_import, "latest_monitor_run_progress", return_value={}), \
+                mock.patch.object(quick_import, "list_quick_import_runs", return_value=[]), \
+                mock.patch.object(quick_import, "list_inbox_recent_jobs", return_value=[]), \
+                mock.patch.object(quick_import, "count_inbox_recent_jobs", return_value=0):
             first = quick_import._build_inbox_status(cfg, core.get_inbox_tasks(cfg)[0])
             second = quick_import._build_inbox_status(cfg, core.get_inbox_tasks(cfg)[1])
         self.assertEqual(first["task_name"], "接收")
@@ -407,6 +410,55 @@ class MultiInboxFanoutTest(unittest.TestCase):
                 mock.patch.object(quick_import, "count_inbox_recent_jobs", return_value=0):
             status = quick_import.get_quick_import_status()
         self.assertEqual([item["task_name"] for item in status["inboxes"]], ["接收", "夸克接收"])
+
+    def test_status_snapshot_carries_per_inbox_activity(self):
+        """每张卡片只显示自己那份最近运行 / 最近接收，不能透传第一条或全局值。"""
+        cfg = self._two_provider_cfg()
+        runs_by_path = {"/115/接收": [{"id": 9, "summary": "115 的整理"}], "/quark/接收": []}
+
+        def fake_runs(limit=20, inbox_path=""):
+            return runs_by_path.get(inbox_path, [])
+
+        with mock.patch.object(quick_import, "list_quick_import_runs", side_effect=fake_runs), \
+                mock.patch.object(quick_import, "list_inbox_recent_jobs", return_value=[]), \
+                mock.patch.object(quick_import, "count_inbox_recent_jobs", return_value=0), \
+                mock.patch.object(quick_import, "latest_monitor_run_progress", return_value={}):
+            first = quick_import._build_inbox_status(cfg, core.get_inbox_tasks(cfg)[0])
+            second = quick_import._build_inbox_status(cfg, core.get_inbox_tasks(cfg)[1])
+        self.assertEqual(first["latest"]["id"], 9)
+        self.assertEqual(second["latest"], {})
+        self.assertIn("recent_job_count_24h", first)
+        self.assertIn("running", second)
+        self.assertFalse(second["running"])
+        self.assertEqual(first["latest_detail"], {})
+
+    def test_task_running_is_scoped_by_name(self):
+        quick_import._INBOX_RUNNING_TASK["name"] = ""
+        quick_import._QUICK_IMPORT_CANCEL.clear()
+        quick_import._QUICK_IMPORT_CANCEL_TASKS.clear()
+        if not quick_import._QUICK_IMPORT_RUN_LOCK.acquire(timeout=0):
+            self.fail("整理锁没被释放，测试状态被污染了")
+        try:
+            quick_import._INBOX_RUNNING_TASK["name"] = "夸克接收"
+            self.assertTrue(quick_import.quick_import_task_running("夸克接收"))
+            self.assertFalse(quick_import.quick_import_task_running("接收"))
+            quick_import.request_quick_import_cancel("夸克接收")
+            self.assertTrue(quick_import.quick_import_task_cancelling("夸克接收"))
+            self.assertFalse(quick_import.quick_import_task_cancelling("接收"))
+        finally:
+            quick_import._INBOX_RUNNING_TASK["name"] = ""
+            quick_import._QUICK_IMPORT_CANCEL.clear()
+            quick_import._QUICK_IMPORT_CANCEL_TASKS.clear()
+            quick_import._QUICK_IMPORT_RUN_LOCK.release()
+
+    def test_inbox_delay_uses_target_inbox_idle_seconds(self):
+        """静默窗口按接收夹各自读取，不能所有盘都用第一个接收夹的配置。"""
+        cfg = self._two_provider_cfg()
+        cfg["monitor_tasks"][1]["inbox_idle_seconds"] = 11
+        cfg["monitor_tasks"][2]["inbox_idle_seconds"] = 22
+        with mock.patch.object(quick_import, "get_config", return_value=cfg):
+            self.assertEqual(quick_import._inbox_delay_seconds("接收"), 11)
+            self.assertEqual(quick_import._inbox_delay_seconds("夸克接收"), 22)
 
     def test_run_loops_every_enabled_inbox_and_skips_disabled(self):
         cfg = self._two_provider_cfg()
@@ -443,6 +495,190 @@ class MultiInboxFanoutTest(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(len(result["results"]), 1)
         self.assertEqual(result["errors"][0]["task_name"], "夸克接收")
+
+    def test_manual_trigger_only_runs_target_inbox(self):
+        cfg = self._two_provider_cfg()
+        seen = []
+
+        def fake_run(cfg_arg, inbox, **kwargs):
+            seen.append(inbox["name"])
+            return {"run_id": len(seen), "moved": [], "left": [], "summary": "ok"}
+
+        with mock.patch.object(quick_import, "get_config", return_value=cfg), \
+                mock.patch.object(quick_import, "_run_inbox_quick_import", side_effect=fake_run):
+            result = quick_import.run_quick_import("manual", task_names={"夸克接收"})
+        self.assertEqual(seen, ["夸克接收"])
+        self.assertTrue(result.get("ok"))
+
+    def test_unknown_task_name_skips_without_error(self):
+        cfg = self._two_provider_cfg()
+        with mock.patch.object(quick_import, "get_config", return_value=cfg), \
+                mock.patch.object(quick_import, "_run_inbox_quick_import") as runner:
+            result = quick_import.run_quick_import("manual", task_names={"不存在的接收夹"})
+        self.assertTrue(result.get("skipped"))
+        # 只有锁冲突才该被工作线程重试；这种「没命中接收夹」不能被当锁超时反复空转。
+        self.assertEqual(result.get("reason"), "no_targets")
+        runner.assert_not_called()
+
+    def test_worker_loop_does_not_retry_no_targets(self):
+        """已停用 / 不存在的接收夹返回 skipped 时不能被当锁超时反复重试（否则 5 秒空转一轮）。"""
+        calls = []
+
+        def fake_run(trigger, **kwargs):
+            calls.append(kwargs.get("task_names"))
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": "no_targets",
+                "summary": "没有需要整理的接收夹",
+            }
+
+        with quick_import._INBOX_TRIGGER_LOCK:
+            quick_import._INBOX_TRIGGER_STATE.update(
+                {"worker": None, "pending_tasks": set(), "trigger": "", "source_ref": ""}
+            )
+        with mock.patch.object(quick_import, "run_quick_import", side_effect=fake_run), \
+                mock.patch.object(quick_import, "_wait_for_inbox_next_run"):
+            quick_import._inbox_worker_loop("manual", "", {"夸克接收"})
+        self.assertEqual(calls, [{"夸克接收"}])
+
+    def test_cancel_only_affects_target_inbox(self):
+        quick_import._QUICK_IMPORT_CANCEL.clear()
+        quick_import._QUICK_IMPORT_CANCEL_TASKS.clear()
+        quick_import._QUICK_IMPORT_RUN_LOCK.acquire()
+        try:
+            self.assertTrue(quick_import.request_quick_import_cancel("夸克接收"))
+            self.assertTrue(quick_import._inbox_task_cancelled("夸克接收"))
+            self.assertFalse(quick_import._inbox_task_cancelled("接收"))
+        finally:
+            quick_import._QUICK_IMPORT_RUN_LOCK.release()
+            quick_import._QUICK_IMPORT_CANCEL.clear()
+            quick_import._QUICK_IMPORT_CANCEL_TASKS.clear()
+
+
+class InboxAttributionTest(unittest.TestCase):
+    """同名路径跨网盘时，导入落点与最近接收记录要按接收夹归属判定。"""
+
+    def test_match_quick_import_inbox_respects_provider(self):
+        cfg = MultiInboxFanoutTest._two_provider_cfg()
+        self.assertEqual(
+            str(quick_import.match_quick_import_inbox(cfg, "接收", provider="115").get("name", "")),
+            "接收",
+        )
+        self.assertEqual(
+            # 两个网盘的接收夹相对路径都是「接收」时，只有 provider 能区分归属。
+            str(quick_import.match_quick_import_inbox(cfg, "接收", provider="quark").get("name", "")),
+            "夸克接收",
+        )
+        # 相对路径落在别的网盘那个接收夹上时不算命中。
+        other = MultiInboxFanoutTest._two_provider_cfg()
+        other["monitor_tasks"][2]["scan_path"] = "/quark/夸克接收"
+        self.assertEqual(quick_import.match_quick_import_inbox(other, "接收", provider="quark"), {})
+        self.assertEqual(
+            str(quick_import.match_quick_import_inbox(other, "夸克接收/子目录", provider="quark").get("name", "")),
+            "夸克接收",
+        )
+
+    def test_match_quick_import_inbox_skips_disabled(self):
+        cfg = MultiInboxFanoutTest._two_provider_cfg()
+        cfg["monitor_tasks"][1]["enabled"] = False
+        self.assertEqual(quick_import.match_quick_import_inbox(cfg, "接收", provider="115"), {})
+
+    def test_is_quick_import_savepath_provider_scoped(self):
+        cfg = MultiInboxFanoutTest._two_provider_cfg()
+        self.assertTrue(quick_import.is_quick_import_savepath(cfg, "接收/片名", provider="115"))
+        self.assertTrue(quick_import.is_quick_import_savepath(cfg, "接收/片名", provider="quark"))
+        self.assertFalse(quick_import.is_quick_import_savepath(cfg, "接收/片名", provider="aliyun"))
+        self.assertFalse(quick_import.is_quick_import_savepath(cfg, "电影/片名", provider="115"))
+
+
+class InboxRecentJobsAttributionTest(unittest.TestCase):
+    """resource_jobs 落库带接收夹归属，最近接收统计按归属过滤。"""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.original_db_path = db.DB_PATH
+        self.original_db_ensured = db._DB_ENSURED
+        db.DB_PATH = os.path.join(self.tmpdir.name, "data.db")
+        db._DB_ENSURED = False
+        db.ensure_db()
+
+    def tearDown(self):
+        db.DB_PATH = self.original_db_path
+        db._DB_ENSURED = self.original_db_ensured
+        self.tmpdir.cleanup()
+
+    def test_recent_jobs_filter_by_inbox_task_name(self):
+        from app.resource_jobs import create_resource_jobs
+
+        create_resource_jobs([
+            (
+                {"title": "115 的", "link_url": "magnet:?xt=urn:btih:AAA", "link_type": "magnet"},
+                {"savepath": "接收", "inbox_task_name": "接收", "extra": {"quick_import_inbox": 1}},
+            ),
+            (
+                {"title": "夸克的", "link_url": "magnet:?xt=urn:btih:BBB", "link_type": "magnet"},
+                {"savepath": "接收", "inbox_task_name": "夸克接收", "extra": {"quick_import_inbox": 1}},
+            ),
+        ])
+        only_115 = quick_import.list_inbox_recent_jobs("接收", 3, task_name="接收")
+        self.assertEqual([job["title"] for job in only_115], ["115 的"])
+        self.assertEqual(quick_import.count_inbox_recent_jobs("接收", 24, task_name="夸克接收"), 1)
+        self.assertEqual(
+            len(quick_import.list_inbox_recent_jobs("接收", 5)),
+            2,
+            "不传任务名时保持旧行为（只按路径统计）",
+        )
+
+    def test_find_existing_resource_job_scopes_by_inbox(self):
+        from app.resource_jobs import create_resource_jobs, find_existing_resource_job
+
+        resource = {"title": "同链接", "link_url": "magnet:?xt=urn:btih:CCC", "link_type": "magnet"}
+        create_resource_jobs([
+            (dict(resource), {"savepath": "接收", "inbox_task_name": "接收"}),
+        ])
+        self.assertTrue(find_existing_resource_job(resource, "接收", "接收"))
+        self.assertEqual(find_existing_resource_job(resource, "接收", "夸克接收"), {})
+        self.assertTrue(
+            find_existing_resource_job(resource, "接收"),
+            "不传接收夹时保持旧行为（只在路径维度查）",
+        )
+
+
+class InboxStagingGraceTest(unittest.TestCase):
+    """转存/离线落盘滞后时，接收夹整理要先等一等再判定为空。"""
+
+    def test_wait_for_inbox_children_rescans_until_content_appears(self):
+        with mock.patch.object(
+            quick_import, "_list_inbox_children", side_effect=[[], [], [{"id": "1", "name": "片名"}]]
+        ) as lister, mock.patch.object(quick_import.time, "sleep") as sleeper:
+            children = quick_import._wait_for_inbox_children("cid", "115")
+        self.assertEqual([item["id"] for item in children], ["1"])
+        self.assertEqual(lister.call_count, 3)
+        self.assertEqual(sleeper.call_count, 2)
+
+    def test_wait_for_inbox_children_gives_up_after_max_attempts(self):
+        with mock.patch.object(quick_import, "_list_inbox_children", return_value=[]) as lister, \
+                mock.patch.object(quick_import.time, "sleep"):
+            children = quick_import._wait_for_inbox_children("cid", "115")
+        self.assertEqual(children, [])
+        self.assertEqual(lister.call_count, quick_import.INBOX_STAGING_MAX_ATTEMPTS)
+
+    def test_empty_inbox_run_reports_staging_wait(self):
+        cfg = MultiInboxFanoutTest._two_provider_cfg()
+        inbox = core.get_inbox_task(cfg, "接收")
+        identified = {"items": [], "picked": {}, "results": []}
+        with mock.patch.object(quick_import, "resolve_scraper_dest_folder_id", return_value="cid"), \
+                mock.patch.object(quick_import, "identify_scraper_batch_entries", return_value=identified), \
+                mock.patch.object(quick_import, "_wait_for_inbox_children", return_value=[]), \
+                mock.patch.object(quick_import, "_insert_quick_import_run", return_value=7), \
+                mock.patch.object(quick_import, "create_monitor_run", return_value="run-1"), \
+                mock.patch.object(quick_import, "start_monitor_run"), \
+                mock.patch.object(quick_import, "finish_monitor_run"), \
+                mock.patch.object(quick_import, "_finish_quick_import_run"):
+            result = quick_import._run_inbox_quick_import(cfg, inbox)
+        self.assertIn("已等待", result["summary"])
+        self.assertEqual(result["moved"], [])
 
 
 class MonitorTaskTypeConstraintTest(unittest.TestCase):
@@ -1807,6 +2043,7 @@ class QuickImportRunTest(unittest.TestCase):
         identified = {"items": [], "picked": {}, "results": []}
         with mock.patch.object(quick_import, "get_config", return_value=cfg), \
                 mock.patch.object(quick_import, "resolve_scraper_dest_folder_id", return_value="cid"), \
+                mock.patch.object(quick_import, "_wait_for_inbox_children", return_value=[]), \
                 mock.patch.object(quick_import, "identify_scraper_batch_entries", return_value=identified):
             result = quick_import.run_quick_import("test")
         runs = quick_import.list_quick_import_runs(5)
@@ -1823,6 +2060,7 @@ class QuickImportRunTest(unittest.TestCase):
             self.assertTrue(quick_import._QUICK_IMPORT_CANCEL.is_set())
         finally:
             quick_import._QUICK_IMPORT_CANCEL.clear()
+            quick_import._QUICK_IMPORT_CANCEL_TASKS.clear()
             quick_import._QUICK_IMPORT_RUN_LOCK.release()
         self.assertFalse(quick_import.request_quick_import_cancel())
 
@@ -1843,7 +2081,7 @@ class QuickImportRunTest(unittest.TestCase):
 
         def identify_then_cancel(*args, **kwargs):
             # 模拟用户在识别阶段点了「中断」。
-            quick_import._QUICK_IMPORT_CANCEL.set()
+            quick_import.request_quick_import_cancel("接收")
             return identified
 
         with mock.patch.object(quick_import, "get_config", return_value=cfg), \
@@ -2172,13 +2410,13 @@ class InboxTriggerCoordinatorTest(unittest.TestCase):
     def setUp(self):
         with quick_import._INBOX_TRIGGER_LOCK:
             quick_import._INBOX_TRIGGER_STATE.update(
-                {"worker": None, "pending": False, "trigger": "", "source_ref": ""}
+                {"worker": None, "pending_tasks": set(), "trigger": "", "source_ref": ""}
             )
 
     def tearDown(self):
         with quick_import._INBOX_TRIGGER_LOCK:
             quick_import._INBOX_TRIGGER_STATE.update(
-                {"worker": None, "pending": False, "trigger": "", "source_ref": ""}
+                {"worker": None, "pending_tasks": set(), "trigger": "", "source_ref": ""}
             )
 
     def _wait_worker(self, timeout: float = 5.0) -> bool:

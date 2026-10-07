@@ -10,14 +10,17 @@
 
 ## 基线
 
-- **更新日期**: 2026-10-07
-- **分支**: `main`，与 `origin/main` 同步
-- **版本**: `0.13.4`（`version.json` 是唯一真源，与 `CHANGELOG.md` 顶部一致）
-- **最近提交**: `4f9ef59` 集数识别补「片名 + 破折号/空格 + 裸数字」写法（2026-10-06，0.13.4 元数据已随提交入库）
-- **工作区**: 有未提交改动（最新一批：接收夹多网盘解耦 + 监控回归纯扫描 + 订阅自理电视剧原地改名——`app/core.py` / `app/services/quick_import.py` / `app/services/monitor.py` / `app/services/subscription_task_runner.py` / `cli.py` / `static/js/index.js` / `static/js/modules/subscription/ui.js` / `templates/partials/modals/monitor.html` / `templates/partials/modals/subscription.html` / `templates/partials/pages/monitor_about.html` + 回归与文档；同批收尾还有结论行去掉「自动整理」列、`monitor_changes` 空转的「新增媒体条目」产线删除、接收夹分发目标跨盘提示。此后又把接收夹从「全局唯一」改成「每个网盘一个」：`app/core.py` 按 provider 去重 + `get_inbox_tasks` / `get_inbox_task(name=)`，`app/services/quick_import.py` 按接收夹区分状态与运行，`static/js/index.js` 新增 `openNewInboxTask` + 按 provider 查重，`static/js/modules/app/boot.js` 点击委托挂到两个任务列表（修接收夹卡片按钮点不动），并同步 `templates/partials/pages/settings.html` / `templates/partials/modals/monitor.html` / `115-magnet-helper-webhook.user.js` 的文案。再往后收尾三件小事：新增接收夹先选网盘（已被占用的网盘 `disabled` + 说明、默认落到空闲网盘）、webhook 只允许 115 的接收夹开启（非 115 开关禁用并在落库前清掉 `webhook_enabled`）、修掉新建任务时弹窗误显示已有接收夹运行状态（`renderInboxTaskStatus` 无任务名只渲染占位、`refreshInboxTaskStatus` 按 `editingMonitorName` 取 per-inbox 状态），改动集中在 `static/js/index.js` + `templates/partials/modals/monitor.html`。最近三点：弹窗去掉「任务类型」下拉（类型由入口决定）、两块任务列表的「i」说明拆成各自的文案（接收夹 = 识别 → 整理 → 分发，文件夹监控 = 纯扫描生成 STRM）、目录选择弹窗修掉写死的 115 标题并补「新建文件夹」（`createMonitorFolderInCurrent` 复用资源导入那套 `createResourceFolder`，跟着弹窗网盘走）。最近一点：修掉非 115 接收夹整条「立即整理并分发」链路（`app/services/scraper.py` 的 `resolve_scraper_dest_folder_id` 改通用 + `app/services/quick_import.py` 两处漏传 `provider`；此前夸克/天翼/123/阿里接收夹一运行就报「目标路径操作当前仅支持 115」）。此前还有 订阅「扫描链接」多条粘贴、`scripts/check.sh` 一键验证与 `handoff.md` 体积预算、115 离线入库宽限期重扫 等，均未提交。最近条目见 `handoff.md` 顶部）
+- **更新日期**: 2026-10-08
+- **分支**: `main`，领先 `origin/main` 5 个提交（未推送）
+- **版本**: `0.14.0`（`version.json` 是唯一真源，与 `CHANGELOG.md` 顶部一致；本次发布元数据同步在未提交改动里）
+- **最近提交**: `f2ea26a` 修复非 115 接收夹「立即整理并分发」链路（2026-10-08，接收夹解耦批的最后一个提交）
+- **工作区**: 接收夹解耦批已提交但未推送（`83591a3` / `bba634b` / `01d7361` / `9433dd3` / `f2ea26a`，内容 = 接收夹多网盘解耦 + 监控回归纯扫描 + 订阅自理电视剧原地改名 + webhook 只给 115 + 非 115 整理分发链路修复）；工作区另有未提交改动（0.14.0 发布元数据 + 接收夹「按网盘隔离」的状态 / 触发 / 统计三层；涉及 `app/core.py` / `app/services/quick_import.py` / `app/services/monitor.py` / `app/services/subscription_task_runner.py` / `cli.py` / `static/js/index.js` / `static/js/modules/subscription/ui.js` / `templates/partials/modals/monitor.html` / `templates/partials/modals/subscription.html` / `templates/partials/pages/monitor_about.html` + 回归与文档。同批收尾还有结论行去掉「自动整理」列、`monitor_changes` 空转的「新增媒体条目」产线删除、接收夹分发目标跨盘提示。接收夹从「全局唯一」改成「每个网盘一个」：`app/core.py` 按 provider 去重 + `get_inbox_tasks` / `get_inbox_task(name=)`，`app/services/quick_import.py` 按接收夹区分状态与运行，`static/js/index.js` 新增 `openNewInboxTask` + 按 provider 查重，`static/js/modules/app/boot.js` 点击委托挂到两个任务列表（修接收夹卡片按钮点不动），并同步 `templates/partials/pages/settings.html` / `templates/partials/modals/monitor.html` / `115-magnet-helper-webhook.user.js` 的文案。再往后收尾三件小事：新增接收夹先选网盘（已被占用的网盘 `disabled` + 说明、默认落到空闲网盘）、webhook 只允许 115 的接收夹开启（非 115 开关禁用并在落库前清掉 `webhook_enabled`）、修掉新建任务时弹窗误显示已有接收夹运行状态（`renderInboxTaskStatus` 无任务名只渲染占位、`refreshInboxTaskStatus` 按 `editingMonitorName` 取 per-inbox 状态），改动集中在 `static/js/index.js` + `templates/partials/modals/monitor.html`。最近三点：弹窗去掉「任务类型」下拉（类型由入口决定）、两块任务列表的「i」说明拆成各自的文案（接收夹 = 识别 → 整理 → 分发，文件夹监控 = 纯扫描生成 STRM）、目录选择弹窗修掉写死的 115 标题并补「新建文件夹」（`createMonitorFolderInCurrent` 复用资源导入那套 `createResourceFolder`，跟着弹窗网盘走）。此前还有 订阅「扫描链接」多条粘贴、`scripts/check.sh` 一键验证与 `handoff.md` 体积预算、115 离线入库宽限期重扫 等。最近条目见 `handoff.md` 顶部）
+
+- **未提交（本批）**：接收夹「按网盘隔离」补齐**状态 / 触发 / 统计**三层——`app/services/quick_import.py` 新增落盘宽限重扫（`_wait_for_inbox_children`）、触发与中断按任务名分桶（`_QUICK_IMPORT_CANCEL_TASKS` / `_INBOX_TRIGGER_STATE["pending_tasks"]` / `run_quick_import(task_names=)`）、每盘状态快照（`_INBOX_RUNNING_TASK` + `_build_inbox_status` 补 `latest` / `recent_*` / `running`）与每盘静默窗口；`app/db.py` + `app/resource_jobs.py` 给 `resource_jobs` 加 `inbox_task_name` 归属列、最近接收统计按归属过滤；`app/routes/{monitor,scraper,resource}.py` 与 `app/services/resource.py` 透传接收夹归属；`static/js/index.js` 不再透传全局状态，`static/js/modules/resource/core.js` 区分「已停用接收夹」，`cli.py` 的 `quick-import-status` / `monitor list` 按接收夹输出。
 
 ## 最近一次验证
 
+- `scripts/check.sh --all` 全量 **1228 项零失败**（2026-10-08，0.14.0 发布前复跑：接收夹按网盘隔离三层 + 落盘宽限重扫 + 发布元数据，106s；`compileall app main.py cli.py`、改动 JS `node --check`、`git diff --check`、`handoff.md` 体积预算 32502/32768 均通过）。
 - `scripts/check.sh --all` 全量 **1212 项零失败**（2026-10-08，非 115 接收夹整理分发链路修复：`app/services/scraper.py` 的 `resolve_scraper_dest_folder_id` 从「非 115 直接抛错」改成通用实现——115 走分页版 `resolve_115_folder_id_by_path`，其他网盘走各自 provider 的 `resolve_folder_id_by_path`，找不到抛带完整路径的错；接收夹一进场就要用它解析接收目录 `base_rel` 与每个分发目标 `scan_rel` 的 cid，所以此前夸克/天翼/123/阿里接收夹一运行就报「目标路径操作当前仅支持 115」整轮失败；`app/services/quick_import.py` 的 `_dispatch_organized_entry` 另外两处漏传 `provider`（目标无同名文件夹时的搬运、并入已有文件夹前列同名）会退回默认 115，用非 115 的文件 ID 调 115 接口，一并补上。`tests.test_scraper_path_ops` 2 项断言改写；`tests.test_quick_import` 新增 2 项：夸克接收夹分发走夸克搬运、散文件并入已有文件夹按夸克列目录；`compileall app main.py`、`git diff --check`、`handoff.md` 体积预算 32526/32768 均通过）。
 - `scripts/check.sh --all` 全量 **1209 项零失败**（2026-10-08，目录选择弹窗修正 + 新建文件夹：`templates/partials/modals/monitor.html` 的 h3 补 `id="monitor-folder-modal-title"`（此前缺 id，`index.js` 里的 provider 标题从未生效，夸克接收夹也显示「选择 115 监控文件夹」）、路径标签改 `id="monitor-folder-path-label"` 并按目标显示「当前监控路径 / 当前接收夹路径 / 当前分发目标」、新增 `monitor-folder-create-name` + `monitor-folder-create-btn`；`static/js/index.js` 新增 `setMonitorFolderCreateBusy` / `createMonitorFolderInCurrent()`（复用 `window.createResourceFolder(cid, name, { provider: monitorFolderProvider })`，建完清分支缓存、自动进入并提示点「选择当前目录」）与 `showMonitorNameHelp()`（非 115 接收夹不再提 webhook 地址）；`static/js/modules/app/boot.js` 补新建输入框回车提交；`tests.test_monitor_run_frontend` 新增 `MonitorFolderPickerTest` 4 项；`compileall app main.py`、改动 JS `node --check`、`git diff --check`、`handoff.md` 体积预算 30952/32768 均通过）。
 - `scripts/check.sh --all` 全量 **1205 项零失败**（2026-10-07，两块任务列表的「i」说明各弹各的：`static/js/index.js` 新增 `INBOX_HELP_HTML`（接收夹链路：分类前的中转文件夹 / 立即整理并分发 / 每个网盘只能有一个 / 只搬运不生成 STRM / 整理节流 / 明确「文件夹监控是纯扫描，不会替你整理」），`showMonitorHelp(kind = 'scan')` 按 `kind === 'inbox'` 分派标题与正文；`templates/partials/pages/monitor_about.html` 两个按钮分别传 `'inbox'` / `'scan'` 并各自补 `aria-label` / `title`；`tests.test_monitor_run_frontend` 断言两个 onclick 变体 + 两份文案，新增 `test_inbox_help_talks_about_inbox_not_scan`；`compileall app main.py`、改动 JS `node --check`、`git diff --check`、`handoff.md` 体积预算 32760/32768 均通过）。
@@ -45,6 +48,8 @@
 
 ## 待办 / 未完成
 
+- 容器重建后实测**接收夹按网盘隔离的修复批**（未提交）：① 115 与夸克各一个接收夹，点其中一张卡片的「立即整理并分发」，另一张不应进入运行中；② 在某张卡片点「中断」不应打断另一张正在跑的整理；③ 两张卡片的「最近接收 24 小时」「最近整理」互相独立（同名 `/接收` 不再串账）；④ 夸克分享转存进接收夹后大文件夹也能在宽限期内被整理（不再空跑「没有可整理的内容」）；⑤ 禁用其中一个接收夹后，资源导入弹窗提示「已停用，保存后不会自动整理」。
+- 已定口径（2026-10-08）：**通知只保留文件夹监控与订阅两条，接收夹整理不推通知**（成功 / 失败 / 留守都只在监控日志与卡片状态里看），原计划的「Task 7 接收夹通知」取消；手工放进接收夹不自动触发（只能定时 / 手动 / webhook）、不同网盘不并行整理（一把全局锁顺序跑），均维持现状。
 - 容器重建后实测**非 115 接收夹整理分发**（夸克 / 天翼 / 123 / 阿里）：点「立即整理并分发」能识别 → 整理 → 搬进同盘目标（不再报「目标路径操作当前仅支持 115」）；重点复核目标目录**没有**同名文件夹时（整包搬运）与**已有**同名文件夹时（并入）两条分支都走对网盘。
 - 容器重建后复核目录选择弹窗：夸克 / 天翼 / 123 / 阿里接收夹点「选择文件夹」时标题应是「选择 夸克网盘 文件夹」这类（此前写死「选择 115 监控文件夹」）；弹窗里能就地「新建文件夹」，建完自动进入、再点「选择当前目录」保存；非 115 接收夹点「任务名」旁的 i 不再提 webhook 地址。
 - 待用户拍板：编辑已有接收夹时要不要允许**改网盘**（现在下拉不做禁用，只在保存时按「每个网盘只能有一个」拦重复；如果要禁止，就在编辑态把网盘也锁成只读）。
@@ -57,7 +62,7 @@
 - 容器重建后在订阅「扫描链接」弹窗一次粘贴多条磁力/电驴链接，复核排队顺序、离线入库与命中挑选链路。
 - 容器重建后用真实 115 订阅复核：`Renegade Immortal – 仙逆 Xian NI – 154.mkv`（破折号）与 `仙逆 154.mp4`（空格）这类「片名 + 分隔符 + 裸数字」文件都能被解析成第 154 集并被选中入库（旧口径下解析为空集、文件被直接跳过）。
 - 容器重建后用真实 115 / 订阅链复核：订阅落进 `仙逆/Season 01` 的新集不再被自动整理搬进 `仙逆 (2023)/`；历史遗留的 `仙逆/仙逆 (2023)/Season 01/…` 是否需要回搬待用户确认。
-- 0.13.3 的代码修复（`scraper.py` + 4 项回归）、文档与发布元数据已就绪，待提交 / 推送 / 打 tag，之后重建容器部署。
+- 0.14.0 的代码（接收夹解耦批已提交的 5 个提交 + 未提交的「按网盘隔离」三层）与发布元数据已就绪：5 个提交待推送 / 打 tag，未提交改动待提交，之后重建容器部署。
 - 容器重建后用真实接收夹复核：整段名字只有推广话术的假 `.mkv/.mp4` 只被忽略（开启“删除广告文件”时才删除），不再被识别成正片。
 - 容器重建后手动触发一次接收夹整理，确认同一部影视的多个版本/多个条目合并进同一个媒体文件夹（第二条文件名带 `(2)`），发行组命名的空壳目录被清理。
 - 真实 115 重跑确认 `Curb.Your.Enthusiasm` S09/S10/S11 整季包落季与季包残留（`RARBG.txt`/空 `Subs`）清理。

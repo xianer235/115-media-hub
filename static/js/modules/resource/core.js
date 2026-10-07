@@ -1897,7 +1897,8 @@
                 if (!matches) return;
                 if (String(task.task_type || 'scan') === 'inbox') {
                     // 接收夹不是监控任务：落到这里的资源由接收夹整理流程接管，不生成 STRM。
-                    matchedInbox = task;
+                    // 同盘有多个接收夹时保留路径最深的那个（子目录接收夹优先）。
+                    if (!matchedInbox) matchedInbox = task;
                     return;
                 }
                 const depth = scanPath.split('/').filter(Boolean).length;
@@ -1914,6 +1915,8 @@
                 scanPath: normalizeRemotePathInput(matchedTask?.scan_path || ''),
                 inboxTask: matchedInbox,
                 inboxTaskName: matchedInbox?.name || '',
+                // 停用的接收夹后端不会触发整理，提示也要如实说，不能继续宣传「自动整理」。
+                inboxEnabled: matchedInbox ? matchedInbox.enabled !== false : false,
                 isInbox: !matchedTask && !!matchedInbox,
             };
         }
@@ -2017,7 +2020,9 @@
             const monitorHint = match.taskName
                 ? `映射到 ${providerLabel} 路径 ${match.fullPath}，命中监控任务“${match.taskName}”，保存完成后自动生成 STRM。`
                 : (match.isInbox
-                    ? `映射到 ${providerLabel} 路径 ${match.fullPath}，命中接收夹“${match.inboxTaskName || '接收夹'}”，保存完成后自动整理分发，再由监控任务生成 STRM。`
+                    ? (match.inboxEnabled
+                        ? `映射到 ${providerLabel} 路径 ${match.fullPath}，命中接收夹“${match.inboxTaskName || '接收夹'}”，保存完成后自动整理分发，再由监控任务生成 STRM。`
+                        : `映射到 ${providerLabel} 路径 ${match.fullPath}，接收夹“${match.inboxTaskName || '接收夹'}”已停用，保存后不会自动整理；请到「文件夹监控」页启用该接收夹。`)
                     : `映射到 ${providerLabel} 路径 ${match.fullPath}，未纳入文件夹监控，不会自动生成 STRM。`);
             hintEl.innerText = `${selectionHint} ${monitorHint}`.trim();
         }
@@ -2069,7 +2074,9 @@
             if (match.taskName) {
                 displayInput.textContent = match.taskName;
             } else if (match.isInbox) {
-                displayInput.textContent = `${match.inboxTaskName || '接收夹'}（导入后自动整理分发）`;
+                displayInput.textContent = match.inboxEnabled
+                    ? `${match.inboxTaskName || '接收夹'}（导入后自动整理分发）`
+                    : `${match.inboxTaskName || '接收夹'}（已停用，不会自动整理）`;
             } else {
                 displayInput.textContent = '当前目录不自动触发';
             }

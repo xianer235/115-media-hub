@@ -3776,7 +3776,11 @@
             // 跟着页面既有的状态轮询（约 15s 一次）刷新卡片上的最近接收 / 最近整理；
             // 整理进行中时缩短到 5s，好让卡片及时出现「中断」按钮。
             const now = Date.now();
-            const interval = inboxTaskStatusCache && inboxTaskStatusCache.running
+            const editingName = String(editingMonitorName || '').trim();
+            const anyRunning = editingName
+                ? !!inboxStatusForTask(editingName).running
+                : !!inboxTaskStatusCache?.running;
+            const interval = anyRunning
                 ? INBOX_STATUS_RUNNING_REFRESH_INTERVAL_MS
                 : INBOX_STATUS_REFRESH_INTERVAL_MS;
             if (inboxStatusFetchedAt && now - inboxStatusFetchedAt < interval) return;
@@ -3784,12 +3788,23 @@
         }
 
         function inboxStatusForTask(taskName = '') {
-            // 每个网盘一个接收夹：卡片按名字取自己那份，再叠加全局的运行 / 最近记录字段。
+            // 每个网盘一个接收夹：卡片按名字取自己那份；取不到就给一份空快照，
+            // 绝不把全局的最近运行 / 最近接收透传给这张卡片（否则所有卡片显示同一条）。
             const cache = inboxTaskStatusCache && typeof inboxTaskStatusCache === 'object' ? inboxTaskStatusCache : {};
             const name = String(taskName || '').trim();
             const list = Array.isArray(cache.inboxes) ? cache.inboxes : [];
             const match = name ? list.find((item) => String(item?.task_name || '').trim() === name) : null;
-            return match ? { ...cache, ...match } : cache;
+            if (match) return { ...cache, ...match };
+            return {
+                latest: {},
+                latest_detail: {},
+                recent_jobs: [],
+                recent_job_count_24h: 0,
+                running: false,
+                cancelling: false,
+                pending_rerun: false,
+                active_run: {},
+            };
         }
 
         function buildInboxActivityHtml(taskName = '') {
@@ -3841,12 +3856,12 @@
 
         async function toggleInboxTaskRun() {
             // 弹窗里的按钮是同一个开关：空闲时开始整理，整理中变成中断。
-            const running = !!(inboxTaskStatusCache && inboxTaskStatusCache.running);
+            const name = currentMonitorFormTaskName();
+            const running = !!inboxStatusForTask(name).running;
             if (!running) {
                 await runInboxTaskNow();
                 return;
             }
-            const name = currentMonitorFormTaskName();
             if (!name) return;
             renderInboxTaskStatus({ ...inboxStatusForTask(name), running: true, cancelling: true });
             await stopMonitorTask(name);

@@ -242,6 +242,13 @@ class InboxTaskFrontendTest(unittest.TestCase):
         self.assertIn("保存后由接收夹整理分发", import_modal)
         self.assertIn("String(task?.task_type || 'scan') !== 'inbox'", import_modal)
 
+    def test_import_hint_marks_disabled_inbox(self):
+        """停用的接收夹后端不会触发整理，导入提示不能继续写「自动整理」。"""
+        core_js = (ROOT / "static/js/modules/resource/core.js").read_text(encoding="utf-8")
+        self.assertIn("inboxEnabled", core_js)
+        self.assertIn("已停用，保存后不会自动整理", core_js)
+        self.assertIn("已停用，不会自动整理", core_js)
+
     def test_inbox_run_button_can_be_interrupted(self):
         """接收夹整理运行中，卡片按钮要变成黄色的「中断」，弹窗按钮同一个开关。"""
         script = INDEX_SCRIPT_PATH.read_text(encoding="utf-8")
@@ -251,6 +258,9 @@ class InboxTaskFrontendTest(unittest.TestCase):
         self.assertIn("async function toggleInboxTaskRun", script)
         self.assertIn("window.toggleInboxTaskRun = toggleInboxTaskRun", script)
         self.assertIn("已请求中断接收夹整理", script)
+        # 每个接收夹只显示自己那份状态：取不到匹配就给空快照，不透传全局值。
+        self.assertIn("recent_jobs: []", script)
+        self.assertIn("const running = !!inboxStatusForTask(name).running;", script)
         modal = MONITOR_MODAL_PATH.read_text(encoding="utf-8")
         self.assertIn('id="inbox-task-run-btn"', modal)
         self.assertIn('onclick="toggleInboxTaskRun()"', modal)
@@ -346,7 +356,9 @@ class InboxTaskBackendWiringTest(unittest.TestCase):
 
     def test_import_hooks_flag_inbox_jobs(self):
         routes = RESOURCE_ROUTES_PATH.read_text(encoding="utf-8")
-        self.assertIn("is_quick_import_savepath", routes)
+        # 落点判定要带 provider，否则 115 / 夸克都用「接收」时会互相串账。
+        self.assertIn("match_quick_import_inbox", routes)
+        self.assertIn("inbox_task_name", routes)
         self.assertIn("quick_import_inbox", routes)
         service = RESOURCE_SERVICE_PATH.read_text(encoding="utf-8")
         self.assertIn("quick_import_inbox", service)

@@ -158,6 +158,7 @@ async def _handle_inbox_webhook(
             "webhook_task_name": task_name,
             "webhook_target": "inbox",
             "quick_import_inbox": 1,
+            "inbox_task_name": task_name,
         },
     )
 
@@ -220,7 +221,8 @@ async def _create_userscript_magnet_job(
             "extra": {},
         }
     )
-    existing = find_existing_resource_job(resource, normalized_savepath)
+    normalized_inbox_task_name = str((extra or {}).get("inbox_task_name", "") or "").strip()
+    existing = find_existing_resource_job(resource, normalized_savepath, normalized_inbox_task_name)
     if existing:
         existing_status = str(existing.get("status", "")).strip().lower()
         if existing_status == "completed":
@@ -250,6 +252,7 @@ async def _create_userscript_magnet_job(
             "savepath": normalized_savepath,
             "sharetitle": sharetitle,
             "monitor_task_name": monitor_task_name,
+            "inbox_task_name": normalized_inbox_task_name,
             "refresh_delay_seconds": refresh_delay_seconds,
             "auto_refresh": True,
             "extra": job_extra,
@@ -500,7 +503,7 @@ async def start_monitor(request: Request) -> Dict[str, Any]:
         # 不阻塞请求，也不会丢掉任何触发。
         from ..services.quick_import import notify_quick_import
 
-        result = notify_quick_import("manual")
+        result = notify_quick_import("manual", task_name=task_name)
         return {"ok": True, "status": str(result.get("summary", "") or ""), "result": result}
     status = queue_monitor_job(task_name, "manual")
     return {"ok": True, "status": status}
@@ -532,7 +535,7 @@ async def stop_monitor(request: Request) -> Dict[str, Any]:
         # 接收夹任务没有“中断扫描”的概念：这里请求中断当前整理（下一条目开始前生效）。
         from ..services.quick_import import request_quick_import_cancel
 
-        if not request_quick_import_cancel():
+        if not request_quick_import_cancel(task_name):
             return {"ok": False, "status": "idle", "cleared": 0}
         await write_monitor_log(f"{task_name} · 已请求中断接收夹整理", "warn")
         return {"ok": True, "status": "stopping", "cleared": 0}
