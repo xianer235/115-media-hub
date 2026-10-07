@@ -300,6 +300,29 @@ class MonitorDirScanTest(unittest.TestCase):
         # 运行结论不再包含“自动整理”结果。
         self.assertNotIn("已自动整理", monitor.build_monitor_run_summary({"generated": 1}))
 
+    def test_scan_skips_ad_named_fake_video_and_cleans_generated_strm(self):
+        """整段名字只有推广话术的假 .mkv 不生成 STRM；老口径生成的本地 STRM 会被过期清理删掉。"""
+        ad_name = "【更多无水印高品质资源请访问】【更多无水印高品质资源请访问】.mkv"
+        ad_local_rel = f"Library/SeriesA/{ad_name}"
+        self._insert_monitor_file(ad_local_rel, remote_rel_path=f"SeriesA/{ad_name}", remote_modified="t1")
+        stale_strm = self._create_strm(ad_local_rel)
+        task = self._task(sync_clean=True, skip_by_dir_mtime=False)
+        path_results = {
+            "/115/Library": ("t1", [_dir_item("SeriesA", "t1")]),
+            "/115/Library/SeriesA": (
+                "t1",
+                [_file_item(ad_name, "t1", 300 * 1024), _file_item("E01.mkv", "t1")],
+            ),
+        }
+
+        self._run_monitor(path_results, task=task, trigger="manual")
+
+        self.assertFalse(os.path.exists(stale_strm))
+        self.assertTrue(
+            os.path.exists(strm_files.managed_strm_file_path("Library/SeriesA/E01.mkv", root=self.strm_root))
+        )
+        self.assertNotIn(ad_local_rel, self._list_monitor_files())
+
     def test_savepaths_cleanup_and_index_bounded_to_union(self):
         task = self._task(sync_clean=True, skip_by_dir_mtime=True)
         self._insert_monitor_file(

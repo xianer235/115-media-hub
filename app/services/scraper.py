@@ -1383,15 +1383,31 @@ _SCRAPER_AD_NAME_RESIDUE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# 判断“整段都是广告词”时，裸域名同样属于广告残留（真实案例：推广话术里夹 www.Butailing.com）。
+_SCRAPER_AD_NAME_DOMAIN_RE = re.compile(
+    r"(?i)(?:[a-z0-9][a-z0-9-]*\.)+" + SCRAPER_SITE_TLD_PATTERN + r"\b"
+)
+
+
+def _strip_scraper_compound_extensions(value: str) -> str:
+    """剥掉叠在名字后面的已知后缀链（`.mkv` / `.mkv.strm` / `.mp4.DOC`），只剥已知后缀。"""
+    text = str(value or "").strip()
+    while True:
+        stem, ext = os.path.splitext(text)
+        if not stem or ext.lower() not in SCRAPER_STRIPPABLE_EXTENSIONS:
+            return text
+        text = stem
+
 
 def _is_scraper_promotional_only(value: str) -> bool:
-    """名字是否“只由广告推广话术组成”（去掉话术、序号、括号后没有任何片名残留）。
+    """名字是否“只由广告推广话术组成”（去掉话术、网址、序号、括号后没有任何片名残留）。
 
     站点引流会把广告文件伪装成 .mkv/.mp4 并直接用推广整句命名
-    （真实案例：`【更多无水印高品质资源请访问 】【更多无水印高品质资源请访问 】.mkv`）。
+    （真实案例：`【更多无水印高品质资源请访问 】【更多无水印高品质资源请访问 】.mkv`，
+    同一份话术还会配 `.mp4` / `.DOC`，本地 STRM 侧则是 `.mkv.strm`）。
     这类名字没有任何可用来识别影片的信息，只有判成广告，才不会把广告当成正片整理进媒体库。
     """
-    stem = os.path.splitext(str(value or "").strip())[0]
+    stem = _strip_scraper_compound_extensions(value)
     text = unicodedata.normalize("NFKC", stem).strip()
     if not text:
         return False
@@ -1400,6 +1416,8 @@ def _is_scraper_promotional_only(value: str) -> bool:
         return False
     common_re, _, _ = _get_scraper_noise_rules()
     residue = common_re.sub(" ", text)
+    residue = _SCRAPER_EMBEDDED_AD_URL_RE.sub(" ", residue)
+    residue = _SCRAPER_AD_NAME_DOMAIN_RE.sub(" ", residue)
     residue = _SCRAPER_AD_NAME_RESIDUE_RE.sub(" ", residue)
     residue = re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", " ", residue)
     # 允许残留一个连接字（如“最新地址请收藏本站”里的“请”），但片名至少要有 2 个字才算正常名字。
@@ -5040,6 +5058,16 @@ SCRAPER_BATCH_SUBTITLE_EXTENSIONS = {".srt", ".ass", ".ssa", ".sub", ".vtt", ".i
 SCRAPER_BATCH_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
 SCRAPER_BATCH_INFO_EXTENSIONS = {".nfo"}
 SCRAPER_BATCH_AD_EXTENSIONS = {".txt", ".url", ".html", ".htm", ".lnk", ".torrent", ".torrent!"}
+# 可以连续剥离的尾部后缀：站点会给同一份推广文件配 .mkv / .mp4 / .DOC，本地 STRM 侧还可能
+# 再叠一层（.mkv.strm）。判断「整段是不是只有推广话术」前先把这些已知后缀剥干净，
+# 否则残留的 “mkv” 会被当成片名，广告文件就漏判了。
+SCRAPER_STRIPPABLE_EXTENSIONS = (
+    SCRAPER_BATCH_MEDIA_EXTENSIONS
+    | SCRAPER_BATCH_SUBTITLE_EXTENSIONS
+    | SCRAPER_BATCH_IMAGE_EXTENSIONS
+    | SCRAPER_BATCH_AD_EXTENSIONS
+    | {".strm", ".doc", ".docx", ".pdf", ".exe", ".tbn", ".xml", ".json"}
+)
 SCRAPER_STANDARD_IMAGE_STEMS = {
     "poster", "folder", "cover", "backdrop", "fanart", "banner", "clearart",
     "logo", "landscape", "thumb",
@@ -5300,7 +5328,8 @@ def _is_scraper_ad_image(name: str, size: int = 0) -> bool:
 
 
 def _is_scraper_ad_file(name: str, size: int = 0) -> bool:
-    """判断是否广告类文件：广告扩展名（txt/url/html 等）、广告图片、或“片名全是推广话术”的伪装视频。
+    """判断是否广告类文件：广告扩展名（txt/url/html 等）、广告图片、“片名全是推广话术”的伪装视频，
+    以及其他扩展名（.doc / .strm 等）里整段只有推广话术的名字。
 
     NFO 是媒体信息，不算广告。
     """
@@ -5311,6 +5340,10 @@ def _is_scraper_ad_file(name: str, size: int = 0) -> bool:
         return _is_scraper_ad_image(name, size)
     if category == "video":
         # 站点会把广告片伪装成 .mkv/.mp4；文件名去掉推广话术后没有片名残留时按广告处理。
+        return _is_scraper_promotional_only(name)
+    if category == "other":
+        # 非视频扩展名同样会被拿来塞广告：同一份推广话术会配 .mkv / .mp4 / .DOC，
+        # 115 源站上还可能躺着 .strm。整段只有推广话术时按广告处理，否则不动。
         return _is_scraper_promotional_only(name)
     return False
 

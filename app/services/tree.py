@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from ..core import *  # noqa: F401,F403
 from ..db import now_text, retry_sqlite_locked
 from ..memory import release_process_memory
+from .scraper import _is_scraper_promotional_only
 from .strm_files import delete_managed_strm_file, managed_strm_file_path
 
 TREE_SYNC_PATH_BATCH_SIZE = max(
@@ -295,6 +296,10 @@ def _scan_tree_text(
             path_stack.pop(stale_level, None)
         path_stack[level] = clean_name
         if not is_video_file(clean_name, user_exts):
+            continue
+        # 树导出只有名字、没有体积：只按“整段都是推广话术”的确定广告名跳过，
+        # 与扫描 / 变更同步的 STRM 生成口径保持一致。
+        if _is_scraper_promotional_only(clean_name):
             continue
         # 对齐 0.2.2：不强制要求 0..level 每层都存在，按已有层级拼接即可。
         full_parts = [path_stack[depth] for depth in range(level + 1) if depth in path_stack]

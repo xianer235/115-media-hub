@@ -7244,7 +7244,7 @@ async def write_monitor_task_footer(task_name: str, status: str, level: str = "t
 
 async def write_monitor_task_summary(stats: Dict[str, int], cleanup_enabled: Optional[bool] = None) -> None:
     await write_monitor_log(
-        f"生成汇总: 新增/更新 {stats['generated']} | 跳过文件 {stats['skipped']} | 跳过目录 {stats['skipped_dirs']} | 失败目录 {stats['failed_dirs']}",
+        f"生成汇总: 新增/更新 {stats['generated']} | 跳过文件 {stats['skipped']}（含广告 {stats.get('skipped_ad_files', 0)}） | 跳过目录 {stats['skipped_dirs']} | 失败目录 {stats['failed_dirs']}",
         "info",
     )
     await write_monitor_log(

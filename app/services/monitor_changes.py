@@ -1167,6 +1167,11 @@ def _file_passes_filters(cfg: Dict[str, Any], task: Dict[str, Any], provider_pat
     name = basename(provider_path)
     if not is_video_file(name, get_user_extensions(cfg)):
         return False
+    # 变更同步与整任务扫描同一口径：推广话术命名的假视频不生成 STRM。
+    from .scraper import _is_scraper_ad_file
+
+    if _is_scraper_ad_file(name, size):
+        return False
     min_bytes = _task_min_file_size_bytes(task)
     return min_bytes <= 0 or _nonnegative_int(size) >= min_bytes
 

@@ -5,6 +5,7 @@ from ..core import *  # noqa: F401,F403
 from ..db import retry_sqlite_locked
 from ..memory import release_process_memory
 from .notify import push_monitor_success_notification
+from .scraper import _is_scraper_ad_file
 from .strm_files import delete_managed_strm_file, managed_strm_file_path, remove_empty_parent_dirs
 from .monitor_runs import add_source as add_monitor_run_source
 from .monitor_runs import create_run as create_monitor_run
@@ -672,6 +673,7 @@ async def run_monitor_task(
         "generated": 0,
         "updated": 0,
         "skipped": 0,
+        "skipped_ad_files": 0,
         "skipped_dirs": 0,
         "failed_dirs": 0,
         "deleted_files": 0,
@@ -1038,6 +1040,14 @@ async def run_monitor_task(
                     continue
                 if min_bytes > 0 and size < min_bytes:
                     stats["skipped"] += 1
+                    continue
+                if _is_scraper_ad_file(name, size):
+                    # 站点会把广告片伪装成 .mkv/.mp4 并直接用推广话术命名；生成 STRM 只会把
+                    # 广告带进媒体库。这里跳过（不计入 current_scan，已有的本地 STRM 会在
+                    # 过期清理里被删掉）。
+                    stats["skipped"] += 1
+                    stats["skipped_ad_files"] += 1
+                    await write_monitor_log(f"跳过广告文件: {item_remote_path}", "warn")
                     continue
 
                 target_file = managed_strm_file_path(item_local_rel)

@@ -41,7 +41,7 @@
 ### 文件夹监控（folder monitor）
 - **用途**：持续扫描网盘目录，为媒体文件生成 / 更新 `.strm`，并跟踪目录与文件的索引。
 - **入口**：页面「文件夹监控」的监控卡片（运行、停止、定时、Webhook `POST /webhook/{任务名}`）；刮削页「扫描监控」按钮（`POST /monitor/scan`，局部指定目录）；CLI `monitor start|stop|list|logs`。
-- **会做**：按 savepath / sharetitle / 指定目录确定范围 → 扫描子树 → 写或清理 STRM → 更新文件索引与首层时间基线 → 变更同步（网盘变更事件、待补扫范围、运行记录）。
+- **会做**：按 savepath / sharetitle / 指定目录确定范围 → 扫描子树 → 写或清理 STRM → 更新文件索引与首层时间基线 → 变更同步（网盘变更事件、待补扫范围、运行记录）；命中「整段名字只有推广话术」的假视频（`.mkv` / `.mp4` / `.DOC` / …）时跳过、不生成 STRM，已有的本地 STRM 按过期清理删掉。
 - **不会做**：**任何扫描（含「扫描监控」按钮、变更同步、Webhook、定时）都不再自动整理，只生成 / 同步 STRM**，不整理、不改名、不移动；任何扫描都不删非受管文件；接收夹任务不参与目录扫描。
 - **相关代码**：`app/routes/monitor.py`、`app/services/monitor.py`、`app/services/monitor_changes.py`、`app/services/monitor_runs.py`、`app/services/strm_files.py`；页面 `templates/partials/pages/monitor_about.html`
 - **细节**：`docs/superpowers/specs/2026-09-23-folder-monitor-workflow-design.md`、`2026-09-26-folder-receive-monitor-runtime-design.md`、`2026-09-23-folder-monitor-log-redesign.md`

@@ -1951,6 +1951,29 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         self.assertEqual(scraper._scraper_file_category("movie.nfo"), "info")
         self.assertFalse(scraper._is_scraper_ad_file("poster.jpg"))
 
+    def test_is_scraper_ad_file_covers_compound_extensions_and_doc(self):
+        """同一份推广话术会配 .mkv/.mp4/.DOC，本地 STRM 侧还会叠成 .mkv.strm。"""
+        ad_name = "【更多无水印高品质资源请访问】【更多无水印高品质资源请访问】"
+        for name in (
+            f"{ad_name}.mkv",
+            f"{ad_name}.mp4",
+            f"{ad_name}.mkv.strm",
+            f"{ad_name}.DOC",
+            "【更多无水印高品质资源请访问www.Butailing.com】"
+            "【更多无水印高品质资源请访问www.Butailing.com】.DOC",
+        ):
+            self.assertTrue(scraper._is_scraper_ad_file(name, 300 * 1024), name)
+        # 纯推广话术名不受体积阈值限制（大文件也照样是广告）。
+        self.assertTrue(scraper._is_scraper_ad_file(f"{ad_name}.mkv", 900 * 1024 * 1024))
+        # 正常片名不能被误伤。
+        for name in ("某剧.S01E01.1080p.mkv", "某电影.2160p.无水印.mkv", "Show.S01E01.1080p.mkv"):
+            self.assertFalse(scraper._is_scraper_ad_file(name, 300 * 1024 * 1024), name)
+
+    def test_is_scraper_ad_file_keeps_mixed_names_even_when_small(self):
+        """名字里还留着正片信息时，不管体积多小都不按广告处理（只认“整段都是推广话术”）。"""
+        self.assertFalse(scraper._is_scraper_ad_file("更多资源请访问官方网站.The.Matrix.1999.1080p.mkv", 5 * 1024 * 1024))
+        self.assertFalse(scraper._is_scraper_ad_file("某短片.在线观看.mp4", 30 * 1024 * 1024))
+
     def test_build_rename_plan_keeps_nfo_info_file_even_when_deleting_ads(self):
         tmdb = self._tmdb_binding(title="Show", year="2024", media_type="tv")
         plan = self._rename_plan_with_files(
