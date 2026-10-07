@@ -82,7 +82,7 @@ class QuickImportConfigTest(unittest.TestCase):
         cfg = core.normalize_config({"webhook_secret": "s3cret"})
         self.assertFalse(core.get_inbox_task(cfg)["webhook_enabled"])
 
-    def test_only_one_inbox_task_is_kept(self):
+    def test_same_provider_inbox_duplicates_collapse_to_one(self):
         cfg = core.normalize_config(
             {
                 "monitor_tasks": [
@@ -95,6 +95,36 @@ class QuickImportConfigTest(unittest.TestCase):
         self.assertEqual(len(inboxes), 1)
         self.assertEqual(inboxes[0]["name"], "接收")
         self.assertEqual(inboxes[0]["scan_path"], "/115/接收")
+
+    def test_each_provider_keeps_its_own_inbox(self):
+        """每个网盘一个接收夹：不同网盘各留一个，同网盘重复的只保留第一个。"""
+        cfg = core.normalize_config(
+            {
+                "mount_points": [dict(item) for item in MOUNT_POINTS] + [{"provider": "quark", "prefix": "/quark"}],
+                "monitor_tasks": [
+                    {"name": "接收", "task_type": "inbox", "provider": "115", "scan_path": "/115/接收"},
+                    {"name": "115第二个", "task_type": "inbox", "provider": "115", "scan_path": "/115/接收2"},
+                    {"name": "夸克接收", "task_type": "inbox", "provider": "quark", "scan_path": "/quark/接收"},
+                ],
+            }
+        )
+        self.assertEqual([task["name"] for task in core.get_inbox_tasks(cfg)], ["接收", "夸克接收"])
+        self.assertEqual([task["provider"] for task in core.get_inbox_tasks(cfg)], ["115", "quark"])
+
+    def test_get_inbox_task_can_be_selected_by_name(self):
+        cfg = core.normalize_config(
+            {
+                "mount_points": [dict(item) for item in MOUNT_POINTS] + [{"provider": "quark", "prefix": "/quark"}],
+                "monitor_tasks": [
+                    {"name": "接收", "task_type": "inbox", "provider": "115", "scan_path": "/115/接收"},
+                    {"name": "夸克接收", "task_type": "inbox", "provider": "quark", "scan_path": "/quark/接收"},
+                ],
+            }
+        )
+        # 不传名字回退第一个（默认 115 那个）；传名字按名字取。
+        self.assertEqual(core.get_inbox_task(cfg)["name"], "接收")
+        self.assertEqual(core.get_inbox_task(cfg, "夸克接收")["provider"], "quark")
+        self.assertEqual(core.get_inbox_task(cfg, "不存在的接收夹"), {})
 
     def test_configured_inbox_task_survives_normalize(self):
         cfg = core.normalize_config(
@@ -315,8 +345,81 @@ class QuickImportConfigTest(unittest.TestCase):
         self.assertIn("quark", message)
 
 
+class MultiInboxFanoutTest(unittest.TestCase):
+    """每个网盘一个接收夹：状态与整理都要按接收夹分别处理，不能互相串号。"""
+
+    @staticmethod
+    def _two_provider_cfg():
+        return {
+            "mount_points": [dict(item) for item in MOUNT_POINTS] + [{"provider": "quark", "prefix": "/quark"}],
+            "monitor_tasks": [
+                _task("电影", "/115/电影"),
+                _inbox_task(name="接收", path="/115/接收", provider="115", targets={"movie": "/115/电影"}),
+                _inbox_task(name="夸克接收", path="/quark/接收", provider="quark", targets={"movie": "/quark/电影"}),
+            ],
+        }
+
+    def test_status_snapshot_is_built_per_inbox(self):
+        cfg = self._two_provider_cfg()
+        with mock.patch.object(quick_import, "latest_monitor_run_progress", return_value={}):
+            first = quick_import._build_inbox_status(cfg, core.get_inbox_tasks(cfg)[0])
+            second = quick_import._build_inbox_status(cfg, core.get_inbox_tasks(cfg)[1])
+        self.assertEqual(first["task_name"], "接收")
+        self.assertEqual(first["provider"], "115")
+        self.assertIsNone(first["config_error"] or None)
+        self.assertEqual(second["task_name"], "夸克接收")
+        self.assertEqual(second["provider"], "quark")
+        self.assertEqual(second["targets"]["movie"]["target_path"], "/quark/电影")
+
+    def test_status_lists_every_inbox(self):
+        cfg = self._two_provider_cfg()
+        with mock.patch.object(quick_import, "get_config", return_value=cfg), \
+                mock.patch.object(quick_import, "latest_monitor_run_progress", return_value={}), \
+                mock.patch.object(quick_import, "list_quick_import_runs", return_value=[]), \
+                mock.patch.object(quick_import, "list_inbox_recent_jobs", return_value=[]), \
+                mock.patch.object(quick_import, "count_inbox_recent_jobs", return_value=0):
+            status = quick_import.get_quick_import_status()
+        self.assertEqual([item["task_name"] for item in status["inboxes"]], ["接收", "夸克接收"])
+
+    def test_run_loops_every_enabled_inbox_and_skips_disabled(self):
+        cfg = self._two_provider_cfg()
+        cfg["monitor_tasks"].append(
+            _inbox_task(name="停用的接收夹", path="/quark/停用", provider="quark", enabled=False)
+        )
+        seen = []
+
+        def fake_run(cfg_arg, inbox, **kwargs):
+            seen.append(inbox["name"])
+            return {"run_id": len(seen), "moved": [{"name": inbox["name"]}], "left": [], "summary": f"{inbox['name']} 完成"}
+
+        with mock.patch.object(quick_import, "get_config", return_value=cfg), \
+                mock.patch.object(quick_import, "_run_inbox_quick_import", side_effect=fake_run):
+            result = quick_import.run_quick_import("manual")
+
+        self.assertEqual(seen, ["接收", "夸克接收"])
+        self.assertFalse(result.get("skipped"))
+        self.assertEqual(len(result["moved"]), 2)
+        self.assertEqual(len(result["results"]), 2)
+
+    def test_one_inbox_failure_does_not_stop_the_others(self):
+        cfg = self._two_provider_cfg()
+
+        def fake_run(cfg_arg, inbox, **kwargs):
+            if inbox["name"] == "夸克接收":
+                raise RuntimeError("boom")
+            return {"run_id": 1, "moved": [], "left": [], "summary": "ok"}
+
+        with mock.patch.object(quick_import, "get_config", return_value=cfg), \
+                mock.patch.object(quick_import, "_run_inbox_quick_import", side_effect=fake_run):
+            result = quick_import.run_quick_import("manual")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(len(result["results"]), 1)
+        self.assertEqual(result["errors"][0]["task_name"], "夸克接收")
+
+
 class MonitorTaskTypeConstraintTest(unittest.TestCase):
-    """任务类型不可更改：内置接收夹固定是接收夹，新增任务一律是普通扫描任务。"""
+    """同名任务类型不可更改；接收夹可以按网盘新增（每个网盘一个），扫描任务照旧。"""
 
     def test_scan_task_cannot_become_inbox(self):
         existing = [{"name": "电影", "task_type": "scan"}, {"name": "接收", "task_type": "inbox"}]
@@ -343,14 +446,18 @@ class MonitorTaskTypeConstraintTest(unittest.TestCase):
             {"接收": "inbox", "电影": "scan"},
         )
 
-    def test_new_task_is_forced_to_scan(self):
+    def test_new_inbox_task_is_allowed(self):
+        """接收夹不再写死单例：可以按网盘新增，保存后由 ensure_inbox_task 按 provider 去重。"""
         existing = [{"name": "接收", "task_type": "inbox"}]
-        posted = [{"name": "接收", "task_type": "inbox"}, {"name": "新任务", "task_type": "inbox"}]
+        posted = [
+            {"name": "接收", "task_type": "inbox"},
+            {"name": "夸克接收", "task_type": "inbox", "provider": "quark"},
+        ]
 
         result = core.apply_task_type_constraints(existing, posted)
 
         by_name = {task["name"]: task for task in result}
-        self.assertEqual(by_name["新任务"]["task_type"], "scan")
+        self.assertEqual(by_name["夸克接收"]["task_type"], "inbox")
 
     def test_inbox_rename_is_allowed(self):
         existing = [{"name": "接收", "task_type": "inbox"}, {"name": "电影", "task_type": "scan"}]

@@ -14,10 +14,13 @@
 - **分支**: `main`，与 `origin/main` 同步
 - **版本**: `0.13.4`（`version.json` 是唯一真源，与 `CHANGELOG.md` 顶部一致）
 - **最近提交**: `4f9ef59` 集数识别补「片名 + 破折号/空格 + 裸数字」写法（2026-10-06，0.13.4 元数据已随提交入库）
-- **工作区**: 有未提交改动（最新一批：接收夹多网盘解耦 + 监控回归纯扫描 + 订阅自理电视剧原地改名——`app/core.py` / `app/services/quick_import.py` / `app/services/monitor.py` / `app/services/subscription_task_runner.py` / `cli.py` / `static/js/index.js` / `static/js/modules/subscription/ui.js` / `templates/partials/modals/monitor.html` / `templates/partials/modals/subscription.html` / `templates/partials/pages/monitor_about.html` + 回归与文档；同批收尾还有结论行去掉「自动整理」列、`monitor_changes` 空转的「新增媒体条目」产线删除、接收夹分发目标跨盘提示；此前还有 订阅「扫描链接」多条粘贴、`scripts/check.sh` 一键验证与 `handoff.md` 体积预算、115 离线入库宽限期重扫 等，均未提交。最近条目见 `handoff.md` 顶部）
+- **工作区**: 有未提交改动（最新一批：接收夹多网盘解耦 + 监控回归纯扫描 + 订阅自理电视剧原地改名——`app/core.py` / `app/services/quick_import.py` / `app/services/monitor.py` / `app/services/subscription_task_runner.py` / `cli.py` / `static/js/index.js` / `static/js/modules/subscription/ui.js` / `templates/partials/modals/monitor.html` / `templates/partials/modals/subscription.html` / `templates/partials/pages/monitor_about.html` + 回归与文档；同批收尾还有结论行去掉「自动整理」列、`monitor_changes` 空转的「新增媒体条目」产线删除、接收夹分发目标跨盘提示。此后又把接收夹从「全局唯一」改成「每个网盘一个」：`app/core.py` 按 provider 去重 + `get_inbox_tasks` / `get_inbox_task(name=)`，`app/services/quick_import.py` 按接收夹区分状态与运行，`static/js/index.js` 新增 `openNewInboxTask` + 按 provider 查重，`static/js/modules/app/boot.js` 点击委托挂到两个任务列表（修接收夹卡片按钮点不动），并同步 `templates/partials/pages/settings.html` / `templates/partials/modals/monitor.html` / `115-magnet-helper-webhook.user.js` 的文案。再往后收尾三件小事：新增接收夹先选网盘（已被占用的网盘 `disabled` + 说明、默认落到空闲网盘）、webhook 只允许 115 的接收夹开启（非 115 开关禁用并在落库前清掉 `webhook_enabled`）、修掉新建任务时弹窗误显示已有接收夹运行状态（`renderInboxTaskStatus` 无任务名只渲染占位、`refreshInboxTaskStatus` 按 `editingMonitorName` 取 per-inbox 状态），改动集中在 `static/js/index.js` + `templates/partials/modals/monitor.html`。此前还有 订阅「扫描链接」多条粘贴、`scripts/check.sh` 一键验证与 `handoff.md` 体积预算、115 离线入库宽限期重扫 等，均未提交。最近条目见 `handoff.md` 顶部）
 
 ## 最近一次验证
 
+- `scripts/check.sh --all` 全量 **1201 项零失败**（2026-10-07，接收夹新增先选网盘 + webhook 只给 115 + 新建任务不再显示已有运行状态：`static/js/index.js` 新增 `inboxProvidersTaken` / `renderMonitorInboxProviderHint`（占用网盘 `disabled` + 说明，新建默认落到空闲网盘）/ `monitorWebhookProviderSupported`（非 115 接收夹的 webhook 开关禁用并说明可用手动 / 定时替代），`renderInboxTaskStatus` 无任务名时只渲染占位说明、`refreshInboxTaskStatus` 按 `editingMonitorName` 取 per-inbox 状态，`currentMonitorFormData` 落库前把非 115 接收夹的 `webhook_enabled` 清成 false；`templates/partials/modals/monitor.html` 把网盘选择移到共用路径框前面并新增 `monitor-inbox-provider-row` / `webhook-provider-hint`；`tests.test_quick_import_frontend` 新增 3 项用例；`compileall app main.py`、改动 JS `node --check`、`git diff --check`、`handoff.md` 体积预算 32706/32768 均通过）。
+- `scripts/check.sh --all` 全量 **1198 项零失败**（2026-10-07，文件夹监控任务弹窗去掉 webhook 开关下方的大块参数说明、只留开关旁的「i」提示按钮：`templates/partials/modals/monitor.html` 删 `#webhook-hint`、`static/js/index.js` 删 `refreshWebhookHint()`、`boot.js` 改调 `renderMonitorWebhookUrl()`、`static/css/index.css` 删 `.monitor-webhook-hint` 样式；`tests.test_quick_import_frontend` 同步改写；`compileall app main.py`、改动 JS `node --check`、`git diff --check`、`handoff.md` 体积预算 32098/32768 均通过）。
+- `scripts/check.sh --all` 全量 **1198 项零失败**（2026-10-07，接收夹改「每个网盘一个」：内置「接收」保留为 115 的接收夹、其他网盘可新增；`app/core.py` 按 provider 去重 + `get_inbox_tasks` / `get_inbox_task(name=)`，`app/services/quick_import.py` 的 build / validate / `is_quick_import_savepath` / `run_quick_import` / `get_quick_import_status` 全部按接收夹区分，`app/routes/monitor.py` webhook 按任务名分派；新增 `tests.test_quick_import.MultiInboxFanoutTest` 4 项 + `test_each_provider_keeps_its_own_inbox` + `get_inbox_task` 按名字取；`tests.test_quick_import_frontend` 类型锁 / 新增接收夹用例改写；`compileall app main.py`、改动 JS `node --check`、`git diff --check`、`handoff.md` 体积预算 32764/32768 均通过）。
 - `scripts/check.sh --all` 全量 **1192 项零失败**（2026-10-07，监控自动整理残留清理 + 接收夹跨盘提示：结论行去掉「自动整理」列、`monitor_changes` 空转的「新增媒体条目」产线整段删除、接收夹目标跨盘时校验明确提示；`tests.test_monitor_log_readability` / `tests.test_quick_import` / `tests.test_scraper_monitor_sync` / `tests.test_monitor_dir_scan` 同步改写；`compileall app main.py cli.py`、改动 JS `node --check`、`git diff --check`、`handoff.md` 体积预算均通过）。
 - `scripts/check.sh --all` 全量 **1196 项零失败**（2026-10-07，接收夹多网盘解耦 + 监控回归纯扫描 + 订阅自理整理：`tests.test_quick_import` / `tests.test_monitor_dir_scan` / `tests.test_scraper_batch_organize` / `tests.test_subscription_manual_offline` / `tests.test_cli_payloads` / `tests.test_scraper_monitor_sync` / `tests.test_quick_import_frontend` 等均更新；`compileall app main.py cli.py`、改动 JS `node --check`、`git diff --check`、`handoff.md` 体积预算 31529/32768 均通过）。
 - `scripts/check.sh --all` 全量 **1187 项零失败**（2026-10-07，115 离线入库宽限期重扫：`app/services/subscription_task_runner.py` 新增 `_wait_for_subscription_offline_staging_meta()`，完成判定后宽限期重扫中转目录（30 秒 / 每 10 秒一次 / 最多 3 次）；失败详情补「已等待 N 秒」）。
@@ -37,6 +40,10 @@
 
 ## 待办 / 未完成
 
+- 待用户拍板：编辑已有接收夹时要不要允许**改网盘**（现在下拉不做禁用，只在保存时按「每个网盘只能有一个」拦重复；如果要禁止，就在编辑态把网盘也锁成只读）。
+- 待用户拍板：`/webhook/{task_name}` 要不要在**服务端**一并拒绝非 115 的接收夹（现在只在界面禁选 + 落库前清 `webhook_enabled`，手工改配置文件仍能绕过，届时脚本上报的 115 相对路径会被当成该接收夹的路径用）。
+- 容器重建后复核接收夹弹窗：新增时网盘列表里已被占用的网盘置灰并提示「已有且只能有一个」、默认落到空闲网盘；非 115 接收夹的 webhook 开关置灰翻不动；新建时状态区只显示「保存任务后…」占位，不出现已有接收夹的最近整理 / 运行状态。
+- 待用户拍板：接收夹现在**一律不能删除**（服务端 `/monitor/delete` 返回 400「接收夹任务是内置的，不能删除」+ 卡片不给删除按钮）。用户自建的、非 115 的接收夹是否要允许删除，还是继续用「启用本任务」开关代替？
 - 容器重建后实测**接收夹多网盘**：接收夹挂非 115 网盘（如夸克）时只搬运、不刷 STRM；115 上目标未落在任何目录同步任务扫描范围时也不刷；命中范围才刷。
 - 容器重建后实测**接收夹跨盘目标**：接收夹在夸克、目标填 `/115/...` 时保存 / 运行应被明确拦下（提示「必须和接收夹在同一网盘」），不再退化成 `115/...` 这种相对路径去分发。
 - 容器重建后实测**订阅自理整理**：电视剧新集入库后按「入库后整理」原地改名（standard + 中文标题、不建目录）；电影订阅不改名仍只刷 STRM；关掉开关后完全不改；`tmdb_id<=0` 的订阅跳过改名。
@@ -55,7 +62,7 @@
 ## 当前需要知道的上下文
 
 - 接收夹（inbox）是**可选中转入口**，不是强制流程；旧的“直接推送到电影/电视剧监控目录”用法继续有效，两种并存。详细口径见 `conventions.md`。
-- 接收夹**与网盘无关**：任务上的 `provider` 决定它挂在哪块盘（默认 115），分发目标必须**同盘**（`distribute_targets` 存远程路径，含挂载前缀）；只有 115 且目标命中某个目录同步任务扫描范围才刷 STRM，其他网盘只搬运（v1 不做跨盘分发 / 跨盘 STRM）。
+- 接收夹**与网盘无关**：任务上的 `provider` 决定它挂在哪块盘（默认 115），**每个网盘一个**——内置的「接收」保留为 115 那份，其他网盘在「文件夹监控」页点「新增接收夹」各加一个；同一个网盘重复添加会被拦下，配置归一化也按 provider 去重、只保留第一个。分发目标必须**同盘**（`distribute_targets` 存远程路径，含挂载前缀）；只有 115 且目标命中某个目录同步任务扫描范围才刷 STRM，其他网盘只搬运（v1 不做跨盘分发 / 跨盘 STRM）。
 - **自动整理只有两个入口**：接收夹负责“分类归档”（重命名后搬进同盘分类目录）、订阅负责“自理”（电视剧新集入库后原地改名）。文件夹监控是**纯扫描**——含「扫描监控」按钮、变更同步、Webhook、定时、卡片「运行」，都只生成 / 同步 STRM，不整理。
 - “文件夹监控”与“接收夹”是两套触发方式，共用同一个全局 `webhook_secret`，但接收后的处理链路不同。
 - 当前设计文档入口：`docs/superpowers/specs/2026-09-23-folder-monitor-workflow-design.md`（文件夹监控与接收夹）、`docs/superpowers/specs/2026-09-26-folder-receive-monitor-runtime-design.md`（运行时）。

@@ -2933,38 +2933,6 @@
             border: 2px solid transparent;
             background-clip: padding-box;
         }
-        /* webhook 参数说明：每条参数一行，折行后与首行文字对齐，避免整段文字糊成一片。 */
-        .monitor-webhook-hint {
-            display: grid;
-            gap: 0.28rem;
-        }
-        .monitor-webhook-hint .webhook-hint-line {
-            display: flex;
-            align-items: flex-start;
-            gap: 0.5rem;
-        }
-        .monitor-webhook-hint .webhook-hint-line::before {
-            content: "";
-            flex: 0 0 auto;
-            width: 0.34rem;
-            height: 0.34rem;
-            margin-top: 0.46rem;
-            border-radius: 999px;
-            background: currentColor;
-            opacity: 0.6;
-        }
-        .monitor-webhook-hint .webhook-hint-line > span {
-            min-width: 0;
-            overflow-wrap: anywhere;
-        }
-        .monitor-webhook-hint .webhook-hint-notes {
-            display: grid;
-            gap: 0.2rem;
-            margin-top: 0.22rem;
-            padding-top: 0.4rem;
-            border-top: 1px dashed currentColor;
-            opacity: 0.78;
-        }
         .subscription-modal-shell {
             --subscription-shell-inline-pad: 1.5rem;
         }

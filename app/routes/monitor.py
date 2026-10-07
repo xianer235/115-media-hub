@@ -124,17 +124,17 @@ async def _handle_inbox_webhook(
     savepath: str,
 ) -> JSONResponse:
     """接收夹任务的 webhook：只接磁力，落点必须落在接收夹内（含其子目录）。"""
-    config_error = validate_quick_import_config(cfg)
+    config_error = validate_quick_import_config(cfg, task)
     if config_error:
         return JSONResponse(
             status_code=400,
             content={"ok": False, "msg": f"接收夹任务不可用：{config_error}"},
         )
 
-    conf = build_quick_import_config(cfg)
+    conf = build_quick_import_config(cfg, task)
     inbox_rel = str(conf.get("inbox_rel", "") or "").strip()
     if savepath:
-        if not is_quick_import_savepath(cfg, savepath):
+        if not is_quick_import_savepath(cfg, savepath, task):
             return JSONResponse(
                 status_code=400,
                 content={

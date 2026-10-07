@@ -27,25 +27,28 @@
                             <button type="button" class="info-dot" onclick="showHelp('启用：按「定时执行」自动跑，也会被 webhook / 导入完成 / 刮削变更自动触发，仍可手动运行。\\n停用：定时和所有自动触发都停，只保留手动运行，用于排查或临时冻结。')">i</button>
                         </label>
                         <label class="flex items-center gap-3 cursor-pointer text-sm">
-                            <input type="checkbox" id="monitor_webhook_enabled" class="ui-checkbox" onchange="refreshWebhookHint()">
+                            <input type="checkbox" id="monitor_webhook_enabled" class="ui-checkbox">
                             <span>开启 webhook</span>
-                            <button type="button" class="info-dot" onclick="showHelp('Webhook 参数说明：\\n1) 接口地址：/webhook/任务名，任务名用于匹配这条任务（扫描任务或内置接收夹任务）\\n2) 请求方式：POST + JSON\\n3) 磁力导入必填：magnet 或 link_url + savepath\\n4) 扫描任务的 savepath 必须落在本任务扫描路径内，导入成功后才会自动刷新并生成 strm；接收夹任务的 savepath 填接收夹或它的子目录，留空即接收夹，下载完成后自动识别整理再按类型分发\\n5) delayTime 可选，表示本次导入成功后延迟几秒再刷新 / 整理；不传则使用任务默认延迟\\n6) title / sharetitle 只用于日志或局部刷新提示\\n7) 签名校验可选：X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign，或 X-Webhook-Token；这是全站唯一密钥，扫描任务和接收夹任务共用，不用分开配。')">i</button>
+                            <button type="button" class="info-dot" onclick="showHelp('Webhook 参数说明：\\n1) 接口地址：/webhook/任务名，任务名用于匹配这条任务（扫描任务或接收夹任务）；修改任务名会改变 webhook 地址，记得同步油猴脚本里的“请求地址”\\n2) 请求方式：POST + JSON\\n3) 磁力导入必填：magnet 或 link_url + savepath\\n4) 扫描任务的 savepath 填 115 根目录下的相对路径（例如 电影/新片），且必须落在本任务扫描路径内，导入成功后才会自动刷新并生成 strm；接收夹任务的 savepath 填接收夹或它的子目录（同样是所在网盘根目录下的相对路径），留空即接收夹，下载完成后自动识别整理再按类型分发\\n5) delayTime 可选，表示本次导入成功后延迟几秒再刷新 / 整理；不传则使用任务默认延迟\\n6) title / sharetitle 只用于日志或局部刷新提示\\n7) 签名校验可选：X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign，或 X-Webhook-Token；这是全站唯一密钥，扫描任务和接收夹任务共用，不用分开配。')">i</button>
                         </label>
                     </div>
                     <div id="webhook-secret-hint" class="hidden text-xs text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-xl p-3 leading-5">
                         还没有设置 Webhook 签名密钥：先去「参数配置 → 后台安全管理」设置密钥，才能开启 webhook。
                     </div>
-                    <div id="webhook-hint" class="monitor-webhook-hint text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3 leading-5">
-                        <div class="webhook-hint-line"><span>webhook 地址：IP:容器端口/webhook/任务名（任务名用于绑定这个监控任务）</span></div>
-                        <div class="webhook-hint-line"><span>磁力导入必填：magnet 或 link_url + savepath</span></div>
-                        <div class="webhook-hint-line"><span>savepath 填 115 根目录下的相对路径（例如 电影/新片）；必须落在本任务目录内，导入后才会自动刷新 strm</span></div>
-                        <div class="webhook-hint-line"><span>delayTime 可选：本次导入成功后延迟几秒刷新；不传则使用任务默认延迟</span></div>
-                        <div class="webhook-hint-line"><span>title / sharetitle 可选：仅用于日志或局部刷新提示</span></div>
-                        <div class="webhook-hint-line"><span>签名校验（可选，与接收夹任务共用同一个全局密钥）：X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign 或 X-Webhook-Token</span></div>
-                        <div class="webhook-hint-notes">
-                            <div>说明：全站只有一个签名密钥，在「参数配置 -&gt; 后台安全管理」里设置，扫描任务和接收夹任务共用；为空时不校验</div>
-                            <div>修改任务名会改变上面的 webhook 地址，记得同步油猴脚本里的“请求地址”</div>
-                        </div>
+                    <div id="webhook-provider-hint" class="hidden text-xs text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-xl p-3 leading-5">
+                        Webhook 只支持 115 网盘的接收夹（油猴脚本上报的保存路径按 115 根目录解析，其他网盘配了也落不到本盘）。这个接收夹请用「立即整理并分发」或「定时执行」。
+                    </div>
+                    <div id="monitor-inbox-provider-row" class="hidden space-y-1">
+                        <label class="block">
+                            <span class="text-xs text-slate-500 inline-flex items-center gap-2">
+                                接收夹所在网盘
+                                <button type="button" class="info-dot" onclick="showHelp('接收夹可以挂在任意已配置且支持目录浏览的网盘上；分发目标只能选同一网盘的文件夹，v1 不做跨盘分发，也不为其他网盘生成 STRM。每个网盘只能有一个接收夹。')">i</button>
+                            </span>
+                            <select id="monitor_inbox_provider" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none" onchange="syncMonitorInboxProviderUI()">
+                                <option value="115">115</option>
+                            </select>
+                            <div id="monitor-inbox-provider-hint" class="text-[11px] text-slate-500 leading-5 mt-1"></div>
+                        </label>
                     </div>
                     <label class="block">
                         <span id="monitor-scan-path-label" class="text-xs text-slate-500 inline-flex items-center gap-2">
@@ -105,15 +108,6 @@
                     </label>
                     </div>
                     <div id="monitor-inbox-fields" class="hidden space-y-4">
-                        <label class="block">
-                            <span class="text-xs text-slate-500 inline-flex items-center gap-2">
-                                接收夹所在网盘
-                                <button type="button" class="info-dot" onclick="showHelp('接收夹可以挂在任意已配置且支持目录浏览的网盘上；分发目标只能选同一网盘的文件夹，v1 不做跨盘分发，也不为其他网盘生成 STRM。')">i</button>
-                            </span>
-                            <select id="monitor_inbox_provider" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none" onchange="syncMonitorInboxProviderUI()">
-                                <option value="115">115</option>
-                            </select>
-                        </label>
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <label class="block">
                                 <span class="text-xs text-slate-500">电影分发到（同盘文件夹，留空=不分发）</span>

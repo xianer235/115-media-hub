@@ -207,15 +207,22 @@ def pending_quick_import_rerun() -> bool:
         return bool(_INBOX_TRIGGER_STATE.get("pending"))
 
 
-def _inbox_remote_path(cfg: Dict[str, Any]) -> str:
-    task = get_inbox_task(cfg)
+def _resolve_inbox(cfg: Dict[str, Any], inbox: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """取要处理的接收夹任务：显式传入就用它，否则回退第一个（默认 115 那个）。"""
+    if isinstance(inbox, dict) and inbox:
+        return inbox
+    return get_inbox_task(cfg)
+
+
+def _inbox_remote_path(cfg: Dict[str, Any], inbox: Optional[Dict[str, Any]] = None) -> str:
+    task = _resolve_inbox(cfg, inbox)
     remote = normalize_remote_path(str(task.get("scan_path", "") or "").strip())
     return "" if remote == "/" else remote
 
 
-def _inbox_provider(cfg: Dict[str, Any]) -> str:
+def _inbox_provider(cfg: Dict[str, Any], inbox: Optional[Dict[str, Any]] = None) -> str:
     """接收夹所在网盘：任务上的 ``provider``，缺省回退 115。"""
-    task = get_inbox_task(cfg)
+    task = _resolve_inbox(cfg, inbox)
     provider = normalize_mount_provider(task.get("provider", "")) if isinstance(task, dict) else ""
     return provider or QUICK_IMPORT_DEFAULT_PROVIDER
 
@@ -229,15 +236,15 @@ def _inbox_scrape_options(inbox: Dict[str, Any]) -> Dict[str, Any]:
     return options
 
 
-def _inbox_rel_path(cfg: Dict[str, Any]) -> str:
-    remote = _inbox_remote_path(cfg)
+def _inbox_rel_path(cfg: Dict[str, Any], inbox: Optional[Dict[str, Any]] = None) -> str:
+    remote = _inbox_remote_path(cfg, inbox)
     if not remote:
         return ""
     try:
         _provider, relative = resolve_provider_relative_path(
             cfg,
             remote,
-            expected_provider=_inbox_provider(cfg),
+            expected_provider=_inbox_provider(cfg, inbox),
         )
     except Exception:
         return ""
@@ -259,12 +266,18 @@ def _task_rel_path(cfg: Dict[str, Any], scan_path: Any, provider: str = "") -> s
     return normalize_relative_path(relative)
 
 
-def build_quick_import_config(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """接收夹配置：接收夹本身是 ``monitor_tasks`` 里的一个 inbox 任务，分发目标写在它的
-    ``distribute_targets`` 上（同盘远程文件夹路径），整理选项也取自它自己。"""
+def build_quick_import_config(
+    cfg: Optional[Dict[str, Any]] = None,
+    inbox: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """某一接收夹的配置：接收夹是 ``monitor_tasks`` 里的一个 inbox 任务，分发目标写在它的
+    ``distribute_targets`` 上（同盘远程文件夹路径），整理选项也取自它自己。
+
+    每个网盘可以各有一个接收夹；不传 ``inbox`` 时回退第一个（默认 115 那个）。
+    """
     active_cfg = cfg if isinstance(cfg, dict) else get_config()
-    inbox = get_inbox_task(active_cfg)
-    provider = _inbox_provider(active_cfg)
+    inbox = _resolve_inbox(active_cfg, inbox)
+    provider = _inbox_provider(active_cfg, inbox)
     inbox_options = _inbox_scrape_options(inbox)
     targets: Dict[str, Dict[str, Any]] = {key: {} for key in QUICK_IMPORT_TARGET_KEYS}
     distribute_targets = (
@@ -292,8 +305,8 @@ def build_quick_import_config(cfg: Optional[Dict[str, Any]] = None) -> Dict[str,
         "task_name": str(inbox.get("name", "") or "").strip(),
         "enabled": bool(inbox.get("enabled")) if inbox else False,
         "provider": provider,
-        "inbox_path": _inbox_remote_path(active_cfg),
-        "inbox_rel": _inbox_rel_path(active_cfg),
+        "inbox_path": _inbox_remote_path(active_cfg, inbox),
+        "inbox_rel": _inbox_rel_path(active_cfg, inbox),
         "targets": targets,
         "inbox_idle_seconds": max(0, int(inbox.get("inbox_idle_seconds", 120) or 120)),
         "inbox_max_items_per_run": max(1, min(500, inbox_max_items_per_run)),
@@ -301,27 +314,36 @@ def build_quick_import_config(cfg: Optional[Dict[str, Any]] = None) -> Dict[str,
     }
 
 
-def is_quick_import_savepath(cfg: Dict[str, Any], savepath: Any) -> bool:
-    """导入落点是否落在接收夹内（savepath 是网盘相对路径，如 ``接收/xxx``）。
+def is_quick_import_savepath(
+    cfg: Dict[str, Any],
+    savepath: Any,
+    inbox: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """导入落点是否落在某个接收夹内（savepath 是网盘相对路径，如 ``接收/xxx``）。
 
-    网盘从接收夹任务内部推导（``build_quick_import_config`` 已有 inbox provider），
-    调用方不需要传：savepath 是相对路径、本身不带 provider 信息。
+    savepath 本身不带 provider 信息，所以只能按「同盘 + 相对路径落在接收夹内」判断。
+    传了 ``inbox`` 就只判这一个接收夹；否则任一启用的接收夹命中即算命中。
     """
-    conf = build_quick_import_config(cfg)
-    if not conf["enabled"]:
-        return False
-    inbox_rel = str(conf.get("inbox_rel", "") or "").strip()
-    if not inbox_rel:
-        return False
     relative = normalize_relative_path(str(savepath or "").strip())
     if not relative:
         return False
-    return relative == inbox_rel or relative.startswith(inbox_rel + "/")
+    candidates = [inbox] if isinstance(inbox, dict) and inbox else get_inbox_tasks(cfg)
+    for candidate in candidates:
+        conf = build_quick_import_config(cfg, candidate)
+        if not conf["enabled"]:
+            continue
+        inbox_rel = str(conf.get("inbox_rel", "") or "").strip()
+        if not inbox_rel:
+            continue
+        if relative == inbox_rel or relative.startswith(inbox_rel + "/"):
+            return True
+    return False
 
 
 def _cross_provider_target_hint(
     cfg: Dict[str, Any],
     provider: str,
+    inbox: Optional[Dict[str, Any]] = None,
 ) -> str:
     """分发目标落在别的网盘时给出明确提示。
 
@@ -329,7 +351,7 @@ def _cross_provider_target_hint(
     （``/115/电影`` → ``115/电影``），分发时被当成接收夹网盘根目录下的子目录；这里
     直接拦下并说清「必须和接收夹同盘」。
     """
-    inbox = get_inbox_task(cfg)
+    inbox = _resolve_inbox(cfg, inbox)
     raw_targets = normalize_distribute_targets(
         inbox.get("distribute_targets") if isinstance(inbox, dict) else None
     )
@@ -352,12 +374,15 @@ def _cross_provider_target_hint(
     return ""
 
 
-def validate_quick_import_config(cfg: Optional[Dict[str, Any]] = None) -> Optional[str]:
+def validate_quick_import_config(
+    cfg: Optional[Dict[str, Any]] = None,
+    inbox: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
     active_cfg = cfg if isinstance(cfg, dict) else get_config()
-    conf = build_quick_import_config(active_cfg)
+    conf = build_quick_import_config(active_cfg, inbox)
     provider = str(conf.get("provider", "") or "") or QUICK_IMPORT_DEFAULT_PROVIDER
     if not conf["task_name"]:
-        return "没有找到内置的接收夹任务，请重启服务或检查配置（接收夹是内置固定任务，不需要新增）"
+        return "没有找到接收夹任务，请在「文件夹监控」页新增一个接收夹"
     if not conf["enabled"]:
         return f"接收夹任务「{conf['task_name']}」未启用"
     if not conf["inbox_path"]:
@@ -365,7 +390,7 @@ def validate_quick_import_config(cfg: Optional[Dict[str, Any]] = None) -> Option
     inbox_rel = str(conf.get("inbox_rel", "") or "").strip()
     if not inbox_rel:
         return f"接收文件夹必须位于 {provider} 网盘前缀下"
-    cross_provider = _cross_provider_target_hint(active_cfg, provider)
+    cross_provider = _cross_provider_target_hint(active_cfg, provider, inbox)
     if cross_provider:
         return cross_provider
     if not any(conf["targets"].get(key) for key in QUICK_IMPORT_TARGET_KEYS):
@@ -692,13 +717,9 @@ def count_inbox_recent_jobs(inbox_rel: str, hours: int = 24) -> int:
     return int(retry_sqlite_locked(load) or 0)
 
 
-def get_quick_import_status() -> Dict[str, Any]:
-    cfg = get_config()
-    conf = build_quick_import_config(cfg)
-    inbox_rel = str(conf.get("inbox_rel", "") or "").strip()
-    runs = list_quick_import_runs(1)
-    latest = runs[0] if runs else {}
-    detail = safe_json_loads(latest.get("detail_json", "{}"), {}) if latest else {}
+def _build_inbox_status(cfg: Dict[str, Any], inbox: Dict[str, Any]) -> Dict[str, Any]:
+    """单个接收夹的状态快照：卡片按名字取自己那一份，避免多个接收夹互相串号。"""
+    conf = build_quick_import_config(cfg, inbox)
     active_run: Dict[str, Any] = {}
     if str(conf.get("task_name", "") or "").strip():
         try:
@@ -707,10 +728,12 @@ def get_quick_import_status() -> Dict[str, Any]:
             active_run = {}
     return {
         "task_name": conf["task_name"],
+        "provider": conf["provider"],
         "task_path": conf["inbox_path"],
         "enabled": conf["enabled"],
         "inbox_path": conf["inbox_path"],
-        "config_error": validate_quick_import_config(cfg) or "",
+        "inbox_rel": conf["inbox_rel"],
+        "config_error": validate_quick_import_config(cfg, inbox) or "",
         "targets": {
             key: {
                 "target_path": (conf["targets"].get(key) or {}).get("scan_path", ""),
@@ -718,10 +741,33 @@ def get_quick_import_status() -> Dict[str, Any]:
             }
             for key in QUICK_IMPORT_TARGET_KEYS
         },
+        "active_run": active_run,
+    }
+
+
+def get_quick_import_status() -> Dict[str, Any]:
+    cfg = get_config()
+    inbox_tasks = get_inbox_tasks(cfg)
+    inbox_statuses = [_build_inbox_status(cfg, task) for task in inbox_tasks]
+    primary = inbox_statuses[0] if inbox_statuses else {}
+    conf = build_quick_import_config(cfg, inbox_tasks[0] if inbox_tasks else None)
+    inbox_rel = str(conf.get("inbox_rel", "") or "").strip()
+    runs = list_quick_import_runs(1)
+    latest = runs[0] if runs else {}
+    detail = safe_json_loads(latest.get("detail_json", "{}"), {}) if latest else {}
+    return {
+        "task_name": conf["task_name"],
+        "task_path": conf["inbox_path"],
+        "enabled": conf["enabled"],
+        "inbox_path": conf["inbox_path"],
+        "config_error": validate_quick_import_config(cfg) or "",
+        "targets": primary.get("targets", {}),
+        # 每个网盘一个接收夹：卡片按名字从这里取自己那份状态。
+        "inboxes": inbox_statuses,
         "running": _QUICK_IMPORT_RUN_LOCK.locked(),
         "cancelling": _QUICK_IMPORT_RUN_LOCK.locked() and _QUICK_IMPORT_CANCEL.is_set(),
         "pending_rerun": pending_quick_import_rerun(),
-        "active_run": active_run,
+        "active_run": primary.get("active_run", {}),
         "latest": latest,
         "latest_detail": detail,
         "recent_jobs": list_inbox_recent_jobs(inbox_rel, 3),
@@ -1208,36 +1254,24 @@ def _queue_dispatch_child_runs(
     return run_ids
 
 
-def run_quick_import(
-    trigger: str = "manual",
+def _run_inbox_quick_import(
+    cfg: Dict[str, Any],
+    inbox: Dict[str, Any],
     *,
+    trigger: str = "manual",
     sub_path: str = "",
     parent_run_id: str = "",
     source_ref: str = "",
-    wait_for_lock: bool = False,
 ) -> Dict[str, Any]:
-    """扫描接收夹，整理高置信度条目并按类型分发到标注过的监控目录。
+    """整理单个接收夹：识别 → 重命名 → 搬到同盘目标文件夹（调用方负责持有整理锁）。
 
-    低置信度 / 识别失败 / 计划冲突 / 搬运失败的条目都会留在接收夹，并记录具体原因。
+    低置信度 / 识别失败 / 计划冲突 / 搬运失败的条目都会留在该接收夹，并记录具体原因。
     """
-    # 手动点击时不卡住请求：已有整理在跑就直接返回（卡片上会显示黄色的「中断」按钮）。
-    if wait_for_lock:
-        lock_wait_seconds = max(QUICK_IMPORT_LOCK_WAIT_SECONDS, 60)
-    else:
-        lock_wait_seconds = 0 if str(trigger or "").strip().lower() == "manual" else QUICK_IMPORT_LOCK_WAIT_SECONDS
-    if not _QUICK_IMPORT_RUN_LOCK.acquire(timeout=lock_wait_seconds):
-        return {
-            "ok": True,
-            "skipped": True,
-            "summary": "已有接收夹整理在执行，可在任务卡片上点「中断」后重试",
-        }
-    _QUICK_IMPORT_CANCEL.clear()
     try:
-        cfg = get_config()
-        config_error = validate_quick_import_config(cfg)
+        config_error = validate_quick_import_config(cfg, inbox)
         if config_error:
             raise RuntimeError(config_error)
-        conf = build_quick_import_config(cfg)
+        conf = build_quick_import_config(cfg, inbox)
         provider = str(conf.get("provider", "") or "") or QUICK_IMPORT_DEFAULT_PROVIDER
         inbox_rel = conf["inbox_rel"]
         normalized_sub = normalize_relative_path(str(sub_path or "").strip())
@@ -1255,7 +1289,7 @@ def run_quick_import(
             subject="识别中",
             parent_run_id=parent_run_id,
             source_ref=source_ref,
-            task_snapshot=get_inbox_task(cfg),
+            task_snapshot=inbox,
         )
         start_monitor_run(monitor_run_id, subject="识别中", scope={"kind": "paths", "paths": [base_rel] if base_rel else []})
         moved: List[Dict[str, Any]] = []
@@ -1981,6 +2015,72 @@ def run_quick_import(
                 {"moved": moved, "left": left, "error": str(exc)[:300]},
             )
             raise
+    finally:
+        # 整理锁和取消标志由 run_quick_import 统一管理：这里不清理，这样一轮里点
+        # 「中断」也能作用于后续网盘的接收夹。
+        pass
+
+
+def run_quick_import(
+    trigger: str = "manual",
+    *,
+    sub_path: str = "",
+    parent_run_id: str = "",
+    source_ref: str = "",
+    wait_for_lock: bool = False,
+) -> Dict[str, Any]:
+    """对每个启用的接收夹各整理一轮（每个网盘一个接收夹，各自只整理同盘文件）。"""
+    # 手动点击时不卡住请求：已有整理在跑就直接返回（卡片上会显示黄色的「中断」按钮）。
+    if wait_for_lock:
+        lock_wait_seconds = max(QUICK_IMPORT_LOCK_WAIT_SECONDS, 60)
+    else:
+        lock_wait_seconds = 0 if str(trigger or "").strip().lower() == "manual" else QUICK_IMPORT_LOCK_WAIT_SECONDS
+    if not _QUICK_IMPORT_RUN_LOCK.acquire(timeout=lock_wait_seconds):
+        return {
+            "ok": True,
+            "skipped": True,
+            "summary": "已有接收夹整理在执行，可在任务卡片上点「中断」后重试",
+        }
+    _QUICK_IMPORT_CANCEL.clear()
+    try:
+        cfg = get_config()
+        inboxes = [task for task in get_inbox_tasks(cfg) if task.get("enabled")]
+        if not inboxes:
+            # 一个启用的接收夹都没有：沿用旧行为，把配置问题抛给调用方。
+            raise RuntimeError(validate_quick_import_config(cfg) or "没有启用的接收夹任务")
+        results: List[Dict[str, Any]] = []
+        errors: List[Dict[str, Any]] = []
+        for inbox in inboxes:
+            try:
+                results.append(
+                    _run_inbox_quick_import(
+                        cfg,
+                        inbox,
+                        trigger=trigger,
+                        sub_path=sub_path,
+                        parent_run_id=parent_run_id,
+                        source_ref=source_ref,
+                    )
+                )
+            except Exception as exc:
+                # 一个接收夹坏掉不能拖垮其他网盘的接收夹。
+                errors.append({"task_name": str(inbox.get("name", "") or ""), "error": str(exc)[:300]})
+        if errors and not results and len(inboxes) == 1:
+            raise RuntimeError(str(errors[0].get("error", "") or "接收夹整理失败"))
+        moved = [item for result in results for item in result.get("moved", [])]
+        left = [item for result in results for item in result.get("left", [])]
+        summaries = [str(result.get("summary", "") or "") for result in results if result.get("summary")]
+        cancelled = any(bool(result.get("cancelled")) for result in results)
+        return {
+            "ok": True,
+            "run_id": results[0].get("run_id") if results else 0,
+            "moved": moved,
+            "left": left,
+            "summary": "；".join(summaries),
+            "cancelled": cancelled,
+            "results": results,
+            "errors": errors,
+        }
     finally:
         _QUICK_IMPORT_CANCEL.clear()
         _QUICK_IMPORT_RUN_LOCK.release()

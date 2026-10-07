@@ -1135,6 +1135,7 @@ MONITOR_TASK_TYPE_SCAN = "scan"
 MONITOR_TASK_TYPE_INBOX = "inbox"
 MONITOR_TASK_TYPES = (MONITOR_TASK_TYPE_SCAN, MONITOR_TASK_TYPE_INBOX)
 MONITOR_INBOX_DEFAULT_NAME = "接收"
+MONITOR_INBOX_DEFAULT_PROVIDER = "115"
 
 
 def normalize_task_type(value: Any) -> str:
@@ -1276,11 +1277,12 @@ def _migrate_inbox_distribute_targets(
 
 
 def ensure_inbox_task(cfg: Dict[str, Any]) -> None:
-    """保证配置里始终有且只有一个接收夹任务，并顺带迁移旧版全局配置。
+    """保证每个网盘最多一个接收夹任务，并在一个都没有时补一个默认的 115 接收夹。
 
-    接收夹是内置的固定槽位（用户只需要配好它，不需要自己新建）：没有就补一个默认的
-    「接收」任务，有多个就收敛成一个，同时把旧版的 ``quick_import_enabled`` /
-    ``quick_import_inbox_path`` 与扫描任务上的 ``quick_import_target`` 迁移过来并删除旧字段。
+    接收夹是内置槽位（用户不需要自己新建），但接收夹只能整理**同盘**文件，所以每个网盘
+    可以各配一个。同一个网盘上重复的接收夹会互相抢同一个路径，这里按 provider 去重、
+    只保留第一个。顺带把旧版的 ``quick_import_enabled`` / ``quick_import_inbox_path`` 与
+    扫描任务上的 ``quick_import_target`` 迁移到默认（115）接收夹并删除旧字段。
     """
     tasks = cfg.get("monitor_tasks") if isinstance(cfg.get("monitor_tasks"), list) else []
     legacy_keys_present = ("quick_import_enabled" in cfg) or ("quick_import_inbox_path" in cfg)
@@ -1297,53 +1299,74 @@ def ensure_inbox_task(cfg: Dict[str, Any]) -> None:
         if target in ("movie", "tv") and target not in legacy_targets:
             legacy_targets[target] = str(task.get("name", "") or "").strip()
 
-    inbox_tasks = [
-        task
-        for task in tasks
-        if isinstance(task, dict) and normalize_task_type(task.get("task_type")) == MONITOR_TASK_TYPE_INBOX
-    ]
-    inbox = inbox_tasks[0] if inbox_tasks else None
-    if inbox is None:
+    kept_inbox: List[Dict[str, Any]] = []
+    seen_providers: set = set()
+    for task in tasks:
+        if not isinstance(task, dict) or normalize_task_type(task.get("task_type")) != MONITOR_TASK_TYPE_INBOX:
+            continue
+        provider_key = normalize_mount_provider(task.get("provider", "")) or MONITOR_INBOX_DEFAULT_PROVIDER
+        if provider_key in seen_providers:
+            continue
+        seen_providers.add(provider_key)
+        kept_inbox.append(task)
+
+    if not kept_inbox:
         name = MONITOR_INBOX_DEFAULT_NAME
         used_names = {str(task.get("name", "") or "") for task in tasks if isinstance(task, dict)}
         suffix = 2
         while name in used_names:
             name = f"{MONITOR_INBOX_DEFAULT_NAME}{suffix}"
             suffix += 1
-        # 内置接收夹默认开启（配置不全时界面会直接提示缺什么），但 webhook 默认关闭：
+        # 默认接收夹挂在 115 上、默认开启（配置不全时界面会直接提示缺什么），但 webhook 默认关闭：
         # 只有用户在后台设置了签名密钥后才能手动打开，避免全新安装就暴露一个免鉴权写入口。
-        inbox = normalize_task(
+        default_inbox = normalize_task(
             {
                 "name": name,
                 "task_type": MONITOR_TASK_TYPE_INBOX,
+                "provider": MONITOR_INBOX_DEFAULT_PROVIDER,
                 "enabled": True,
                 "webhook_enabled": False,
             }
         )
-        tasks.append(inbox)
+        tasks.append(default_inbox)
+        kept_inbox.append(default_inbox)
 
-    inbox_scan_path = str(inbox.get("scan_path", "") or "").strip()
-    if inbox_scan_path == "/":
-        inbox_scan_path = ""
-        # 空路径保持为空，界面才会提示“请先选择接收文件夹”，而不是显示成根目录。
-        inbox["scan_path"] = ""
-    if legacy_inbox and not inbox_scan_path:
-        inbox["scan_path"] = legacy_inbox
-    if legacy_enabled:
-        inbox["enabled"] = True
-    raw_targets = normalize_distribute_targets(inbox.get("distribute_targets"))
-    for key, task_name in legacy_targets.items():
-        raw_targets.setdefault(key, task_name)
-    inbox["distribute_targets"] = _migrate_inbox_distribute_targets(cfg, raw_targets, tasks)
-    if legacy_keys_present or legacy_targets:
-        # 旧接收夹入口本身常开，但迁移时遵循“有签名密钥才开 webhook”的新口径；
-        # 没有密钥就保持关闭，让用户在编辑弹窗里看到提示后自行开启。
-        inbox["webhook_enabled"] = bool(str(cfg.get("webhook_secret", "") or "").strip())
-    # 只保留一个接收夹任务：历史误建的多余接收夹会互相抢同一个路径，这里直接收敛掉。
+    # 旧版全局配置只迁移到默认（115）接收夹；其他网盘的接收夹从默认值起步。
+    primary_inbox = next(
+        (
+            task
+            for task in kept_inbox
+            if (normalize_mount_provider(task.get("provider", "")) or MONITOR_INBOX_DEFAULT_PROVIDER)
+            == MONITOR_INBOX_DEFAULT_PROVIDER
+        ),
+        kept_inbox[0],
+    )
+    for inbox in kept_inbox:
+        if str(inbox.get("scan_path", "") or "").strip() == "/":
+            # 空路径保持为空，界面才会提示“请先选择接收文件夹”，而不是显示成根目录。
+            inbox["scan_path"] = ""
+        if inbox is primary_inbox and legacy_inbox and not str(inbox.get("scan_path", "") or "").strip():
+            inbox["scan_path"] = legacy_inbox
+        if inbox is primary_inbox and legacy_enabled:
+            inbox["enabled"] = True
+        raw_targets = normalize_distribute_targets(inbox.get("distribute_targets"))
+        if inbox is primary_inbox:
+            for key, task_name in legacy_targets.items():
+                raw_targets.setdefault(key, task_name)
+        inbox["distribute_targets"] = _migrate_inbox_distribute_targets(cfg, raw_targets, tasks)
+        if inbox is primary_inbox and (legacy_keys_present or legacy_targets):
+            # 旧接收夹入口本身常开，但迁移时遵循“有签名密钥才开 webhook”的新口径；
+            # 没有密钥就保持关闭，让用户在编辑弹窗里看到提示后自行开启。
+            inbox["webhook_enabled"] = bool(str(cfg.get("webhook_secret", "") or "").strip())
+
+    # 只保留每个网盘第一个接收夹：同一网盘上历史误建的多余接收夹会互相抢同一个路径。
+    kept_ids = {id(task) for task in kept_inbox}
     cfg["monitor_tasks"] = [
         task
         for task in tasks
-        if task is inbox or normalize_task_type(task.get("task_type")) != MONITOR_TASK_TYPE_INBOX
+        if not isinstance(task, dict)
+        or normalize_task_type(task.get("task_type")) != MONITOR_TASK_TYPE_INBOX
+        or id(task) in kept_ids
     ]
 
     # 分发目标统一由接收夹任务声明，扫描任务上的旧标注清空，避免两处各说各话。
@@ -1354,11 +1377,21 @@ def ensure_inbox_task(cfg: Dict[str, Any]) -> None:
     cfg.pop("quick_import_inbox_path", None)
 
 
-def get_inbox_task(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """取接收夹任务（``task_type='inbox'``），未配置时返回空字典。"""
+def get_inbox_tasks(cfg: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """取全部接收夹任务（``task_type='inbox'``），保持配置里的顺序。"""
     active_cfg = cfg if isinstance(cfg, dict) else get_config()
-    for task in active_cfg.get("monitor_tasks", []) or []:
-        if isinstance(task, dict) and normalize_task_type(task.get("task_type")) == MONITOR_TASK_TYPE_INBOX:
+    return [
+        task
+        for task in (active_cfg.get("monitor_tasks", []) or [])
+        if isinstance(task, dict) and normalize_task_type(task.get("task_type")) == MONITOR_TASK_TYPE_INBOX
+    ]
+
+
+def get_inbox_task(cfg: Optional[Dict[str, Any]] = None, name: str = "") -> Dict[str, Any]:
+    """取一个接收夹任务：给了 ``name`` 就按名字取，否则取第一个；未配置时返回空字典。"""
+    wanted = str(name or "").strip()
+    for task in get_inbox_tasks(cfg):
+        if not wanted or str(task.get("name", "") or "").strip() == wanted:
             return task
     return {}
 
@@ -1367,43 +1400,25 @@ def apply_task_type_constraints(
     existing_tasks: List[Dict[str, Any]],
     posted_tasks: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """任务类型不可更改：内置接收夹固定是接收夹，新增任务一律是普通扫描任务。
+    """同名任务的类型不可更改；接收夹可以按网盘新增（每个网盘保留一个）。
 
     - 与现有任务同名：类型沿用现有类型（扫描任务不能变成接收夹，接收夹也不能变成扫描任务）；
-    - 提交里出现的新接收夹：只有「当前接收夹名字已从提交列表消失，且提交里恰好一个接收夹」
-      时才当作接收夹改名放行（改名会同时改变 webhook 地址，界面里有提示）；
-    - 其余新任务一律按扫描任务处理。
+    - 新任务：按提交的类型保留，接收夹 / 扫描都可以，保存后由 ``ensure_inbox_task``
+      按 provider 去重（同一个网盘只保留第一个接收夹）；
+    - 非接收夹任务上的 ``distribute_targets`` 一律清空（分发目标只属于接收夹）。
     """
     current_by_name = {
         str(task.get("name", "") or "").strip(): task
         for task in (existing_tasks or [])
         if isinstance(task, dict) and str(task.get("name", "") or "").strip()
     }
-    current_inbox_name = next(
-        (
-            name
-            for name, task in current_by_name.items()
-            if normalize_task_type(task.get("task_type")) == MONITOR_TASK_TYPE_INBOX
-        ),
-        "",
-    )
-    posted_names = {str(task.get("name", "") or "").strip() for task in (posted_tasks or [])}
-    inbox_candidates = [
-        str(task.get("name", "") or "").strip()
-        for task in (posted_tasks or [])
-        if normalize_task_type(task.get("task_type")) == MONITOR_TASK_TYPE_INBOX
-    ]
-    rename_candidate = ""
-    if current_inbox_name and current_inbox_name not in posted_names and len(inbox_candidates) == 1:
-        rename_candidate = inbox_candidates[0]
-
     for task in posted_tasks or []:
         name = str(task.get("name", "") or "").strip()
         existing = current_by_name.get(name)
         if existing is not None:
             task["task_type"] = normalize_task_type(existing.get("task_type"))
-        elif normalize_task_type(task.get("task_type")) == MONITOR_TASK_TYPE_INBOX and name != rename_candidate:
-            task["task_type"] = MONITOR_TASK_TYPE_SCAN
+        else:
+            task["task_type"] = normalize_task_type(task.get("task_type"))
         if normalize_task_type(task.get("task_type")) != MONITOR_TASK_TYPE_INBOX:
             task["distribute_targets"] = {}
     return posted_tasks
@@ -1413,12 +1428,22 @@ def finalize_monitor_tasks_for_save(
     existing_tasks: List[Dict[str, Any]],
     posted_tasks: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """保存监控任务前的统一收口：类型不可改；漏传内置接收夹时沿用当前配置。
+    """保存监控任务前的统一收口：同名任务类型不可改；漏传的接收夹沿用当前配置。
 
     ``/monitor/save`` 与 ``/save_settings`` 都走这里，避免两个入口的约束不一致
-    （否则可以绕过 ``/monitor/save`` 直接把内置接收夹改成扫描任务）。
+    （否则可以绕过 ``/monitor/save`` 直接把接收夹改成扫描任务）。
     """
     tasks = apply_task_type_constraints(existing_tasks, posted_tasks)
+    posted_inbox_names = {
+        str(task.get("name", "") or "").strip()
+        for task in tasks
+        if normalize_task_type(task.get("task_type")) == MONITOR_TASK_TYPE_INBOX
+    }
+    for inbox in get_inbox_tasks({"monitor_tasks": existing_tasks}):
+        name = str(inbox.get("name", "") or "").strip()
+        if name and name not in posted_inbox_names:
+            tasks.append(inbox)
+            posted_inbox_names.add(name)
     if not any(normalize_task_type(task.get("task_type")) == MONITOR_TASK_TYPE_INBOX for task in tasks):
         current_inbox = get_inbox_task({"monitor_tasks": existing_tasks})
         if current_inbox:

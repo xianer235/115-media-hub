@@ -3617,9 +3617,8 @@
             if (!statusEl) return;
             const data = status && typeof status === 'object' ? status : {};
             const runBtn = document.getElementById('inbox-task-run-btn');
-            if (runBtn) {
-                const busy = !!data.running;
-                const cancelling = !!data.cancelling;
+            const applyRunButton = (busy = false, cancelling = false) => {
+                if (!runBtn) return;
                 runBtn.textContent = busy ? (cancelling ? '正在中断…' : '中断整理') : '立即整理并分发';
                 runBtn.disabled = cancelling;
                 runBtn.classList.toggle('btn-disabled', cancelling);
@@ -3627,7 +3626,7 @@
                 runBtn.classList.toggle('hover:bg-amber-400', busy);
                 runBtn.classList.toggle('bg-emerald-600', !busy);
                 runBtn.classList.toggle('hover:bg-emerald-500', !busy);
-            }
+            };
             const showStatus = (modifier, html) => {
                 statusEl.className = modifier
                     ? `tg-proxy-status quick-import-result ${modifier}`
@@ -3637,6 +3636,17 @@
                 void statusEl.offsetWidth;
                 statusEl.classList.add('quick-import-result--enter');
             };
+            if (!String(data.task_name || '').trim()) {
+                // 新建接收夹还没有任务名：这里不能显示任何已有接收夹的运行状态，只给占位说明。
+                applyRunButton(false, false);
+                showStatus(
+                    '',
+                    '<div class="tg-proxy-status-title">最近动态</div>'
+                    + '<div class="tg-proxy-status-meta">保存任务后，这里会显示这个接收夹最近的接收与整理记录。</div>',
+                );
+                return;
+            }
+            applyRunButton(!!data.running, !!data.cancelling);
             if (data.running) {
                 showStatus(
                     'tg-proxy-status--loading',
@@ -3695,7 +3705,8 @@
             } catch (e) {
                 inboxTaskStatusCache = inboxTaskStatusCache || {};
             }
-            renderInboxTaskStatus(inboxTaskStatusCache);
+            // 弹窗里只显示当前正在编辑的那条接收夹；没有编辑对象（新建）时渲染占位说明。
+            renderInboxTaskStatus(editingMonitorName ? inboxStatusForTask(editingMonitorName) : {});
             renderMonitorTasks();
         }
 
@@ -3710,9 +3721,18 @@
             void refreshInboxTaskStatus();
         }
 
-        function buildInboxActivityHtml() {
+        function inboxStatusForTask(taskName = '') {
+            // 每个网盘一个接收夹：卡片按名字取自己那份，再叠加全局的运行 / 最近记录字段。
+            const cache = inboxTaskStatusCache && typeof inboxTaskStatusCache === 'object' ? inboxTaskStatusCache : {};
+            const name = String(taskName || '').trim();
+            const list = Array.isArray(cache.inboxes) ? cache.inboxes : [];
+            const match = name ? list.find((item) => String(item?.task_name || '').trim() === name) : null;
+            return match ? { ...cache, ...match } : cache;
+        }
+
+        function buildInboxActivityHtml(taskName = '') {
             // 接收夹任务卡片上常驻一行：最近有没有收到文件、最近一次整理结果。
-            const status = inboxTaskStatusCache && typeof inboxTaskStatusCache === 'object' ? inboxTaskStatusCache : {};
+            const status = inboxStatusForTask(taskName);
             const latest = status.latest && typeof status.latest === 'object' ? status.latest : {};
             const count = Math.max(0, Number(status.recent_job_count_24h || 0) || 0);
             const configError = String(status.config_error || '').trim();
@@ -3741,7 +3761,7 @@
                 showToast('请先保存接收夹任务，再点「立即整理并分发」', { tone: 'warn', duration: 2800, placement: 'top-center' });
                 return;
             }
-            renderInboxTaskStatus({ ...inboxTaskStatusCache, running: true });
+            renderInboxTaskStatus({ ...inboxStatusForTask(name), running: true });
             try {
                 const data = await window.MediaHubApi.postJson('/monitor/start', { name });
                 showToast(String((data && (data.result?.summary || data.status)) || '接收夹整理完成'), {
@@ -3766,7 +3786,7 @@
             }
             const name = currentMonitorFormTaskName();
             if (!name) return;
-            renderInboxTaskStatus({ ...inboxTaskStatusCache, running: true, cancelling: true });
+            renderInboxTaskStatus({ ...inboxStatusForTask(name), running: true, cancelling: true });
             await stopMonitorTask(name);
         }
 
@@ -4195,12 +4215,15 @@
             const taskType = String(document.getElementById('monitor_task_type')?.value || 'scan').trim() === 'inbox'
                 ? 'inbox'
                 : 'scan';
+            const inboxProvider = taskType === 'inbox'
+                ? (normalizeMountProviderInput(document.getElementById('monitor_inbox_provider')?.value || '') || '115')
+                : '';
+            // webhook 只对 115 的接收夹有意义，落库前再兜一次，避免旧配置或手工改配置把开关带进来。
+            const webhookSupported = taskType !== 'inbox' || inboxProvider === '115';
             return {
                 name: document.getElementById('monitor_name').value.trim(),
                 task_type: taskType,
-                provider: taskType === 'inbox'
-                    ? (normalizeMountProviderInput(document.getElementById('monitor_inbox_provider')?.value || '') || '115')
-                    : '',
+                provider: inboxProvider,
                 enabled: document.getElementById('monitor_enabled')?.checked !== false,
                 distribute_targets: taskType === 'inbox'
                     ? {
@@ -4208,7 +4231,7 @@
                         tv: String(document.getElementById('monitor_inbox_target_tv')?.value || '').trim(),
                     }
                     : {},
-                webhook_enabled: document.getElementById('monitor_webhook_enabled').checked,
+                webhook_enabled: webhookSupported && document.getElementById('monitor_webhook_enabled').checked,
                 scan_path: rawScanPath ? normalizeRemotePathInput(rawScanPath) : '',
                 target_path: document.getElementById('monitor_target_path').value.trim(),
                 skip_by_dir_mtime: document.getElementById('monitor_skip_by_dir_mtime').checked,
@@ -4569,19 +4592,62 @@
             return String(document.getElementById('monitor_task_type')?.value || 'scan').trim() === 'inbox' ? 'inbox' : 'scan';
         }
 
+        function inboxProvidersTaken() {
+            // 每个网盘只能有一个接收夹：这里收集「已被别的接收夹占用」的网盘，用于禁选与提示。
+            const taken = new Map();
+            (monitorState.tasks || []).forEach((item) => {
+                if (String(item?.task_type || 'scan') !== 'inbox') return;
+                if (editingMonitorName && item.name === editingMonitorName) return;
+                const key = normalizeMountProviderInput(item.provider || '115') || '115';
+                if (!taken.has(key)) taken.set(key, String(item.name || '').trim());
+            });
+            return taken;
+        }
+
+        function renderMonitorInboxProviderHint() {
+            const hint = document.getElementById('monitor-inbox-provider-hint');
+            if (!hint) return;
+            const taken = inboxProvidersTaken();
+            const free = (window.providerMeta || [])
+                .filter((p) => !!p?.supports_folder_browse)
+                .map((p) => normalizeMountProviderInput(p.name || '') || String(p.name || ''))
+                .filter((name) => name && !taken.has(name));
+            if (!taken.size) {
+                hint.textContent = '每个网盘只能有一个接收夹：内置的「接收」是 115 那份，其他网盘可以各加一个。';
+                return;
+            }
+            const takenText = [...taken.entries()]
+                .map(([key, name]) => `${getProviderLabel(key)}${name ? `（${name}）` : ''}`)
+                .join('、');
+            hint.textContent = free.length
+                ? `每个网盘只能有一个接收夹：${takenText} 已经有了，请改选其它网盘；要调整已有那条，直接点它的编辑。`
+                : `每个网盘只能有一个接收夹：${takenText} 都已经有了，不能再新增；要调整请直接编辑已有接收夹。`;
+        }
+
         function populateMonitorInboxProviderSelect(task = {}) {
             const el = document.getElementById('monitor_inbox_provider');
             if (!el) return;
             const providers = (window.providerMeta || []).filter((p) => !!p?.supports_folder_browse);
             const usable = providers.length ? providers : [{ name: '115', label: '115' }];
-            el.innerHTML = usable.map((p) => (
-                `<option value="${escapeHtml(String(p.name || ''))}">${escapeHtml(String(p.label || p.name || ''))}</option>`
-            )).join('');
-            const current = normalizeMountProviderInput(task?.provider || '') || '115';
-            if (!usable.some((p) => String(p.name || '') === current)) {
+            const taken = inboxProvidersTaken();
+            el.innerHTML = usable.map((p) => {
+                const name = String(p.name || '');
+                const label = String(p.label || p.name || '');
+                const takenBy = taken.get(normalizeMountProviderInput(name) || name);
+                const text = takenBy ? `${label}（已有接收夹「${takenBy}」，每个网盘只能有一个）` : label;
+                return `<option value="${escapeHtml(name)}"${takenBy ? ' disabled' : ''}>${escapeHtml(text)}</option>`;
+            }).join('');
+            const names = usable.map((p) => String(p.name || ''));
+            let current = normalizeMountProviderInput(task?.provider || '') || '';
+            if (!current || !names.includes(current) || taken.has(current)) {
+                // 新增时优先落在还没被占用的网盘上，避免默认选中一个不能用的选项。
+                current = names.find((name) => !taken.has(normalizeMountProviderInput(name) || name)) || current || '115';
+            }
+            if (!names.includes(current)) {
                 el.insertAdjacentHTML('afterbegin', `<option value="${escapeHtml(current)}">${escapeHtml(getProviderLabel(current))}</option>`);
             }
             el.value = current;
+            renderMonitorInboxProviderHint();
         }
 
         function populateMonitorInboxTargetFields(task = {}) {
@@ -4616,6 +4682,8 @@
                 }
             });
             updateMonitorScanPathHint(pathInput?.value || '');
+            // 换网盘会决定这条任务能不能开 webhook，所以一起刷新开关状态。
+            syncWebhookToggleState();
         }
 
         function openMonitorInboxTargetFolder(kind) {
@@ -4629,6 +4697,7 @@
             const isInbox = monitorFormTaskType() === 'inbox';
             document.getElementById('monitor-scan-fields')?.classList.toggle('hidden', isInbox);
             document.getElementById('monitor-inbox-fields')?.classList.toggle('hidden', !isInbox);
+            document.getElementById('monitor-inbox-provider-row')?.classList.toggle('hidden', !isInbox);
             document.getElementById('monitor-scan-path-label')?.classList.toggle('hidden', isInbox);
             document.getElementById('monitor-inbox-path-label')?.classList.toggle('hidden', !isInbox);
             const pathInput = document.getElementById('monitor_scan_path');
@@ -4639,41 +4708,59 @@
                 pathInput.placeholder = isInbox ? `${inboxPrefix}/接收` : '/115/自存影视/115自存电视剧';
             }
             renderMonitorWebhookUrl();
-            refreshWebhookHint();
             syncWebhookToggleState();
-            if (isInbox) void refreshInboxTaskStatus();
+            if (isInbox) {
+                // 新建时表单里还没有任务名：只渲染占位说明，避免把已有接收夹的运行状态显示进来。
+                if (editingMonitorName) void refreshInboxTaskStatus();
+                else renderInboxTaskStatus({});
+            }
         }
 
         function syncMonitorTaskTypeOptions() {
-            // 任务类型不可更改：新增的一律是普通监控任务，内置接收夹也不能改成别的类型。
+            // 任务类型只在新增时可选；已有任务的类型不可更改（接收夹按网盘各一个）。
             const select = document.getElementById('monitor_task_type');
             const hint = document.getElementById('monitor-task-type-hint');
             if (!select) return;
             const editingInbox = (monitorState.tasks || []).some((item) => (
                 String(item?.task_type || 'scan') === 'inbox' && item.name === editingMonitorName
             ));
-            select.value = editingInbox ? 'inbox' : 'scan';
-            select.disabled = true;
+            if (editingMonitorName) {
+                select.value = editingInbox ? 'inbox' : 'scan';
+                select.disabled = true;
+            } else {
+                select.disabled = false;
+            }
             if (hint) {
                 if (editingInbox) {
-                    hint.textContent = '接收夹是内置固定任务：类型不能改，只有接收目录、分发目标和开关可以调整。';
+                    hint.textContent = '接收夹类型不能改：只有接收目录、分发目标和开关可以调整。';
                 } else if (editingMonitorName) {
-                    hint.textContent = '任务类型不可更改；接收夹是内置固定任务，直接在任务列表里编辑它。';
+                    hint.textContent = '已有任务的类型不能改。';
                 } else {
-                    hint.textContent = '新增的任务都是普通监控任务；接收夹是内置固定任务，直接在任务列表里编辑它。';
+                    hint.textContent = '新增任务默认是扫描任务；要给别的网盘配接收夹，把类型选成「接收夹任务」（每个网盘一个）。';
                 }
             }
         }
 
+        function monitorWebhookProviderSupported() {
+            // webhook 只支持 115：油猴脚本上报的保存路径按 115 根目录解析，别的网盘配了也落不到本盘。
+            if (monitorFormTaskType() !== 'inbox') return true;
+            const provider = normalizeMountProviderInput(document.getElementById('monitor_inbox_provider')?.value || '') || '115';
+            return provider === '115';
+        }
+
         function syncWebhookToggleState() {
-            // webhook 只在设置了签名密钥后才能开启，避免全新安装就暴露一个免鉴权的写入口。
+            // webhook 只在设置了签名密钥后才能开启，避免全新安装就暴露一个免鉴权的写入口；
+            // 另外只有 115 的接收夹能开（脚本里的保存路径按 115 根目录解析）。
             const checkbox = document.getElementById('monitor_webhook_enabled');
-            const hint = document.getElementById('webhook-secret-hint');
+            const secretHint = document.getElementById('webhook-secret-hint');
+            const providerHint = document.getElementById('webhook-provider-hint');
             if (!checkbox) return;
             const hasSecret = !!sensitiveConfigMeta.webhook_secret;
-            checkbox.disabled = !hasSecret;
-            if (!hasSecret && checkbox.checked) checkbox.checked = false;
-            if (hint) hint.classList.toggle('hidden', hasSecret);
+            const providerOk = monitorWebhookProviderSupported();
+            checkbox.disabled = !hasSecret || !providerOk;
+            if ((!hasSecret || !providerOk) && checkbox.checked) checkbox.checked = false;
+            if (secretHint) secretHint.classList.toggle('hidden', hasSecret);
+            if (providerHint) providerHint.classList.toggle('hidden', providerOk);
         }
 
         function resetMonitorForm() {
@@ -4710,6 +4797,16 @@
 
         function openNewMonitorTask() {
             resetMonitorForm();
+            showLockedModal('monitor-modal');
+        }
+
+        function openNewInboxTask() {
+            // 接收夹按网盘各一个：这里只是把新增弹窗切成「接收夹任务」类型。
+            resetMonitorForm();
+            document.getElementById('monitor-modal-title').innerText = '新增接收夹任务';
+            const select = document.getElementById('monitor_task_type');
+            if (select) select.value = 'inbox';
+            applyMonitorTaskTypeUI();
             showLockedModal('monitor-modal');
         }
 
@@ -4775,40 +4872,6 @@
         window.closeMonitorManualRequired = closeMonitorManualRequired;
         window.rescanMonitorManualRequired = rescanMonitorManualRequired;
 
-        function refreshWebhookHint() {
-            const name = document.getElementById('monitor_name').value.trim() || '任务名';
-            const isInbox = monitorFormTaskType() === 'inbox';
-            const items = isInbox
-                ? [
-                    `webhook 地址：IP:容器端口/webhook/${escapeHtml(name)}（任务名用于绑定这个接收夹任务）`,
-                    '接收夹是分类前的中转文件夹，也是可选的便捷入口：先统一落这里，再按识别结果归到同盘的电影 / 电视剧目标文件夹，不用每次保存前挑分类；不用它也能照旧把 savepath 填到分类监控任务的目录',
-                    '只接磁力：magnet 或 link_url；分享转存落到接收夹后同样会自动整理分发',
-                    'savepath 填所选网盘根目录下的相对路径（例如 接收 或 接收/子目录）；留空默认落到接收夹',
-                    '面板里的 /115/接收 这类带挂载前缀的路径照抄也能识别，推荐只写根目录相对路径',
-                    '整理规则用接收夹自己的整理选项；只有 115 上、且目标落在某个目录同步任务扫描范围内时才会刷新 STRM；识别不准的留在接收夹并写明原因',
-                    '签名校验（可选，与普通监控任务共用同一个全局密钥）：X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign 或 X-Webhook-Token',
-                ]
-                : [
-                    `webhook 地址：IP:容器端口/webhook/${escapeHtml(name)}（任务名用于绑定这个监控任务）`,
-                    '磁力导入必填：magnet 或 link_url + savepath',
-                    'savepath 填 115 根目录下的相对路径（例如 电影/新片）；必须落在本任务目录内，导入后才会自动刷新 strm',
-                    'delayTime 可选：本次导入成功后延迟几秒刷新；不传则使用任务默认延迟',
-                    'title / sharetitle 可选：仅用于日志或局部刷新提示',
-                    '签名校验（可选，与接收夹任务共用同一个全局密钥）：X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign 或 X-Webhook-Token',
-                ];
-            const notes = [
-                '说明：全站只有一个签名密钥，在「参数配置 -> 后台安全管理」里设置，扫描任务和接收夹任务共用；为空时不校验',
-                '修改任务名会改变上面的 webhook 地址，记得同步油猴脚本里的“请求地址”',
-            ];
-            const hintEl = document.getElementById('webhook-hint');
-            if (hintEl) {
-                const itemHtml = items.map((line) => `<div class="webhook-hint-line"><span>${line}</span></div>`).join('');
-                const noteHtml = notes.map((line) => `<div>${line}</div>`).join('');
-                hintEl.innerHTML = `${itemHtml}<div class="webhook-hint-notes">${noteHtml}</div>`;
-            }
-            renderMonitorWebhookUrl();
-        }
-
         async function persistMonitorTasks(tasks) {
             const data = await window.MediaHubApi.postJson('/monitor/save', { tasks });
             applyMonitorState({ ...monitorState, tasks: data.tasks || [] }, { forceRender: true });
@@ -4838,11 +4901,14 @@
                 if (offMount) {
                     return showToast(`分发目标必须和接收夹在同一个网盘（${mountPrefix} 下）`, { tone: 'warn', duration: 3400, placement: 'top-center' });
                 }
+                const providerKey = normalizeMountProviderInput(task.provider || '115') || '115';
                 const otherInbox = (monitorState.tasks || []).find((item) => (
-                    item.name !== editingMonitorName && String(item.task_type || 'scan') === 'inbox'
+                    item.name !== editingMonitorName
+                    && String(item.task_type || 'scan') === 'inbox'
+                    && (normalizeMountProviderInput(item.provider || '115') || '115') === providerKey
                 ));
                 if (otherInbox) {
-                    return showToast('只保留一个接收夹任务，请直接编辑已有的那个', { tone: 'warn', duration: 3200, placement: 'top-center' });
+                    return showToast(`每个网盘只能有一个接收夹：「${getProviderLabel(providerKey)}」已经有接收夹「${otherInbox.name}」，请直接编辑它`, { tone: 'warn', duration: 3600, placement: 'top-center' });
                 }
             }
             if (task.retries < 1 || task.retries > 5) return showToast('读取失败尝试次数只能在 1 到 5 之间', { tone: 'warn', duration: 2600, placement: 'top-center' });
@@ -5010,7 +5076,7 @@
                 const movie = String(targets.movie || '').trim() || '未指定';
                 const tv = String(targets.tv || '').trim() || '未指定';
                 const webhookText = task?.webhook_enabled ? '已启用 Webhook 触发' : '未启用 Webhook';
-                const status = inboxTaskStatusCache && typeof inboxTaskStatusCache === 'object' ? inboxTaskStatusCache : {};
+                const status = inboxStatusForTask(task?.name);
                 const count24h = Math.max(0, Number(status.recent_job_count_24h || 0) || 0);
                 const latest = status.latest && typeof status.latest === 'object' ? status.latest : {};
                 const latestText = latest.id
@@ -5119,9 +5185,7 @@
                     ? `<div class="mt-1 text-xs font-semibold ${failedChanges || manualRequiredFailed ? 'text-red-400' : 'text-amber-300'}">${changeLabels.join(' / ')}</div>`
                     : '';
                 // 接收夹整理跑在工作线程里，运行状态来自 /scraper/quick-import/status，而不是监控扫描状态。
-                const inboxStatus = isInboxTask && inboxTaskStatusCache && typeof inboxTaskStatusCache === 'object'
-                    ? inboxTaskStatusCache
-                    : {};
+                const inboxStatus = isInboxTask ? inboxStatusForTask(taskName) : {};
                 const running = isInboxTask
                     ? !!inboxStatus.running
                     : (monitorState.running && monitorState.current_task === taskName);
@@ -5144,7 +5208,7 @@
                 const taskTypeBadge = isInboxTask
                     ? '<span class="quick-import-chip">接收夹</span>'
                     : '';
-                const inboxActivityHtml = isInboxTask ? buildInboxActivityHtml() : '';
+                const inboxActivityHtml = isInboxTask ? buildInboxActivityHtml(taskName) : '';
                 const toggleRunButton = buildMonitorTaskIconButton({
                     action: 'toggle-run',
                     taskName,
@@ -5167,7 +5231,7 @@
                     icon: 'edit',
                     tone: 'edit',
                 });
-                // 接收夹是内置槽位，不给删除入口（服务端也会拒绝删除）。
+                // 接收夹按网盘各一个：暂不给删除入口（不想用时把「启用本任务」关掉），服务端也会拒绝删除。
                 const deleteButton = isInboxTask ? '' : buildMonitorTaskIconButton({
                     action: 'delete',
                     taskName,
@@ -5218,7 +5282,7 @@
             const scanHtml = scanTasks.map(renderTaskCard).join('');
             container.innerHTML = scanHtml || `<div class="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">还没有文件夹监控任务，点击“新增任务”即可创建。</div>`;
             if (inboxContainer) {
-                inboxContainer.innerHTML = inboxHtml || `<div class="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">接收夹任务未加载，请刷新页面或检查配置。</div>`;
+                inboxContainer.innerHTML = inboxHtml || `<div class="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">还没有接收夹任务，点击“新增接收夹”即可给某个网盘加一个。</div>`;
             }
         }
 

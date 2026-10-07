@@ -212,13 +212,13 @@
                 resetSubscriptionForm();
                 resetResourceSourceForm();
                 syncResourceSourceSelect();
-                refreshWebhookHint();
+                renderMonitorWebhookUrl();
                 void renderVersionInfoPanel();
                 await refreshSign115Status(true);
             } catch (e) {}
         }
 
-        document.getElementById('monitor_name')?.addEventListener('input', refreshWebhookHint);
+        document.getElementById('monitor_name')?.addEventListener('input', renderMonitorWebhookUrl);
         ['subscription_title'].forEach(id => {
             document.getElementById(id)?.addEventListener('keydown', async (e) => {
                 if (e.key !== 'Enter' || e.isComposing) return;
@@ -601,7 +601,7 @@
         document.getElementById('subscription-log-box')?.addEventListener('scroll', () => {
             if (typeof handleSubscriptionLogScroll === 'function') handleSubscriptionLogScroll();
         });
-        document.getElementById('monitor-task-list')?.addEventListener('click', async (e) => {
+        const handleMonitorTaskListClick = async (e) => {
             const introBtn = e.target.closest('[data-monitor-toggle-intro]');
             if (introBtn) {
                 const name = decodeURIComponent(introBtn.dataset.monitorToggleIntro || '');
@@ -623,7 +623,11 @@
             if (action === 'stop') await stopMonitorTask(name);
             if (action === 'edit') editMonitorTask(name);
             if (action === 'delete') await deleteMonitorTask(name);
-        });
+        };
+        // 接收夹卡片渲染在独立容器里（页面上半区），点击委托要两个列表都挂上，
+        // 否则接收夹卡片的「编辑 / 立即整理 / 展开」会点不动。
+        document.getElementById('monitor-task-list')?.addEventListener('click', handleMonitorTaskListClick);
+        document.getElementById('monitor-inbox-task-list')?.addEventListener('click', handleMonitorTaskListClick);
         document.getElementById('monitor-modal')?.addEventListener('click', (e) => {
             if (e.target.id === 'monitor-modal') closeMonitorModal();
         });

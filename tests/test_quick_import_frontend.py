@@ -105,14 +105,24 @@ class InboxTaskFrontendTest(unittest.TestCase):
         ):
             self.assertIn(marker, script)
 
-    def test_inbox_task_is_builtin_and_not_deletable(self):
-        """接收夹是内置槽位：默认就有一个，界面上不给新建第二个、也不给删除。"""
+    def test_inbox_task_type_is_locked_and_add_per_provider_is_wired(self):
+        """接收夹按网盘各一个：内置「接收」保留为 115 那份，界面能给别的网盘新增、也能编辑。"""
         script = INDEX_SCRIPT_PATH.read_text(encoding="utf-8")
         self.assertIn("const deleteButton = isInboxTask ? '' : buildMonitorTaskIconButton({", script)
-        # 任务类型不可更改：类型下拉锁死，只作为展示。
+        # 已有任务的类型不可更改：类型下拉锁死，只作为展示。
         self.assertIn("select.disabled = true;", script)
         self.assertIn("monitor-task-type-hint", script)
-        self.assertIn("接收夹是内置固定任务：类型不能改", script)
+        self.assertIn("已有任务的类型不能改。", script)
+        # 新增时类型可选，并说明「每个网盘一个」。
+        self.assertIn(
+            "新增任务默认是扫描任务；要给别的网盘配接收夹，把类型选成「接收夹任务」（每个网盘一个）。",
+            script,
+        )
+        self.assertIn("function openNewInboxTask()", script)
+        self.assertIn(
+            "每个网盘只能有一个接收夹：「${getProviderLabel(providerKey)}」已经有接收夹「${otherInbox.name}」，请直接编辑它",
+            script,
+        )
         self.assertIn('id="monitor-task-type-hint"', MONITOR_MODAL_PATH.read_text(encoding="utf-8"))
         monitor_routes = MONITOR_ROUTES_PATH.read_text(encoding="utf-8")
         self.assertIn("接收夹任务是内置的，不能删除", monitor_routes)
@@ -122,10 +132,51 @@ class InboxTaskFrontendTest(unittest.TestCase):
         script = INDEX_SCRIPT_PATH.read_text(encoding="utf-8")
         self.assertIn("'webhook_secret'", script)
         self.assertIn("sensitiveConfigMeta.webhook_secret", script)
-        self.assertIn("checkbox.disabled = !hasSecret;", script)
+        self.assertIn("checkbox.disabled = !hasSecret || !providerOk;", script)
         modal = MONITOR_MODAL_PATH.read_text(encoding="utf-8")
         self.assertIn('id="webhook-secret-hint"', modal)
         self.assertIn("Webhook 签名密钥", modal)
+
+    def test_webhook_only_supported_on_115_inbox(self):
+        """webhook 只给 115 的接收夹：别的网盘开关禁选，并说明原因与替代做法。"""
+        script = INDEX_SCRIPT_PATH.read_text(encoding="utf-8")
+        self.assertIn("function monitorWebhookProviderSupported()", script)
+        self.assertIn("return provider === '115';", script)
+        self.assertIn("const providerOk = monitorWebhookProviderSupported();", script)
+        # 落库前再兜一次，避免旧配置/手工改配置把 webhook 带到非 115 接收夹上。
+        self.assertIn(
+            "webhook_enabled: webhookSupported && document.getElementById('monitor_webhook_enabled').checked,",
+            script,
+        )
+        # 换网盘会决定这条任务能不能开 webhook，所以要跟着刷新开关。
+        self.assertIn("// 换网盘会决定这条任务能不能开 webhook，所以一起刷新开关状态。", script)
+        modal = MONITOR_MODAL_PATH.read_text(encoding="utf-8")
+        self.assertIn('id="webhook-provider-hint"', modal)
+        self.assertIn("Webhook 只支持 115 网盘的接收夹", modal)
+
+    def test_new_inbox_disables_providers_already_taken(self):
+        """新增接收夹先选网盘：已被别的接收夹占用的网盘禁选，并提示「每个网盘只能有一个」。"""
+        script = INDEX_SCRIPT_PATH.read_text(encoding="utf-8")
+        self.assertIn("function inboxProvidersTaken()", script)
+        self.assertIn("${takenBy ? ' disabled' : ''}", script)
+        self.assertIn("（已有接收夹「${takenBy}」，每个网盘只能有一个）", script)
+        self.assertIn("请改选其它网盘；要调整已有那条，直接点它的编辑。", script)
+        self.assertIn("都已经有了，不能再新增；要调整请直接编辑已有接收夹。", script)
+        modal = MONITOR_MODAL_PATH.read_text(encoding="utf-8")
+        self.assertIn('id="monitor-inbox-provider-hint"', modal)
+        # 先选网盘、再选文件夹：网盘选择排在共用的「接收夹路径」输入框前面。
+        self.assertLess(modal.index('id="monitor-inbox-provider-row"'), modal.index('id="monitor_scan_path"'))
+        self.assertIn("monitor-inbox-provider-row", script)
+
+    def test_new_inbox_form_does_not_show_existing_run_status(self):
+        """新建任务时表单里不该出现已有接收夹的运行状态，只留占位说明。"""
+        script = INDEX_SCRIPT_PATH.read_text(encoding="utf-8")
+        self.assertNotIn("if (isInbox) void refreshInboxTaskStatus();", script)
+        self.assertIn(
+            "renderInboxTaskStatus(editingMonitorName ? inboxStatusForTask(editingMonitorName) : {});",
+            script,
+        )
+        self.assertIn("保存任务后，这里会显示这个接收夹最近的接收与整理记录。", script)
 
     def test_scan_only_fields_are_hidden_for_inbox(self):
         """重试次数/列出延时/大小过滤只对扫描任务有意义，应当收进扫描字段组。"""
@@ -141,9 +192,9 @@ class InboxTaskFrontendTest(unittest.TestCase):
         self.assertNotIn("monitor_cron_minutes", scan_section)
 
     def test_rename_and_disable_are_explained_in_modal(self):
-        script = INDEX_SCRIPT_PATH.read_text(encoding="utf-8")
-        self.assertIn("修改任务名会改变上面的 webhook 地址", script)
+        # webhook 说明只收在开关旁的「i」提示里，不再单列一大块重复文字。
         modal = MONITOR_MODAL_PATH.read_text(encoding="utf-8")
+        self.assertIn("修改任务名会改变 webhook 地址", modal)
         self.assertIn("定时和所有自动触发都停", modal)
         self.assertIn("接收夹任务会识别并分发一次", modal)
 
@@ -182,12 +233,14 @@ class InboxTaskFrontendTest(unittest.TestCase):
         self.assertIn("request_quick_import_cancel", monitor_routes)
 
     def test_webhook_hint_teaches_root_relative_savepath(self):
-        """保存路径统一从 115 根目录开始填；面板的 /115/xxx 只是显示形式。"""
-        script = INDEX_SCRIPT_PATH.read_text(encoding="utf-8")
-        self.assertIn("115 根目录下的相对路径", script)
+        """保存路径统一从网盘根目录开始填；说明只留在 webhook 的「i」提示里。"""
         modal = MONITOR_MODAL_PATH.read_text(encoding="utf-8")
-        self.assertIn("根目录下的相对路径", modal)
+        # 开关旁已经有提示按钮，不再单列一大块说明（避免重复与挤占弹窗空间）。
+        self.assertNotIn('id="webhook-hint"', modal)
+        self.assertIn("115 根目录下的相对路径", modal)
         self.assertIn("不要带", modal)
+        script = INDEX_SCRIPT_PATH.read_text(encoding="utf-8")
+        self.assertNotIn("refreshWebhookHint", script)
 
     def test_nested_folder_picker_stacks_above_parent_modal(self):
         """「选择文件夹」是二级弹窗：模板里的 z-[56] 低于任务弹窗，必须靠动态层级抬升。"""
@@ -237,16 +290,16 @@ class InboxTaskFrontendTest(unittest.TestCase):
         self.assertIn("分类前的中转文件夹", page)
         self.assertIn("便捷入口", page)
         self.assertIn("全站唯一的密钥", page)
-        # 旧说法（把接收夹当成「新增任务」里的一个类型）已经不对：它是内置固定任务。
+        # 旧说法（把接收夹当成「新增任务」里的一个类型）已经不对：接收夹按网盘各一个。
         self.assertNotIn("新增任务 → 任务类型选“接收夹任务”", page)
 
         modal = MONITOR_MODAL_PATH.read_text(encoding="utf-8")
         self.assertIn("全站唯一", modal)
         self.assertIn("便捷入口", modal)
 
-        script = INDEX_SCRIPT_PATH.read_text(encoding="utf-8")
-        self.assertIn("与普通监控任务共用同一个全局密钥", script)
-        self.assertIn("可选的便捷入口", script)
+        # 密钥共用与「不是强制流程」的口径也收在同一个提示按钮里。
+        self.assertIn("扫描任务和接收夹任务共用", modal)
+        self.assertIn("不是强制流程", modal)
 
         userscript = USERSCRIPT_PATH.read_text(encoding="utf-8")
         self.assertIn("分类前的中转文件夹", userscript)
