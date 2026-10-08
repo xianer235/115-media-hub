@@ -12,12 +12,13 @@
 
 - **更新日期**: 2026-10-08
 - **分支**: `main`，与 `origin/main` 一致（接收夹解耦批已推送）
-- **版本**: `0.14.1`（`version.json` 是唯一真源，与 `CHANGELOG.md` 顶部一致；0.14.1 修复与元数据同步在未提交改动里）
+- **版本**: `0.14.2`（`version.json` 是唯一真源，与 `CHANGELOG.md` 顶部一致；0.14.2 覆盖「115 写操作受理 + 回验落地」与「文件夹监控页手机端排版」两批，发布元数据在未提交改动里）
 - **最近提交**: `35da703` Decouple inbox tasks from folder monitoring per provider（2026-10-08，接收夹解耦批 + 0.14.0 发布元数据，已推送）
-- **工作区**: 未提交改动 = **0.14.1 发布批**（广告名假视频不再生成本地 STRM，见 `CHANGELOG.md`）**＋ 115 写操作「受理 + 回验落地」修复批**（`app/providers/pan115.py` 忙响应退避重试 + `move_proid` 查进度 + 逐条回验父目录 / 名字；`app/services/scraper.py`、`app/services/quick_import.py` 没确认落地就不排 STRM 同步、不删接收夹源目录，条目留接收夹等下一轮；spec：`docs/superpowers/specs/2026-10-08-115-move-task-acceptance.md`）。接收夹解耦批（含 0.14.0 元数据）已在 **`35da703`** 推送，详细内容见该提交与 `handoff.md` 历史条目。
+- **工作区**: 未提交改动 = **0.14.2 发布批**（① 115 写操作「受理 + 回验落地」修复：`app/providers/pan115.py` 忙响应退避重试 + `move_proid` 查进度 + 逐条回验父目录 / 名字，`app/services/scraper.py`、`app/services/quick_import.py` 没确认落地就不排 STRM 同步、不删接收夹源目录，条目留接收夹等下一轮，spec：`docs/superpowers/specs/2026-10-08-115-move-task-acceptance.md`；② 文件夹监控页手机端排版：新增按钮跟标题同行、两张卡片简介收进「i」弹窗、软键盘弹出时任务弹窗钉在可视视口内；③ 0.14.1 的广告 STRM 修复也在未提交里，见 `CHANGELOG.md` 的 0.14.1 / 0.14.2 两段）。接收夹解耦批（含 0.14.0 元数据）已在 **`35da703`** 推送，详细内容见该提交与 `handoff.md` 历史条目。
 
 ## 最近一次验证
 
+- `version.json` 解析通过且与 `CHANGELOG.md` 顶部版本号一致（`0.14.2`）；完整 `unittest discover -s tests -p 'test_*.py'` **1249 项零失败**（2026-10-08，109s；含本次手机端排版新增的 `tests.test_quick_import_frontend.MonitorMobileLayoutTest` 2 项）；`scripts/check.sh --all`、`compileall app main.py`、改动 JS `node --check`、`git diff --check`、`handoff.md` 体积预算（32510/32768）均通过。容器镜像版本走 `Dockerfile` 的 `APP_VERSION` 构建参数（默认 `dev`），无写死版本需要同步。
 - 完整 `unittest discover -s tests -p 'test_*.py'` **1247 项零失败**（2026-10-08，115 写操作「受理 + 回验落地」：`pan115._call_115_write_with_retry`（忙响应 1/2/4/8 秒退避）/ `wait_115_move_progress` / `wait_115_writes_landed`（逐条回验，超 50 条按进度兜底）/ `get_115_file_info` 补 `parent_id`+`is_dir`；`scraper` 的搬运 / 改名与整理任务三步批量按 `landing` 收尾、未落地转 `needs_reconcile`；`quick_import` 待落地留条不排同步不删源。108s；新增 `tests.test_115_list_pagination.Pan115MoveAcceptanceTest` 11 项、`tests.test_scraper_monitor_sync.ScraperMoveLandingTest` 3 项、`tests.test_quick_import` 1 项；`scripts/check.sh --all`、`compileall app main.py`、`git diff --check`、`handoff.md` 体积预算（31780/32768）均通过。**实盘只做过只读探测，未在真实账号重放写入**）。
 - 完整 `unittest discover -s tests -p 'test_*.py'` **1231 项零失败**（2026-10-08，0.14.1 发布前复跑：广告名不再生成本地 STRM + 广告识别扩展叠后缀 / 裸域名 / `other` 扩展名，107s）；`version.json` 解析通过且与 `CHANGELOG.md` 顶部版本号（`0.14.1`）一致；`compileall app main.py`、`git diff --check`、`handoff.md` 体积预算（32548/32768）均通过。
 - `scripts/check.sh tests.test_monitor_dir_scan tests.test_scraper_batch_organize tests.test_scraper_monitor_sync tests.test_tree_streaming_sync tests.test_tree_tasks tests.test_monitor_dir_rescan tests.test_monitor_runs tests.test_monitor_log_readability tests.test_modules_doc` **428 项零失败**（2026-10-08，推广话术假视频不再生成 STRM + 广告识别扩到 `.mkv.strm` / `.DOC`：`app/services/scraper.py` 新增 `SCRAPER_STRIPPABLE_EXTENSIONS` / `_strip_scraper_compound_extensions` / `_SCRAPER_AD_NAME_DOMAIN_RE`，`_is_scraper_promotional_only` 先剥后缀链再判残留，`_is_scraper_ad_file` 的 `other` 分支纳入「整段只有推广话术」；`app/services/monitor.py` 扫描跳过广告文件并计 `skipped_ad_files`、`app/core.py`「生成汇总」补「（含广告 N）」、`monitor_changes._file_passes_filters` 与 `tree._scan_tree_text` 同口径；`tests.test_scraper_batch_organize` 新增 2 项、`tests.test_monitor_dir_scan` 新增 1 项）。
@@ -49,6 +50,7 @@
 
 ## 待办 / 未完成
 
+- 手机实机复核**文件夹监控页手机端排版批**（未提交）：① 两块卡片的新增按钮应跟在标题同一行右侧、状态胶囊独占第二行；② 编辑接收夹 / 监控任务时点输入框，弹窗应停在键盘上方那半屏（标题栏不被顶出屏幕、内容在弹窗内滚动）；③ 点「i」弹出的说明里首段应是一句话用途（页面上不再有卡片简介）。
 - 容器重建后实测**115 写操作「受理 + 回验落地」修复批**（未提交）：① 接收夹里同时来多部影视，点「立即整理并分发」不再出现「移动[...]操作尚未执行完成，请稍后再试!」，也不再出现「文件没搬走却先扫目录」；② 若 115 受理后 30 秒内没回验到落地，条目应留在接收夹并写明「已提交给 115，但等待落地确认超时」，同时目标目录的同步事件由 `needs_reconcile` 兜底补扫；③ 确认已落地的那一批仍然照常生成 STRM（`move_progress` 到 100 → 回验父目录 / 名字通过）。实盘只做过只读探测（列目录、进度查询、`get_info`），写入路径没有被真实重放过。
 - 未做：①（2026-09-18 spec §五 遗留）115 系统目录（我的接收 / 最近接收 / 离线下载 / 礼包文件）当接收夹 / 目标的拦截与提示、整理链路的 source→target 审计记录；②（2026-10-08 新增）订阅的磁力 / 电驴离线入库（`app/services/subscription_task_runner.py:1536`）仍是「受理完就刷监控」——已吃到忙响应退避重试，但没接落地回验，做法见 `docs/superpowers/specs/2026-10-08-115-move-task-acceptance.md` §六。
 - 容器重建后实测**接收夹按网盘隔离的修复批**（未提交）：① 115 与夸克各一个接收夹，点其中一张卡片的「立即整理并分发」，另一张不应进入运行中；② 在某张卡片点「中断」不应打断另一张正在跑的整理；③ 两张卡片的「最近接收 24 小时」「最近整理」互相独立（同名 `/接收` 不再串账）；④ 夸克分享转存进接收夹后大文件夹也能在宽限期内被整理（不再空跑「没有可整理的内容」）；⑤ 禁用其中一个接收夹后，资源导入弹窗提示「已停用，保存后不会自动整理」。
@@ -56,7 +58,7 @@
 - 容器重建后实测**非 115 接收夹整理分发**（夸克 / 天翼 / 123 / 阿里）：点「立即整理并分发」能识别 → 整理 → 搬进同盘目标（不再报「目标路径操作当前仅支持 115」）；重点复核目标目录**没有**同名文件夹时（整包搬运）与**已有**同名文件夹时（并入）两条分支都走对网盘。
 - 容器重建后复核目录选择弹窗：夸克 / 天翼 / 123 / 阿里接收夹点「选择文件夹」时标题应是「选择 夸克网盘 文件夹」这类（此前写死「选择 115 监控文件夹」）；弹窗里能就地「新建文件夹」，建完自动进入、再点「选择当前目录」保存；非 115 接收夹点「任务名」旁的 i 不再提 webhook 地址。
 - 待用户拍板：编辑已有接收夹时要不要允许**改网盘**（现在下拉不做禁用，只在保存时按「每个网盘只能有一个」拦重复；如果要禁止，就在编辑态把网盘也锁成只读）。
-- 容器重建后复核接收夹弹窗：弹窗里已无「任务类型」下拉——从「新增接收夹」进来是接收夹类型、从「新增任务」进来是目录同步类型、编辑已有任务沿用原类型；新增时网盘列表里已被占用的网盘置灰并提示「已有且只能有一个」、默认落到空闲网盘；非 115 接收夹的 webhook 开关置灰翻不动；新建时状态区只显示「保存任务后…」占位，不出现已有接收夹的最近整理 / 运行状态；「新增接收夹」按钮宽度与「新增任务」一致（内容宽度、右对齐，窄屏仍占满）。
+- 容器重建后复核接收夹弹窗：弹窗里已无「任务类型」下拉——从「新增接收夹」进来是接收夹类型、从「新增任务」进来是目录同步类型、编辑已有任务沿用原类型；新增时网盘列表里已被占用的网盘置灰并提示「已有且只能有一个」、默认落到空闲网盘；非 115 接收夹的 webhook 开关置灰翻不动；新建时状态区只显示「保存任务后…」占位，不出现已有接收夹的最近整理 / 运行状态；「新增接收夹」按钮宽度与「新增任务」一致（内容宽度、右对齐；窄屏起两块列表的新增按钮都跟标题同行贴右，不再单独占一行）。
 - 待用户拍板：接收夹现在**一律不能删除**（服务端 `/monitor/delete` 返回 400「接收夹任务是内置的，不能删除」+ 卡片不给删除按钮）。用户自建的、非 115 的接收夹是否要允许删除，还是继续用「启用本任务」开关代替？
 - 容器重建后实测**接收夹多网盘**：接收夹挂非 115 网盘（如夸克）时只搬运、不刷 STRM；115 上目标未落在任何目录同步任务扫描范围时也不刷；命中范围才刷。
 - 容器重建后实测**接收夹跨盘目标**：接收夹在夸克、目标填 `/115/...` 时保存 / 运行应被明确拦下（提示「必须和接收夹在同一网盘」），不再退化成 `115/...` 这种相对路径去分发。
@@ -65,7 +67,7 @@
 - 容器重建后在订阅「扫描链接」弹窗一次粘贴多条磁力/电驴链接，复核排队顺序、离线入库与命中挑选链路。
 - 容器重建后用真实 115 订阅复核：`Renegade Immortal – 仙逆 Xian NI – 154.mkv`（破折号）与 `仙逆 154.mp4`（空格）这类「片名 + 分隔符 + 裸数字」文件都能被解析成第 154 集并被选中入库（旧口径下解析为空集、文件被直接跳过）。
 - 容器重建后用真实 115 / 订阅链复核：订阅落进 `仙逆/Season 01` 的新集不再被自动整理搬进 `仙逆 (2023)/`；历史遗留的 `仙逆/仙逆 (2023)/Season 01/…` 是否需要回搬待用户确认。
-- 0.14.0 的代码（接收夹解耦批已提交的 5 个提交 + 未提交的「按网盘隔离」三层）与发布元数据已就绪：5 个提交待推送 / 打 tag，未提交改动待提交，之后重建容器部署。
+- `0.14.2` 发布元数据已就绪（`version.json` / `CHANGELOG.md` / `README.md` / `state.md` 同步）：未提交的 0.14.2 发布批（115 写操作「受理 + 回验落地」+ 文件夹监控页手机端排版 + 0.14.1 广告 STRM 修复）待提交 / 推送 / 打 tag，之后重建容器部署（0.14.0 的接收夹解耦批已在 `35da703` 推送）。
 - 容器重建后用真实接收夹复核：整段名字只有推广话术的假 `.mkv/.mp4` 只被忽略（开启“删除广告文件”时才删除），不再被识别成正片；同口径已扩到 `.mkv.strm` / `.DOC` 与叠后缀（剥后缀 + 去网址后再判残留），且文件夹监控扫描 / 变更同步 / 目录树都不再为这类名字生成 STRM，上一轮已生成的本地 `.mkv.strm` 会被过期清理删掉。
 - 容器重建后手动触发一次接收夹整理，确认同一部影视的多个版本/多个条目合并进同一个媒体文件夹（第二条文件名带 `(2)`），发行组命名的空壳目录被清理。
 - 真实 115 重跑确认 `Curb.Your.Enthusiasm` S09/S10/S11 整季包落季与季包残留（`RARBG.txt`/空 `Subs`）清理。

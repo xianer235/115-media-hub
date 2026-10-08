@@ -14,6 +14,8 @@
         :root {
             --nav-btn-radius: 0.82rem;
             --app-vh: 100vh;
+            /* 手机软键盘弹出时可视视口相对布局视口的平移量（用于把弹窗钉在可视区域内）。 */
+            --app-vv-offset-top: 0px;
         }
         #main-nav-actions .nav-action-btn,
         #main-nav-actions .nav-task-center-btn {
@@ -2022,6 +2024,30 @@
             border: 1px solid rgba(71, 85, 105, 0.9);
             background: linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(2, 6, 23, 0.98));
             box-shadow: 0 28px 70px rgba(2, 6, 23, 0.56);
+        }
+        /* 手机软键盘弹出（html.keyboard-open 由 syncViewportMetrics 打标）：
+           浏览器为了让输入框露出来会平移可视视口，固定定位的弹窗会跟着被顶出屏幕。
+           这里把弹窗层重新钉到可视视口（高度取 --app-vh、位置用平移量抵消），
+           让弹窗留在键盘上方那半屏里，内容由弹窗自己的滚动区滚动。 */
+        html.keyboard-open .app-dialog-modal,
+        html.keyboard-open #monitor-modal,
+        html.keyboard-open #monitor-folder-modal,
+        html.keyboard-open #subscription-modal {
+            top: var(--app-vv-offset-top, 0px);
+            bottom: auto;
+            height: var(--app-vh, 100dvh);
+            align-items: flex-start;
+            padding-top: 0.5rem;
+            padding-bottom: 0.5rem;
+        }
+        html.keyboard-open #monitor-modal .monitor-modal-shell,
+        html.keyboard-open #subscription-modal .subscription-modal-shell {
+            margin-top: 0;
+            max-block-size: calc(var(--app-vh, 100dvh) - 1rem);
+        }
+        html.keyboard-open #monitor-folder-modal .modal-card {
+            margin-top: 0;
+            max-height: calc(var(--app-vh, 100dvh) - 1rem);
         }
         .app-dialog-header {
             display: flex;
@@ -6982,14 +7008,25 @@
         @media (max-width: 1024px) {
             #main-nav-actions { width: auto; justify-content: flex-end; }
             .footer-text { padding: 1rem 0 1rem; }
+            /* 窄屏：新增按钮跟标题同行贴右，状态胶囊另起一行占满宽度，
+               别再让只有按钮的那一行白白吃掉半屏高度。 */
             #page-monitor .monitor-page-head {
-                grid-template-columns: 1fr;
-                align-items: stretch;
+                grid-template-columns: minmax(0, 1fr) auto;
+                align-items: center;
+                gap: 0.6rem 0.75rem;
             }
-            #page-monitor .monitor-head-actions {
-                justify-self: stretch;
-                width: 100%;
+            #page-monitor .monitor-head-copy { grid-area: 1 / 1 / 2 / 2; }
+            /* 提成头部网格的直接子项，才能让按钮留在标题行、胶囊落到第二行。 */
+            #page-monitor .monitor-head-actions { display: contents; width: auto; }
+            #page-monitor .monitor-head-add-btn {
+                grid-area: 1 / 2 / 2 / 3;
+                justify-self: end;
+                align-self: center;
+                min-width: 0;
+                padding-left: 0.85rem;
+                padding-right: 0.85rem;
             }
+            #page-monitor .monitor-status-pill { grid-area: 2 / 1 / 3 / 3; }
         }
 
         @media (max-width: 960px) {
@@ -7322,8 +7359,6 @@
             #monitor-log-box { height: 38vh !important; }
             #page-monitor .grid.grid-cols-1.sm\:grid-cols-2.md\:grid-cols-4 { grid-template-columns: 1fr; }
             #page-monitor .grid.grid-cols-1.sm\:grid-cols-2.md\:grid-cols-4 button { width: 100%; }
-            #page-monitor .monitor-head-actions { grid-template-columns: 1fr; }
-            #page-monitor .monitor-head-add-btn { width: 100%; }
             #page-monitor .flex.items-center.gap-3 { width: 100%; justify-content: space-between; flex-wrap: wrap; }
             #page-monitor .flex.justify-between.items-center.mb-4 { gap: 0.5rem; align-items: flex-start; flex-wrap: wrap; }
             #page-task .task-action-grid { gap: 0.6rem; }
@@ -15417,6 +15452,16 @@
 
             .scraper-provider-tab small {
                 font-size: 0.62rem;
+            }
+
+            /* 小屏上「文件夹监控任务列表」要和新增按钮同行，标题稍微收一点避免折行。 */
+            #page-monitor .monitor-head-title {
+                font-size: 0.8rem;
+            }
+
+            #page-monitor .monitor-head-add-btn {
+                padding-left: 0.7rem;
+                padding-right: 0.7rem;
             }
         }
 

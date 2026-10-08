@@ -529,6 +529,8 @@
                 document.body.style.top = `-${modalScrollLockY}px`;
             }
             modalScrollLockCount += 1;
+            // 滚动锁状态变了要重算可视视口平移量（--app-vv-offset-top 只在锁住时生效）。
+            requestViewportMetricsSync();
             syncResourceBackTopButton();
             window.syncScraperBackTopButton?.();
         }
@@ -543,6 +545,7 @@
             document.body.classList.remove('body-scroll-lock');
             document.body.style.top = '';
             window.scrollTo(0, restoreY);
+            requestViewportMetricsSync();
             syncResourceBackTopButton();
             window.syncScraperBackTopButton?.();
         }
@@ -563,12 +566,32 @@
         }
 
         function syncViewportMetrics() {
+            const viewport = window.visualViewport;
+            const layoutHeight = Math.max(0, window.innerHeight || 0, document.documentElement.clientHeight || 0);
             const viewportHeight = Math.max(
                 0,
-                window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0,
+                viewport?.height || window.innerHeight || document.documentElement.clientHeight || 0,
             );
             if (!viewportHeight) return;
             document.documentElement.style.setProperty('--app-vh', `${viewportHeight}px`);
+            // 手机软键盘弹出时可视视口会矮掉接近一个键盘的高度；此时浏览器会为露出输入框
+            // 平移可视视口，固定定位的弹窗会被顶出屏幕，这里记下状态并用 offsetTop 抵消平移。
+            const active = document.activeElement;
+            const editing = !!active && (
+                active.tagName === 'INPUT'
+                || active.tagName === 'TEXTAREA'
+                || active.tagName === 'SELECT'
+                || active.isContentEditable
+            );
+            const keyboardOpen = editing && (layoutHeight - viewportHeight) > 120;
+            document.documentElement.classList.toggle('keyboard-open', keyboardOpen);
+            // 只有整页滚动被锁住（弹窗打开）时才用 offsetTop 抵消平移：页面正常滚动时
+            // iOS 的 offsetTop 含页面滚动量，直接套上去反而会把弹窗推下去。
+            const locked = document.body.classList.contains('body-scroll-lock');
+            const viewportOffsetTop = (keyboardOpen && locked)
+                ? Math.max(0, Math.round(viewport?.offsetTop || 0))
+                : 0;
+            document.documentElement.style.setProperty('--app-vv-offset-top', `${viewportOffsetTop}px`);
             // 设置页顶部吸顶分区条需要避开 shell 工具栏，工具栏高度随断点变化，这里统一量一次。
             const toolbar = document.querySelector('.shell-toolbar');
             if (toolbar) {
@@ -2318,7 +2341,8 @@
         const MONITOR_HELP_HTML = `
             <div class="help-rich-section">
                 <div class="help-rich-title">这块在做什么</div>
-                <div class="help-rich-text">文件夹监控会扫描 115 网盘目录，把命中的视频生成为本地 <code>/strm</code> 播放文件；媒体服务器（Emby / Jellyfin / Infuse 等）读本地 strm，播放时再由服务端解析 115 链接回源。</div>
+                <div class="help-rich-text">只扫描 115 网盘目录、生成 / 刷新本地 <code>/strm</code> 播放文件，<b>不整理、不搬运</b>网盘里的文件。</div>
+                <div class="help-rich-text">媒体服务器（Emby / Jellyfin / Infuse 等）读本地 strm，播放时再由服务端解析 115 链接回源。</div>
                 <div class="help-rich-text">资源导入 / Webhook 命中 savepath 时会优先局部刷新——只处理这次变动涉及的目录，不必等下一次全量扫描。</div>
             </div>
             <div class="help-rich-section">
@@ -2362,7 +2386,7 @@
         const INBOX_HELP_HTML = `
             <div class="help-rich-section">
                 <div class="help-rich-title">这块在做什么</div>
-                <div class="help-rich-text">接收夹是<b>分类前的中转文件夹</b>：不想每次保存前先挑电影还是电视剧时，先把磁力 / 分享统一落进来，系统识别类型后按<b>接收夹任务自己的整理选项</b>重命名，再搬进同一个网盘的电影 / 电视剧文件夹。</div>
+                <div class="help-rich-text">接收夹是<b>分类前的中转文件夹</b>：磁力 / 分享先统一落进来，系统识别类型后按本任务的整理选项重命名，再搬进同盘的电影 / 电视剧文件夹。</div>
                 <div class="help-rich-text">它只是可选入口，不是强制流程：照旧把保存路径填到分类监控任务的目录也完全有效。</div>
             </div>
             <div class="help-rich-section">

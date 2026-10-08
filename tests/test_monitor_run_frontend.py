@@ -1284,9 +1284,11 @@ class MonitorPageHelpTest(unittest.TestCase):
         self.assertIn('title="文件夹监控说明"', html)
         self.assertIn('title="接收夹整理说明"', html)
         self.assertIn("monitor-head-title", html)
-        # 原正文文案不再直接铺在页面上
+        # 原正文文案不再直接铺在页面上；卡片简介（两块的用途）也一并收进弹窗
         self.assertNotIn("扫描 115 网盘目录，生成或刷新本地", html)
         self.assertNotIn("命中 savepath 时会优先局部刷新", html)
+        self.assertNotIn("接收夹是中转入口", html)
+        self.assertNotIn("目录同步只扫描目录", html)
 
     def test_help_modal_holds_monitor_copy(self):
         script = INDEX_JS_PATH.read_text(encoding="utf-8")
@@ -1297,6 +1299,8 @@ class MonitorPageHelpTest(unittest.TestCase):
         self.assertIn("showHelpHtml('接收夹整理说明', INBOX_HELP_HTML)", script)
         self.assertIn("window.showMonitorHelp = showMonitorHelp;", script)
         # 说明本身保留在弹窗里：局部刷新 + 路径匹配 + 跳过条件
+        self.assertIn("只扫描 115 网盘目录、生成 / 刷新本地", script)
+        self.assertIn("不整理、不搬运", script)
         self.assertIn("资源导入 / Webhook 命中 savepath 时会优先局部刷新", script)
         self.assertIn("savepath 必须落在某条任务的扫描路径内", script)
         self.assertIn("文件大小过滤", script)
@@ -1307,6 +1311,7 @@ class MonitorPageHelpTest(unittest.TestCase):
         inbox_block = script.split("const INBOX_HELP_HTML", 1)[1].split("function showMonitorHelp", 1)[0]
         for marker in (
             "分类前的中转文件夹",
+            "磁力 / 分享先统一落进来",
             "立即整理并分发",
             "每个网盘只能有一个接收夹",
             "只搬运文件，不生成 STRM",

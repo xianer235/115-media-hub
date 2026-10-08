@@ -342,6 +342,33 @@ class InboxTaskFrontendTest(unittest.TestCase):
         self.assertIn("全部任务共用同一把", userscript)
 
 
+class MonitorMobileLayoutTest(unittest.TestCase):
+    """手机端：新增按钮跟标题同行，软键盘弹出时弹窗钉在可视视口内。"""
+
+    def test_add_buttons_share_the_title_row_on_narrow_screens(self):
+        css = (ROOT / "static/css/index.css").read_text(encoding="utf-8")
+        # 窄屏头部保持两列（标题 + 按钮），胶囊落到第二行，按钮不再独占一行。
+        self.assertIn("#page-monitor .monitor-head-actions { display: contents; width: auto; }", css)
+        self.assertIn("#page-monitor .monitor-head-add-btn {", css)
+        self.assertIn("grid-area: 1 / 2 / 2 / 3;", css)
+        self.assertIn("#page-monitor .monitor-status-pill { grid-area: 2 / 1 / 3 / 3; }", css)
+        self.assertNotIn("#page-monitor .monitor-head-actions { grid-template-columns: 1fr; }", css)
+        self.assertNotIn("#page-monitor .monitor-head-add-btn { width: 100%; }", css)
+
+    def test_task_modal_pins_to_visual_viewport_when_keyboard_opens(self):
+        css = (ROOT / "static/css/index.css").read_text(encoding="utf-8")
+        self.assertIn("--app-vv-offset-top: 0px;", css)
+        self.assertIn("html.keyboard-open #monitor-modal,", css)
+        self.assertIn("html.keyboard-open #monitor-modal .monitor-modal-shell,", css)
+        self.assertIn("top: var(--app-vv-offset-top, 0px);", css)
+        self.assertIn("height: var(--app-vh, 100dvh);", css)
+
+        script = INDEX_SCRIPT_PATH.read_text(encoding="utf-8")
+        self.assertIn("classList.toggle('keyboard-open', keyboardOpen)", script)
+        self.assertIn("setProperty('--app-vv-offset-top'", script)
+        self.assertIn("document.body.classList.contains('body-scroll-lock')", script)
+
+
 class InboxTaskBackendWiringTest(unittest.TestCase):
     def test_routes_expose_inbox_task_endpoints(self):
         source = SCRAPER_ROUTES_PATH.read_text(encoding="utf-8")
