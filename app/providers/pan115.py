@@ -354,12 +354,22 @@ def get_115_file_info(cookie: str, file_id: str) -> Dict[str, Any]:
         item_id = str(item.get("fid") or item.get("file_id") or item.get("id") or "").strip()
         if item_id and item_id != normalized_id:
             continue
+        # 115 的 get_info 字段不对称：文件带 ``fid``，父目录在 ``cid``；
+        # 目录自身就是 ``cid``，父目录在 ``pid``。回验"搬到哪了"都靠这个。
+        item_fid = str(item.get("fid") or "").strip()
+        parent_id = (
+            str(item.get("cid") or "").strip()
+            if item_fid
+            else str(item.get("pid") or "").strip()
+        )
         return {
             "id": item_id or normalized_id,
             "name": str(item.get("n") or item.get("name") or "").strip(),
             "sha1": str(item.get("sha") or item.get("sha1") or "").strip(),
             "pick_code": str(item.get("pc") or item.get("pick_code") or "").strip(),
             "size": parse_int(item.get("s") or item.get("size") or 0),
+            "parent_id": parent_id,
+            "is_dir": not bool(item_fid),
         }
     raise RuntimeError(f"115 文件不存在或已删除：{normalized_id}")
 
@@ -1030,6 +1040,322 @@ def _build_115_indexed_fid_payload(ids: List[str]) -> Dict[str, str]:
     }
 
 
+# ---------------------------------------------------------------------------
+# 115 写操作（移动 / 复制 / 改名 / 删除）的排队重试与落地确认
+# ---------------------------------------------------------------------------
+# 115 的文件写操作是"受理 + 服务端排队执行"：接口返回 {"state": true} 只代表请求进了队列。
+# 同一账号上一次任务没跑完就再发，会拿到 990019「移动[...]操作尚未执行完成，请稍后再试！」
+# 这类"忙"响应（对照 p115client 的 errno 表：990005 / 990009 / 990019 / 590075 都是 EBUSY
+# 语义）。一次整理里连着搬多个条目很容易撞上，必须退避重试，不能当成"搬运失败"。
+_115_BUSY_ERRNOS = (990005, 990009, 990019, 590075, 51012)
+_115_BUSY_ERROR_HINTS = ("尚未执行完成", "类似任务正在处理", "操作太频繁", "请稍后再试", "稍候再试")
+_115_WRITE_RETRY_BACKOFF_SECONDS = (1.0, 2.0, 4.0, 8.0)
+_115_MOVE_PROGRESS_INTERVAL_SECONDS = 2.0
+# 移动任务进度最多等多久：115 没有完成回调，progress 到 100 只是"服务端说跑完了"，
+# 真正落地还要靠回验；超时就退回既有的 needs_reconcile 兜底，不判死。
+_115_MOVE_PROGRESS_TIMEOUT_SECONDS = max(
+    5.0,
+    min(300.0, float(os.environ.get("API_115_MOVE_WAIT_SECONDS", 30.0) or 30.0)),
+)
+_115_RENAME_WAIT_SECONDS = max(
+    3.0,
+    min(120.0, float(os.environ.get("API_115_RENAME_WAIT_SECONDS", 12.0) or 12.0)),
+)
+_115_LANDING_VERIFY_ROUNDS = 3
+# 逐条 get_info 回验最多查多少条：正常一轮接收夹整理只有个位数条目，
+# 超大 batch（整理任务的 100 条分片）不必逐条问，避免把请求数放大。
+_115_LANDING_VERIFY_MAX_ENTRIES = 50
+
+
+def _extract_115_errno(payload: Dict[str, Any]) -> Optional[int]:
+    for key in ("errno", "errNo", "err_no", "errcode", "errCode"):
+        value = (payload or {}).get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if not text:
+            continue
+        try:
+            return int(float(text))
+        except Exception:
+            continue
+    return None
+
+
+def _is_115_busy_write_response(payload: Dict[str, Any]) -> bool:
+    """115 写操作返回的"忙"响应（排队 / 限频）：可以安全退避重试。"""
+    if _is_115_mutation_success(payload):
+        return False
+    if _extract_115_errno(payload) in _115_BUSY_ERRNOS:
+        return True
+    message = str(
+        (payload or {}).get("error", "")
+        or (payload or {}).get("msg", "")
+        or (payload or {}).get("message", "")
+    ).strip()
+    return any(hint in message for hint in _115_BUSY_ERROR_HINTS)
+
+
+def _115_write_error_detail(payload: Dict[str, Any], fallback: str) -> str:
+    return (
+        str((payload or {}).get("error", "")).strip()
+        or str((payload or {}).get("msg", "")).strip()
+        or str((payload or {}).get("message", "")).strip()
+        or str((payload or {}).get("error_msg", "")).strip()
+        or str((payload or {}).get("err_msg", "")).strip()
+        or fallback
+    )
+
+
+def _generate_115_move_proid() -> str:
+    """移动任务 id 由客户端生成（115 按它记 /files/move_progress）。"""
+    return str(int(time.time() * 1000))
+
+
+def _call_115_write_with_retry(call, *, label: str = "115 写操作") -> Dict[str, Any]:
+    """执行一次 115 写操作；"忙"响应按退避重试，其余响应交给调用方判断。"""
+    backoffs = (0.0,) + tuple(_115_WRITE_RETRY_BACKOFF_SECONDS)
+    attempts = 0
+    waited = 0.0
+    response: Dict[str, Any] = {}
+    for index, delay in enumerate(backoffs):
+        if delay > 0:
+            time.sleep(delay)
+            waited += delay
+        attempts += 1
+        throttle_115_api_requests()
+        response = call() or {}
+        if _is_115_mutation_success(response) or not _is_115_busy_write_response(response):
+            break
+        next_delay = backoffs[index + 1] if index + 1 < len(backoffs) else 0.0
+        logging.info(
+            "%s 被 115 排队拒绝（errno=%s），%.1fs 后重试（第 %s 次）",
+            label,
+            _extract_115_errno(response),
+            next_delay,
+            attempts,
+        )
+    return {"response": response, "attempts": attempts, "retry_wait_seconds": waited}
+
+
+def wait_115_move_progress(
+    cookie: str,
+    move_proid: str,
+    *,
+    timeout_seconds: Optional[float] = None,
+    interval_seconds: Optional[float] = None,
+) -> Dict[str, Any]:
+    """轮询 ``/files/move_progress``，``progress >= 100`` 视为服务端任务跑完。
+
+    返回 ``status``：``completed`` / ``unknown`` / ``timeout`` / ``skipped``。
+    ``unknown`` 表示 115 返回 990003（任务记录查不到，通常是已结束并被清理）——
+    这时不能判失败，交给落地回验决定。
+    """
+    normalized_cookie = str(cookie or "").strip()
+    task_id = str(move_proid or "").strip()
+    if not normalized_cookie or not task_id:
+        return {"status": "skipped", "progress": None, "polls": 0, "waited_seconds": 0.0}
+    timeout = float(
+        timeout_seconds if timeout_seconds is not None else _115_MOVE_PROGRESS_TIMEOUT_SECONDS
+    )
+    interval = max(
+        0.5,
+        float(
+            interval_seconds
+            if interval_seconds is not None
+            else _115_MOVE_PROGRESS_INTERVAL_SECONDS
+        ),
+    )
+    started = time.monotonic()
+    polls = 0
+    progress: Optional[int] = None
+    while True:
+        throttle_115_api_requests()
+        polls += 1
+        try:
+            response = _request_115_webapi_json(
+                "https://webapi.115.com/files/move_progress?move_proid="
+                + urllib.parse.quote(task_id),
+                headers=_build_115_webapi_headers(normalized_cookie),
+                timeout=20,
+            )
+        except Exception as exc:
+            logging.info("115 移动进度查询失败（继续等待）：%s", str(exc)[:120])
+            response = {}
+        if _extract_115_errno(response) == 990003:
+            return {
+                "status": "unknown",
+                "progress": progress,
+                "polls": polls,
+                "waited_seconds": time.monotonic() - started,
+            }
+        if _is_115_mutation_success(response):
+            try:
+                progress = int(float(str((response or {}).get("progress", "") or 0).strip() or 0))
+            except Exception:
+                progress = None
+            if progress is not None and progress >= 100:
+                return {
+                    "status": "completed",
+                    "progress": progress,
+                    "polls": polls,
+                    "waited_seconds": time.monotonic() - started,
+                }
+        if time.monotonic() - started >= timeout:
+            return {
+                "status": "timeout",
+                "progress": progress,
+                "polls": polls,
+                "waited_seconds": time.monotonic() - started,
+            }
+        time.sleep(interval)
+
+
+def _probe_115_entry_placement(cookie: str, entry_id: str) -> Dict[str, Any]:
+    """直查单个条目当前所在目录（get_info 即时，不受目录列表缓存影响）。"""
+    try:
+        info = get_115_file_info(cookie, entry_id)
+    except Exception as exc:
+        return {"ok": False, "parent_id": "", "name": "", "error": str(exc)[:120]}
+    return {
+        "ok": True,
+        "parent_id": str(info.get("parent_id", "") or "").strip(),
+        "name": str(info.get("name", "") or "").strip(),
+        "error": "",
+    }
+
+
+def _verify_115_entries_placement(
+    cookie: str,
+    expects: List[Dict[str, Any]],
+) -> Tuple[List[str], List[str], List[str]]:
+    """逐条回验：返回 (已落地, 明确还没落地, 查不出来) 的条目 ID 列表。"""
+    landed: List[str] = []
+    pending: List[str] = []
+    unknown: List[str] = []
+    for expect in expects or []:
+        entry_id = str(expect.get("id", "") or "").strip()
+        if not entry_id:
+            continue
+        target_parent = str(expect.get("parent_id", "") or "").strip()
+        expected_name = str(expect.get("name", "") or "").strip()
+        probe = _probe_115_entry_placement(cookie, entry_id)
+        if probe.get("ok"):
+            if probe.get("parent_id") == target_parent and (
+                not expected_name or probe.get("name") == expected_name
+            ):
+                landed.append(entry_id)
+            else:
+                pending.append(entry_id)
+            continue
+        # get_info 查不到（条目已删除 / 查不了）：退回源目录确认它确实搬走了。
+        source_parent = str(expect.get("source_parent_id", "") or "").strip()
+        if source_parent and _verify_115_entries_removed(cookie, [entry_id], source_parent):
+            landed.append(entry_id)
+            continue
+        unknown.append(entry_id)
+    return landed, pending, unknown
+
+
+def wait_115_writes_landed(
+    cookie: str,
+    expects: List[Dict[str, Any]],
+    *,
+    move_proid: str = "",
+    timeout_seconds: Optional[float] = None,
+    interval_seconds: Optional[float] = None,
+    label: str = "115 搬运",
+) -> Dict[str, Any]:
+    """等 115 写操作真正落地：先看移动任务进度，再逐条回验父目录 / 名字。
+
+    ``expects`` 每项形如 ``{"id", "parent_id", "name", "source_parent_id"}``。
+    返回 ``status``：``landed``（全部确认）/ ``pending``（有条目明确还没落地）/
+    ``unknown``（查不出来，不阻塞，但要记日志）。
+    """
+    normalized = [
+        dict(item)
+        for item in (expects or [])
+        if isinstance(item, dict) and str(item.get("id", "") or "").strip()
+    ]
+    if not normalized:
+        return {
+            "status": "landed",
+            "pending_ids": [],
+            "unknown_ids": [],
+            "progress_status": "skipped",
+            "waited_seconds": 0.0,
+            "attempts": 0,
+        }
+    timeout = float(
+        timeout_seconds if timeout_seconds is not None else _115_MOVE_PROGRESS_TIMEOUT_SECONDS
+    )
+    interval = max(
+        0.5,
+        float(
+            interval_seconds
+            if interval_seconds is not None
+            else _115_MOVE_PROGRESS_INTERVAL_SECONDS
+        ),
+    )
+    started = time.monotonic()
+    progress = (
+        wait_115_move_progress(
+            cookie,
+            move_proid,
+            timeout_seconds=timeout,
+            interval_seconds=interval,
+        )
+        if str(move_proid or "").strip()
+        else {"status": "skipped", "progress": None, "polls": 0, "waited_seconds": 0.0}
+    )
+    checkable = normalized[:_115_LANDING_VERIFY_MAX_ENTRIES]
+    # 超过逐条回验上限的条目（整理任务一批 100 条）只靠服务端进度兜底：
+    # progress 没跑到 100 就算「待确认」，不能默认当成功。
+    overflow_ids = [
+        str(item.get("id", "") or "").strip()
+        for item in normalized[_115_LANDING_VERIFY_MAX_ENTRIES:]
+    ]
+    pending_ids: List[str] = []
+    unknown_ids: List[str] = []
+    rounds = 0
+    while True:
+        rounds += 1
+        _, pending_ids, unknown_ids = _verify_115_entries_placement(cookie, checkable)
+        if not pending_ids or rounds >= _115_LANDING_VERIFY_ROUNDS:
+            break
+        if time.monotonic() - started >= timeout:
+            break
+        time.sleep(interval)
+    if overflow_ids and str(progress.get("status", "") or "") != "completed":
+        pending_ids = list(dict.fromkeys(list(pending_ids) + overflow_ids))
+    waited = time.monotonic() - started
+    if pending_ids:
+        status = "pending"
+    elif unknown_ids:
+        status = "unknown"
+    else:
+        status = "landed"
+    if status != "landed":
+        logging.info(
+            "%s 落地确认未全部通过（status=%s，等待 %.1fs，进度=%s，pending=%s，unknown=%s）",
+            label,
+            status,
+            waited,
+            progress.get("status"),
+            pending_ids[:5],
+            unknown_ids[:5],
+        )
+    return {
+        "status": status,
+        "pending_ids": pending_ids,
+        "unknown_ids": unknown_ids,
+        "progress_status": progress.get("status"),
+        "progress": progress.get("progress"),
+        "waited_seconds": waited,
+        "attempts": rounds,
+    }
+
+
 def rename_115_entries(cookie: str, renames: Dict[str, str], parent_cid: str = "") -> Dict[str, Any]:
     """一次请求批量重命名多个条目（官方 batch_rename 支持多个 files_new_name[id]=名字）。"""
     normalized_cookie = str(cookie or "").strip()
@@ -1051,27 +1377,29 @@ def rename_115_entries(cookie: str, renames: Dict[str, str], parent_cid: str = "
             "Origin": "https://115.com",
             "User-Agent": "Mozilla/5.0 115-media-hub",
         }
-        response = http_request_form_json(
-            "https://webapi.115.com/files/batch_rename",
-            {
-                f"files_new_name[{entry_id}]": name
-                for entry_id, name in normalized_renames.items()
-            },
-            timeout=60,
-            extra_headers=headers,
+        outcome = _call_115_write_with_retry(
+            lambda: http_request_form_json(
+                "https://webapi.115.com/files/batch_rename",
+                {
+                    f"files_new_name[{entry_id}]": name
+                    for entry_id, name in normalized_renames.items()
+                },
+                timeout=60,
+                extra_headers=headers,
+            ),
+            label="115 重命名",
         )
-        success = bool((response or {}).get("state")) or int((response or {}).get("errno", 0) or 0) == 0
-        if not success:
-            detail = (
-                str((response or {}).get("error", "")).strip()
-                or str((response or {}).get("msg", "")).strip()
-                or str((response or {}).get("message", "")).strip()
-                or "115 重命名失败"
-            )
-            raise RuntimeError(detail)
+        response = outcome["response"]
+        if not _is_115_mutation_success(response):
+            raise RuntimeError(_115_write_error_detail(response, "115 重命名失败"))
         invalidate_115_entries_cache(parent_cid)
         mark_cookie_health_success("115", trigger="runtime:rename_115_entries")
-        return {"renames": normalized_renames, "response": response}
+        return {
+            "renames": normalized_renames,
+            "response": response,
+            "attempts": outcome["attempts"],
+            "retry_wait_seconds": outcome["retry_wait_seconds"],
+        }
     except Exception as exc:
         mark_cookie_health_failure("115", exc, trigger="runtime:rename_115_entries")
         raise
@@ -1090,7 +1418,19 @@ def rename_115_entry(cookie: str, entry_id: str, new_name: str, parent_cid: str 
     }
 
 
-def move_115_entries(cookie: str, entry_ids: List[str], target_cid: str, source_cid: str = "") -> Dict[str, Any]:
+def move_115_entries(
+    cookie: str,
+    entry_ids: List[str],
+    target_cid: str,
+    source_cid: str = "",
+    *,
+    move_proid: str = "",
+) -> Dict[str, Any]:
+    """移动文件/目录。
+
+    带上客户端生成的 ``move_proid``：115 会按这个 id 记 ``/files/move_progress``，
+    调用方据此判断"这次移动跑完了没有"。同一个 id 跨重试复用，服务端不会重复执行。
+    """
     normalized_cookie = str(cookie or "").strip()
     if not normalized_cookie:
         raise RuntimeError("115 Cookie 未配置")
@@ -1098,6 +1438,7 @@ def move_115_entries(cookie: str, entry_ids: List[str], target_cid: str, source_
     if not ids:
         raise RuntimeError("请选择要移动的文件")
     target_id = str(target_cid or "0").strip() or "0"
+    task_id = str(move_proid or "").strip() or _generate_115_move_proid()
     try:
         headers = {
             "Cookie": normalized_cookie,
@@ -1106,27 +1447,32 @@ def move_115_entries(cookie: str, entry_ids: List[str], target_cid: str, source_
             "Origin": "https://115.com",
             "User-Agent": "Mozilla/5.0 115-media-hub",
         }
-        payload = {"pid": target_id}
-        payload.update(_build_115_indexed_fid_payload(ids))
-        response = http_request_form_json(
-            "https://webapi.115.com/files/move",
-            payload,
-            timeout=60,
-            extra_headers=headers,
-        )
-        success = bool((response or {}).get("state")) or int((response or {}).get("errno", 0) or 0) == 0
-        if not success:
-            detail = (
-                str((response or {}).get("error", "")).strip()
-                or str((response or {}).get("msg", "")).strip()
-                or str((response or {}).get("message", "")).strip()
-                or "115 移动失败"
+
+        def _call() -> Dict[str, Any]:
+            payload = {"pid": target_id, "move_proid": task_id}
+            payload.update(_build_115_indexed_fid_payload(ids))
+            return http_request_form_json(
+                "https://webapi.115.com/files/move",
+                payload,
+                timeout=60,
+                extra_headers=headers,
             )
-            raise RuntimeError(detail)
+
+        outcome = _call_115_write_with_retry(_call, label="115 移动")
+        response = outcome["response"]
+        if not _is_115_mutation_success(response):
+            raise RuntimeError(_115_write_error_detail(response, "115 移动失败"))
         invalidate_115_entries_cache(source_cid)
         invalidate_115_entries_cache(target_id)
         mark_cookie_health_success("115", trigger="runtime:move_115_entries")
-        return {"ids": ids, "target_cid": target_id, "response": response}
+        return {
+            "ids": ids,
+            "target_cid": target_id,
+            "response": response,
+            "move_proid": task_id,
+            "attempts": outcome["attempts"],
+            "retry_wait_seconds": outcome["retry_wait_seconds"],
+        }
     except Exception as exc:
         mark_cookie_health_failure("115", exc, trigger="runtime:move_115_entries")
         raise
@@ -1148,26 +1494,30 @@ def copy_115_entries(cookie: str, entry_ids: List[str], target_cid: str, source_
             "Origin": "https://115.com",
             "User-Agent": "Mozilla/5.0 115-media-hub",
         }
-        payload = {"pid": target_id}
-        payload.update(_build_115_indexed_fid_payload(ids))
-        response = http_request_form_json(
-            "https://webapi.115.com/files/copy",
-            payload,
-            timeout=60,
-            extra_headers=headers,
-        )
-        success = bool((response or {}).get("state")) or int((response or {}).get("errno", 0) or 0) == 0
-        if not success:
-            detail = (
-                str((response or {}).get("error", "")).strip()
-                or str((response or {}).get("msg", "")).strip()
-                or str((response or {}).get("message", "")).strip()
-                or "115 复制失败"
+
+        def _call() -> Dict[str, Any]:
+            payload = {"pid": target_id}
+            payload.update(_build_115_indexed_fid_payload(ids))
+            return http_request_form_json(
+                "https://webapi.115.com/files/copy",
+                payload,
+                timeout=60,
+                extra_headers=headers,
             )
-            raise RuntimeError(detail)
+
+        outcome = _call_115_write_with_retry(_call, label="115 复制")
+        response = outcome["response"]
+        if not _is_115_mutation_success(response):
+            raise RuntimeError(_115_write_error_detail(response, "115 复制失败"))
         invalidate_115_entries_cache(target_id)
         mark_cookie_health_success("115", trigger="runtime:copy_115_entries")
-        return {"ids": ids, "target_cid": target_id, "response": response}
+        return {
+            "ids": ids,
+            "target_cid": target_id,
+            "response": response,
+            "attempts": outcome["attempts"],
+            "retry_wait_seconds": outcome["retry_wait_seconds"],
+        }
     except Exception as exc:
         mark_cookie_health_failure("115", exc, trigger="runtime:copy_115_entries")
         raise
@@ -1264,12 +1614,16 @@ def delete_115_entries(cookie: str, entry_ids: List[str], parent_cid: str = "") 
         last_exc = None
         for use_app_endpoint in (False, True):
             try:
-                response = _request_115_delete_payload(
-                    normalized_cookie,
-                    ids,
-                    parent_cid=parent_cid,
-                    use_app_endpoint=use_app_endpoint,
+                outcome = _call_115_write_with_retry(
+                    lambda use_app_endpoint=use_app_endpoint: _request_115_delete_payload(
+                        normalized_cookie,
+                        ids,
+                        parent_cid=parent_cid,
+                        use_app_endpoint=use_app_endpoint,
+                    ),
+                    label="115 删除",
                 )
+                response = outcome["response"]
             except Exception as exc:
                 last_exc = exc
                 last_error = str(exc).strip() or "115 删除失败"
@@ -1279,13 +1633,7 @@ def delete_115_entries(cookie: str, entry_ids: List[str], parent_cid: str = "") 
                 invalidate_115_entries_cache(parent_cid)
                 mark_cookie_health_success("115", trigger="runtime:delete_115_entries")
                 return {"ids": ids, "response": response}
-            last_error = (
-                str((response or {}).get("error", "")).strip()
-                or str((response or {}).get("msg", "")).strip()
-                or str((response or {}).get("message", "")).strip()
-                or str((response or {}).get("err_msg", "")).strip()
-                or "115 删除失败"
-            )
+            last_error = _115_write_error_detail(response, "115 删除失败")
         detail = last_error or "115 删除失败"
         if len(responses) > 1:
             detail = f"{detail}（webapi/proapi 均未成功）"

@@ -1098,6 +1098,20 @@ def _move_entries_into_folder(
     )
 
 
+def _dispatch_landing(dispatch: Dict[str, Any]) -> Dict[str, Any]:
+    """取一条分发结果里的落地确认信息（缺省视为已确认，兼容旧调用方 / mock）。"""
+    landing = dispatch.get("landing") if isinstance(dispatch, dict) else {}
+    return landing if isinstance(landing, dict) else {}
+
+
+def _dispatch_pending_ids(dispatch: Dict[str, Any]) -> List[str]:
+    return [
+        str(value)
+        for value in (_dispatch_landing(dispatch).get("pending_ids") or [])
+        if str(value or "").strip()
+    ]
+
+
 def _merge_organized_folder_into_existing(
     source_folder: Dict[str, Any],
     source_rel: str,
@@ -1127,6 +1141,7 @@ def _merge_organized_folder_into_existing(
     skipped: List[str] = []
     cleanup_pending: List[Dict[str, str]] = []
     pending_moves: List[Dict[str, Any]] = []
+    pending_landing_ids: List[str] = []
     target_names = _folder_entry_names(target_id, name_cache, provider)
     for child in _folder_children_payload(source_id, source_rel, provider):
         child_id = str(child.get("id", "") or "").strip()
@@ -1155,8 +1170,10 @@ def _merge_organized_folder_into_existing(
                 monitor_sync_events += int(nested.get("monitor_sync_events", 0) or 0)
                 skipped.extend(nested.get("skipped") or [])
                 cleanup_pending.extend(nested.get("cleanup_pending") or [])
-                if not nested.get("skipped"):
+                pending_landing_ids.extend(nested.get("pending_ids") or [])
+                if not nested.get("skipped") and not nested.get("pending_ids"):
                     # 内容已经并过去了，删空目录只是收尾：失败不能连累搬运结果。
+                    # 还没确认落地时不删——源目录里内容可能还在，删它只会白报一次错。
                     try:
                         scraper_service.delete_scraper_entries(
                             provider,
@@ -1192,11 +1209,13 @@ def _merge_organized_folder_into_existing(
         )
         moved_count += len(pending_moves)
         monitor_sync_events += max(0, int(((move_result.get("monitor_sync") or {}).get("event_count", 0) or 0)))
+        pending_landing_ids.extend(_dispatch_pending_ids(move_result))
     return {
         "moved_count": moved_count,
         "monitor_sync_events": monitor_sync_events,
         "skipped": skipped,
         "cleanup_pending": cleanup_pending,
+        "pending_ids": pending_landing_ids,
     }
 
 
@@ -1237,7 +1256,12 @@ def _dispatch_organized_entry(
             monitor_run_id=monitor_run_id,
             provider=provider,
         )
-        return {"merged": False, "skipped": [], "monitor_sync_events": max(0, int(((move_result.get("monitor_sync") or {}).get("event_count", 0) or 0)))}
+        return {
+            "merged": False,
+            "skipped": [],
+            "monitor_sync_events": max(0, int(((move_result.get("monitor_sync") or {}).get("event_count", 0) or 0))),
+            "landing": _dispatch_landing(move_result),
+        }
 
     existing_name = str((existing or {}).get("name", "") or entry_name).strip() or entry_name
     merged_target_rel = normalize_relative_path(join_relative_path(target_rel, existing_name))
@@ -1254,7 +1278,14 @@ def _dispatch_organized_entry(
             monitor_run_id=monitor_run_id,
             provider=provider,
         )
-        return {"merged": True, "skipped": [], "target_folder": existing_name, "moved_count": 1, "monitor_sync_events": max(0, int(((move_result.get("monitor_sync") or {}).get("event_count", 0) or 0)))}
+        return {
+            "merged": True,
+            "skipped": [],
+            "target_folder": existing_name,
+            "moved_count": 1,
+            "monitor_sync_events": max(0, int(((move_result.get("monitor_sync") or {}).get("event_count", 0) or 0))),
+            "landing": _dispatch_landing(move_result),
+        }
 
     outcome = _merge_organized_folder_into_existing(
         entry,
@@ -1269,9 +1300,11 @@ def _dispatch_organized_entry(
     )
     skipped = list(outcome.get("skipped") or [])
     cleanup_pending = list(outcome.get("cleanup_pending") or [])
-    if not skipped:
+    pending_landing_ids = list(outcome.get("pending_ids") or [])
+    if not skipped and not pending_landing_ids:
         # 内容已经全部并进目标文件夹，接收夹里那个空文件夹要清掉；清理失败只记
         # “待清理”，不能把已经成功的搬运判成失败。
+        # 还没确认落地时不删：内容可能还在源文件夹里，删不动反而多一条“待清理”。
         try:
             scraper_service.delete_scraper_entries(
                 provider,
@@ -1296,6 +1329,7 @@ def _dispatch_organized_entry(
         "target_folder": existing_name,
         "moved_count": int(outcome.get("moved_count", 0) or 0),
         "monitor_sync_events": int(outcome.get("monitor_sync_events", 0) or 0),
+        "landing": {"pending_ids": pending_landing_ids},
     }
 
 
@@ -1930,6 +1964,21 @@ def _run_inbox_quick_import(
                                     "reason": (
                                         f"目标文件夹「{dispatch.get('target_folder', '')}」中已存在同名文件："
                                         f"{'、'.join(str(value) for value in dispatch.get('skipped') or [])[:120]}"
+                                    ),
+                                }
+                            )
+                            continue
+                        pending_landing_ids = _dispatch_pending_ids(dispatch)
+                        if pending_landing_ids:
+                            # 115 只是"受理"了搬运请求，还没回验到真的落地：这轮不排同步扫描、
+                            # 不当成功，条目留在接收夹等下一轮重试——否则就是"文件没搬走却先扫目录"。
+                            left.append(
+                                {
+                                    "name": str(item.get("name", "") or ""),
+                                    "reason_code": "dispatch_pending",
+                                    "reason": (
+                                        "已提交给 115，但等待落地确认超时，本轮未触发同步；"
+                                        f"下一轮自动重试（{len(pending_landing_ids)} 项未确认落地）"
                                     ),
                                 }
                             )

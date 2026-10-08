@@ -2141,6 +2141,7 @@ class QuickImportMergeIntoExistingFolderTest(unittest.TestCase):
         entry=None,
         options_sink=None,
         delete_side_effect=None,
+        move_landing=None,
     ):
         """跑一次快捷导入：接收夹里一个已整理好的「王子与乞丐 (2026)」文件夹。"""
         cfg = _cfg()
@@ -2189,6 +2190,8 @@ class QuickImportMergeIntoExistingFolderTest(unittest.TestCase):
             names_by_cid.setdefault(str(target_cid), []).extend(
                 str(item.get("name", "") or "") for item in kwargs.get("entries") or []
             )
+            if move_landing:
+                return {"landing": dict(move_landing)}
             return {}
 
         def fake_plan(provider, items, picked, options, **kwargs):
@@ -2292,6 +2295,33 @@ class QuickImportMergeIntoExistingFolderTest(unittest.TestCase):
         self.assertEqual(moves, [])
         self.assertEqual(deletes, [])
         self.assertIn("已存在同名文件", result["left"][0]["reason"])
+
+    def test_pending_landing_stays_in_inbox_and_skips_sync(self):
+        """115 只受理了搬运、还没回验到落地时：不排目录同步，条目留在接收夹等下一轮重试。
+
+        旧行为是只要接口返回 state=true 就当成搬完了，接着去扫目标目录；文件其实还在
+        路上，扫描自然找不到，重试几轮后整条整理报「搬运失败」。
+        """
+        result, moves, deletes = self._run_once(
+            existing_map={("cid:电视剧", "王子与乞丐 (2026)"): {"id": "target-folder", "name": "王子与乞丐 (2026)"}},
+            folder_children={
+                "inbox-folder": [{"id": "f1", "name": "王子与乞丐 (2026) - S01E01.mkv", "is_dir": False}]
+            },
+            move_landing={"status": "pending", "pending_ids": ["f1"], "waited_seconds": 30},
+        )
+
+        # 搬运请求确实发出去了（115 受理），但没确认落地，所以不能算搬运成功。
+        self.assertEqual(len(moves), 1)
+        self.assertEqual(result["moved"], [])
+        self.assertEqual([item["reason_code"] for item in result["left"]], ["dispatch_pending"])
+        self.assertIn("未确认落地", result["left"][0]["reason"])
+        # 不能按“搬完了”去排队扫目标目录。
+        self.assertTrue(
+            all(not call.args[2] for call in self._child_run_mock.call_args_list),
+            self._child_run_mock.call_args_list,
+        )
+        # 接收夹残留清理也留到下一轮（这轮不知道内容到底走没走）。
+        self.assertEqual(deletes, [])
 
     def test_cleanup_delete_failure_keeps_dispatch_success(self):
         """内容已经搬进目标、只是接收夹空目录没删掉时，不能判成“搬运失败、留在接收夹”。"""

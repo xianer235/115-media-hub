@@ -14,10 +14,11 @@
 - **分支**: `main`，与 `origin/main` 一致（接收夹解耦批已推送）
 - **版本**: `0.14.1`（`version.json` 是唯一真源，与 `CHANGELOG.md` 顶部一致；0.14.1 修复与元数据同步在未提交改动里）
 - **最近提交**: `35da703` Decouple inbox tasks from folder monitoring per provider（2026-10-08，接收夹解耦批 + 0.14.0 发布元数据，已推送）
-- **工作区**: 未提交改动 = **0.14.1 修复批**（推广话术命名的假视频不再生成本地 STRM）——`app/services/scraper.py` 连续剥已知后缀链（`.mkv.strm` / `.mp4.DOC`）+ 裸域名算广告残留 + `other` 扩展名纳入「整段只有推广话术」判定；`app/services/monitor.py` 扫描跳过广告文件并计 `skipped_ad_files`、`app/core.py`「生成汇总」补「（含广告 N）」；`app/services/monitor_changes.py` 与 `app/services/tree.py` 同口径。同批还有 0.14.1 元数据（`version.json` / `CHANGELOG.md` / `README.md`）与回归、文档。接收夹解耦批（含 0.14.0 元数据）已在 **`35da703`** 推送，详细内容见该提交与 `handoff.md` 历史条目。
+- **工作区**: 未提交改动 = **0.14.1 发布批**（广告名假视频不再生成本地 STRM，见 `CHANGELOG.md`）**＋ 115 写操作「受理 + 回验落地」修复批**（`app/providers/pan115.py` 忙响应退避重试 + `move_proid` 查进度 + 逐条回验父目录 / 名字；`app/services/scraper.py`、`app/services/quick_import.py` 没确认落地就不排 STRM 同步、不删接收夹源目录，条目留接收夹等下一轮；spec：`docs/superpowers/specs/2026-10-08-115-move-task-acceptance.md`）。接收夹解耦批（含 0.14.0 元数据）已在 **`35da703`** 推送，详细内容见该提交与 `handoff.md` 历史条目。
 
 ## 最近一次验证
 
+- 完整 `unittest discover -s tests -p 'test_*.py'` **1247 项零失败**（2026-10-08，115 写操作「受理 + 回验落地」：`pan115._call_115_write_with_retry`（忙响应 1/2/4/8 秒退避）/ `wait_115_move_progress` / `wait_115_writes_landed`（逐条回验，超 50 条按进度兜底）/ `get_115_file_info` 补 `parent_id`+`is_dir`；`scraper` 的搬运 / 改名与整理任务三步批量按 `landing` 收尾、未落地转 `needs_reconcile`；`quick_import` 待落地留条不排同步不删源。108s；新增 `tests.test_115_list_pagination.Pan115MoveAcceptanceTest` 11 项、`tests.test_scraper_monitor_sync.ScraperMoveLandingTest` 3 项、`tests.test_quick_import` 1 项；`scripts/check.sh --all`、`compileall app main.py`、`git diff --check`、`handoff.md` 体积预算（31780/32768）均通过。**实盘只做过只读探测，未在真实账号重放写入**）。
 - 完整 `unittest discover -s tests -p 'test_*.py'` **1231 项零失败**（2026-10-08，0.14.1 发布前复跑：广告名不再生成本地 STRM + 广告识别扩展叠后缀 / 裸域名 / `other` 扩展名，107s）；`version.json` 解析通过且与 `CHANGELOG.md` 顶部版本号（`0.14.1`）一致；`compileall app main.py`、`git diff --check`、`handoff.md` 体积预算（32548/32768）均通过。
 - `scripts/check.sh tests.test_monitor_dir_scan tests.test_scraper_batch_organize tests.test_scraper_monitor_sync tests.test_tree_streaming_sync tests.test_tree_tasks tests.test_monitor_dir_rescan tests.test_monitor_runs tests.test_monitor_log_readability tests.test_modules_doc` **428 项零失败**（2026-10-08，推广话术假视频不再生成 STRM + 广告识别扩到 `.mkv.strm` / `.DOC`：`app/services/scraper.py` 新增 `SCRAPER_STRIPPABLE_EXTENSIONS` / `_strip_scraper_compound_extensions` / `_SCRAPER_AD_NAME_DOMAIN_RE`，`_is_scraper_promotional_only` 先剥后缀链再判残留，`_is_scraper_ad_file` 的 `other` 分支纳入「整段只有推广话术」；`app/services/monitor.py` 扫描跳过广告文件并计 `skipped_ad_files`、`app/core.py`「生成汇总」补「（含广告 N）」、`monitor_changes._file_passes_filters` 与 `tree._scan_tree_text` 同口径；`tests.test_scraper_batch_organize` 新增 2 项、`tests.test_monitor_dir_scan` 新增 1 项）。
 - `scripts/check.sh --all` 全量 **1228 项零失败**（2026-10-08，0.14.0 发布前复跑：接收夹按网盘隔离三层 + 落盘宽限重扫 + 发布元数据，106s；`compileall app main.py cli.py`、改动 JS `node --check`、`git diff --check`、`handoff.md` 体积预算 32502/32768 均通过）。
@@ -48,6 +49,8 @@
 
 ## 待办 / 未完成
 
+- 容器重建后实测**115 写操作「受理 + 回验落地」修复批**（未提交）：① 接收夹里同时来多部影视，点「立即整理并分发」不再出现「移动[...]操作尚未执行完成，请稍后再试!」，也不再出现「文件没搬走却先扫目录」；② 若 115 受理后 30 秒内没回验到落地，条目应留在接收夹并写明「已提交给 115，但等待落地确认超时」，同时目标目录的同步事件由 `needs_reconcile` 兜底补扫；③ 确认已落地的那一批仍然照常生成 STRM（`move_progress` 到 100 → 回验父目录 / 名字通过）。实盘只做过只读探测（列目录、进度查询、`get_info`），写入路径没有被真实重放过。
+- 未做：①（2026-09-18 spec §五 遗留）115 系统目录（我的接收 / 最近接收 / 离线下载 / 礼包文件）当接收夹 / 目标的拦截与提示、整理链路的 source→target 审计记录；②（2026-10-08 新增）订阅的磁力 / 电驴离线入库（`app/services/subscription_task_runner.py:1536`）仍是「受理完就刷监控」——已吃到忙响应退避重试，但没接落地回验，做法见 `docs/superpowers/specs/2026-10-08-115-move-task-acceptance.md` §六。
 - 容器重建后实测**接收夹按网盘隔离的修复批**（未提交）：① 115 与夸克各一个接收夹，点其中一张卡片的「立即整理并分发」，另一张不应进入运行中；② 在某张卡片点「中断」不应打断另一张正在跑的整理；③ 两张卡片的「最近接收 24 小时」「最近整理」互相独立（同名 `/接收` 不再串账）；④ 夸克分享转存进接收夹后大文件夹也能在宽限期内被整理（不再空跑「没有可整理的内容」）；⑤ 禁用其中一个接收夹后，资源导入弹窗提示「已停用，保存后不会自动整理」。
 - 已定口径（2026-10-08）：**通知只保留文件夹监控与订阅两条，接收夹整理不推通知**（成功 / 失败 / 留守都只在监控日志与卡片状态里看），原计划的「Task 7 接收夹通知」取消；手工放进接收夹不自动触发（只能定时 / 手动 / webhook）、不同网盘不并行整理（一把全局锁顺序跑），均维持现状。
 - 容器重建后实测**非 115 接收夹整理分发**（夸克 / 天翼 / 123 / 阿里）：点「立即整理并分发」能识别 → 整理 → 搬进同盘目标（不再报「目标路径操作当前仅支持 115」）；重点复核目标目录**没有**同名文件夹时（整包搬运）与**已有**同名文件夹时（并入）两条分支都走对网盘。

@@ -62,6 +62,10 @@
    “先 `move_scraper_entries` 再 `delete_scraper_entries`”；`move_115_entries`
    （`app/providers/pan115.py:1093`）只判断接口返回的 `state/errno`，没有再去目标目录确认该条目确实出现。
    若遇到“move 返回成功但未真实移动”的边界情况，后续删源会把文件误移进回收站。
+   **已于 2026-10-08 修复**：`move_115_entries` 现在带 `move_proid` 并可查 `/files/move_progress`，
+   `wait_115_writes_landed` 会逐条回验父目录 / 名字，只有确认落地才删源目录、才把监控同步按成功收尾；
+   未确认落地时条目留在接收夹等下一轮，详见
+   `docs/superpowers/specs/2026-10-08-115-move-task-acceptance.md`。
 
 3. **缺 source→target 审计**：`run_quick_import`（`app/services/quick_import.py:609`）里 `moved` 只记录
    `{name, target, task_name, job_id}`，没有来源 cid/路径与目标 cid/路径，出事后难精确回滚追查。

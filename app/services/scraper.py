@@ -2,12 +2,14 @@ import os
 import re
 import unicodedata
 import uuid
+import logging
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..core import *  # noqa: F401,F403
 from ..db import db_connection
 from ..providers.pan115 import (
+    _115_RENAME_WAIT_SECONDS,
     invalidate_115_entries_cache,
     list_115_entries_payload,
     rename_115_entries,
@@ -15,6 +17,7 @@ from ..providers.pan115 import (
     resolve_115_folder_id_by_path,
     resolve_115_folder_path,
     search_115_entries,
+    wait_115_writes_landed,
 )
 from ..providers.registry import get_or_none as get_provider_or_none, list_enabled as list_enabled_providers
 from ..media_tags import media_tag_labels, parse_media_tags, remove_media_tags
@@ -610,8 +613,19 @@ def _rename_provider_entry(provider: str, cookie: str, entry_id: str, new_name: 
     return p.rename_entry(cookie, entry_id, new_name, parent_id)
 
 
-def _rename_provider_entries(provider: str, cookie: str, renames: Dict[str, str], parent_id: str = "") -> Dict[str, Any]:
-    """批量重命名（115 官方 batch_rename 一次传多个；其他网盘逐条回退）。"""
+def _rename_provider_entries(
+    provider: str,
+    cookie: str,
+    renames: Dict[str, str],
+    parent_id: str = "",
+    *,
+    verify_landing: bool = True,
+) -> Dict[str, Any]:
+    """批量重命名（115 官方 batch_rename 一次传多个；其他网盘逐条回退）。
+
+    返回里带 ``landing``：115 写操作是排队的，只有回验到新名字 / 新父目录才算真的落地，
+    调用方据此决定要不要把监控同步事件按"成功"收尾。
+    """
     _require_scraper_operation(provider, "rename", "重命名")
     normalized = normalize_scraper_provider(provider)
     normalized_renames: Dict[str, str] = {}
@@ -623,17 +637,62 @@ def _rename_provider_entries(provider: str, cookie: str, renames: Dict[str, str]
     if not normalized_renames:
         raise RuntimeError("重命名条目不能为空")
     if normalized == "115":
-        return rename_115_entries(cookie, normalized_renames, parent_cid=parent_id)
+        result = dict(rename_115_entries(cookie, normalized_renames, parent_cid=parent_id) or {})
+        if verify_landing:
+            result["landing"] = _await_provider_writes_landed(
+                provider,
+                cookie,
+                [
+                    {
+                        "id": entry_id,
+                        "parent_id": str(parent_id or "").strip(),
+                        "name": name,
+                        "source_parent_id": str(parent_id or "").strip(),
+                    }
+                    for entry_id, name in normalized_renames.items()
+                ],
+                kind="rename",
+            )
+        return result
     responses = []
     for entry_id, name in normalized_renames.items():
         responses.append(_rename_provider_entry(provider, cookie, entry_id, name, parent_id))
     return {"renames": normalized_renames, "responses": responses}
 
 
-def _move_provider_entries(provider: str, cookie: str, entry_ids: List[str], target_id: str, source_id: str = "") -> Dict[str, Any]:
+def _move_provider_entries(
+    provider: str,
+    cookie: str,
+    entry_ids: List[str],
+    target_id: str,
+    source_id: str = "",
+    *,
+    verify_landing: bool = True,
+) -> Dict[str, Any]:
+    """移动条目；115 额外等它真正落地（progress + 父目录回验）。
+
+    ``verify_landing=False`` 只给失败恢复 / 回滚这类"尽力而为"的路径用，避免拖慢救援。
+    """
     _require_scraper_operation(provider, "move", "移动")
     p = get_provider_or_none(provider)
-    return p.move_entries(cookie, entry_ids, target_id, source_id)
+    result = dict(p.move_entries(cookie, entry_ids, target_id, source_id) or {})
+    if verify_landing:
+        result["landing"] = _await_provider_writes_landed(
+            provider,
+            cookie,
+            [
+                {
+                    "id": str(entry_id or "").strip(),
+                    "parent_id": str(target_id or "").strip(),
+                    "source_parent_id": str(source_id or "").strip(),
+                }
+                for entry_id in (entry_ids or [])
+                if str(entry_id or "").strip()
+            ],
+            move_proid=str(result.get("move_proid", "") or ""),
+            kind="move",
+        )
+    return result
 
 
 def _copy_provider_entries(provider: str, cookie: str, entry_ids: List[str], target_id: str, source_id: str = "") -> Dict[str, Any]:
@@ -651,6 +710,108 @@ def _delete_provider_entries(provider: str, cookie: str, entry_ids: List[str], p
 def _invalidate_provider_parent(provider: str, parent_id: str = "") -> None:
     if provider == "115":
         invalidate_115_entries_cache(parent_id)
+
+
+_LANDING_LANDED_RESULT: Dict[str, Any] = {
+    "status": "landed",
+    "pending_ids": [],
+    "unknown_ids": [],
+    "progress_status": "skipped",
+    "waited_seconds": 0.0,
+    "attempts": 0,
+}
+
+
+def _await_provider_writes_landed(
+    provider: str,
+    cookie: str,
+    expects: List[Dict[str, Any]],
+    *,
+    move_proid: str = "",
+    kind: str = "move",
+) -> Dict[str, Any]:
+    """等 115 写操作真正落地（先看移动任务进度，再逐条回验父目录 / 名字）。
+
+    只有 115 需要；其他网盘接口是同步的，直接返回"已落地"。
+    确认超时 / 查不出来不是搬运失败——由调用方决定按成功收尾还是走 needs_reconcile 兜底。
+    """
+    normalized = normalize_scraper_provider(provider)
+    checkable = [
+        item
+        for item in (expects or [])
+        if isinstance(item, dict) and str(item.get("id", "") or "").strip()
+    ]
+    if normalized != "115" or not checkable:
+        return dict(_LANDING_LANDED_RESULT)
+    kind_label = "改名" if kind == "rename" else "移动"
+    try:
+        return wait_115_writes_landed(
+            cookie,
+            checkable,
+            move_proid=str(move_proid or "").strip(),
+            timeout_seconds=_115_RENAME_WAIT_SECONDS if kind == "rename" else None,
+            label=f"115 {kind_label}",
+        )
+    except Exception as exc:
+        logging.info("115 %s 落地确认失败（不影响搬运结果）：%s", kind_label, str(exc)[:120])
+        return {
+            **_LANDING_LANDED_RESULT,
+            "status": "unknown",
+            "unknown_ids": [str(item.get("id", "") or "").strip() for item in checkable],
+            "progress_status": "error",
+        }
+
+
+def _landing_pending_detail(landing: Optional[Dict[str, Any]]) -> str:
+    """未确认落地时的说明文字；返回空串表示可以按成功收尾。"""
+    if not isinstance(landing, dict):
+        return ""
+    pending_ids = [str(value) for value in (landing.get("pending_ids") or []) if str(value or "").strip()]
+    if not pending_ids:
+        return ""
+    waited = int(float(landing.get("waited_seconds", 0) or 0))
+    progress = str(landing.get("progress_status", "") or "")
+    tail = f"，进度={progress}" if progress and progress != "skipped" else ""
+    return f"已提交给 115，但等待 {waited} 秒仍未确认落地（{len(pending_ids)} 项{tail}）"
+
+
+def _merge_scraper_landing_results(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """把多阶段写操作各自的 landing 合并成一份（批量整理收尾判断用）。"""
+    pending: List[str] = []
+    unknown: List[str] = []
+    waited = 0.0
+    progress_statuses: List[str] = []
+    for result in results or []:
+        landing = result.get("landing") if isinstance(result, dict) else {}
+        if not isinstance(landing, dict) or not landing:
+            continue
+        pending.extend(str(value) for value in (landing.get("pending_ids") or []) if str(value or "").strip())
+        unknown.extend(str(value) for value in (landing.get("unknown_ids") or []) if str(value or "").strip())
+        waited = max(waited, float(landing.get("waited_seconds", 0) or 0))
+        status = str(landing.get("progress_status", "") or "").strip()
+        if status:
+            progress_statuses.append(status)
+    return {
+        "status": "pending" if pending else ("unknown" if unknown else "landed"),
+        "pending_ids": list(dict.fromkeys(pending)),
+        "unknown_ids": list(dict.fromkeys(unknown)),
+        "progress_status": ",".join(dict.fromkeys(progress_statuses)),
+        "waited_seconds": waited,
+        "attempts": len(results or []),
+    }
+
+
+def _finish_scraper_syncs_with_landing(
+    prepared_syncs: List[Dict[str, Any]],
+    landing: Optional[Dict[str, Any]],
+) -> None:
+    """按"是否确认落地"收尾监控同步事件：落地按成功，否则交给 needs_reconcile 兜底。"""
+    detail = _landing_pending_detail(landing)
+    for prepared_sync in prepared_syncs or []:
+        if detail:
+            _finish_scraper_monitor_sync(prepared_sync, succeeded=False, error=detail)
+        else:
+            _finish_scraper_monitor_sync(prepared_sync, succeeded=True)
 
 
 def _compact_scraper_entry(entry: Dict[str, Any], parent_id: str = "", parent_path: str = "") -> Dict[str, Any]:
@@ -1028,8 +1189,31 @@ def rename_scraper_entry(
         _finish_scraper_monitor_sync(prepared, succeeded=False, error=str(exc))
         raise
     _invalidate_provider_parent(normalized, parent_id)
-    monitor_sync = _finish_scraper_monitor_sync(prepared, succeeded=True)
-    return {"ok": True, "provider": normalized, "entry": result, "monitor_sync": monitor_sync}
+    landing = _await_provider_writes_landed(
+        normalized,
+        cookie,
+        [
+            {
+                "id": str(entry_id or "").strip(),
+                "parent_id": str(parent_id or "").strip(),
+                "name": str(name or "").strip(),
+                "source_parent_id": str(parent_id or "").strip(),
+            }
+        ],
+        kind="rename",
+    )
+    pending_detail = _landing_pending_detail(landing)
+    if pending_detail:
+        monitor_sync = _finish_scraper_monitor_sync(prepared, succeeded=False, error=pending_detail)
+    else:
+        monitor_sync = _finish_scraper_monitor_sync(prepared, succeeded=True)
+    return {
+        "ok": True,
+        "provider": normalized,
+        "entry": result,
+        "monitor_sync": monitor_sync,
+        "landing": landing,
+    }
 
 
 def check_scraper_folder_rename_warning(provider: str, old_path: str, new_path: str) -> Dict[str, Any]:
@@ -1086,8 +1270,20 @@ def move_scraper_entries(
         raise
     _invalidate_provider_parent(normalized, source_cid)
     _invalidate_provider_parent(normalized, target_cid)
-    monitor_sync = _finish_scraper_monitor_sync(prepared, succeeded=True)
-    return {"ok": True, "provider": normalized, "result": result, "monitor_sync": monitor_sync}
+    landing = result.get("landing") if isinstance(result, dict) else {}
+    pending_detail = _landing_pending_detail(landing)
+    if pending_detail:
+        # 115 收下了请求但还没落地：事件留给 needs_reconcile 兜底补扫，别当成"搬完了"。
+        monitor_sync = _finish_scraper_monitor_sync(prepared, succeeded=False, error=pending_detail)
+    else:
+        monitor_sync = _finish_scraper_monitor_sync(prepared, succeeded=True)
+    return {
+        "ok": True,
+        "provider": normalized,
+        "result": result,
+        "monitor_sync": monitor_sync,
+        "landing": landing,
+    }
 
 
 def copy_scraper_entries(
@@ -4254,12 +4450,13 @@ def _restore_scraper_move_rename_actions(
         rename_back.setdefault(old_parent_id, {})[entry_id] = old_name
     for parent_id, ids in move_back.items():
         try:
-            _move_provider_entries(provider, cookie, ids, parent_id)
+            # 恢复路径只管"尽力挪回去"，不等待落地确认（否则救援会被拖慢甚至超时）。
+            _move_provider_entries(provider, cookie, ids, parent_id, verify_landing=False)
         except Exception:
             pass
     for parent_id, renames in rename_back.items():
         try:
-            _rename_provider_entries(provider, cookie, renames, parent_id=parent_id)
+            _rename_provider_entries(provider, cookie, renames, parent_id=parent_id, verify_landing=False)
         except Exception:
             pass
 
@@ -4371,8 +4568,7 @@ def _execute_scraper_job_batch_forward(
                 renames[str(action.get("entry_id", "") or "").strip()] = str(action.get("new_name", "") or "")
             result = _rename_provider_entries(provider, cookie, renames, parent_id=parent_id)
             _invalidate_provider_parent(provider, parent_id)
-            for prepared_sync in prepared_syncs:
-                _finish_scraper_monitor_sync(prepared_sync, succeeded=True)
+            _finish_scraper_syncs_with_landing(prepared_syncs, result.get("landing"))
             for action, event_action in zip(ready, event_actions):
                 if bool(action.get("is_dir")):
                     path_rewrites.append(
@@ -4571,8 +4767,7 @@ def _execute_scraper_job_batch_forward(
                             for action in chunk:
                                 _invalidate_provider_parent(provider, str(action.get("old_parent_id", "") or "").strip())
                             _invalidate_provider_parent(provider, target_parent_id)
-                            for prepared_sync in prepared_syncs:
-                                _finish_scraper_monitor_sync(prepared_sync, succeeded=True)
+                            _finish_scraper_syncs_with_landing(prepared_syncs, result.get("landing"))
                             for action in chunk:
                                 _mark_completed(action, "已移动", {"moved": True, "response": result.get("response", {})})
                         except Exception as exc:
@@ -4594,6 +4789,7 @@ def _execute_scraper_job_batch_forward(
                 prepared_syncs = []
                 event_actions = []
                 temp_by_action: Dict[int, str] = {}
+                final_landings: List[Dict[str, Any]] = []
                 try:
                     for action in move_rename:
                         event_action = _rebase_scraper_job_action_paths(action, path_rewrites)
@@ -4645,11 +4841,20 @@ def _execute_scraper_job_batch_forward(
                             str(action.get("entry_id", "") or "").strip()
                         ] = str(action.get("new_name", "") or "")
                     for target_parent_id, renames_map in final_renames.items():
-                        _rename_provider_entries(provider, cookie, renames_map, parent_id=target_parent_id)
+                        final_result = _rename_provider_entries(
+                            provider,
+                            cookie,
+                            renames_map,
+                            parent_id=target_parent_id,
+                        )
+                        final_landings.append(final_result)
                         _invalidate_provider_parent(provider, target_parent_id)
 
-                    for prepared_sync in prepared_syncs:
-                        _finish_scraper_monitor_sync(prepared_sync, succeeded=True)
+                    # 三步都发完之后才按"最终名字 + 最终目录"的回验结果收尾监控事件。
+                    _finish_scraper_syncs_with_landing(
+                        prepared_syncs,
+                        _merge_scraper_landing_results(final_landings),
+                    )
                     for action in move_rename:
                         _mark_completed(action, "已整理", {"renamed": True, "moved": True})
                 except Exception as exc:

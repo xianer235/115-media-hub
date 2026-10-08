@@ -4622,5 +4622,85 @@ class ScraperMonitorSyncTest(unittest.TestCase):
         self.assertEqual(owner, "inbox-run")
 
 
+class ScraperMoveLandingTest(unittest.TestCase):
+    """115 移动只是"受理"：只有回验到真的落地，监控同步事件才按成功收尾。
+
+    回归场景：接收夹整理多部影视时连发移动，115 还在排队；旧实现把"受理"当"完成"，
+    先排了目录同步，扫描自然找不到刚搬的内容，整条整理随后报「搬运失败」。
+    """
+
+    def _fake_provider(self, name, response):
+        class _FakeProvider:
+            supports_folder_browse = True
+
+            def __init__(self):
+                self.name = name
+
+            def move_entries(self, cookie, entry_ids, target_id, source_id=""):
+                return {**response, "ids": list(entry_ids), "target_cid": target_id}
+
+        return _FakeProvider()
+
+    def _move(self, provider_name, response, landing):
+        syncs = []
+        with patch.object(scraper, "_require_provider_cookie", return_value="cookie-value"), \
+                patch.object(scraper, "_require_scraper_operation"), \
+                patch.object(
+                    scraper,
+                    "get_provider_or_none",
+                    return_value=self._fake_provider(provider_name, response),
+                ), \
+                patch.object(scraper, "wait_115_writes_landed", return_value=dict(landing)) as landing_wait, \
+                patch.object(scraper, "_prepare_scraper_monitor_sync", return_value={}), \
+                patch.object(
+                    scraper,
+                    "_finish_scraper_monitor_sync",
+                    side_effect=lambda prepared, **kwargs: syncs.append(kwargs),
+                ), \
+                patch.object(scraper, "_build_transfer_monitor_snapshots", return_value=[]), \
+                patch.object(scraper, "_invalidate_provider_parent"):
+            result = scraper.move_scraper_entries(
+                provider_name,
+                ["e1"],
+                "target-cid",
+                source_cid="source-cid",
+                target_parent_path="Media/片名 (2026)",
+            )
+        return result, syncs, landing_wait
+
+    def test_pending_landing_keeps_sync_event_unconfirmed(self):
+        result, syncs, _ = self._move(
+            "115",
+            {"move_proid": "42"},
+            {
+                "status": "pending",
+                "pending_ids": ["e1"],
+                "waited_seconds": 30.0,
+                "progress_status": "timeout",
+            },
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["landing"]["pending_ids"], ["e1"])
+        self.assertEqual(len(syncs), 1)
+        self.assertFalse(syncs[0]["succeeded"])
+        self.assertIn("未确认落地", syncs[0]["error"])
+
+    def test_landed_landing_confirms_sync_event(self):
+        result, syncs, _ = self._move("115", {"move_proid": "42"}, {"status": "landed", "pending_ids": []})
+
+        self.assertEqual(result["landing"]["status"], "landed")
+        self.assertEqual(len(syncs), 1)
+        self.assertTrue(syncs[0]["succeeded"])
+        self.assertEqual(syncs[0].get("error", ""), "")
+
+    def test_other_providers_do_not_wait_for_115_landing(self):
+        result, syncs, landing_wait = self._move("quark", {}, {"status": "pending", "pending_ids": ["e1"]})
+
+        landing_wait.assert_not_called()
+        self.assertEqual(result["landing"]["status"], "landed")
+        self.assertTrue(syncs[0]["succeeded"])
+
+
 if __name__ == "__main__":
     unittest.main()
