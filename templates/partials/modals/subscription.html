@@ -73,6 +73,10 @@
                         <input id="subscription_tmdb_total_seasons" class="hidden" value="0">
                         <input id="subscription_tmdb_season_episode_map" class="hidden" value="">
                         <input id="subscription_tmdb_episode_mode" class="hidden" value="seasonal">
+                        <input id="subscription_tmdb_status" class="hidden" value="">
+                        <input id="subscription_tmdb_next_air_date" class="hidden" value="">
+                        <input id="subscription_tmdb_last_air_date" class="hidden" value="">
+                        <input id="subscription_tmdb_next_episode_number" class="hidden" value="0">
                     </div>
                     <div id="subscription-tv-fields" class="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <label class="block">
@@ -245,7 +249,24 @@
                                 <input id="subscription_schedule_interval_minutes" type="number" min="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="120">
                             </label>
                         </div>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <label class="block">
+                                <span class="text-xs text-slate-500">命中后冷却</span>
+                                <select id="subscription_hit_cooldown_mode" onchange="syncSubscriptionHitCooldownUI()" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1">
+                                    <option value="auto">自动（按剧集播出排期）</option>
+                                    <option value="manual">手动指定</option>
+                                    <option value="off">关闭</option>
+                                </select>
+                            </label>
+                            <label class="block hidden" id="subscription-hit-cooldown-hours-wrap">
+                                <span class="text-xs text-slate-500">冷却时长（小时，1-336，最长 14 天）</span>
+                                <input id="subscription_hit_cooldown_hours" type="number" min="1" max="336" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
+                            </label>
+                        </div>
                         <div class="text-[11px] text-slate-500 leading-5">仅在所选星期与时间段内按间隔自动查询。支持跨天时段（例如 22:00 到次日 02:00）。</div>
+                        <div class="text-[11px] text-slate-500 leading-5">
+                            命中新集后暂停自动查询，直到下一集播出前，避免重复空搜。选「自动」会读 TMDB 的下一集播出日期推算；手动值建议比更新周期短 10~15%（日更填 20、周更填 144、一周双更填 60），填成周期整数会导致每次都晚一集。手动运行不受限制。
+                        </div>
                     </div>
                     <label id="subscription-min-score-wrap" class="block">
                         <span class="text-xs text-slate-500">匹配阈值（30-100）</span>

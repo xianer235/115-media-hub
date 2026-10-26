@@ -428,6 +428,15 @@ SUBSCRIPTION_CHANNEL_WATERMARK_OVERLAP_POSTS = max(
 )
 SUBSCRIPTION_MAX_CRON_MINUTES = 24 * 60
 SUBSCRIPTION_MAX_SCHEDULE_INTERVAL_MINUTES = SUBSCRIPTION_MAX_CRON_MINUTES
+# 命中后冷却：命中新资源后暂停自动查询，直到下一集播出前。
+# 取值固定早于一个更新周期（相位锁定：冷却等于周期会每次都晚整整一个周期）。
+SUBSCRIPTION_HIT_COOLDOWN_MODES = ("auto", "manual", "off")
+SUBSCRIPTION_HIT_COOLDOWN_DEFAULT_MODE = "auto"
+SUBSCRIPTION_HIT_COOLDOWN_MAX_HOURS = 24 * 14
+SUBSCRIPTION_AUTO_COOLDOWN_CAP_DAYS = 7
+SUBSCRIPTION_AUTO_COOLDOWN_RATIO = 0.85
+SUBSCRIPTION_AUTO_COOLDOWN_GUARD_MINUTES = 60
+TMDB_TV_STATUS_VALUES = ("Returning Series", "Planned", "In Production", "Ended", "Canceled", "Pilot")
 SUBSCRIPTION_ATTEMPT_INTERVAL_SECONDS = max(
     0.0,
     min(5.0, float(os.environ.get("SUBSCRIPTION_ATTEMPT_INTERVAL_SECONDS", 2) or 2)),
@@ -1620,6 +1629,26 @@ def normalize_subscription_schedule_interval_minutes(value: Any, fallback: int =
     return max(1, min(SUBSCRIPTION_MAX_SCHEDULE_INTERVAL_MINUTES, int(interval or 1)))
 
 
+def normalize_subscription_hit_cooldown_mode(value: Any, fallback: str = SUBSCRIPTION_HIT_COOLDOWN_DEFAULT_MODE) -> str:
+    text = str(value or "").strip().lower()
+    if text in SUBSCRIPTION_HIT_COOLDOWN_MODES:
+        return text
+    fallback_text = str(fallback or "").strip().lower()
+    return fallback_text if fallback_text in SUBSCRIPTION_HIT_COOLDOWN_MODES else SUBSCRIPTION_HIT_COOLDOWN_DEFAULT_MODE
+
+
+def normalize_subscription_hit_cooldown_hours(value: Any, fallback: int = 0) -> int:
+    try:
+        hours = float(value if value is not None and value != "" else fallback)
+    except (TypeError, ValueError):
+        hours = float(fallback or 0)
+    if not math.isfinite(hours):
+        hours = float(fallback or 0)
+    if hours <= 0:
+        return 0
+    return max(1, min(SUBSCRIPTION_HIT_COOLDOWN_MAX_HOURS, int(round(hours))))
+
+
 def compute_subscription_schedule_window_meta(
     weekdays: List[int],
     start_time: str,
@@ -1725,6 +1754,123 @@ def format_subscription_schedule_next_run(value: Optional[datetime]) -> str:
     }
     weekday = weekday_labels.get(value.isoweekday(), "")
     return f"{value.strftime('%m-%d %H:%M:%S')} {weekday}".strip()
+
+
+def normalize_tmdb_air_date(value: Any) -> str:
+    text = str(value or "").strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        return ""
+    try:
+        datetime.strptime(text, "%Y-%m-%d")
+    except ValueError:
+        return ""
+    return text
+
+
+def parse_tmdb_air_date_datetime(value: Any) -> Optional[datetime]:
+    text = normalize_tmdb_air_date(value)
+    if not text:
+        return None
+    try:
+        return datetime.strptime(text, "%Y-%m-%d")
+    except ValueError:
+        return None
+
+
+def normalize_tmdb_status(value: Any) -> str:
+    text = str(value or "").strip()
+    return text if text in TMDB_TV_STATUS_VALUES else ""
+
+
+def is_subscription_task_finished(task: Optional[Dict[str, Any]]) -> bool:
+    """剧集已完结（只认 TMDB 的明确标记，集数追平不算）。"""
+    payload = task if isinstance(task, dict) else {}
+    if str(payload.get("media_type", "movie") or "movie").strip().lower() != "tv":
+        return False
+    return normalize_tmdb_status(payload.get("tmdb_status", "")) in ("Ended", "Canceled")
+
+
+def compute_subscription_cooldown_until(
+    *,
+    now_ts: float,
+    last_hit_ts: float,
+    task: Optional[Dict[str, Any]] = None,
+) -> float:
+    """命中后冷却的终点时间戳，0 表示不冷却。
+
+    锚点是「最后一次命中时刻」（每命中一次都会被刷新），所以一批新集分批上传时
+    冷却会不断顺延，直到某一轮空手才开始真正计时。
+
+    自动模式取下面两个依据里更早的那个（及时优先于省请求）：
+    1. TMDB 的下一集播出日 + 本次命中的时分 - guard：档期稳定的经验做法。
+       不能直接拿播出日 00:00 当终点——命中那一轮刷新的 TMDB 里，
+       next_episode_to_air 常常就是刚入库的这一集，日期已经是今天甚至昨天。
+    2. 相邻两集播出日之差 = 更新周期 T，冷却取 0.85T（严格短于 T，避免相位锁定）。
+    """
+    payload = task if isinstance(task, dict) else {}
+    mode = normalize_subscription_hit_cooldown_mode(payload.get("hit_cooldown_mode", ""))
+    if mode == "off":
+        return 0.0
+    hit_ts = max(0.0, float(last_hit_ts or 0.0))
+    if hit_ts <= 0:
+        return 0.0
+    now_value = max(0.0, float(now_ts or 0.0))
+    guard_seconds = float(SUBSCRIPTION_AUTO_COOLDOWN_GUARD_MINUTES * 60)
+    cap_seconds = float(SUBSCRIPTION_AUTO_COOLDOWN_CAP_DAYS * 86400 - guard_seconds)
+
+    if mode == "manual":
+        cooldown_seconds = normalize_subscription_hit_cooldown_hours(payload.get("hit_cooldown_hours", 0)) * 3600
+        if cooldown_seconds <= 0:
+            return 0.0
+        target_ts = hit_ts + min(float(cooldown_seconds), cap_seconds)
+        return target_ts if target_ts > now_value else 0.0
+
+    candidates: List[float] = []
+    period_seconds = 0.0
+    next_dt = parse_tmdb_air_date_datetime(payload.get("tmdb_next_air_date", ""))
+    last_air_dt = parse_tmdb_air_date_datetime(payload.get("tmdb_last_air_date", ""))
+    if next_dt and last_air_dt:
+        period_days = (next_dt.date() - last_air_dt.date()).days
+        if period_days > 0:
+            period_seconds = float(period_days * 86400)
+            candidates.append(hit_ts + period_seconds * SUBSCRIPTION_AUTO_COOLDOWN_RATIO)
+    if next_dt:
+        hit_dt = datetime.fromtimestamp(hit_ts)
+        expected_dt = next_dt.replace(
+            hour=hit_dt.hour,
+            minute=hit_dt.minute,
+            second=0,
+            microsecond=0,
+        ) - timedelta(seconds=guard_seconds)
+        if expected_dt < next_dt:
+            expected_dt = next_dt
+        expected_ts = expected_dt.timestamp()
+        if expected_ts > hit_ts:
+            candidates.append(expected_ts)
+
+    if not candidates:
+        return 0.0
+    target_ts = min(candidates)
+    target_ts = min(target_ts, hit_ts + cap_seconds)
+    if period_seconds > 0:
+        # 严格早于一个更新周期，留出相位余量。
+        target_ts = min(target_ts, hit_ts + period_seconds - guard_seconds)
+    return target_ts if target_ts > now_value else 0.0
+
+
+def compute_subscription_next_due_ts(
+    *,
+    now_ts: float,
+    last_run_ts: float,
+    interval_seconds: float,
+    cooldown_until: float = 0.0,
+) -> float:
+    """下一次允许自动运行的时刻：常规间隔与命中冷却取较晚者。"""
+    interval_value = max(60.0, float(interval_seconds or 0.0))
+    last_run_value = max(0.0, float(last_run_ts or 0.0))
+    interval_due_ts = last_run_value + interval_value if last_run_value > 0 else float(now_ts or 0.0)
+    cooldown_value = max(0.0, float(cooldown_until or 0.0))
+    return max(interval_due_ts, cooldown_value)
 
 
 def normalize_tmdb_media_type(value: Any, fallback: str = "") -> str:
@@ -2327,6 +2473,10 @@ def normalize_subscription_task(task: Dict[str, Any]) -> Dict[str, Any]:
         schedule_interval_raw,
         fallback=(legacy_cron_minutes if legacy_cron_minutes > 0 else 120),
     )
+    hit_cooldown_mode = normalize_subscription_hit_cooldown_mode(
+        task.get("hit_cooldown_mode", SUBSCRIPTION_HIT_COOLDOWN_DEFAULT_MODE),
+    )
+    hit_cooldown_hours = normalize_subscription_hit_cooldown_hours(task.get("hit_cooldown_hours", 0))
     try:
         min_score = int(task.get("min_score", SUBSCRIPTION_MIN_SCORE) or SUBSCRIPTION_MIN_SCORE)
     except (TypeError, ValueError):
@@ -2363,9 +2513,20 @@ def normalize_subscription_task(task: Dict[str, Any]) -> Dict[str, Any]:
         tmdb_total_seasons = 0
     tmdb_season_episode_map = normalize_tmdb_season_episode_map(task.get("tmdb_season_episode_map", {}))
     tmdb_episode_mode = normalize_tmdb_episode_mode(task.get("tmdb_episode_mode", "seasonal"))
+    tmdb_status = normalize_tmdb_status(task.get("tmdb_status", ""))
+    tmdb_next_air_date = normalize_tmdb_air_date(task.get("tmdb_next_air_date", ""))
+    tmdb_last_air_date = normalize_tmdb_air_date(task.get("tmdb_last_air_date", ""))
+    try:
+        tmdb_next_episode_number = max(0, int(task.get("tmdb_next_episode_number", 0) or 0))
+    except (TypeError, ValueError):
+        tmdb_next_episode_number = 0
     if media_type != "tv":
         multi_season_mode = False
         tmdb_episode_mode = "seasonal"
+        tmdb_status = ""
+        tmdb_next_air_date = ""
+        tmdb_last_air_date = ""
+        tmdb_next_episode_number = 0
     savepath = normalize_relative_path(task.get("savepath", ""))
     share_link_url = str(
         task.get(
@@ -2450,6 +2611,8 @@ def normalize_subscription_task(task: Dict[str, Any]) -> Dict[str, Any]:
         "schedule_start_time": schedule_start_time,
         "schedule_end_time": schedule_end_time,
         "schedule_interval_minutes": schedule_interval_minutes,
+        "hit_cooldown_mode": hit_cooldown_mode,
+        "hit_cooldown_hours": hit_cooldown_hours,
         "min_score": max(30, min(100, min_score)),
         "quality_priority": quality_priority,
         "min_file_size_mb": min_file_size_mb,
@@ -2471,6 +2634,10 @@ def normalize_subscription_task(task: Dict[str, Any]) -> Dict[str, Any]:
         "tmdb_total_seasons": tmdb_total_seasons if tmdb_id > 0 else 0,
         "tmdb_season_episode_map": tmdb_season_episode_map if tmdb_id > 0 else {},
         "tmdb_episode_mode": tmdb_episode_mode if tmdb_id > 0 else "seasonal",
+        "tmdb_status": tmdb_status if tmdb_id > 0 else "",
+        "tmdb_next_air_date": tmdb_next_air_date if tmdb_id > 0 else "",
+        "tmdb_last_air_date": tmdb_last_air_date if tmdb_id > 0 else "",
+        "tmdb_next_episode_number": tmdb_next_episode_number if tmdb_id > 0 else 0,
     }
 
 
@@ -4548,6 +4715,8 @@ subscription_control = {"cancel": False}
 subscription_queue_lock = threading.Lock()
 subscription_queue: List[Dict[str, Any]] = []
 subscription_last_run: Dict[str, float] = {}
+# 命中后冷却的终点时间戳（进程内缓存，重启后按 DB 的 last_success_at 重算）
+subscription_cooldown_until: Dict[str, float] = {}
 subscription_next_run: Dict[str, str] = {}
 subscription_log_context_var: contextvars.ContextVar[Optional[Dict[str, Any]]] = contextvars.ContextVar(
     "subscription_log_context",
@@ -6263,6 +6432,8 @@ def build_subscription_task_update_payload(cfg: Optional[Dict[str, Any]] = None)
         "matched_score",
         "queued_job_id",
         "updated_at",
+        "tmdb_status",
+        "tmdb_next_air_date",
     )
     updates: List[Dict[str, Any]] = []
     for task in list_subscription_task_runtime(cfg):

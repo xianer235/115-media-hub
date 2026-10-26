@@ -190,6 +190,8 @@ async def save_subscription_tasks(request: Request) -> Dict[str, Any]:
         if dead_name not in alive:
             subscription_last_run.pop(dead_name, None)
             subscription_next_run.pop(dead_name, None)
+    # 冷却缓存整轮清空：用户可能刚改了冷却模式/时长，缓存里的旧终点必须作废。
+    subscription_cooldown_until.clear()
     with subscription_queue_lock:
         subscription_queue[:] = [item for item in subscription_queue if item.get("task_name") in alive]
         subscription_status["queued"] = [item["task_name"] for item in subscription_queue]
@@ -340,6 +342,7 @@ async def delete_subscription_task(request: Request) -> Dict[str, Any]:
         subscription_status["queued"] = [item["task_name"] for item in subscription_queue]
     subscription_last_run.pop(task_name, None)
     subscription_next_run.pop(task_name, None)
+    subscription_cooldown_until.pop(task_name, None)
     prune_subscription_state_for_missing_tasks([task.get("name", "") for task in cfg.get("subscription_tasks", [])])
     schedule_ui_state_push(0)
     return {"ok": True}

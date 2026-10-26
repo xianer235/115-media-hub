@@ -591,12 +591,20 @@ def build_tmdb_task_binding(detail: Dict[str, Any], media_type: str = "") -> Dic
         "tmdb_total_seasons": max(0, parse_int(detail.get("total_seasons", 0) or 0, 0)),
         "tmdb_season_episode_map": detail.get("season_episode_map", {}) if isinstance(detail.get("season_episode_map"), dict) else {},
         "tmdb_episode_mode": normalize_tmdb_episode_mode(detail.get("episode_mode", "seasonal")),
+        "tmdb_status": normalize_tmdb_status(detail.get("status", "")),
+        "tmdb_next_air_date": normalize_tmdb_air_date(detail.get("next_air_date", "")),
+        "tmdb_last_air_date": normalize_tmdb_air_date(detail.get("last_air_date", "")),
+        "tmdb_next_episode_number": max(0, parse_int(detail.get("next_episode_number", 0) or 0, 0)),
     }
     if normalized_media_type != "tv":
         task_binding["tmdb_total_episodes"] = 0
         task_binding["tmdb_total_seasons"] = 0
         task_binding["tmdb_season_episode_map"] = {}
         task_binding["tmdb_episode_mode"] = "seasonal"
+        task_binding["tmdb_status"] = ""
+        task_binding["tmdb_next_air_date"] = ""
+        task_binding["tmdb_last_air_date"] = ""
+        task_binding["tmdb_next_episode_number"] = 0
     return task_binding
 
 
@@ -655,4 +663,10 @@ def get_tmdb_media_detail(
             season_episode_map[str(season_no)] = episode_count
         payload["season_episode_map"] = season_episode_map
         payload["episode_mode"] = infer_tmdb_episode_mode(detail)
+        # 播出排期：TMDB 详情本来就返回这两个字段，用于命中后冷却推算更新周期。
+        next_episode = detail.get("next_episode_to_air") if isinstance(detail.get("next_episode_to_air"), dict) else {}
+        last_episode = detail.get("last_episode_to_air") if isinstance(detail.get("last_episode_to_air"), dict) else {}
+        payload["next_air_date"] = normalize_tmdb_air_date(next_episode.get("air_date", ""))
+        payload["last_air_date"] = normalize_tmdb_air_date(last_episode.get("air_date", ""))
+        payload["next_episode_number"] = max(0, parse_int(next_episode.get("episode_number", 0) or 0, 0))
     return payload

@@ -250,6 +250,7 @@ async def startup() -> None:
                 if dead_name not in active_names:
                     subscription_last_run.pop(dead_name, None)
                     subscription_next_run.pop(dead_name, None)
+                    subscription_cooldown_until.pop(dead_name, None)
 
             for task in tasks:
                 name = str(task.get("name", "")).strip()
@@ -257,6 +258,13 @@ async def startup() -> None:
                     continue
                 if not task.get("enabled", True):
                     subscription_next_run.pop(name, None)
+                    subscription_cooldown_until.pop(name, None)
+                    continue
+
+                # 已完结只认 TMDB 的明确标记（集数追平不算）：停止自动查询，手动运行仍可用。
+                if is_subscription_task_finished(task):
+                    subscription_next_run.pop(name, None)
+                    subscription_cooldown_until.pop(name, None)
                     continue
 
                 window_meta = compute_subscription_schedule_window_meta(
@@ -267,6 +275,7 @@ async def startup() -> None:
                 )
                 if not bool(window_meta.get("valid", False)):
                     subscription_next_run.pop(name, None)
+                    subscription_cooldown_until.pop(name, None)
                     continue
 
                 interval_minutes = normalize_subscription_schedule_interval_minutes(
@@ -274,31 +283,70 @@ async def startup() -> None:
                     fallback=120,
                 )
                 interval_seconds = max(60, interval_minutes * 60)
+                cooldown_mode = normalize_subscription_hit_cooldown_mode(task.get("hit_cooldown_mode", ""))
+                if cooldown_mode == "off":
+                    subscription_cooldown_until[name] = 0.0
 
                 if name not in subscription_last_run:
                     state = load_subscription_task_state(name, task.get("media_type", "movie"))
                     last_run_at = parse_resource_datetime_to_timestamp(str(state.get("last_run_at", "") or "").strip())
                     subscription_last_run[name] = last_run_at if last_run_at > 0 else 0.0
+                    last_hit_ts = parse_resource_datetime_to_timestamp(
+                        str(state.get("last_success_at", "") or "").strip()
+                    )
+                    subscription_cooldown_until[name] = compute_subscription_cooldown_until(
+                        now_ts=now_ts,
+                        last_hit_ts=last_hit_ts,
+                        task=task,
+                    )
 
                 if bool(window_meta.get("in_window", False)):
                     previous_run_ts = float(subscription_last_run.get(name, 0.0) or 0.0)
-                    next_due_ts = previous_run_ts + interval_seconds if previous_run_ts > 0 else now_ts
-                    if now_ts >= next_due_ts:
+                    due_ts = compute_subscription_next_due_ts(
+                        now_ts=now_ts,
+                        last_run_ts=previous_run_ts,
+                        interval_seconds=interval_seconds,
+                        cooldown_until=float(subscription_cooldown_until.get(name, 0.0) or 0.0),
+                    )
+                    if now_ts >= due_ts and cooldown_mode != "off":
+                        # 只有真正到期时才读一次库（每个间隔最多一次主键查询）：
+                        # 上一轮命中会把 last_success_at 推后，冷却终点要跟着顺延。
+                        state = load_subscription_task_state(name, task.get("media_type", "movie"))
+                        last_hit_ts = parse_resource_datetime_to_timestamp(
+                            str(state.get("last_success_at", "") or "").strip()
+                        )
+                        refreshed_until = compute_subscription_cooldown_until(
+                            now_ts=now_ts,
+                            last_hit_ts=last_hit_ts,
+                            task=task,
+                        )
+                        subscription_cooldown_until[name] = refreshed_until
+                        due_ts = compute_subscription_next_due_ts(
+                            now_ts=now_ts,
+                            last_run_ts=previous_run_ts,
+                            interval_seconds=interval_seconds,
+                            cooldown_until=refreshed_until,
+                        )
+                    if now_ts >= due_ts:
                         queue_subscription_job(name, "cron")
-                        next_due_ts = now_ts + interval_seconds
+                        # 乐观占位：任务可能要排在其它任务之后才真正开始，
+                        # 否则这期间每 5 秒都会重复判定到期、重复读库。
+                        subscription_last_run[name] = now_ts
+                        due_ts = now_ts + interval_seconds
 
+                    display_ts = due_ts
                     active_end = window_meta.get("active_end")
                     active_end_ts = active_end.timestamp() if isinstance(active_end, datetime) else 0.0
-                    if active_end_ts > 0 and next_due_ts < active_end_ts:
-                        subscription_next_run[name] = format_subscription_schedule_next_run(
-                            datetime.fromtimestamp(next_due_ts)
-                        )
-                    else:
+                    if active_end_ts > 0 and due_ts >= active_end_ts:
                         next_window_start = window_meta.get("next_window_start")
                         if isinstance(next_window_start, datetime):
-                            subscription_next_run[name] = format_subscription_schedule_next_run(next_window_start)
-                        else:
-                            subscription_next_run.pop(name, None)
+                            display_ts = max(due_ts, next_window_start.timestamp())
+                    if display_ts > 0:
+                        subscription_next_run[name] = format_subscription_schedule_next_run(
+                            datetime.fromtimestamp(display_ts)
+                        )
+                    else:
+                        subscription_next_run.pop(name, None)
                     continue
 
                 next_window_start = window_meta.get("next_window_start")

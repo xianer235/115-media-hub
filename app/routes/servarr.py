@@ -220,7 +220,11 @@ async def verify_servarr_api_key(request: Request) -> None:
         auth_header = str(request.headers.get("Authorization", "") or "").strip()
         if auth_header.lower().startswith("bearer "):
             provided = auth_header[len("bearer "):].strip()
-    if not provided or not hmac.compare_digest(provided, expected):
+    # 按字节比较：verify 对非 ASCII 的 str 会抛 TypeError（密钥里含中文时变成 500）
+    if not provided or not hmac.compare_digest(
+        provided.encode("utf-8", "surrogateescape"),
+        expected.encode("utf-8", "surrogateescape"),
+    ):
         raise HTTPException(status_code=401, detail="API Key 无效")
 
 
@@ -317,6 +321,7 @@ def _drop_subscription_tasks(match) -> Dict[str, Any]:
     for name in deleted_names:
         subscription_last_run.pop(name, None)
         subscription_next_run.pop(name, None)
+        subscription_cooldown_until.pop(name, None)
     prune_subscription_state_for_missing_tasks(
         [str(task.get("name", "")) for task in left]
     )

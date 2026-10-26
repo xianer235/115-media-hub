@@ -184,13 +184,26 @@
             const windowText = isCrossDayWindow
                 ? `${scheduleStartTime} - 次日 ${scheduleEndTime}`
                 : `${scheduleStartTime} - ${scheduleEndTime}`;
+            const hitCooldownMode = normalizeSubscriptionHitCooldownMode(task?.hit_cooldown_mode || SUBSCRIPTION_HIT_COOLDOWN_DEFAULT_MODE);
+            const hitCooldownHours = normalizeSubscriptionHitCooldownHours(task?.hit_cooldown_hours || 0);
+            const taskFinished = isSubscriptionTaskFinished(task);
             let scheduleText = '';
-            if (task?.enabled === false) {
+            if (taskFinished) {
+                scheduleText = '已完结，自动查询已停止，可手动运行';
+            } else if (task?.enabled === false) {
                 scheduleText = '自动查询已停用，仅支持手动运行';
             } else if (!scheduleWeekdays.length) {
                 scheduleText = '未选择查询星期，仅支持手动运行';
             } else {
                 scheduleText = `${weekdayText} ${windowText} 每 ${scheduleIntervalMinutes} 分钟查询一次，下次执行 ${String(nextRun || '计算中')}`;
+            }
+            let cooldownText = '';
+            if (!taskFinished && hitCooldownMode === 'manual' && hitCooldownHours > 0) {
+                cooldownText = `，命中后冷却 ${hitCooldownHours} 小时`;
+            } else if (!taskFinished && hitCooldownMode === 'auto') {
+                cooldownText = '，命中后按播出排期冷却';
+            } else if (!taskFinished && hitCooldownMode === 'off') {
+                cooldownText = '，未启用命中冷却';
             }
             const latestText = buildSubscriptionLatestMatchText(task);
             const modeText = isTv ? (multiSeasonMode ? '多季合一追更' : '单季追更') : '命中资源后即执行';
@@ -206,7 +219,7 @@
             const minFileSizeMb = normalizeSubscriptionMinFileSizeMb(task?.min_file_size_mb ?? 0);
             const sizeFilterText = minFileSizeMb > 0 ? `，小于 ${formatSubscriptionMinFileSizeMb(minFileSizeMb)}MB 不导入` : '';
             const strictMatchText = task?.strict_title_match ? '，精准匹配：简介命中不算同剧证据' : '';
-            return `状态：${statusText}（${enabledText}）。${providerText} · ${mediaText}《${titleText}》保存到 ${savepath}${fixedShareText}${shareScopeText}${providerRuleText}${excludeText}${excludeFileText}${sizeFilterText}${strictMatchText}，${modeText}，${episodeText}；${scheduleText}；${latestText}。`;
+            return `状态：${statusText}（${enabledText}）。${providerText} · ${mediaText}《${titleText}》保存到 ${savepath}${fixedShareText}${shareScopeText}${providerRuleText}${excludeText}${excludeFileText}${sizeFilterText}${strictMatchText}，${modeText}，${episodeText}；${scheduleText}${cooldownText}；${latestText}。`;
         }
 
         function buildSubscriptionTaskProgressBar({ progress = 0, detail = '' } = {}) {
@@ -675,6 +688,18 @@
             return `<span class="${meta.className}">${escapeHtml(meta.label)}</span>`;
         }
 
+        function isSubscriptionTaskFinished(task) {
+            const payload = task && typeof task === 'object' ? task : {};
+            if (normalizeSubscriptionMediaType(payload.media_type || 'movie') !== 'tv') return false;
+            const status = String(payload.tmdb_status || '').trim();
+            return status === 'Ended' || status === 'Canceled';
+        }
+
+        function buildSubscriptionFinishedBadge(task) {
+            if (!isSubscriptionTaskFinished(task)) return '';
+            return '<span class="rounded-md border border-slate-500/50 px-2 py-0.5 text-[11px] text-slate-300">已完结</span>';
+        }
+
         function getCurrentSubscriptionProvider() {
             return normalizeSubscriptionProvider(document.getElementById('subscription_provider')?.value || '115', '115');
         }
@@ -1117,6 +1142,10 @@
                 tmdb_total_seasons: Math.max(0, parseInt(document.getElementById('subscription_tmdb_total_seasons')?.value || '0', 10) || 0),
                 tmdb_season_episode_map: normalizeTmdbSeasonEpisodeMap(document.getElementById('subscription_tmdb_season_episode_map')?.value || ''),
                 tmdb_episode_mode: normalizeTmdbEpisodeMode(document.getElementById('subscription_tmdb_episode_mode')?.value || 'seasonal'),
+                tmdb_status: String(document.getElementById('subscription_tmdb_status')?.value || '').trim(),
+                tmdb_next_air_date: String(document.getElementById('subscription_tmdb_next_air_date')?.value || '').trim(),
+                tmdb_last_air_date: String(document.getElementById('subscription_tmdb_last_air_date')?.value || '').trim(),
+                tmdb_next_episode_number: Math.max(0, parseInt(document.getElementById('subscription_tmdb_next_episode_number')?.value || '0', 10) || 0),
             };
         }
 
@@ -1135,6 +1164,10 @@
                 tmdb_total_seasons: Math.max(0, parseInt(binding.tmdb_total_seasons || binding.total_seasons || '0', 10) || 0),
                 tmdb_season_episode_map: normalizeTmdbSeasonEpisodeMap(binding.tmdb_season_episode_map || binding.season_episode_map || {}),
                 tmdb_episode_mode: normalizeTmdbEpisodeMode(binding.tmdb_episode_mode || binding.episode_mode || 'seasonal'),
+                tmdb_status: String(binding.tmdb_status || binding.status || '').trim(),
+                tmdb_next_air_date: String(binding.tmdb_next_air_date || binding.next_air_date || '').trim(),
+                tmdb_last_air_date: String(binding.tmdb_last_air_date || binding.last_air_date || '').trim(),
+                tmdb_next_episode_number: Math.max(0, parseInt(binding.tmdb_next_episode_number || binding.next_episode_number || '0', 10) || 0),
             };
             const useBinding = normalized.tmdb_id > 0;
             document.getElementById('subscription_tmdb_id').value = useBinding ? String(normalized.tmdb_id) : '0';
@@ -1147,7 +1180,36 @@
             document.getElementById('subscription_tmdb_total_seasons').value = useBinding ? String(normalized.tmdb_total_seasons) : '0';
             document.getElementById('subscription_tmdb_season_episode_map').value = useBinding ? JSON.stringify(normalized.tmdb_season_episode_map) : '';
             document.getElementById('subscription_tmdb_episode_mode').value = useBinding ? normalized.tmdb_episode_mode : 'seasonal';
+            document.getElementById('subscription_tmdb_status').value = useBinding ? normalized.tmdb_status : '';
+            document.getElementById('subscription_tmdb_next_air_date').value = useBinding ? normalized.tmdb_next_air_date : '';
+            document.getElementById('subscription_tmdb_last_air_date').value = useBinding ? normalized.tmdb_last_air_date : '';
+            document.getElementById('subscription_tmdb_next_episode_number').value = useBinding ? String(normalized.tmdb_next_episode_number) : '0';
             renderSubscriptionTmdbBinding();
+        }
+
+        const SUBSCRIPTION_HIT_COOLDOWN_MODES = ['auto', 'manual', 'off'];
+        const SUBSCRIPTION_HIT_COOLDOWN_DEFAULT_MODE = 'auto';
+        const SUBSCRIPTION_HIT_COOLDOWN_MAX_HOURS = 336;
+
+        function normalizeSubscriptionHitCooldownMode(value) {
+            const text = String(value || '').trim().toLowerCase();
+            return SUBSCRIPTION_HIT_COOLDOWN_MODES.includes(text) ? text : SUBSCRIPTION_HIT_COOLDOWN_DEFAULT_MODE;
+        }
+
+        function normalizeSubscriptionHitCooldownHours(value) {
+            const hours = Math.round(Number(value) || 0);
+            if (!Number.isFinite(hours) || hours <= 0) return 0;
+            return Math.max(1, Math.min(SUBSCRIPTION_HIT_COOLDOWN_MAX_HOURS, hours));
+        }
+
+        function syncSubscriptionHitCooldownUI() {
+            const modeEl = document.getElementById('subscription_hit_cooldown_mode');
+            if (!modeEl) return;
+            const manual = normalizeSubscriptionHitCooldownMode(modeEl.value) === 'manual';
+            const wrapEl = document.getElementById('subscription-hit-cooldown-hours-wrap');
+            if (wrapEl) wrapEl.classList.toggle('hidden', !manual);
+            const hoursEl = document.getElementById('subscription_hit_cooldown_hours');
+            if (hoursEl && manual && !normalizeSubscriptionHitCooldownHours(hoursEl.value)) hoursEl.value = '24';
         }
 
         function clearSubscriptionTmdbBinding({ silent = false } = {}) {
@@ -1649,6 +1711,12 @@
             const minFileSizeMb = normalizeSubscriptionMinFileSizeMb(minFileSizeInput?.value || '0');
             if (minFileSizeInput) minFileSizeInput.value = formatSubscriptionMinFileSizeMb(minFileSizeMb);
             const scanSettings = readSubscriptionScanSettingsFromForm(provider);
+            const hitCooldownMode = normalizeSubscriptionHitCooldownMode(
+                document.getElementById('subscription_hit_cooldown_mode')?.value || SUBSCRIPTION_HIT_COOLDOWN_DEFAULT_MODE
+            );
+            const hitCooldownHours = hitCooldownMode === 'manual'
+                ? normalizeSubscriptionHitCooldownHours(document.getElementById('subscription_hit_cooldown_hours')?.value || 0)
+                : 0;
             return {
                 name: title,
                 provider,
@@ -1672,6 +1740,8 @@
                 schedule_start_time: scheduleStartTime,
                 schedule_end_time: scheduleEndTime,
                 schedule_interval_minutes: scheduleIntervalMinutes,
+                hit_cooldown_mode: hitCooldownMode,
+                hit_cooldown_hours: hitCooldownHours,
                 min_score: parseInt(document.getElementById('subscription_min_score').value || '55', 10) || 55,
                 quality_priority: normalizeSubscriptionQualityPriority(document.getElementById('subscription_quality_priority').value || 'ultra'),
                 min_file_size_mb: minFileSizeMb,
@@ -1691,6 +1761,10 @@
                 tmdb_total_seasons: tmdbBinding.tmdb_total_seasons,
                 tmdb_season_episode_map: tmdbBinding.tmdb_season_episode_map,
                 tmdb_episode_mode: tmdbBinding.tmdb_episode_mode,
+                tmdb_status: tmdbBinding.tmdb_status,
+                tmdb_next_air_date: tmdbBinding.tmdb_next_air_date,
+                tmdb_last_air_date: tmdbBinding.tmdb_last_air_date,
+                tmdb_next_episode_number: tmdbBinding.tmdb_next_episode_number,
                 organize_on_import: !!document.getElementById('subscription_organize_on_import')?.checked,
                 organize_options: collectSubscriptionOrganizeOptions(),
                 cross_copy_mode: getSubscriptionCrossCopyMode(),
@@ -1742,6 +1816,11 @@
             document.getElementById('subscription_schedule_start_time').value = '00:00';
             document.getElementById('subscription_schedule_end_time').value = '23:59';
             document.getElementById('subscription_schedule_interval_minutes').value = SUBSCRIPTION_DEFAULT_SCHEDULE_INTERVAL_MINUTES;
+            const hitCooldownModeEl = document.getElementById('subscription_hit_cooldown_mode');
+            if (hitCooldownModeEl) hitCooldownModeEl.value = SUBSCRIPTION_HIT_COOLDOWN_DEFAULT_MODE;
+            const hitCooldownHoursEl = document.getElementById('subscription_hit_cooldown_hours');
+            if (hitCooldownHoursEl) hitCooldownHoursEl.value = 0;
+            syncSubscriptionHitCooldownUI();
             document.getElementById('subscription_min_score').value = 55;
             document.getElementById('subscription_min_file_size_mb').value = 0;
             const strictTitleInput = document.getElementById('subscription_strict_title_match');
@@ -1842,6 +1921,9 @@
             if (task.year && !/^(19|20)\d{2}$/.test(task.year)) return showToast('年份格式不正确，请输入四位年份', { tone: 'warn', duration: 2800, placement: 'top-center' });
             if (task.schedule_start_time === task.schedule_end_time) return showToast('开始时间和结束时间不能相同', { tone: 'warn', duration: 2800, placement: 'top-center' });
             if (task.schedule_interval_minutes < 1) return showToast('时段内查询间隔不能小于 1 分钟', { tone: 'warn', duration: 3000, placement: 'top-center' });
+            if (task.hit_cooldown_mode === 'manual' && (task.hit_cooldown_hours < 1 || task.hit_cooldown_hours > SUBSCRIPTION_HIT_COOLDOWN_MAX_HOURS)) {
+                return showToast(`手动冷却时长需在 1-${SUBSCRIPTION_HIT_COOLDOWN_MAX_HOURS} 小时之间`, { tone: 'warn', duration: 3000, placement: 'top-center' });
+            }
             if (task.enabled && (!Array.isArray(task.schedule_weekdays) || task.schedule_weekdays.length <= 0)) {
                 return showToast('请至少选择一个查询星期，或先关闭任务启用状态', { tone: 'warn', duration: 3400, placement: 'top-center' });
             }
@@ -1861,6 +1943,10 @@
                 task.tmdb_total_seasons = 0;
                 task.tmdb_season_episode_map = {};
                 task.tmdb_episode_mode = 'seasonal';
+                task.tmdb_status = '';
+                task.tmdb_next_air_date = '';
+                task.tmdb_last_air_date = '';
+                task.tmdb_next_episode_number = 0;
             } else {
                 task.multi_season_mode = !!(task.multi_season_mode ?? task.anime_mode);
                 task.anime_mode = !!task.multi_season_mode;
@@ -1883,6 +1969,10 @@
                 task.tmdb_total_seasons = 0;
                 task.tmdb_season_episode_map = {};
                 task.tmdb_episode_mode = 'seasonal';
+                task.tmdb_status = '';
+                task.tmdb_next_air_date = '';
+                task.tmdb_last_air_date = '';
+                task.tmdb_next_episode_number = 0;
             }
 
             const tasks = [...(subscriptionState.tasks || [])].map(item => ({
@@ -1971,6 +2061,11 @@
                     10
                 ) || SUBSCRIPTION_DEFAULT_SCHEDULE_INTERVAL_MINUTES
             );
+            const hitCooldownModeEl = document.getElementById('subscription_hit_cooldown_mode');
+            if (hitCooldownModeEl) hitCooldownModeEl.value = normalizeSubscriptionHitCooldownMode(task.hit_cooldown_mode || SUBSCRIPTION_HIT_COOLDOWN_DEFAULT_MODE);
+            const hitCooldownHoursEl = document.getElementById('subscription_hit_cooldown_hours');
+            if (hitCooldownHoursEl) hitCooldownHoursEl.value = normalizeSubscriptionHitCooldownHours(task.hit_cooldown_hours || 0);
+            syncSubscriptionHitCooldownUI();
             document.getElementById('subscription_min_score').value = task.min_score ?? 55;
             document.getElementById('subscription_min_file_size_mb').value = formatSubscriptionMinFileSizeMb(task.min_file_size_mb ?? 0);
             const strictTitleInput = document.getElementById('subscription_strict_title_match');
@@ -1989,6 +2084,10 @@
                 tmdb_total_seasons: task.tmdb_total_seasons || 0,
                 tmdb_season_episode_map: task.tmdb_season_episode_map || {},
                 tmdb_episode_mode: task.tmdb_episode_mode || 'seasonal',
+                tmdb_status: task.tmdb_status || '',
+                tmdb_next_air_date: task.tmdb_next_air_date || '',
+                tmdb_last_air_date: task.tmdb_last_air_date || '',
+                tmdb_next_episode_number: task.tmdb_next_episode_number || 0,
             });
             syncSubscriptionTypeUI();
             showLockedModal('subscription-modal');
@@ -2412,6 +2511,7 @@
                     ? '<span class="subscription-strict-match-badge">精准</span>'
                     : '';
                 const lastHitBadgeHtml = buildSubscriptionLastHitBadge(task, taskName);
+                const finishedBadgeHtml = buildSubscriptionFinishedBadge(task);
                 const crossCopyMode = String(task?.cross_copy_mode || 'off').trim().toLowerCase();
                 const crossCopySourceNames = Array.isArray(task?.cross_copy_sources)
                     ? task.cross_copy_sources.map(name => String(name || '').trim())
@@ -2523,6 +2623,7 @@
                                         ${providerBadgeHtml}
                                         ${crossCopyBadgeHtml}
                                         ${strictBadgeHtml}
+                                        ${finishedBadgeHtml}
                                         ${lastHitBadgeHtml}
                                     </div>
                                 </button>
