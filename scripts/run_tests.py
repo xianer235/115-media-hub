@@ -73,8 +73,10 @@ REPO_TMP_ROOT = os.path.join(REPO, ".workbuddy", "tmp")
 REPO_TMP_DIR = os.path.join(REPO_TMP_ROOT, "work")
 # .workbuddy/tmp 下历次「把临时目录指进项目内」留下的同类残渣，统一收掉
 LEGACY_TEST_TEMP_DIRS = ("work", "debug-tests")
-# tempfile 探测失败时会在 cwd 留下的东西：8 位小写字母数字、不超过 4 字节
-PROBE_FILE_RE = re.compile(r"^[0-9a-z]{8}$")
+# tempfile 探测失败时会在 cwd 留下的东西：8 位小写字母数字、不超过 4 字节。
+# 字符集必须带下划线——RandomNameSequence 用的是 "abcdefghijklmnopqrstuvwxyz0123456789_"，
+# 漏掉下划线会让 `384oxwf_` 这类名字永远清不掉（真实踩过）。
+PROBE_FILE_RE = re.compile(r"^[0-9a-z_]{8}$")
 # 兜底模式（临时目录只能落在项目里）下，每轮最多清多少个历史残留：
 # 项目内删除很慢，一次清几千个会把测试启动拖成十几分钟。
 PRUNE_LIMIT = 50
@@ -333,7 +335,7 @@ def _sweep_probe_files():
     它们是 ``tempfile.gettempdir()`` 的候选探测留下的：探针建好文件后删不掉
     （安全策略拦删除），就一路退到 cwd，把残骸留在仓库根目录。删不掉的会
     一直堆在那里，每次清理都要人工确认——所以给一条命令一次性收掉。
-    只删「8 位小写字母数字 + ≤4 字节 + git 没跟踪」的文件，不动任何正常文件。
+    只删「8 位小写字母数字或下划线 + ≤4 字节 + git 没跟踪」的文件，不动任何正常文件。
     """
     removed, kept = [], []
     for name in os.listdir(REPO):
