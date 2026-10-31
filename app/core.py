@@ -956,8 +956,8 @@ _SETTINGS_CONFIG_KEY_ORDER_AFTER_AUTH: Tuple[str, ...] = (
     "webhook_secret",
     "servarr_api_key",
     "servarr_default_savepath",
-        "servarr_movie_savepath",
-        "servarr_tv_savepath",
+    "servarr_movie_savepath",
+    "servarr_tv_savepath",
     # 其他页面维护的数据
     "mount_points",
     "monitor_tasks",
