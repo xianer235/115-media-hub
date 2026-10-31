@@ -440,7 +440,9 @@ function collectSettingsPayload({
         'password',
         'webhook_secret',
         'servarr_api_key',
-        'servarr_default_savepath'
+        'servarr_default_savepath',
+        'servarr_movie_savepath',
+        'servarr_tv_savepath'
     ];
     const sensitiveFieldSet = new Set(Array.isArray(sensitiveSettingFields) ? sensitiveSettingFields : []);
     standardIds.forEach((id) => {

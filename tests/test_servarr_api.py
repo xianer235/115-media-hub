@@ -28,6 +28,8 @@ TV_TMDB_ID = 1396
 BASE_CFG = {
     "servarr_api_key": API_KEY,
     "servarr_default_savepath": "Seerr点播",
+    "servarr_movie_savepath": "媒体库/网盘电影",
+    "servarr_tv_savepath": "媒体库/网盘电视剧",
 }
 
 FAKE_MOVIE_DETAIL = {
@@ -167,6 +169,10 @@ class ServarrAuthTest(ServarrApiTestBase):
                 "/api/v3/system/status", headers={"Authorization": f"Bearer {API_KEY}"}
             )
             self.assertEqual(resp_bearer.status_code, 200)
+            resp_query = self.client.get(
+                f"/api/v3/system/status?apikey={API_KEY}"
+            )
+            self.assertEqual(resp_query.status_code, 200)
 
     def test_missing_key_header_returns_401(self):
         with self._patched():
@@ -196,12 +202,9 @@ class ServarrStaticEndpointsTest(ServarrApiTestBase):
         self.assertTrue(data[0]["items"])
 
     def test_rootfolder_default_and_configured(self):
-        with self._patched(cfg={"servarr_default_savepath": ""}):
-            resp = self.client.get("/api/v3/rootfolder", headers=HEADERS)
-        self.assertEqual(resp.json()[0]["path"], "/")
         with self._patched():
             resp = self.client.get("/api/v3/rootfolder", headers=HEADERS)
-        self.assertEqual(resp.json()[0]["path"], "Seerr点播")
+        self.assertEqual(resp.json(), [{"id": 1, "path": "/"}])
 
     def test_tag(self):
         with self._patched():
@@ -259,10 +262,10 @@ class ServarrMovieApiTest(ServarrApiTestBase):
         self.assertEqual(resp.status_code, 400)
 
     def test_add_movie_without_default_savepath_returns_400(self):
-        with self._patched(cfg={"servarr_default_savepath": ""}):
+        with self._patched(cfg={"servarr_default_savepath": "", "servarr_movie_savepath": ""}):
             resp = self.client.post("/api/v3/movie", json={"tmdbId": 603}, headers=HEADERS)
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("未配置点播默认保存目录", resp.json()["detail"])
+        self.assertIn("未配置电影点播保存目录", resp.json()["detail"])
 
     def test_add_movie_with_tmdb_config_error_returns_400(self):
         with self._patched(tmdb_config_error="TMDB 增强未启用，请先在参数配置中开启"):
@@ -437,10 +440,10 @@ class ServarrSeriesApiTest(ServarrApiTestBase):
         self.assertEqual(resp.status_code, 400)
 
     def test_add_series_without_default_savepath_returns_400(self):
-        with self._patched(cfg={"servarr_default_savepath": ""}, tvdb_to_tmdb=TV_TMDB_ID):
+        with self._patched(cfg={"servarr_default_savepath": "", "servarr_tv_savepath": ""}, tvdb_to_tmdb=TV_TMDB_ID):
             resp = self.client.post("/api/v3/series", json={"tmdbId": TV_TMDB_ID}, headers=HEADERS)
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("未配置点播默认保存目录", resp.json()["detail"])
+        self.assertIn("未配置电视剧点播保存目录", resp.json()["detail"])
 
     def test_add_series_name_collision_gets_tmdb_suffix(self):
         cfg = {"subscription_tasks": [_movie_task(tmdb_id=999, name="绝命毒师 (2008)")]}
