@@ -956,6 +956,8 @@ _SETTINGS_CONFIG_KEY_ORDER_AFTER_AUTH: Tuple[str, ...] = (
     "webhook_secret",
     "servarr_api_key",
     "servarr_default_savepath",
+    "servarr_movie_savepath",
+    "servarr_tv_savepath",
     # 其他页面维护的数据
     "mount_points",
     "monitor_tasks",
@@ -1013,6 +1015,8 @@ def default_config() -> Dict[str, Any]:
         "webhook_secret": "",
         "servarr_api_key": "",
         "servarr_default_savepath": "",
+        "servarr_movie_savepath": "",
+        "servarr_tv_savepath": "",
         "strm_proxy_base_url": "",
         "api_115_rate_limit_seconds": API_115_RATE_LIMIT_SECONDS,
         "api_115_list_cache_ttl_seconds": API_115_LIST_CACHE_TTL_SECONDS,

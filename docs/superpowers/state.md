@@ -8,19 +8,20 @@
 
 ## 基线
 
-- **更新日期**: 2026-10-26（0.15.10：订阅任务命中后冷却 + 已完结自动停查）
-- **分支**: `main`，0.15.1 ~ 0.15.9 已推送；**0.15.10 已改版本号待推送**；tag `v0.15.8` 已推并发布 Release（**0.15.9 只有提交与镜像、没有 tag / Release**），Docker 镜像 `xianer235/115-media-hub:0.15.8`（含 `latest`）由 GitHub Actions 自动构建（测试不绿就不构建）
-- **版本**: `0.15.10`（2026-10-26：订阅任务命中后冷却——命中新集后暂停自动查询到下一集播出前，未命中频率完全不变；锚点复用 `last_success_at`，终点 = min(下一集播出日当天+上次命中时分−60 分钟, 相邻两集播出日差×0.85)，封顶 7 天；任务级 `hit_cooldown_mode`(auto/manual/off) + `hit_cooldown_hours`(1~336)；已完结只认 TMDB `Ended`/`Canceled` 后停自动调度。顺带修 servarr API Key 非 ASCII 时 500）
+- **更新日期**: 2026-10-31（0.15.11：Seerr 点播补丁 PR #17 修好并合入）
+- **分支**: `main`，0.15.1 ~ 0.15.10 已推送；**0.15.11 已改版本号待推送**；tag 最新 `v0.15.10`，Docker 镜像同版本由 GitHub Actions 自动构建（测试不绿就不构建）
+- **版本**: `0.15.11`（2026-10-31：Seerr 点播对接补齐——网址参数鉴权、PUT /movie、POST /command 真触发搜索、GET /episode、titleSlug/folderName 非空；电影/电视剧保存目录拆开 + 剧集落点补「剧名 (年份)」层；修掉子串匹配误删订阅与 TMDB 失败静默建任务）
 - **CI**: 单一工作流 `.github/workflows/ci.yml`（`docker-release.yml` 已并入并移除），**限定 `paths: version.json`，只在发版推送时触发**：`test` job 跑 `compileall` + 全量 `node --check` + `scripts/run_tests.py`，`build-and-push` 用 `needs: test` 挂在后面（`workflow_dispatch` 有 `publish` 开关，关掉只跑测试）。日常开发验证只用本机 `scripts/check.sh`，不要等 CI
 - **本地不入库文件**: `AGENTS.md` / `CLAUDE.md` / `.workbuddy/` / `.claude/` / `.worktrees/` 是本机开发用，**按约定不入库**。任何测试/代码读它们前必须判存在（`test_modules_doc` 已这么做），否则干净 clone 跑测试必挂。
 - **运行环境**: `docker compose` 服务名 `115-media-hub-test`（应用本体），端口 18080；`/app/storage` 已映射到宿主机 `/Users/xianer/Documents/docker/115strmxianer/storage`（virtiofs，空间读数正常）。挂载路径与端口已改为从根目录 `.env` 读取（模板 `.env.example`），本机 `.env` 写的是原来的绝对路径
-- **最近提交**: `c3824c2` 订阅命中后冷却（main，未推送）；其前的 `0b1f569` 发版 0.15.9 已推送
-- **工作区**: 0.15.10 发版四件套（`version.json` / `CHANGELOG.md` / `README.md` / `state.md` / `handoff.md`）已改，待 push → tag → release；仓库根 8 个探针残骸（`1fzcan79` / `384oxwf_` / `f5rzb5xd` / `gcauazwi` / `ldkjwkgl` / `ohl49u2p` / `svn9y_7k` / `w58oau16`）待清
+- **最近提交**: `merge/pr17` 上合并 PR #17 并追加修复（8 个原作者提交原样保留）；其前 `2200c0d` 发版 0.15.10 已推送、已打 tag `v0.15.10`
+- **工作区**: 0.15.11 发版四件套（`version.json` / `CHANGELOG.md` / `README.md` / `state.md` / `handoff.md`）已改，待 push → tag → release；仓库根 8 个探针残骸（`1fzcan79` / `384oxwf_` / `f5rzb5xd` / `gcauazwi` / `ldkjwkgl` / `ohl49u2p` / `svn9y_7k` / `w58oau16`）待清
 
 
 
 ## 最近一次验证
 
+- **0.15.11 发版前**（2026-10-31）：`scripts/run_tests.py --changed` **2118 条零失败**（142.9s）；`test_servarr_api` 由 36 条扩到 **49 条零失败**，新增 PUT /movie 两条、command 三条、episode 一条、删除精确匹配两条、剧集落点与 slug 三条、TMDB 失败 502 两条、回退旧保存目录一条。作者原分支是 **36 条挂 6 条**（改契约没改断言）。**未在容器内跑全量**。
 - **0.15.10 发版前**（2026-10-26）：新增 `tests/test_subscription_hit_cooldown.py` **24 条零失败**；订阅相关 8 模块 **212 条零失败**（含 `test_servarr_api` / `test_subscription_ui_frontend` / `test_subscription_cross_copy`）；`compileall` / `node --check ui.js` / `git diff --check` 通过。另用真实函数跑 4 天时间线模拟（日更剧、每集 20:30 上线）：命中后自动查询从每天 12 次降到 3 次，每集仍在上线后 2 小时内命中，没有「冷却挡掉下一集」。**未在容器内跑全量**。
 - **0.15.9 发版前全量**（2026-10-25）：`scripts/check.sh --changed` **699 条零失败**，其中 `test_cross_copy_organize` + `test_cross_copy_jobs` 137 条零失败、新增 11 条回归（触发参数与订阅导入一致、先改名再触发、无监控任务时写警告、改名失败仍触发、订阅任务已删仍触发、非 115 不触发、文件夹触发 / 手动不触发、停用不谎报、未配置不触发）。**未在容器内跑**。
 - **0.15.8 发版前全量**（2026-10-24）：本机 `scripts/check.sh --all` **2034 条零失败**（149s），新增 2 条回归：`test_resume_non_aligned_offset_rewinds_to_segment_boundary`（坏断点回退后照常续完并上传，`start_offset` 落在段边界）、`test_note_downloaded_snaps_to_segment_boundary`（`note_downloaded` 只记栅格值）。**未在容器内跑**。
@@ -40,9 +41,9 @@
 
 ### A. 需要用户操作
 
-1. **升到 0.15.10 并重启**（CI 构建的 `0.15.10` 含命中后冷却与已完结停查，也含 0.15.9 的补源触发监控修复、0.15.8 的断点回退修复；此前并行下载 / 断点续传 / 补源触发那些都只是 `docker cp` 热更文件，重启后才算正式生效）：`docker compose up -d --build`。**重启后第一轮就能看到效果**：有 TMDB 绑定的连载剧任务卡片「下次执行」会跳到冷却终点（如「10-27 16:29」），已完结的剧直接标「已完结」。
+1. **升到 0.15.11 并重启**（含 Seerr 点播补齐与保存目录拆分、0.15.10 的命中后冷却与已完结停查、0.15.9 的补源触发监控、0.15.8 的断点回退；此前不少修复只是 `docker cp` 热更文件，重启后才算正式生效）：`docker compose up -d --build`。**重启后先看设置页**：「后台安全管理」里会出现「电影点播保存目录 / 电视剧点播保存目录」两个输入框，原来的「点播默认保存目录」不再显示但仍作为回退值保留。
 2. **真机看一眼冷却是否生效（0.15.10 新增，只有单测 + 时间线模拟）**：找一个日更 / 周更且绑了 TMDB 的剧集任务，等它命中一集后看两处——① 卡片简介会写「命中后按播出排期冷却」，② 「下次执行」跳到下一集播出前（日更约 20 小时后、周更约 6 天后），且这段时间不再跑；手动点「运行」仍应立刻执行。若「下次执行」还停在 2 小时后，先确认该任务 `tmdb_id > 0`（没有 TMDB 绑定就没有排期，冷却无从推算，这是预期行为）。冷却方式在任务弹窗「自动查询」区块可改成手动小时数或关闭。
-3. **真机联调 Seerr 点播对接**（0.15.9 新增，仅单测 + 容器全量，**未真机**）：按 `docs/seerr-setup-guide.md` 起 Seerr / Jellyfin 测试容器，在面板「后台安全管理」生成 API 密钥、填默认保存目录，Seerr 里加 Radarr/Sonarr 两条服务器（地址用 `host.docker.internal` 而非 `localhost`），跑电影点播 / 剧集点播 / 删除 / 接口关闭四步；预期点播变成订阅任务并立即搜索。排错见教程第九节。
+3. **真机联调 Seerr 点播对接（0.15.11 起流程变了，按新教程走）**：`docs/seerr-setup-guide.md` 起 Seerr / Jellyfin 测试容器 → 面板「后台安全管理」生成 API Key、填**两个**保存目录 → Seerr 里加 Radarr / Sonarr 各一条（地址 `host.docker.internal`，Root Folder 选 **`/`**）。预期四步都成立：① 点电影 → 订阅页出现电影任务，落 `<电影目录>/片名 年份/`；② 点剧集 → 每季一条任务，落 `<电视剧目录>/剧名 (年份)/Season NN/`；③ 在 Seerr 里点「重新搜索」→ 面板订阅日志真的多一轮搜索（`POST /command` 已接通）；④ 删除请求 → 对应订阅任务消失，**无关任务不受影响**（回归钉：只按 tmdbId 精确匹配）。Seerr 剧集详情页的「剧集清单」是空的属预期（`GET /episode` 恒空）。
 4. **验证坏断点自愈（0.15.8 新增）**：现网那条报「续传起始偏移未按分段边界对齐（3828076306）」的补源任务，重建镜像后直接点「重试」——预期只补最后约 2.9MB、算完哈希后上传成功，不再需要「删除记录」。日志里应有 `cross-cloud resume offset 3828076306 not segment-aligned, rewinding to 3825205248`。
 5. **跑完一次完整补源**（现在只差最后一段）：把取消的 3 条任务（`id=12/13/14`）点「重试」——前两条已有断点会续传，不必重下 214MB 以上的部分；预期看到落到 `115连载中/光阴之外 (2025)/Season 01` 并各出一个文件、夸克 `/云下载/跨盘中转/光阴之外` 三个中转副本被自动删。**0.15.9 起还应看到（补源触发监控，本次新修）**：订阅日志出现「跨盘补源已触发监控精准刷新」，「文件夹监控」页面对应任务自动跑一轮，「本地文件」页签里出现改名后的 `片名 (年份) - S01E42.strm`；若那里还是分享原名 `S01E42.strm`，说明改名没生效（查「入库后整理」开关与 TMDB 绑定）。**不打算重试的话要清中转目录**，那 3 个文件约 10.3GB 占着夸克配额。
 6. 测试产物清理（都在各盘「跨盘复制测试」文件夹，确认不要就整目录删）：115 侧 `xcopy-a/b/c-aliyun/pan115`、`秒传验证`、`文件夹用例`、`xcopy-d-quark-src-3m.bin`、`监控联动`（已空）；阿里侧 `xcopy-a/b/c`、`文件夹用例`；夸克侧 `xcopy-d-quark-src-3m.bin`（原片）+ 空的「跨盘复制自测」。任务记录 14 条界面点「清空复制」即可。
@@ -60,6 +61,8 @@
 
 ### C. 已确认要做，排在后面
 
+- **订阅磁力搜索（社区 PR #17 用户提出，2026-10-31 评估中）**：订阅链路现在**搜不到磁力**，两处过滤——`subscription.py` 里 `include_magnet_for_115=False`，以及 `_filter_subscription_supported_items` 只认 provider 自己的 link_type（115 → `115share`）。**只改那个 False 没用**，搜回来也会被筛掉。当初只做分享转存的原因：订阅是定时巡检、要能只补缺集、失败可续、转存是服务端秒传；磁力只能整包下种、进度不可控、占 115 离线队列与配额、内容事先不可知。离线链路本身已存在（`resource_jobs` → `submit_115_offline_task` → 轮询 → 移动入库），只是没接订阅。最小方案：仅作兜底（分享候选为 0 且有缺集时取 1 个磁力候选，走 `create_resource_job`），全局并发 1 + 失败冷却 + 按文件名筛集；预计 3 天并必须真机。
+
 - 123 网盘 / 天翼：接上传与取链（现在只能浏览）。用户 2026-10-20：这两个盘现在不用，先放着。
 - STRM 支持非 115（决定「复制到夸克能不能直接进媒体库播放」）。
 - 夸克 / 阿里作目标时的上传会话续传（本期只做下载侧；预签名 / pre 会话跨进程复用需真机验证后再动）。
@@ -71,6 +74,8 @@
 - 跨网盘移动（只复制）；非 115 目标自动刮削；纯流式边下边传。
 
 ## 当前需要知道的上下文
+
+- **Seerr 点播兼容层（0.15.11，社区 PR #17 修好后合入）**：`app/routes/servarr.py` 现在 18 个端点，鉴权认 `X-Api-Key` / `Bearer` / `?apikey=`。**落点由面板决定，不读 Seerr 传的 rootFolderPath**——`/rootfolder` 固定回 `/`，电影用 `servarr_movie_savepath`、剧集用 `servarr_tv_savepath` 再拼「剧名 (年份)」（必须过 `sanitize_115_folder_name`，别在路由里手拼字符串）。两处硬边界：① TMDB 取详情失败就回 502、**不许静默建任务**（会造出永远搜不到的任务，PR 原文这么干过）；② 删除只按 tmdbId 精确匹配，**不许用名字子串兜底**（删 id=2 会误删名字带 2 的电影）。`POST /command` 会真的排一次搜索；`GET /episode` 恒返回空（按季管订阅，不维护逐集清单）。点播任务默认 `cross_copy_mode=fallback`，源取 `core.SUBSCRIPTION_CROSS_COPY_SOURCE_PROVIDERS`。
 
 - **订阅命中后冷却（2026-10-26，0.15.10）**：命中新集后暂停自动查询到下一集播出前；未命中频率完全不变（用户明确不做未命中退避，及时发现新集优先）。冷却锚点复用 `last_success_at`（每次命中刷新 → 分批上传顺延），终点 = min(下一集播出日当天+上次命中时分−60 分钟, 相邻两集播出日差×0.85)，封顶 7 天；任务级 `hit_cooldown_mode`（auto/manual/off）+ `hit_cooldown_hours`（1~336）。已完结只认 TMDB `status ∈ {Ended, Canceled}` 后停止自动调度、列表标「已完结」，手动跑一次变回 Returning 会自动恢复。**TMDB 的 `next_episode_to_air` 在命中那轮指的是刚入库那集，不能直接当终点**（方案审查抓到的失效点，有回归钉）。细节见 `modules.md` 订阅模块与 `conventions.md`「命中后冷却」三条红线。
 

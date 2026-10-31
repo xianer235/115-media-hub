@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.15.11] - 2026-10-31
+
+把社区贡献的 Seerr 点播补丁（PR #17）修好并合入：Seerr 那边能一次性加完 Radarr/Sonarr 并真正点播成功，电影和电视剧可以分开落盘。
+
+### 点播接口补齐（采纳 PR #17，含修复）
+
+- **API Key 支持网址参数**：Seerr 的「Test」按钮把密钥拼在 `?apikey=` 上，原来只认 `X-Api-Key` 请求头，测连接一律 401。
+- **补三个 Seerr 必调的端点**：`PUT /movie`（原来 405）、`POST /command`（原来 404）、`GET /episode`（原来 404）。Seerr 提交请求时会连发这几个动作，缺一个整单失败。
+- **`titleSlug` / `folderName` 不再为空**：Seerr 会把这两个字段写进自己的数据库，空值会让它抛异常并把请求标成「失败」——用户看到的是请求失败，其实跟下载无关。
+- **电影 / 电视剧保存目录拆开**：新增 `servarr_movie_savepath` 与 `servarr_tv_savepath`，两项都留空时回退旧的 `servarr_default_savepath`，老用户升级不会突然点播不了。
+- **剧集多一层「剧名 (年份)」**：点播建的剧集任务落点从 `<目录>/Season 01` 变成 `<目录>/剧名 (年份)/Season 01`。Jellyfin / Plex 按「一部剧一个文件夹」识别，原来所有剧的 Season 01 全挤在根目录下会互相撞名。
+- **`/rootfolder` 固定返回 `/`**：Seerr 里不再需要用户手动挑目录，真实落点由面板两个配置决定（教程已同步）。
+
+### 修复 PR 里的问题
+
+- **删除了子串匹配删除**：原来 `DELETE /movie/{id}` 会在「任务名包含这个数字」时也命中，删 id=2 会连带删掉名字里带 2 的无关电影。现在只按 tmdbId 精确匹配，找不到仍回 404。
+- **TMDB 失败恢复报错**：PR 把异常吞掉、用客户端传来的标题硬建任务，结果是一条搜不到资源、用户却以为点播成功的任务。现在回 502 并在消息里写明原因，任务不会落库。
+- **`POST /command` 真的触发搜索**：原来假装「已完成」，Seerr 里点「重新搜索」等于没反应。现在 `MoviesSearch` / `SeriesSearch` 会给对应订阅任务排一次全量搜索。
+- **剧集列表不再拿 tvdbId 冒充 tmdbId**：映射失败时两套编号空间不同，会匹配到别的剧；现在直接返回空。
+- **补源源名单不再写死**：点播任务默认开「本盘没有才跨盘补源」，源名单取 `core.SUBSCRIPTION_CROSS_COPY_SOURCE_PROVIDERS`，将来放开第二个源时点播任务能自动跟上。
+
+### 已知边界
+
+- `GET /episode` 固定返回空列表：我们按「季」管订阅、不维护逐集清单，Seerr 会显示「尚未获取剧集」，不影响点播下发。
+- 点播建的订阅任务默认开跨盘补源（当前源只有夸克），用户可在订阅页按任务关掉。
+
 ## [0.15.10] - 2026-10-26
 
 只动订阅任务的自动查询节奏：命中新集后别再无意义地空转，也别把已经完结的剧一直查下去。

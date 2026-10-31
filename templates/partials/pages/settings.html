@@ -813,9 +813,14 @@
                             </div>
                         </label>
                         <label class="block">
-                            <span class="text-xs text-slate-500">点播默认保存目录（115 网盘相对路径）</span>
-                            <input id="servarr_default_savepath" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：Seerr点播">
-                            <div class="mt-1 text-[11px] text-slate-500">Seerr 点播创建的任务统一存到这里：电影自动建「片名 年份」子目录，剧集建「Season NN」子目录。留空则无法接受点播。</div>
+                            <span class="text-xs text-slate-500">电影点播保存目录（115 网盘相对路径）</span>
+                            <input id="servarr_movie_savepath" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：媒体库/网盘电影">
+                            <div class="mt-1 text-[11px] text-slate-500">Seerr 电影点播自动建「片名 (年份)」子目录并落盘于此。留空则回退到旧版默认保存目录。</div>
+                        </label>
+                        <label class="block">
+                            <span class="text-xs text-slate-500">电视剧点播保存目录（115 网盘相对路径）</span>
+                            <input id="servarr_tv_savepath" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：媒体库/网盘电视剧">
+                            <div class="mt-1 text-[11px] text-slate-500">Seerr 剧集点播自动建「剧名 (年份)/Season NN」子目录并落盘于此。留空则回退到旧版默认保存目录。</div>
                         </label>
                         <div class="text-xs text-slate-500 leading-6">
                             对接方法：在 Seerr（Jellyseerr / Overseerr）的「设置 → Radarr / Sonarr」里各添加一条服务器，地址填 <code>http://面板地址</code>，API Key 填上面生成的同一个密钥；Radarr 对应电影点播，Sonarr 对应剧集点播，保存后 Seerr 会显示连接成功。

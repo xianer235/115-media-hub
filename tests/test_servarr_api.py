@@ -28,6 +28,8 @@ TV_TMDB_ID = 1396
 BASE_CFG = {
     "servarr_api_key": API_KEY,
     "servarr_default_savepath": "Seerr点播",
+    "servarr_movie_savepath": "媒体库/网盘电影",
+    "servarr_tv_savepath": "媒体库/网盘电视剧",
 }
 
 FAKE_MOVIE_DETAIL = {
@@ -167,6 +169,10 @@ class ServarrAuthTest(ServarrApiTestBase):
                 "/api/v3/system/status", headers={"Authorization": f"Bearer {API_KEY}"}
             )
             self.assertEqual(resp_bearer.status_code, 200)
+            resp_query = self.client.get(
+                f"/api/v3/system/status?apikey={API_KEY}"
+            )
+            self.assertEqual(resp_query.status_code, 200)
 
     def test_missing_key_header_returns_401(self):
         with self._patched():
@@ -195,13 +201,14 @@ class ServarrStaticEndpointsTest(ServarrApiTestBase):
         self.assertEqual(data[0]["name"], "默认")
         self.assertTrue(data[0]["items"])
 
-    def test_rootfolder_default_and_configured(self):
-        with self._patched(cfg={"servarr_default_savepath": ""}):
-            resp = self.client.get("/api/v3/rootfolder", headers=HEADERS)
-        self.assertEqual(resp.json()[0]["path"], "/")
+    def test_rootfolder_is_fixed_slash(self):
+        """根目录固定返回 `/`：Seerr 里不需要用户挑目录，真实落点由面板的两个配置决定。"""
         with self._patched():
             resp = self.client.get("/api/v3/rootfolder", headers=HEADERS)
-        self.assertEqual(resp.json()[0]["path"], "Seerr点播")
+            data = resp.json()
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]["id"], 1)
+        self.assertEqual(data[0]["path"], "/")
 
     def test_tag(self):
         with self._patched():
@@ -223,7 +230,13 @@ class ServarrMovieApiTest(ServarrApiTestBase):
         with self._patched() as ctx:
             resp = self.client.post("/api/v3/movie", json={"tmdbId": 603}, headers=HEADERS)
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json(), {"id": 603})
+        body = resp.json()
+        self.assertEqual(body["id"], 603)
+        self.assertEqual(body["tmdbId"], 603)
+        self.assertEqual(body["title"], "黑客帝国")
+        # Seerr 会把这两个字段写进自己的库，空值会让它把请求标成失败
+        self.assertEqual(body["titleSlug"], "the-matrix")
+        self.assertEqual(body["folderName"], "黑客帝国 (1999)")
         self.assertEqual(ctx.save.call_count, 1)
         tasks = ctx.tasks()
         self.assertEqual(len(tasks), 1)
@@ -231,12 +244,31 @@ class ServarrMovieApiTest(ServarrApiTestBase):
         self.assertEqual(task["name"], "黑客帝国 (1999)")
         self.assertEqual(task["provider"], "115")
         self.assertEqual(task["media_type"], "movie")
-        self.assertEqual(task["savepath"], "Seerr点播")
+        # 电影走电影目录，不再共用唯一目录
+        self.assertEqual(task["savepath"], "媒体库/网盘电影")
         self.assertEqual(task["tmdb_id"], 603)
         self.assertEqual(task["tmdb_title"], "黑客帝国")
         self.assertEqual(task["tmdb_year"], "1999")
         self.assertTrue(task["enabled"])
         self.assertTrue(task["organize_on_import"])
+
+    def test_add_movie_falls_back_to_legacy_savepath(self):
+        """新配置留空时回退旧的 servarr_default_savepath，老用户升级不会突然点播失败。"""
+        with self._patched(cfg={"servarr_movie_savepath": ""}) as ctx:
+            resp = self.client.post("/api/v3/movie", json={"tmdbId": 603}, headers=HEADERS)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(ctx.tasks()[0]["savepath"], "Seerr点播")
+
+    def test_add_movie_enables_cross_copy_fallback_from_core_sources(self):
+        from app.core import SUBSCRIPTION_CROSS_COPY_SOURCE_PROVIDERS
+
+        with self._patched() as ctx:
+            self.client.post("/api/v3/movie", json={"tmdbId": 603}, headers=HEADERS)
+        task = ctx.tasks()[0]
+        self.assertEqual(task["cross_copy_mode"], "fallback")
+        self.assertEqual(
+            task["cross_copy_sources"], list(SUBSCRIPTION_CROSS_COPY_SOURCE_PROVIDERS)
+        )
 
     def test_add_movie_queues_job_immediately(self):
         with self._patched() as ctx:
@@ -249,9 +281,27 @@ class ServarrMovieApiTest(ServarrApiTestBase):
         with self._patched(cfg) as ctx:
             resp = self.client.post("/api/v3/movie", json={"tmdbId": 603}, headers=HEADERS)
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json(), {"id": 603})
+        self.assertEqual(resp.json()["id"], 603)
         self.assertEqual(ctx.save.call_count, 0)
         self.assertEqual(len(ctx.tasks()), 1)
+
+    def test_put_movie_creates_when_missing(self):
+        """Seerr 对「库里已有但未监控」的片子发 PUT，我们没这条任务时要补建。"""
+        with self._patched() as ctx:
+            resp = self.client.put("/api/v3/movie", json={"tmdbId": 603}, headers=HEADERS)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["titleSlug"], "the-matrix")
+        self.assertEqual(len(ctx.tasks()), 1)
+        ctx.queue.assert_called_once_with("黑客帝国 (1999)", "servarr")
+
+    def test_put_movie_existing_does_not_create_again(self):
+        cfg = {"subscription_tasks": [_movie_task()]}
+        with self._patched(cfg) as ctx:
+            resp = self.client.put("/api/v3/movie", json={"tmdbId": 603}, headers=HEADERS)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["id"], 603)
+        self.assertEqual(ctx.save.call_count, 0)
+        self.assertEqual(ctx.queue.call_count, 0)
 
     def test_add_movie_without_tmdb_id_returns_400(self):
         with self._patched():
@@ -259,10 +309,10 @@ class ServarrMovieApiTest(ServarrApiTestBase):
         self.assertEqual(resp.status_code, 400)
 
     def test_add_movie_without_default_savepath_returns_400(self):
-        with self._patched(cfg={"servarr_default_savepath": ""}):
+        with self._patched(cfg={"servarr_default_savepath": "", "servarr_movie_savepath": ""}):
             resp = self.client.post("/api/v3/movie", json={"tmdbId": 603}, headers=HEADERS)
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("未配置点播默认保存目录", resp.json()["detail"])
+        self.assertIn("未配置电影点播保存目录", resp.json()["detail"])
 
     def test_add_movie_with_tmdb_config_error_returns_400(self):
         with self._patched(tmdb_config_error="TMDB 增强未启用，请先在参数配置中开启"):
@@ -270,10 +320,13 @@ class ServarrMovieApiTest(ServarrApiTestBase):
         self.assertEqual(resp.status_code, 400)
         self.assertIn("TMDB 增强未启用", resp.json()["detail"])
 
-    def test_add_movie_detail_failure_returns_500(self):
-        with self._patched(detail_exc=RuntimeError("tmdb boom")):
+    def test_add_movie_detail_failure_returns_502(self):
+        """TMDB 失败必须报错：静默用客户端标题建任务会造出一条永远搜不到的任务。"""
+        with self._patched(detail_exc=RuntimeError("tmdb boom")) as ctx:
             resp = self.client.post("/api/v3/movie", json={"tmdbId": 603}, headers=HEADERS)
-        self.assertEqual(resp.status_code, 500)
+        self.assertEqual(resp.status_code, 502)
+        self.assertIn("TMDB", resp.json()["detail"])
+        self.assertEqual(ctx.tasks(), [])
 
     def test_movie_lookup_monitored_follows_subscription(self):
         with self._patched() as ctx:
@@ -329,12 +382,17 @@ class ServarrSeriesApiTest(ServarrApiTestBase):
                 headers=HEADERS,
             )
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json(), {"id": TV_TMDB_ID})
+        body = resp.json()
+        self.assertEqual(body["id"], TV_TMDB_ID)
+        self.assertEqual(body["titleSlug"], "breaking-bad")
+        self.assertEqual(body["folderName"], "绝命毒师 (2008)")
         tasks = ctx.tasks()
         self.assertEqual(len(tasks), 1)
         self.assertEqual(tasks[0]["name"], "绝命毒师 (2008)")
         self.assertEqual(tasks[0]["season"], 1)
         self.assertEqual(tasks[0]["total_episodes"], 22)
+        # 剧集落点 = 电视剧目录 / 剧名 (年份)，Season NN 由导入侧再拼
+        self.assertEqual(tasks[0]["savepath"], "媒体库/网盘电视剧/绝命毒师 (2008)")
         ctx.queue.assert_called_once_with("绝命毒师 (2008)", "servarr")
 
     def test_add_series_multi_season_creates_one_task_per_season(self):
@@ -395,7 +453,7 @@ class ServarrSeriesApiTest(ServarrApiTestBase):
                 headers=HEADERS,
             )
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json(), {"id": TV_TMDB_ID})
+        self.assertEqual(resp.json()["id"], TV_TMDB_ID)
         self.assertEqual(ctx.save.call_count, 0)
         self.assertEqual(ctx.queue.call_count, 0)
 
@@ -437,10 +495,10 @@ class ServarrSeriesApiTest(ServarrApiTestBase):
         self.assertEqual(resp.status_code, 400)
 
     def test_add_series_without_default_savepath_returns_400(self):
-        with self._patched(cfg={"servarr_default_savepath": ""}, tvdb_to_tmdb=TV_TMDB_ID):
+        with self._patched(cfg={"servarr_default_savepath": "", "servarr_tv_savepath": ""}, tvdb_to_tmdb=TV_TMDB_ID):
             resp = self.client.post("/api/v3/series", json={"tmdbId": TV_TMDB_ID}, headers=HEADERS)
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("未配置点播默认保存目录", resp.json()["detail"])
+        self.assertIn("未配置电视剧点播保存目录", resp.json()["detail"])
 
     def test_add_series_name_collision_gets_tmdb_suffix(self):
         cfg = {"subscription_tasks": [_movie_task(tmdb_id=999, name="绝命毒师 (2008)")]}
@@ -459,6 +517,30 @@ class ServarrSeriesApiTest(ServarrApiTestBase):
             resp = self.client.post("/api/v3/series", json={"tvdbId": TVDB_ID}, headers=HEADERS)
         self.assertEqual(resp.status_code, 400)
         self.assertIn("对应的 TMDB 条目", resp.json()["detail"])
+
+    def test_add_series_detail_failure_returns_502(self):
+        with self._patched(detail_exc=RuntimeError("tmdb boom")) as ctx:
+            resp = self.client.post(
+                "/api/v3/series", json={"tmdbId": TV_TMDB_ID}, headers=HEADERS
+            )
+        self.assertEqual(resp.status_code, 502)
+        self.assertEqual(ctx.tasks(), [])
+
+    def test_series_lookup_has_non_null_slug_and_folder(self):
+        with self._patched(tvdb_to_tmdb=TV_TMDB_ID):
+            resp = self.client.get(
+                "/api/v3/series/lookup", params={"term": f"tvdb:{TVDB_ID}"}, headers=HEADERS
+            )
+        body = resp.json()[0]
+        self.assertEqual(body["titleSlug"], "breaking-bad")
+        self.assertEqual(body["folderName"], "绝命毒师 (2008)")
+
+    def test_series_list_unresolvable_tvdb_does_not_use_tvdb_as_tmdb(self):
+        """tvdb→tmdb 映射失败时不能拿 tvdbId 当 tmdbId 用（会撞上别的剧）。"""
+        cfg = {"subscription_tasks": [_tv_task(tmdb_id=TV_TMDB_ID)]}
+        with self._patched(cfg, tvdb_to_tmdb=0):
+            resp = self.client.get("/api/v3/series", params={"tvdbId": TV_TMDB_ID}, headers=HEADERS)
+        self.assertEqual(resp.json(), [])
 
     def test_series_lookup_tvdb_term(self):
         with self._patched(tvdb_to_tmdb=TV_TMDB_ID):
@@ -529,11 +611,82 @@ class ServarrDeleteApiTest(ServarrApiTestBase):
                 headers=HEADERS,
             )
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json(), {"id": TV_TMDB_ID})
+        self.assertEqual(resp.json()["id"], TV_TMDB_ID)
         tasks = ctx.tasks()
         self.assertEqual(len(tasks), 1)
         self.assertEqual(tasks[0]["name"], "绝命毒师 (2008)")
         ctx.queue.assert_called_once_with("绝命毒师 (2008)", "servarr")
+
+    def test_delete_movie_only_matches_exact_tmdb_id(self):
+        """回归：曾用「名字里包含这个数字」兜底，删 id=2 会把名字带 2 的电影一起删。"""
+        cfg = {
+            "subscription_tasks": [
+                _movie_task(603, "黑客帝国 (1999)"),
+                _movie_task(155, "沙丘2 (2024)"),
+            ]
+        }
+        with self._patched(cfg) as ctx:
+            resp = self.client.delete("/api/v3/movie/155", headers=HEADERS)
+            self.assertEqual(resp.status_code, 200)
+            names = [task["name"] for task in ctx.tasks()]
+        self.assertEqual(names, ["黑客帝国 (1999)"])
+
+    def test_delete_movie_does_not_touch_series(self):
+        cfg = {"subscription_tasks": [_movie_task(), _tv_task(season=1)]}
+        with self._patched(cfg) as ctx:
+            resp = self.client.delete("/api/v3/movie/603", headers=HEADERS)
+            self.assertEqual(resp.status_code, 200)
+            left = ctx.tasks()
+        self.assertEqual([task["media_type"] for task in left], ["tv"])
+
+
+class ServarrCommandTest(ServarrApiTestBase):
+    def test_movies_search_queues_matching_movie_tasks(self):
+        cfg = {
+            "subscription_tasks": [
+                _movie_task(603, "黑客帝国 (1999)"),
+                _movie_task(155, "黑暗骑士 (2008)"),
+            ]
+        }
+        with self._patched(cfg) as ctx:
+            resp = self.client.post(
+                "/api/v3/command",
+                json={"name": "MoviesSearch", "movieIds": [603]},
+                headers=HEADERS,
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["status"], "completed")
+        self.assertEqual(resp.json()["queued"], 1)
+        ctx.queue.assert_called_once_with("黑客帝国 (1999)", "servarr")
+
+    def test_series_search_queues_every_season_task(self):
+        cfg = {"subscription_tasks": [_tv_task(season=1), _tv_task(season=2)]}
+        with self._patched(cfg) as ctx:
+            resp = self.client.post(
+                "/api/v3/command",
+                json={"name": "SeriesSearch", "seriesId": TV_TMDB_ID},
+                headers=HEADERS,
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["queued"], 2)
+        self.assertEqual(ctx.queue.call_count, 2)
+
+    def test_unknown_command_is_noop(self):
+        with self._patched() as ctx:
+            resp = self.client.post(
+                "/api/v3/command", json={"name": "RescanMovie"}, headers=HEADERS
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["queued"], 0)
+        self.assertEqual(ctx.queue.call_count, 0)
+
+    def test_episode_returns_empty_list(self):
+        with self._patched():
+            resp = self.client.get(
+                "/api/v3/episode", params={"seriesId": TV_TMDB_ID}, headers=HEADERS
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), [])
 
 
 if __name__ == "__main__":
