@@ -1,10 +1,10 @@
 {
-  "version": "0.15.10",
-  "buildDate": "2026-10-26T21:00:00+08:00",
+  "version": "0.15.11",
+  "buildDate": "2026-10-31T14:30:00+08:00",
   "notes": [
-    "订阅任务新增「命中后冷却」：命中新集后暂停自动查询，直到下一集播出前才恢复，日更/周更剧不再一天空搜 12 次；未命中时的查询频率完全不变（发现新集优先）。冷却方式可选自动（读 TMDB 播出排期推算）/ 手动指定小时数 / 关闭，按任务单独设置；手动运行与 Seerr 点播不受限制",
-    "剧集在 TMDB 标记为已完结（Ended / Canceled）后自动停止定时查询，列表打「已完结」标记、简介写「自动查询已停止，可手动运行」；手动跑一次若 TMDB 变回连载中会自动恢复（集数追平不算完结）",
-    "顺带修掉 Seerr 点播接口在 API 密钥含非 ASCII 字符时返回 500 的问题（改为按字节比较）"
+    "Seerr 点播接口补齐：支持网址参数传 API Key（Seerr 测连接必需）、补 PUT /movie 与 POST /command、GET /episode，titleSlug / folderName 不再为空；Seerr 里可以一次加完 Radarr / Sonarr 并真正点播成功",
+    "电影与电视剧保存目录拆开（两项留空自动回退旧配置），剧集落点补上「剧名 (年份)」这一层，最终是 <电视剧目录>/剧名 (年份)/Season NN，Jellyfin / Plex 能按「一部剧一个文件夹」识别",
+    "POST /command 现在会真的触发一次搜索（原来假装完成）；同时修掉「按名字子串匹配删除会误删无关订阅」和「TMDB 失败静默建任务、永远搜不到」两个问题"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"
