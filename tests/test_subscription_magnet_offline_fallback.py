@@ -301,6 +301,66 @@ class MagnetExistingEpisodesTest(unittest.IsolatedAsyncioTestCase):
         scan_mock.assert_not_awaited()
 
 
+class MagnetCandidateRankTest(unittest.TestCase):
+    """磁力挑包顺序：先看能补上缺的哪几集，不是照着发布时间随便挑。"""
+
+    def _rank(self, candidates, existing, total=12):
+        return runner._rank_subscription_magnet_candidates(
+            _base_task(), candidates, existing, total, total
+        )
+
+    def test_prefers_candidate_covering_missing_episode(self):
+        """缺 E05 时，含 E05 的旧包要排在只含 E01 的新包前面。"""
+        candidates = [
+            {"id": 1, "title": "测试剧 S01E01 1080p"},
+            {"id": 2, "title": "测试剧 S01E05 1080p"},
+        ]
+        ranked = self._rank(candidates, {1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12})
+        self.assertEqual([item["id"] for item in ranked], [2, 1])
+
+    def test_prefers_wider_coverage(self):
+        """缺 E05+E06 时，覆盖 2 集的合集优于只覆盖 1 集的单集。"""
+        candidates = [
+            {"id": 1, "title": "测试剧 S01E05 1080p"},
+            {"id": 2, "title": "测试剧 S01E01-E06 1080p"},
+        ]
+        ranked = self._rank(candidates, {1, 2, 3, 4, 7, 8, 9, 10, 11, 12})
+        self.assertEqual([item["id"] for item in ranked], [2, 1])
+
+    def test_full_bundle_counts_as_covering_earlier_episodes(self):
+        """「全12集」只解析出集号 12，但 1~12 都有，缺 E05 时要认这条。"""
+        candidates = [
+            {"id": 1, "title": "测试剧 S01E01 1080p"},
+            {"id": 2, "title": "测试剧 全12集"},
+        ]
+        ranked = self._rank(candidates, {1, 2, 3, 4, 6, 7, 8, 9, 10})
+        self.assertEqual([item["id"] for item in ranked], [2, 1])
+
+    def test_smaller_bundle_wins_on_equal_coverage(self):
+        """同样只补 E05，别为了这一集去下整季。"""
+        candidates = [
+            {"id": 1, "title": "测试剧 S01E01-E12 1080p"},
+            {"id": 2, "title": "测试剧 S01E05 1080p"},
+        ]
+        ranked = self._rank(candidates, {1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12})
+        self.assertEqual([item["id"] for item in ranked], [2, 1])
+
+    def test_unparsable_title_goes_last(self):
+        candidates = [
+            {"id": 1, "title": "测试剧"},
+            {"id": 2, "title": "测试剧 S01E05 1080p"},
+        ]
+        ranked = self._rank(candidates, {1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12})
+        self.assertEqual([item["id"] for item in ranked], [2, 1])
+
+    def test_movie_keeps_original_order(self):
+        candidates = [{"id": 1, "title": "测试剧 2025 2160p"}, {"id": 2, "title": "测试剧 2025 1080p"}]
+        ranked = runner._rank_subscription_magnet_candidates(
+            _base_task(media_type="movie"), candidates, set(), 0, 0
+        )
+        self.assertEqual([item["id"] for item in ranked], [1, 2])
+
+
 class MagnetOfflineSettingWiringTest(unittest.TestCase):
     def _read(self, *parts):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

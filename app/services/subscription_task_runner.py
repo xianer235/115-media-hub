@@ -1317,6 +1317,77 @@ async def _resolve_subscription_magnet_existing_episodes(
     return set(), normalized_last
 
 
+def _is_subscription_full_bundle_title(title: str) -> bool:
+    """标题是不是「全集 / 全 N 集」这种整季包。
+
+    「全12集」这类标题只会解析出集号 12，但包里其实 1~12 都有。不特判的话，
+    缺 E05 时这种整季包会因为「只覆盖 1 集（E12）」被排到单集包后面。
+    """
+    normalized = str(title or "").strip()
+    if not normalized:
+        return False
+    lowered = normalized.lower()
+    if "全集" in normalized or "complete series" in lowered:
+        return True
+    return "全" in normalized and "集" in normalized
+
+
+def _rank_subscription_magnet_candidates(
+    task: Dict[str, Any],
+    candidates: List[Dict[str, Any]],
+    existing_episodes: Set[int],
+    episode_upper_bound: int,
+    known_total: int,
+) -> List[Dict[str, Any]]:
+    """磁力兜底挑包顺序：先看能不能补上缺的那几集，别照着盘搜的发布时间随便挑。
+
+    盘搜原始顺序是「发布时间倒序」，和缺哪一集毫无关系：缺 E05 时，一条只含 E01
+    的新包会排在含 E05 的老包前面，下完一整包才发现没有缺的那集——白占 115 离线
+    队列和中转空间（入库时只搬缺集，但下载量已经花掉了）。
+
+    排序口径：
+
+    1. **能补的缺集数降序**——覆盖 3 集的合集优于只覆盖 1 集的单集；
+    2. 同等覆盖时**取集数少的包**——别为了 1 集去下整季；
+    3. 仍然相同时保持盘搜原顺序（发布时间倒序，取新的）。
+
+    标题里解析不出集数的候选排最后（无法判断覆盖，最后才赌一把）。
+
+    :return: 排好序的候选列表（原对象，不做拷贝）。
+    """
+    rows: List[Tuple[int, int, int, Dict[str, Any]]] = []
+    if str(task.get("media_type", "") or "").strip().lower() != "tv":
+        return list(candidates)
+    target_total = max(0, int(episode_upper_bound or 0), int(known_total or 0))
+    normalized_existing = set(existing_episodes or set())
+    missing = (
+        {episode_no for episode_no in range(1, target_total + 1) if episode_no not in normalized_existing}
+        if target_total > 0
+        else set()
+    )
+    for order, raw in enumerate(candidates if isinstance(candidates, list) else []):
+        item = raw if isinstance(raw, dict) else {}
+        title = str(item.get("title", "") or item.get("name", "") or "").strip()
+        episodes = _extract_task_episodes_from_name(task, title) if title else set()
+        if episodes:
+            if missing and _is_subscription_full_bundle_title(title):
+                # 「全12集」实际含 1~12，按最大集号折算覆盖的缺集。
+                bundle_max = max(episodes)
+                covered = len({episode_no for episode_no in missing if episode_no <= bundle_max})
+            elif missing:
+                # 缺集已知就数覆盖了几个；缺集未知时只要解析出集数就算可用。
+                covered = len(episodes & missing)
+            else:
+                covered = 1
+            bundle_size = len(episodes)
+        else:
+            covered = -1
+            bundle_size = 10 ** 6
+        rows.append((-covered, bundle_size, order, raw))
+    rows.sort(key=lambda row: (row[0], row[1], row[2]))
+    return [row[3] for row in rows]
+
+
 async def _run_subscription_magnet_offline_import(
     *,
     task: Dict[str, Any],
@@ -1374,7 +1445,15 @@ async def _run_subscription_magnet_offline_import(
     if not provider_meta or not str(cookie_115 or "").strip():
         return None
 
-    raw_item = offline_candidates[0] if isinstance(offline_candidates[0], dict) else {}
+    # 盘搜给的顺序是发布时间倒序，跟缺哪一集无关，这里按「能补几集缺集」重排。
+    ranked_offline_candidates = _rank_subscription_magnet_candidates(
+        task,
+        offline_candidates,
+        existing_folder_episodes,
+        single_season_episode_upper_bound,
+        known_total,
+    )
+    raw_item = ranked_offline_candidates[0] if isinstance(ranked_offline_candidates[0], dict) else {}
     link_url = str(raw_item.get("link_url", "") or "").strip()
     if not link_url:
         return None
@@ -1384,6 +1463,11 @@ async def _run_subscription_magnet_offline_import(
 
     await write_subscription_log(
         f"磁力离线兜底：本盘与跨盘补源都未拿到缺失集，改用离线下载（{link_type}）：{link_url[:120]}",
+        "info",
+    )
+    await write_subscription_log(
+        f"磁力候选共 {len(ranked_offline_candidates)} 条，已按「能补的缺集数」排序，本次取第一条："
+        f"{str(raw_item.get('title', '') or '').strip()[:120]}",
         "info",
     )
     result = await _run_subscription_manual_offline_import(
