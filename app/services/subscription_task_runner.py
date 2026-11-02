@@ -1288,6 +1288,35 @@ async def _organize_subscription_imported_files(
     return False
 
 
+async def _resolve_subscription_magnet_existing_episodes(
+    task: Dict[str, Any],
+    cfg: Dict[str, Any],
+    last_episode: int,
+) -> Tuple[Set[int], int]:
+    """磁力兜底挑集用的「本盘已有集」：真扫目标目录，扫不到才退回进度口径。
+
+    「盘搜无候选」不等于「本盘为空」——盘搜故障、关键词改动都会走到兜底，
+    而那时本盘可能已经有前几集。传空集合会被下游理解成「一集都没有」，
+    把整季重新搬进 Season 目录，所以这里必须先扫一次真实目录。
+
+    扫描失败（返回 ``None``）才退回「进度已到 E{last_episode}」口径：宁可漏补中间缺集，
+    也不整季重下。扫描成功但目录不存在（返回空集合）是可靠的「本盘一集都没有」，
+    照旧传空集合让下游整季入库——用户删过目录时就是要重下。
+
+    :return: (已有集集合, 校准后的 last_episode)
+    """
+    normalized_last = max(0, int(last_episode or 0))
+    if str(task.get("media_type", "") or "").strip().lower() != "tv":
+        return set(), normalized_last
+    scanned = await _scan_subscription_existing_episodes_quietly(task, cfg)
+    if scanned is not None:
+        episodes = set(scanned)
+        return episodes, max(normalized_last, max(episodes) if episodes else 0)
+    if normalized_last > 0:
+        return set(range(1, normalized_last + 1)), normalized_last
+    return set(), normalized_last
+
+
 async def _run_subscription_magnet_offline_import(
     *,
     task: Dict[str, Any],
@@ -1330,9 +1359,18 @@ async def _run_subscription_magnet_offline_import(
         return None
     if not offline_candidates:
         return None
-    # 本盘不缺（已有比进度更靠后的集）时不下种；口径与补源一致。
-    if not _subscription_cross_copy_needed(task, ranked_candidates, last_episode):
-        return None
+    # 缺集判定要分片种看，不能一律套补源那套「候选集数比 last_episode」：
+    # 剧集走到这里往往正是因为候选全部转存失败（分享失效 / 404），那批候选的集数
+    # 恰恰比 last_episode 大，套过来会算出「本盘不缺」而把最后手段跳过。
+    if str(task.get("media_type", "") or "").strip().lower() != "tv":
+        # 电影：有候选就不兜底——那很可能就是已经在库的那一部，重复下种没意义。
+        if not _subscription_cross_copy_needed(task, ranked_candidates, last_episode):
+            return None
+    else:
+        # 剧集：这轮一集都没导进来，只有「已有集已覆盖到目标总集」才算真的不缺。
+        target_total = max(0, int(single_season_episode_upper_bound or 0), int(known_total or 0))
+        if target_total > 0 and existing_folder_episodes and max(existing_folder_episodes) >= target_total:
+            return None
     if not provider_meta or not str(cookie_115 or "").strip():
         return None
 
@@ -1348,7 +1386,7 @@ async def _run_subscription_magnet_offline_import(
         f"磁力离线兜底：本盘与跨盘补源都未拿到缺失集，改用离线下载（{link_type}）：{link_url[:120]}",
         "info",
     )
-    return await _run_subscription_manual_offline_import(
+    result = await _run_subscription_manual_offline_import(
         task=task,
         task_name=task_name,
         cfg=cfg,
@@ -1371,6 +1409,17 @@ async def _run_subscription_magnet_offline_import(
         batch_refresh_enabled=batch_refresh_enabled,
         import_timeout_seconds=import_timeout_seconds,
     )
+    # 死种防重试：离线被判无效时落失效链接缓存，下一轮盘搜抽候选直接筛掉这条。
+    # 只靠上面「读缓存」是不够的——离线链路的失败在此之前从来没人写过缓存，
+    # 不写就会每轮定时巡检都把同一个死种重新提交一次 115 离线队列。
+    if isinstance(result, dict) and not result.get("ok"):
+        failed_detail = str(result.get("last_failed_detail", "") or "").strip()
+        if failed_detail and _is_subscription_invalid_link_error(failed_detail, link_type):
+            try:
+                _record_subscription_invalid_link_cache(link_url, link_type, failed_detail)
+            except Exception as cache_exc:
+                await write_subscription_log(f"记录失效磁力链接失败（不影响本次订阅）：{cache_exc}", "warn")
+    return result
 
 
 async def _run_subscription_manual_offline_import(
@@ -3982,6 +4031,12 @@ async def run_subscription_task(
                         )
                         or ""
                     )
+                # 「盘搜无候选」不等于「本盘是空的」：盘搜故障、关键词改动都会走到这里，
+                # 而本盘可能已经有前几集。挑集必须拿目标目录里真实存在的集去比，
+                # 传空集合会被下游理解成「一集都没有」而把整季重复搬进 Season 目录。
+                offline_existing_episodes, last_episode = await _resolve_subscription_magnet_existing_episodes(
+                    task, cfg, last_episode
+                )
                 magnet_offline_result = await _run_subscription_magnet_offline_import(
                     task=task,
                     task_name=task_name,
@@ -3994,8 +4049,8 @@ async def run_subscription_task(
                     last_episode=last_episode,
                     known_total=known_total,
                     single_season_episode_upper_bound=single_season_episode_upper_bound,
-                    existing_folder_episodes=set(),
-                    existing_episode_scan_ready=False,
+                    existing_folder_episodes=offline_existing_episodes,
+                    existing_episode_scan_ready=bool(offline_existing_episodes),
                     folder_id=offline_folder_id,
                     effective_savepath=offline_target_savepath,
                     base_savepath=offline_base_savepath,
@@ -6164,29 +6219,34 @@ async def run_subscription_task(
         # 兜底顺序的最后一层：本盘分享转存（上面的循环）→ 跨盘补源（前面已先行）→ 磁力离线。
         # 走到这里 successful_count == 0 才说明本盘一条候选都没能转存成功。
         if successful_count == 0 and not cross_copy_registered and magnet_offline_candidates:
-            magnet_offline_result = await _run_subscription_magnet_offline_import(
-                task=task,
-                task_name=task_name,
-                cfg=cfg,
-                provider=provider,
-                provider_meta=provider_meta,
-                cookie_115=cookie_115,
-                offline_candidates=magnet_offline_candidates,
-                ranked_candidates=ranked_candidates,
-                last_episode=last_episode,
-                known_total=known_total,
-                single_season_episode_upper_bound=single_season_episode_upper_bound,
-                existing_folder_episodes=existing_folder_episodes,
-                existing_episode_scan_ready=existing_episode_scan_ready,
-                folder_id=folder_id,
-                effective_savepath=effective_savepath,
-                base_savepath=base_savepath,
-                monitor_task_name=monitor_task_name,
-                subscription_run_id=subscription_run_id,
-                batch_refresh_enabled=batch_refresh_enabled,
-                cross_copy_registered=cross_copy_registered,
-                import_timeout_seconds=import_timeout_seconds,
-            )
+            magnet_offline_result: Optional[Dict[str, Any]] = None
+            try:
+                magnet_offline_result = await _run_subscription_magnet_offline_import(
+                    task=task,
+                    task_name=task_name,
+                    cfg=cfg,
+                    provider=provider,
+                    provider_meta=provider_meta,
+                    cookie_115=cookie_115,
+                    offline_candidates=magnet_offline_candidates,
+                    ranked_candidates=ranked_candidates,
+                    last_episode=last_episode,
+                    known_total=known_total,
+                    single_season_episode_upper_bound=single_season_episode_upper_bound,
+                    existing_folder_episodes=existing_folder_episodes,
+                    existing_episode_scan_ready=existing_episode_scan_ready,
+                    folder_id=folder_id,
+                    effective_savepath=effective_savepath,
+                    base_savepath=base_savepath,
+                    monitor_task_name=monitor_task_name,
+                    subscription_run_id=subscription_run_id,
+                    batch_refresh_enabled=batch_refresh_enabled,
+                    cross_copy_registered=cross_copy_registered,
+                    import_timeout_seconds=import_timeout_seconds,
+                )
+            except Exception as magnet_exc:
+                # 兜底失败不能把「本轮没导到资源」升级成「任务失败」。
+                await write_subscription_log(f"磁力离线兜底失败（不影响本次订阅）：{magnet_exc}", "warn")
             if magnet_offline_result and magnet_offline_result.get("ok"):
                 magnet_item = (
                     magnet_offline_candidates[0] if isinstance(magnet_offline_candidates[0], dict) else {}

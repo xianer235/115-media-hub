@@ -9,7 +9,7 @@
 import asyncio
 import os
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from app import core
 from app.services import subscription_task_runner as runner
@@ -160,11 +160,37 @@ class MagnetOfflineGateTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result)
         import_mock.assert_not_awaited()
 
-    async def test_not_missing_skips(self):
-        ranked = [{"item": _magnet_item(link_type="115share"), "episode": 9}]
+    async def test_tv_fully_covered_skips(self):
+        """已覆盖到目标总集时才不下种。"""
         with patch.object(runner, "_run_subscription_manual_offline_import", new=AsyncMock()) as import_mock:
             result = await runner._run_subscription_magnet_offline_import(
+                **self._kwargs(existing_folder_episodes=set(range(1, 13)))
+            )
+        self.assertIsNone(result)
+        import_mock.assert_not_awaited()
+
+    async def test_tv_candidates_all_failed_still_falls_back(self):
+        """候选集数比 last_episode 大但全部转存失败时，仍然要下磁力。
+
+        这是兜底最该生效的场景：分享失效了，本盘确实缺集。
+        """
+        ranked = [{"item": _magnet_item(link_type="115share"), "episode": 12}]
+        import_mock = AsyncMock(return_value={"ok": True, "job_id": 1, "imported_episodes": [4]})
+        with patch.object(runner, "write_subscription_log", new=AsyncMock()), patch.object(
+            runner, "_run_subscription_manual_offline_import", new=import_mock
+        ):
+            result = await runner._run_subscription_magnet_offline_import(
                 **self._kwargs(ranked_candidates=ranked)
+            )
+        self.assertTrue(result.get("ok"))
+        import_mock.assert_awaited_once()
+
+    async def test_movie_with_candidates_skips(self):
+        """电影有候选就不兜底，避免把已经在库的那部重复下种。"""
+        ranked = [{"item": _magnet_item(link_type="115share"), "episode": 0}]
+        with patch.object(runner, "_run_subscription_manual_offline_import", new=AsyncMock()) as import_mock:
+            result = await runner._run_subscription_magnet_offline_import(
+                **self._kwargs(task=_base_task(media_type="movie"), ranked_candidates=ranked)
             )
         self.assertIsNone(result)
         import_mock.assert_not_awaited()
@@ -182,6 +208,97 @@ class MagnetOfflineGateTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, {"ok": True, "job_id": 1, "imported_episodes": [5]})
         import_mock.assert_awaited_once()
         self.assertEqual(import_mock.await_args.kwargs["item"]["id"], 7)
+
+    async def test_invalid_link_failure_is_recorded(self):
+        """离线判无效要落失效链接缓存，否则死种每轮巡检都会重新提交一次。"""
+        import_mock = AsyncMock(
+            return_value={"ok": False, "last_failed_detail": "invalid magnet: resource not found"}
+        )
+        record_mock = MagicMock()
+        with patch.object(runner, "write_subscription_log", new=AsyncMock()), patch.object(
+            runner, "_run_subscription_manual_offline_import", new=import_mock
+        ), patch.object(runner, "_record_subscription_invalid_link_cache", new=record_mock):
+            result = await runner._run_subscription_magnet_offline_import(**self._kwargs())
+        self.assertFalse(result["ok"])
+        record_mock.assert_called_once()
+        self.assertEqual(record_mock.call_args.args[0], "magnet:?xt=urn:btih:deadbeef")
+        self.assertEqual(record_mock.call_args.args[1], "magnet")
+
+    async def test_transient_failure_is_not_recorded(self):
+        """超时/网络类失败只是暂时性的，不能当成死种永久跳过。"""
+        import_mock = AsyncMock(
+            return_value={"ok": False, "last_failed_detail": "115 离线任务超时，请稍后重试"}
+        )
+        record_mock = MagicMock()
+        with patch.object(runner, "write_subscription_log", new=AsyncMock()), patch.object(
+            runner, "_run_subscription_manual_offline_import", new=import_mock
+        ), patch.object(runner, "_record_subscription_invalid_link_cache", new=record_mock):
+            result = await runner._run_subscription_magnet_offline_import(**self._kwargs())
+        self.assertFalse(result["ok"])
+        record_mock.assert_not_called()
+
+
+class MagnetExistingEpisodesTest(unittest.IsolatedAsyncioTestCase):
+    """无候选路径挑集用的「本盘已有集」不能是空集合（会被当成整季都没有）。"""
+
+    async def test_uses_scanned_episodes(self):
+        with patch.object(
+            runner,
+            "_scan_subscription_existing_episodes_quietly",
+            new=AsyncMock(return_value={1, 2, 3, 5}),
+        ):
+            episodes, last = await runner._resolve_subscription_magnet_existing_episodes(
+                _base_task(), {}, 3
+            )
+        self.assertEqual(episodes, {1, 2, 3, 5})
+        self.assertEqual(last, 5)
+
+    async def test_scan_failure_falls_back_to_progress(self):
+        with patch.object(
+            runner,
+            "_scan_subscription_existing_episodes_quietly",
+            new=AsyncMock(return_value=None),
+        ):
+            episodes, last = await runner._resolve_subscription_magnet_existing_episodes(
+                _base_task(), {}, 3
+            )
+        self.assertEqual(episodes, {1, 2, 3})
+        self.assertEqual(last, 3)
+
+    async def test_empty_scan_means_target_really_empty(self):
+        """目录不存在是可靠信号（不是「没扫成」），照旧整季入库。"""
+        with patch.object(
+            runner,
+            "_scan_subscription_existing_episodes_quietly",
+            new=AsyncMock(return_value=set()),
+        ):
+            episodes, last = await runner._resolve_subscription_magnet_existing_episodes(
+                _base_task(), {}, 4
+            )
+        self.assertEqual(episodes, set())
+        self.assertEqual(last, 4)
+
+    async def test_fresh_task_stays_empty(self):
+        with patch.object(
+            runner,
+            "_scan_subscription_existing_episodes_quietly",
+            new=AsyncMock(return_value=None),
+        ):
+            episodes, last = await runner._resolve_subscription_magnet_existing_episodes(
+                _base_task(), {}, 0
+            )
+        self.assertEqual(episodes, set())
+        self.assertEqual(last, 0)
+
+    async def test_movie_skips_scan(self):
+        scan_mock = AsyncMock(return_value={1, 2})
+        with patch.object(runner, "_scan_subscription_existing_episodes_quietly", new=scan_mock):
+            episodes, last = await runner._resolve_subscription_magnet_existing_episodes(
+                _base_task(media_type="movie"), {}, 0
+            )
+        self.assertEqual(episodes, set())
+        self.assertEqual(last, 0)
+        scan_mock.assert_not_awaited()
 
 
 class MagnetOfflineSettingWiringTest(unittest.TestCase):
