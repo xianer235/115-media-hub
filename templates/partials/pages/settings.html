@@ -457,6 +457,13 @@
                             <input type="checkbox" id="pansou_enabled" class="ui-checkbox">
                             启用 PanSou 盘搜
                         </label>
+                        <label class="flex items-start gap-3 cursor-pointer text-sm">
+                            <input type="checkbox" id="subscription_magnet_offline_fallback" class="ui-checkbox mt-0.5">
+                            <span>
+                                订阅任务磁力离线兜底
+                                <span class="block text-xs text-slate-500 mt-1">本盘转存与跨盘补源都拿不到缺失集时，才用盘搜到的磁力/电驴链接提交 115 离线下载。会占用 115 离线队列与配额，默认关闭。</span>
+                            </span>
+                        </label>
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <label class="block">
                                 <span class="text-xs text-slate-500">PanSou 服务地址</span>

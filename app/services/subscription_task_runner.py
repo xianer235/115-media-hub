@@ -411,7 +411,7 @@ async def _subscription_cross_copy_dispatch(
     trigger: str,
     total_episodes: int,
     existing_episodes: Optional[Set[int]] = None,
-) -> None:
+) -> bool:
     """跨盘补源：判定本盘缺不缺 → 搜源网盘候选 → 注册复制任务。
 
     只有一个源接通（夸克），名单来自 ``core.SUBSCRIPTION_CROSS_COPY_SOURCE_PROVIDERS``。
@@ -424,10 +424,13 @@ async def _subscription_cross_copy_dispatch(
 
     :param existing_episodes: 目标目录实际落盘的集集合。传了就按集合精确判缺
         （能识别中间缺集）；不传时剧集任务会现场扫一次目录补齐。
+    :return: True 表示这轮真的注册了补源复制任务（缺集已由补源覆盖），
+        False 表示没补源（未开启 / 无源 / 不缺 / 搜不到 / 注册失败）。
+        磁力离线兜底要靠这个返回值判断「补源是否已经接手」。
     """
     cross_copy_mode = str(task.get("cross_copy_mode", "off") or "off")
     if cross_copy_mode == "off":
-        return
+        return False
     # 引擎支持 115/夸克/阿里互传，但补源只接通了夸克作源；
     # 其余源必须显式告知「已跳过」，否则界面勾着却一次搜索都不发，用户无从判断。
     usable_sources, skipped_sources = split_cross_copy_sources(task.get("cross_copy_sources", []))
@@ -442,12 +445,12 @@ async def _subscription_cross_copy_dispatch(
             "跨盘补源：没有已接通的源网盘，本次未执行（当前只支持从夸克网盘补源）",
             "warn",
         )
-        return
+        return False
     # 本盘缺才补源：同盘有资源时走转存（服务端秒传）更快，跨盘要下载再上传，
     # 命中也复制纯属浪费（2026-10-23 删 prefer 档后这里是唯一口径）。
     should_cross_copy = _subscription_cross_copy_needed(task, ranked_candidates, last_episode)
     if not should_cross_copy:
-        return
+        return False
 
     # 精确判缺需要一个「本盘到底有哪些集」的集合。有候选那条路径校准阶段已经扫过，
     # 直接传进来；无候选早退这条还没扫，现场补一次，避免拿进度旧值判缺。
@@ -475,12 +478,13 @@ async def _subscription_cross_copy_dispatch(
             "跨盘补源：本盘缺最新资源，但夸克也未找到可补候选",
             "info",
         )
-        return
+        return False
 
     await write_subscription_log(
         f"跨盘补源：本盘缺最新资源，从夸克找到 {len(cross_copy_candidates)} 条候选，尝试注册补源",
         "info",
     )
+    registered: List[int] = []
     try:
         cross_copy_stats = await asyncio.to_thread(
             register_cross_copy_from_candidates,
@@ -490,6 +494,7 @@ async def _subscription_cross_copy_dispatch(
             last_episode=last_episode,
             existing_episodes=existing_episodes,
         )
+        registered = list(cross_copy_stats.get("registered", []) or [])
         for log_message, log_level in (cross_copy_stats.get("logs", []) or []):
             await write_subscription_log(log_message, log_level)
     except Exception as exc:
@@ -510,6 +515,8 @@ async def _subscription_cross_copy_dispatch(
             )
     except Exception as exc:
         await write_subscription_log(f"跨盘补源中转目录清理失败（不影响补源）：{exc}", "info")
+
+    return bool(registered)
 
 
 def _build_subscription_candidate_manifest_cache_key(provider: str, candidate: Dict[str, Any]) -> str:
@@ -1279,6 +1286,91 @@ async def _organize_subscription_imported_files(
         str(result.get("level", "warn") or "warn"),
     )
     return False
+
+
+async def _run_subscription_magnet_offline_import(
+    *,
+    task: Dict[str, Any],
+    task_name: str,
+    cfg: Dict[str, Any],
+    provider: str,
+    provider_meta: Any,
+    cookie_115: str,
+    offline_candidates: List[Dict[str, Any]],
+    ranked_candidates: List[Dict[str, Any]],
+    last_episode: int,
+    known_total: int,
+    single_season_episode_upper_bound: int,
+    existing_folder_episodes: Set[int],
+    existing_episode_scan_ready: bool,
+    folder_id: str,
+    effective_savepath: str,
+    base_savepath: str,
+    monitor_task_name: str,
+    subscription_run_id: str,
+    batch_refresh_enabled: bool,
+    cross_copy_registered: bool,
+    import_timeout_seconds: int,
+) -> Optional[Dict[str, Any]]:
+    """磁力/电驴离线兜底：本盘转存与跨盘补源都没覆盖缺集时的最后手段。
+
+    优先级固定为本盘分享转存 → 跨盘补源 → 磁力离线，所以只有
+    「补源这轮没注册任何复制任务」且「本盘确实缺集」时才动离线队列。
+
+    :return: 离线入库结果（同 ``_run_subscription_manual_offline_import``）；
+        任何一条前置条件不满足都返回 ``None``，表示「本轮不走磁力兜底」。
+    """
+    if not bool(cfg.get("subscription_magnet_offline_fallback", False)):
+        return None
+    # 只有 115 支持离线下载，其他目标盘没有提交入口。
+    if normalize_subscription_provider(provider, fallback="") != "115":
+        return None
+    # 补源已经注册了复制任务，缺集由它接手，不再占离线队列。
+    if cross_copy_registered:
+        return None
+    if not offline_candidates:
+        return None
+    # 本盘不缺（已有比进度更靠后的集）时不下种；口径与补源一致。
+    if not _subscription_cross_copy_needed(task, ranked_candidates, last_episode):
+        return None
+    if not provider_meta or not str(cookie_115 or "").strip():
+        return None
+
+    raw_item = offline_candidates[0] if isinstance(offline_candidates[0], dict) else {}
+    link_url = str(raw_item.get("link_url", "") or "").strip()
+    if not link_url:
+        return None
+    link_type = resolve_resource_link_type(raw_item.get("link_type", ""), link_url)
+    if link_type not in SUBSCRIPTION_OFFLINE_LINK_TYPES:
+        return None
+
+    await write_subscription_log(
+        f"磁力离线兜底：本盘与跨盘补源都未拿到缺失集，改用离线下载（{link_type}）：{link_url[:120]}",
+        "info",
+    )
+    return await _run_subscription_manual_offline_import(
+        task=task,
+        task_name=task_name,
+        cfg=cfg,
+        provider_meta=provider_meta,
+        cookie=cookie_115,
+        candidate={"item": raw_item},
+        item=raw_item,
+        link_type=link_type,
+        staging_root=_get_subscription_offline_staging_root(cfg),
+        effective_savepath=effective_savepath,
+        base_savepath=base_savepath,
+        folder_id=folder_id,
+        monitor_task_name=monitor_task_name,
+        last_episode=last_episode,
+        known_total=known_total,
+        single_season_episode_upper_bound=single_season_episode_upper_bound,
+        existing_folder_episodes=existing_folder_episodes,
+        existing_episode_scan_ready=existing_episode_scan_ready,
+        subscription_run_id=subscription_run_id,
+        batch_refresh_enabled=batch_refresh_enabled,
+        import_timeout_seconds=import_timeout_seconds,
+    )
 
 
 async def _run_subscription_manual_offline_import(
@@ -3844,11 +3936,19 @@ async def run_subscription_task(
             legacy_candidate = search_result.get("candidate", {}) if isinstance(search_result.get("candidate"), dict) else {}
             if legacy_candidate:
                 ranked_candidates = [legacy_candidate]
+        # 盘搜单独抽出来的磁力/电驴候选（仅当「磁力离线兜底」开关打开时才有内容）。
+        magnet_offline_candidates = (
+            search_result.get("offline_candidates", [])
+            if isinstance(search_result.get("offline_candidates"), list)
+            else []
+        )
+        # 补源是否已注册复制任务：磁力离线兜底要靠它判断「缺集是否已被补源接手」。
+        cross_copy_registered = False
         # 无候选 = 本盘必然缺，先补源再走「等待资源」收口。
         # 有候选的场景不在这里判定：fallback 要比对「目标目录实际已落盘的最高集」，
         # 而那个值要到下面 calibrate 阶段扫完目录才有，此处用进度旧值会恒判「不缺」。
         if not ranked_candidates:
-            await _subscription_cross_copy_dispatch(
+            cross_copy_registered = await _subscription_cross_copy_dispatch(
                 task,
                 cfg,
                 ranked_candidates,
@@ -3856,6 +3956,123 @@ async def run_subscription_task(
                 trigger,
                 known_total,
             )
+        if not ranked_candidates and not cross_copy_registered and magnet_offline_candidates:
+            # 最后手段：本盘无候选（必然缺）且补源这轮没注册任何复制任务，才动 115 离线队列。
+            magnet_offline_result: Optional[Dict[str, Any]] = None
+            try:
+                offline_base_savepath = normalize_relative_path(str(task.get("savepath", "")).strip())
+                offline_target_savepath = offline_base_savepath
+                if task["media_type"] == "movie":
+                    offline_target_savepath = (
+                        build_subscription_movie_savepath(task, offline_base_savepath) or offline_base_savepath
+                    )
+                elif task["media_type"] == "tv":
+                    offline_target_savepath = (
+                        resolve_subscription_tv_scan_savepath(task, offline_base_savepath) or offline_base_savepath
+                    )
+                offline_provider_meta = _get_provider_or_none(provider)
+                offline_cookie = offline_provider_meta.get_cookie(cfg) if offline_provider_meta else ""
+                offline_folder_id = ""
+                if offline_cookie:
+                    offline_folder_id = str(
+                        await asyncio.to_thread(
+                            offline_provider_meta.ensure_folder_id_by_path,
+                            offline_cookie,
+                            offline_target_savepath,
+                        )
+                        or ""
+                    )
+                magnet_offline_result = await _run_subscription_magnet_offline_import(
+                    task=task,
+                    task_name=task_name,
+                    cfg=cfg,
+                    provider=provider,
+                    provider_meta=offline_provider_meta,
+                    cookie_115=offline_cookie,
+                    offline_candidates=magnet_offline_candidates,
+                    ranked_candidates=ranked_candidates,
+                    last_episode=last_episode,
+                    known_total=known_total,
+                    single_season_episode_upper_bound=single_season_episode_upper_bound,
+                    existing_folder_episodes=set(),
+                    existing_episode_scan_ready=False,
+                    folder_id=offline_folder_id,
+                    effective_savepath=offline_target_savepath,
+                    base_savepath=offline_base_savepath,
+                    monitor_task_name="",
+                    subscription_run_id=subscription_run_id,
+                    batch_refresh_enabled=batch_refresh_enabled,
+                    cross_copy_registered=cross_copy_registered,
+                    import_timeout_seconds=max(10, int(SUBSCRIPTION_IMPORT_TIMEOUT_SECONDS or 90)),
+                )
+            except Exception as magnet_exc:
+                await write_subscription_log(f"磁力离线兜底失败（不影响本次订阅）：{magnet_exc}", "warn")
+            if magnet_offline_result and magnet_offline_result.get("ok"):
+                magnet_imported_episodes = sorted(
+                    {
+                        max(0, int(ep or 0))
+                        for ep in (
+                            magnet_offline_result.get("imported_episodes", [])
+                            if isinstance(magnet_offline_result.get("imported_episodes"), list)
+                            else []
+                        )
+                        if max(0, int(ep or 0)) > 0
+                    }
+                )
+                magnet_job_id = max(0, int(magnet_offline_result.get("job_id", 0) or 0))
+                magnet_next_episode = max(last_episode, magnet_imported_episodes[-1] if magnet_imported_episodes else 0)
+                if magnet_imported_episodes:
+                    detail = (
+                        f"磁力离线兜底已入库 {len(magnet_imported_episodes)} 个文件"
+                        f"（E{magnet_imported_episodes[0]}~E{magnet_imported_episodes[-1]}）"
+                    )
+                else:
+                    detail = "磁力离线兜底已入库（未识别到集数）"
+                upsert_subscription_task_state(
+                    task_name,
+                    media_type=task.get("media_type", "movie"),
+                    status="completed",
+                    progress=100,
+                    detail=detail,
+                    last_episode=magnet_next_episode,
+                    stats={
+                        "matched": True,
+                        "run_id": subscription_run_id,
+                        "batch_refresh_enabled": batch_refresh_enabled,
+                        "last_episode": magnet_next_episode,
+                        "total_episodes": known_total,
+                        "job_id": magnet_job_id,
+                        "matched_count": 1,
+                        "imported_episode_count": len(magnet_imported_episodes),
+                        "imported_episodes": magnet_imported_episodes[:80],
+                        "magnet_offline_fallback": True,
+                        **search_stats,
+                    },
+                )
+                await write_subscription_log(detail, "success")
+                update_subscription_summary("已完成", detail)
+                try:
+                    notify_result = await push_subscription_success_notification(
+                        cfg=cfg,
+                        task=task,
+                        item=magnet_offline_candidates[0],
+                        effective_savepath=str(
+                            magnet_offline_result.get("selected_savepath", "") or ""
+                        ),
+                        job_id=magnet_job_id,
+                        successful_count=1,
+                        imported_episode_list=magnet_imported_episodes,
+                        baseline_last_episode=last_episode,
+                        next_episode=magnet_next_episode,
+                        monitor_context={},
+                    )
+                    if bool(notify_result.get("pushed", False)):
+                        await _write_subscription_notify_result_log(
+                            notify_result, task, magnet_offline_candidates[0]
+                        )
+                except Exception as notify_exc:
+                    await write_subscription_log(f"订阅成功通知推送失败：{notify_exc}", "warn")
+                return
         if not ranked_candidates:
             _subscription_stage_timer_enter(stage_timer, "finalize")
             if completed_locked:
@@ -4042,7 +4259,7 @@ async def run_subscription_task(
         # 到这里 last_episode 才是「目标目录实际已落盘的最高集」，fallback 的缺集判定
         # 必须用这个值：用校准前的进度值会得出「本盘不缺」而永不补源（实测踩过）。
         if ranked_candidates:
-            await _subscription_cross_copy_dispatch(
+            cross_copy_registered = await _subscription_cross_copy_dispatch(
                 task,
                 cfg,
                 ranked_candidates,
@@ -5943,6 +6160,80 @@ async def run_subscription_task(
             if not batch_episode_import:
                 break
             await maybe_wait_between_attempts()
+
+        # 兜底顺序的最后一层：本盘分享转存（上面的循环）→ 跨盘补源（前面已先行）→ 磁力离线。
+        # 走到这里 successful_count == 0 才说明本盘一条候选都没能转存成功。
+        if successful_count == 0 and not cross_copy_registered and magnet_offline_candidates:
+            magnet_offline_result = await _run_subscription_magnet_offline_import(
+                task=task,
+                task_name=task_name,
+                cfg=cfg,
+                provider=provider,
+                provider_meta=provider_meta,
+                cookie_115=cookie_115,
+                offline_candidates=magnet_offline_candidates,
+                ranked_candidates=ranked_candidates,
+                last_episode=last_episode,
+                known_total=known_total,
+                single_season_episode_upper_bound=single_season_episode_upper_bound,
+                existing_folder_episodes=existing_folder_episodes,
+                existing_episode_scan_ready=existing_episode_scan_ready,
+                folder_id=folder_id,
+                effective_savepath=effective_savepath,
+                base_savepath=base_savepath,
+                monitor_task_name=monitor_task_name,
+                subscription_run_id=subscription_run_id,
+                batch_refresh_enabled=batch_refresh_enabled,
+                cross_copy_registered=cross_copy_registered,
+                import_timeout_seconds=import_timeout_seconds,
+            )
+            if magnet_offline_result and magnet_offline_result.get("ok"):
+                magnet_item = (
+                    magnet_offline_candidates[0] if isinstance(magnet_offline_candidates[0], dict) else {}
+                )
+                magnet_imported = {
+                    max(0, int(ep or 0))
+                    for ep in (
+                        magnet_offline_result.get("imported_episodes", [])
+                        if isinstance(magnet_offline_result.get("imported_episodes"), list)
+                        else []
+                    )
+                    if max(0, int(ep or 0)) > 0
+                }
+                magnet_job_id = max(0, int(magnet_offline_result.get("job_id", 0) or 0))
+                magnet_candidate = {
+                    "item": magnet_item,
+                    "score": 0,
+                    "episode": min(magnet_imported) if magnet_imported else 0,
+                    "season": (
+                        max(1, int(task.get("season", 1) or 1))
+                        if task["media_type"] == "tv"
+                        else 0
+                    ),
+                    "total": max_total_detected or known_total,
+                }
+                selected_candidate = magnet_candidate
+                selected_item = magnet_item
+                selected_job_id = magnet_job_id
+                selected_auto_refresh = bool(magnet_offline_result.get("auto_refresh", False))
+                selected_reused_existing = False
+                selected_job_savepath = str(
+                    magnet_offline_result.get("selected_savepath", "") or effective_savepath
+                )
+                successful_count = 1
+                attempted_candidates = max(attempted_candidates, 1)
+                scanned_candidates = max(scanned_candidates, 1)
+                if magnet_job_id > 0:
+                    successful_job_ids.append(magnet_job_id)
+                if magnet_imported:
+                    imported_episodes.update(magnet_imported)
+                    if existing_episode_scan_ready:
+                        existing_folder_episodes.update(magnet_imported)
+                        existing_episode_count = len(existing_folder_episodes)
+                max_total_detected = max(
+                    max_total_detected,
+                    max(0, int(magnet_offline_result.get("max_total_detected", 0) or 0)),
+                )
 
         _subscription_stage_timer_enter(stage_timer, "finalize")
         if batch_refresh_enabled:

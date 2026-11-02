@@ -464,6 +464,7 @@ function collectSettingsPayload({
     cfg.tmdb_enabled = !!document.getElementById('tmdb_enabled')?.checked;
     cfg.ai_match_enabled = !!document.getElementById('ai_match_enabled')?.checked;
     cfg.pansou_enabled = !!document.getElementById('pansou_enabled')?.checked;
+    cfg.subscription_magnet_offline_fallback = !!document.getElementById('subscription_magnet_offline_fallback')?.checked;
     cfg.resource_favorite_dirs = collectResourceFavoriteDirs();
     cfg.scraper_noise_phrases = parseKeywordLines(document.getElementById('scraper_noise_phrases')?.value);
     cfg.scraper_standalone_noise_words = parseKeywordLines(document.getElementById('scraper_standalone_noise_words')?.value);

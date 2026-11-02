@@ -1323,6 +1323,9 @@ async def find_subscription_task_match_candidate_by_search(
                     incremental_error_channels.add(channel_id)
 
     cfg = get_config()
+    # 磁力离线兜底：只有开关打开时才让盘搜把 magnet/ed2k 一起搜回来，
+    # 且仅对 115 目标有效（只有 115 支持离线下载）。
+    magnet_offline_fallback_enabled = bool(cfg.get("subscription_magnet_offline_fallback", False))
     if bool(cfg.get("pansou_enabled", False)):
         pansou_started_at = time.perf_counter()
 
@@ -1333,7 +1336,7 @@ async def find_subscription_task_match_candidate_by_search(
                 search_meta = await search_pansou_resource_sources(
                     keyword,
                     provider_filter=provider,
-                    include_magnet_for_115=False,
+                    include_magnet_for_115=magnet_offline_fallback_enabled,
                     total_limit=int(search_limits.get("pansou_limit_per_keyword", 0) or 0),
                 )
                 if isinstance(search_meta, dict):
@@ -1387,6 +1390,39 @@ async def find_subscription_task_match_candidate_by_search(
             expanded_115_items.extend(_expand_subscription_115_item_variants(raw_item))
         deduped_items = dedupe_resource_item_dicts(expanded_115_items, identity_mode="link")
         deduped_items.sort(key=get_resource_item_sort_key, reverse=True)
+    # 磁力/电驴候选单独抽出来走离线兜底，不参与下面的分享链接过滤与评分，
+    # 避免污染正常 115share 链路（也避免被 _filter_subscription_supported_items 丢掉）。
+    offline_item_candidates: List[Dict[str, Any]] = []
+    if provider == "115" and magnet_offline_fallback_enabled:
+        for raw_item in deduped_items:
+            if not isinstance(raw_item, dict):
+                continue
+            if resolve_resource_link_type(raw_item.get("link_type", ""), raw_item.get("link_url", "")) not in (
+                "magnet",
+                "ed2k",
+            ):
+                continue
+            # 磁力整包下种代价高，先按标题信号粗筛一遍：标题对不上或 TMDB 冲突的直接丢掉。
+            title_eval = evaluate_subscription_candidate_title_match(task, raw_item)
+            if title_eval.get("tmdb_conflicts"):
+                continue
+            if not bool(title_eval.get("matched", False)):
+                continue
+            offline_item_candidates.append(raw_item)
+        # 死种防重试：命中失效链接缓存的候选不再重复提交离线。
+        if offline_item_candidates:
+            try:
+                invalid_link_cache = _load_subscription_invalid_link_cache(
+                    [str(item.get("link_url", "") or "").strip() for item in offline_item_candidates]
+                )
+            except Exception:
+                invalid_link_cache = {}
+            if invalid_link_cache:
+                offline_item_candidates = [
+                    item
+                    for item in offline_item_candidates
+                    if str(item.get("link_url", "") or "").strip() not in invalid_link_cache
+                ]
     deduped_items = _filter_subscription_supported_items(deduped_items, provider)
     merged_errors = _merge_subscription_search_errors(all_errors)
     incremental_channels_advanced = 0
@@ -1434,6 +1470,7 @@ async def find_subscription_task_match_candidate_by_search(
     )
     slow_channel_rows.sort(key=lambda row: float(row.get("elapsed_seconds", 0.0) or 0.0), reverse=True)
     persisted_items: List[Dict[str, Any]] = []
+    persisted_offline_items: List[Dict[str, Any]] = []
     ensure_db()
     conn = open_db()
     try:
@@ -1450,6 +1487,13 @@ async def find_subscription_task_match_candidate_by_search(
             if source_post_id:
                 normalized_item["source_post_id"] = source_post_id
             persisted_items.append(normalized_item)
+        # 磁力/电驴候选同样要落库拿 id：离线任务要按资源 id 关联，且靠它做「同资源只下种一次」判断。
+        for raw_item in offline_item_candidates:
+            item = raw_item if isinstance(raw_item, dict) else {}
+            item_id, _ = upsert_resource_item(conn, item, identity_mode="link")
+            if item_id <= 0:
+                continue
+            persisted_offline_items.append({**item, "id": item_id})
         conn.commit()
     finally:
         conn.close()
@@ -1661,6 +1705,7 @@ async def find_subscription_task_match_candidate_by_search(
     return {
         "candidate": candidates[0] if candidates else {},
         "candidates": candidates,
+        "offline_candidates": persisted_offline_items,
         "keywords": keywords,
         "errors": merged_errors,
         "stats": {
@@ -1993,9 +2038,27 @@ def merge_subscription_search_results(
     merged_stats["search_errors"] = len(merged_errors)
     merged_stats["provider"] = provider
 
+    # 磁力离线候选也要合并：固定分享链接兜底那条路径会把两份搜索结果并起来，
+    # 漏了这里磁力兜底在「配了固定链接」的任务上就会静默失效。
+    merged_offline_candidates: List[Dict[str, Any]] = []
+    seen_offline_links: Set[str] = set()
+    for payload in (fixed_payload, channel_payload):
+        rows = payload.get("offline_candidates")
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            offline_link_key = str(row.get("link_url", "") or "").strip()
+            if not offline_link_key or offline_link_key in seen_offline_links:
+                continue
+            seen_offline_links.add(offline_link_key)
+            merged_offline_candidates.append(row)
+
     return {
         "candidate": merged_candidates[0] if merged_candidates else {},
         "candidates": merged_candidates,
+        "offline_candidates": merged_offline_candidates,
         "keywords": (
             merge_keywords(channel_payload, fixed_payload)
             if fixed_candidates_last

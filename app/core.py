@@ -919,6 +919,7 @@ _SETTINGS_CONFIG_KEY_ORDER_AFTER_AUTH: Tuple[str, ...] = (
     "pansou_src",
     "pansou_channels",
     "pansou_plugins",
+    "subscription_magnet_offline_fallback",
     # 7. 网络代理
     "tg_proxy_enabled",
     "tg_proxy_protocol",
@@ -1071,6 +1072,7 @@ def default_config() -> Dict[str, Any]:
         "pansou_src": "all",
         "pansou_channels": "",
         "pansou_plugins": "",
+        "subscription_magnet_offline_fallback": False,
         "mount_points": [dict(item) for item in DEFAULT_MOUNT_POINTS],
         "extensions": DEFAULT_EXTENSIONS,
         "tree_tasks": [],
@@ -3214,6 +3216,8 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         merged["pansou_channels"] = ""
     if "pansou_plugins" not in merged:
         merged["pansou_plugins"] = ""
+    if "subscription_magnet_offline_fallback" not in merged:
+        merged["subscription_magnet_offline_fallback"] = False
     if "mount_points" not in merged or not isinstance(merged["mount_points"], list):
         merged["mount_points"] = [dict(item) for item in DEFAULT_MOUNT_POINTS]
     if "monitor_tasks" not in merged or not isinstance(merged["monitor_tasks"], list):
@@ -3320,6 +3324,10 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         merged["pansou_src"] = "all"
     merged["pansou_channels"] = str(merged.get("pansou_channels", "") or "").strip()
     merged["pansou_plugins"] = str(merged.get("pansou_plugins", "") or "").strip()
+    merged["subscription_magnet_offline_fallback"] = normalize_bool(
+        merged.get("subscription_magnet_offline_fallback", False),
+        default=False,
+    )
     merged["sign115_enabled"] = normalize_bool(merged.get("sign115_enabled", False), default=False)
     merged["sign115_cron_time"] = normalize_sign115_cron_time(merged.get("sign115_cron_time", "09:00"))
     # 订阅批次收口刷新已固定为内置策略，不再保留配置项。
