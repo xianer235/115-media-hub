@@ -1327,9 +1327,23 @@ def _is_subscription_full_bundle_title(title: str) -> bool:
     if not normalized:
         return False
     lowered = normalized.lower()
-    if "全集" in normalized or "complete series" in lowered:
+    if "complete series" in lowered or "complete season" in lowered:
         return True
-    return "全" in normalized and "集" in normalized
+    compact = "".join(normalized.split())
+    if "全集" in compact:
+        return True
+    # 只认「全 + 数字 + 集/话/話/期」，不能退化成「含全且含集」：
+    # 「全高清 第05集」这类画质标签极常见，误判会把单集包当成整季包优先下种。
+    start = compact.find("全")
+    while start != -1:
+        cursor = start + 1
+        digits_start = cursor
+        while cursor < len(compact) and compact[cursor].isdigit():
+            cursor += 1
+        if cursor > digits_start and cursor < len(compact) and compact[cursor] in "集话話期":
+            return True
+        start = compact.find("全", start + 1)
+    return False
 
 
 def _rank_subscription_magnet_candidates(
@@ -1503,6 +1517,10 @@ async def _run_subscription_magnet_offline_import(
                 _record_subscription_invalid_link_cache(link_url, link_type, failed_detail)
             except Exception as cache_exc:
                 await write_subscription_log(f"记录失效磁力链接失败（不影响本次订阅）：{cache_exc}", "warn")
+    # 候选已按缺集重排，实际提交的不一定是盘搜原顺序的第一条；把选中的那条带回去，
+    # 否则上层日志/通知/任务状态会挂到另一条资源上（标题、链接都不是真正下载的那个）。
+    if isinstance(result, dict):
+        result.setdefault("selected_item", raw_item)
     return result
 
 
@@ -4159,6 +4177,10 @@ async def run_subscription_task(
                     }
                 )
                 magnet_job_id = max(0, int(magnet_offline_result.get("job_id", 0) or 0))
+                # 排序后实际提交的可能是别的候选，通知要挂到真正下种的那条上。
+                magnet_selected_item = magnet_offline_result.get("selected_item")
+                if not isinstance(magnet_selected_item, dict):
+                    magnet_selected_item = magnet_offline_candidates[0]
                 magnet_next_episode = max(last_episode, magnet_imported_episodes[-1] if magnet_imported_episodes else 0)
                 if magnet_imported_episodes:
                     detail = (
@@ -4194,7 +4216,7 @@ async def run_subscription_task(
                     notify_result = await push_subscription_success_notification(
                         cfg=cfg,
                         task=task,
-                        item=magnet_offline_candidates[0],
+                        item=magnet_selected_item,
                         effective_savepath=str(
                             magnet_offline_result.get("selected_savepath", "") or ""
                         ),
@@ -4207,7 +4229,7 @@ async def run_subscription_task(
                     )
                     if bool(notify_result.get("pushed", False)):
                         await _write_subscription_notify_result_log(
-                            notify_result, task, magnet_offline_candidates[0]
+                            notify_result, task, magnet_selected_item
                         )
                 except Exception as notify_exc:
                     await write_subscription_log(f"订阅成功通知推送失败：{notify_exc}", "warn")
@@ -6332,9 +6354,12 @@ async def run_subscription_task(
                 # 兜底失败不能把「本轮没导到资源」升级成「任务失败」。
                 await write_subscription_log(f"磁力离线兜底失败（不影响本次订阅）：{magnet_exc}", "warn")
             if magnet_offline_result and magnet_offline_result.get("ok"):
-                magnet_item = (
-                    magnet_offline_candidates[0] if isinstance(magnet_offline_candidates[0], dict) else {}
-                )
+                # 排序后实际提交的可能是别的候选，状态与通知要挂到真正下种的那条上。
+                magnet_item = magnet_offline_result.get("selected_item")
+                if not isinstance(magnet_item, dict):
+                    magnet_item = (
+                        magnet_offline_candidates[0] if isinstance(magnet_offline_candidates[0], dict) else {}
+                    )
                 magnet_imported = {
                     max(0, int(ep or 0))
                     for ep in (

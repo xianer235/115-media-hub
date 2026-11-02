@@ -205,9 +205,30 @@ class MagnetOfflineGateTest(unittest.IsolatedAsyncioTestCase):
             result = await runner._run_subscription_magnet_offline_import(
                 **self._kwargs(offline_candidates=[first, second])
             )
-        self.assertEqual(result, {"ok": True, "job_id": 1, "imported_episodes": [5]})
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["job_id"], 1)
+        self.assertEqual(result["imported_episodes"], [5])
         import_mock.assert_awaited_once()
         self.assertEqual(import_mock.await_args.kwargs["item"]["id"], 7)
+
+    async def test_result_carries_actually_submitted_item(self):
+        """排序会改顺序，上层通知要挂真正下种的那条，不能拿盘搜的第一条。"""
+        stale = _magnet_item(id=1, title="测试剧 S01E01 1080p")
+        useful = _magnet_item(id=2, title="测试剧 S01E05 1080p", link_url="magnet:?xt=urn:btih:cafe")
+        import_mock = AsyncMock(return_value={"ok": True, "job_id": 9, "imported_episodes": [5]})
+        with patch.object(runner, "write_subscription_log", new=AsyncMock()), patch.object(
+            runner, "_run_subscription_manual_offline_import", new=import_mock
+        ):
+            result = await runner._run_subscription_magnet_offline_import(
+                **self._kwargs(
+                    offline_candidates=[stale, useful],
+                    existing_folder_episodes={1, 2, 3, 4, 6, 7, 8, 9, 10, 11},
+                    single_season_episode_upper_bound=12,
+                    known_total=12,
+                )
+            )
+        self.assertEqual(import_mock.await_args.kwargs["item"]["id"], 2)
+        self.assertEqual(result["selected_item"]["id"], 2)
 
     async def test_invalid_link_failure_is_recorded(self):
         """离线判无效要落失效链接缓存，否则死种每轮巡检都会重新提交一次。"""
@@ -359,6 +380,23 @@ class MagnetCandidateRankTest(unittest.TestCase):
             _base_task(media_type="movie"), candidates, set(), 0, 0
         )
         self.assertEqual([item["id"] for item in ranked], [1, 2])
+
+    def test_quality_tag_is_not_treated_as_full_bundle(self):
+        """「全高清」是画质标签，不能因为含「全」「集」就把单集包当整季包。"""
+        self.assertFalse(runner._is_subscription_full_bundle_title("测试剧 全高清 第12集 1080p"))
+        self.assertFalse(runner._is_subscription_full_bundle_title("测试剧 全国首播 第1集"))
+        self.assertTrue(runner._is_subscription_full_bundle_title("测试剧 全12集"))
+        self.assertTrue(runner._is_subscription_full_bundle_title("测试剧 全 12 話"))
+        self.assertTrue(runner._is_subscription_full_bundle_title("测试剧 全集"))
+
+    def test_full_bundle_tag_does_not_lift_plain_episode(self):
+        """缺 E05：带「全高清」的单集包不能靠误判抢到含 E05 的包前面。"""
+        candidates = [
+            {"id": 1, "title": "测试剧 全高清 第12集"},
+            {"id": 2, "title": "测试剧 S01E05 1080p"},
+        ]
+        ranked = self._rank(candidates, {1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12})
+        self.assertEqual([item["id"] for item in ranked], [2, 1])
 
 
 class MagnetOfflineSettingWiringTest(unittest.TestCase):
