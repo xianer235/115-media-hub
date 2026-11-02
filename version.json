@@ -1,10 +1,10 @@
 {
-  "version": "0.15.11",
-  "buildDate": "2026-10-31T14:30:00+08:00",
+  "version": "0.15.12",
+  "buildDate": "2026-11-02T21:30:00+08:00",
   "notes": [
-    "Seerr 点播接口补齐：支持网址参数传 API Key（Seerr 测连接必需）、补 PUT /movie 与 POST /command、GET /episode，titleSlug / folderName 不再为空；Seerr 里可以一次加完 Radarr / Sonarr 并真正点播成功",
-    "电影与电视剧保存目录拆开（两项留空自动回退旧配置），剧集落点补上「剧名 (年份)」这一层，最终是 <电视剧目录>/剧名 (年份)/Season NN，Jellyfin / Plex 能按「一部剧一个文件夹」识别",
-    "POST /command 现在会真的触发一次搜索（原来假装完成）；同时修掉「按名字子串匹配删除会误删无关订阅」和「TMDB 失败静默建任务、永远搜不到」两个问题"
+    "订阅任务新增「磁力离线兜底」：本盘转存与跨盘补源都拿不到缺失集时，才从盘搜的磁力/电驴链接走 115 离线下载补一集，是最后手段；设置页「PanSou 盘搜」里一个开关，默认关",
+    "挑包按「能补上几集缺集」排序而不是照发布时间随便取：缺 E05 时含 E05 的老包会排在只含 E01 的新包前面，同等覆盖下不会为了 1 集去下整季；下完仍只把缺的集搬进 Season 目录，整包只留在中转",
+    "死种会被记住不再重试（超时/网络类失败不算）；分享失效导致候选全部转存失败时仍会兜底，盘搜没有候选时也不会被当成「本盘为空」而整季重下"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

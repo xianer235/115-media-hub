@@ -8,19 +8,20 @@
 
 ## 基线
 
-- **更新日期**: 2026-10-31（0.15.11：Seerr 点播补丁 PR #17 修好并合入）
-- **分支**: `main`，0.15.1 ~ 0.15.10 已推送；**0.15.11 已改版本号待推送**；tag 最新 `v0.15.10`，Docker 镜像同版本由 GitHub Actions 自动构建（测试不绿就不构建）
-- **版本**: `0.15.11`（2026-10-31：Seerr 点播对接补齐——网址参数鉴权、PUT /movie、POST /command 真触发搜索、GET /episode、titleSlug/folderName 非空；电影/电视剧保存目录拆开 + 剧集落点补「剧名 (年份)」层；修掉子串匹配误删订阅与 TMDB 失败静默建任务）
+- **更新日期**: 2026-11-02（0.15.12：订阅磁力离线兜底）
+- **分支**: `main`，0.15.1 ~ 0.15.11 已推送；**0.15.12 已改版本号待推送**；tag 最新 `v0.15.11`，Docker 镜像同版本由 GitHub Actions 自动构建（测试不绿就不构建）
+- **版本**: `0.15.12`（2026-11-02：订阅任务新增磁力 / 电驴离线兜底，作为「本盘转存 → 跨盘补源 → 磁力离线」的最后一层，全局开关默认关；候选按「能补的缺集数」排序而非发布时间；死种落失效链接缓存不再重试；候选全失败与盘搜无候选两条路径都不会整季重下）
 - **CI**: 单一工作流 `.github/workflows/ci.yml`（`docker-release.yml` 已并入并移除），**限定 `paths: version.json`，只在发版推送时触发**：`test` job 跑 `compileall` + 全量 `node --check` + `scripts/run_tests.py`，`build-and-push` 用 `needs: test` 挂在后面（`workflow_dispatch` 有 `publish` 开关，关掉只跑测试）。日常开发验证只用本机 `scripts/check.sh`，不要等 CI
 - **本地不入库文件**: `AGENTS.md` / `CLAUDE.md` / `.workbuddy/` / `.claude/` / `.worktrees/` 是本机开发用，**按约定不入库**。任何测试/代码读它们前必须判存在（`test_modules_doc` 已这么做），否则干净 clone 跑测试必挂。
 - **运行环境**: `docker compose` 服务名 `115-media-hub-test`（应用本体），端口 18080；`/app/storage` 已映射到宿主机 `/Users/xianer/Documents/docker/115strmxianer/storage`（virtiofs，空间读数正常）。挂载路径与端口已改为从根目录 `.env` 读取（模板 `.env.example`），本机 `.env` 写的是原来的绝对路径
-- **最近提交**: `merge/pr17` 上合并 PR #17 并追加修复（8 个原作者提交原样保留）；其前 `2200c0d` 发版 0.15.10 已推送、已打 tag `v0.15.10`
-- **工作区**: 0.15.11 发版四件套（`version.json` / `CHANGELOG.md` / `README.md` / `state.md` / `handoff.md`）已改，待 push → tag → release；仓库根 8 个探针残骸（`1fzcan79` / `384oxwf_` / `f5rzb5xd` / `gcauazwi` / `ldkjwkgl` / `ohl49u2p` / `svn9y_7k` / `w58oau16`）待清
+- **最近提交**: `f6e7f09` 修磁力兜底排序带出的两个问题（上报挂错资源、全高清误判整季包）；其前 `9d4297e` 挑包排序、`74fe7c4` 审查修复、`bfd56f5` 功能本体；再前 `3196a86` 发版 0.15.11 已推送、tag `v0.15.11`
+- **工作区**: 0.15.12 发版四件套（`version.json` / `CHANGELOG.md` / `README.md` / `state.md` / `handoff.md`）已改，待 push → tag → release；仓库根无探针残骸
 
 
 
 ## 最近一次验证
 
+- **0.15.12 发版前**（2026-11-02）：`tests.test_subscription_magnet_offline_fallback` **32 条零失败**（新增功能 + 排序 + 上报一致性）；订阅相关 7 模块（磁力兜底 / 跨盘补源 / 手动离线 / UI / modules_doc / 离线清理 / 命中冷却）**203 条零失败**；`scripts/check.sh --changed` 全通过（compileall + `node --check` + `git diff --check` + handoff 体积 31755/32768）。**未在容器内跑全量**（本机沙箱对 unlink 有拦截，全量里依赖临时目录清理的模块会假失败）。真机验证项见待办 A-10。
 - **0.15.11 发版前**（2026-10-31）：`scripts/run_tests.py --changed` **2118 条零失败**（142.9s）；`test_servarr_api` 由 36 条扩到 **49 条零失败**，新增 PUT /movie 两条、command 三条、episode 一条、删除精确匹配两条、剧集落点与 slug 三条、TMDB 失败 502 两条、回退旧保存目录一条。作者原分支是 **36 条挂 6 条**（改契约没改断言）。**未在容器内跑全量**。
 - **0.15.10 发版前**（2026-10-26）：新增 `tests/test_subscription_hit_cooldown.py` **24 条零失败**；订阅相关 8 模块 **212 条零失败**（含 `test_servarr_api` / `test_subscription_ui_frontend` / `test_subscription_cross_copy`）；`compileall` / `node --check ui.js` / `git diff --check` 通过。另用真实函数跑 4 天时间线模拟（日更剧、每集 20:30 上线）：命中后自动查询从每天 12 次降到 3 次，每集仍在上线后 2 小时内命中，没有「冷却挡掉下一集」。**未在容器内跑全量**。
 - **0.15.9 发版前全量**（2026-10-25）：`scripts/check.sh --changed` **699 条零失败**，其中 `test_cross_copy_organize` + `test_cross_copy_jobs` 137 条零失败、新增 11 条回归（触发参数与订阅导入一致、先改名再触发、无监控任务时写警告、改名失败仍触发、订阅任务已删仍触发、非 115 不触发、文件夹触发 / 手动不触发、停用不谎报、未配置不触发）。**未在容器内跑**。
