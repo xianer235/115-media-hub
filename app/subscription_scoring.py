@@ -1,6 +1,7 @@
 import unicodedata
 
 from .core import *  # noqa: F401,F403
+from .runtime_files import VIDEO_EXTENSIONS
 
 def pick_subscription_display_title(task: Dict[str, Any], item: Dict[str, Any], fallback: str = "未命名资源") -> str:
     payload_task = task if isinstance(task, dict) else {}
@@ -74,7 +75,10 @@ def build_subscription_candidate_text(item: Dict[str, Any]) -> str:
 
 SUBSCRIPTION_STRICT_WEAK_RAW_PREFIXES = (
     "简介",
+    "描述",
+    "介绍",
     "剧情",
+    "剧情简介",
     "主演",
     "演员",
     "类型",
@@ -92,6 +96,8 @@ SUBSCRIPTION_STRICT_TITLE_PREFIXES = (
     "标题",
     "片名",
     "剧名",
+    "名称",
+    "资源名称",
     "资源",
     "电视剧",
     "电影",
@@ -206,6 +212,10 @@ def _is_subscription_strict_title_raw_line(line: str, index: int) -> bool:
     normalized = unicodedata.normalize("NFKC", str(line or "")).strip()
     if not normalized:
         return False
+    # 弱描述行（简介/描述/剧情简介…）必须先排除：否则简介里出现的
+    # "第二季"、"第5集"、TMDB 编号会抢先被当成片名证据，让无关资源入库。
+    if _is_subscription_strict_weak_raw_line(normalized):
+        return False
     if extract_subscription_tmdb_ids_from_text(normalized):
         return True
     label = _normalize_subscription_raw_line_label(normalized)
@@ -216,7 +226,7 @@ def _is_subscription_strict_title_raw_line(line: str, index: int) -> bool:
         return True
     if "/" in normalized and re.search(r"\.(mkv|mp4|avi|ts|mov|m2ts)\b", lowered):
         return True
-    return index == 0 and not _is_subscription_strict_weak_raw_line(normalized)
+    return index == 0
 
 
 def build_subscription_candidate_identity_text(
@@ -315,8 +325,8 @@ def _strip_subscription_strict_title_prefix(segment: str) -> str:
     normalized = unicodedata.normalize("NFKC", str(segment or "")).strip()
     normalized = re.sub(r"^[^\w\u4e00-\u9fff]+", "", normalized).strip()
     for prefix in SUBSCRIPTION_STRICT_TITLE_PREFIXES:
-        if re.match(rf"^{re.escape(prefix)}\s*[:：]", normalized, re.IGNORECASE):
-            return re.split(r"[:：]", normalized, maxsplit=1)[1].strip()
+        if re.match(rf"^{re.escape(prefix)}\s*[:：|｜]", normalized, re.IGNORECASE):
+            return re.split(r"[:：|｜]", normalized, maxsplit=1)[1].strip()
     return normalized
 
 
@@ -333,6 +343,29 @@ def _subscription_strict_title_segment_keys(text: str) -> List[str]:
             candidate = re.split(r"\s+[-–—]\s+|\s+[|｜]\s+", candidate, maxsplit=1)[0]
             candidate = re.split(r"[\(（\[]\s*(?:19|20)\d{2}", candidate, maxsplit=1)[0]
             candidate = re.split(r"\bs\d{1,2}e\d{1,4}\b|\bseason\s*\d+\b", candidate, maxsplit=1, flags=re.IGNORECASE)[0]
+            # 剥掉「更新至68集 / 第12话 / 全24集」这类中文集号尾巴，
+            # 否则 "诛仙 更新至68集" 的 segment key 会变成 "诛仙更新至68集"，与片名对不上。
+            candidate = re.sub(
+                r"[\s._-]*(?:[（(\[]\s*)?(?:(?:更新至|更至|更新到)\s*)?(?:第\s*)?"
+                r"[0-9零〇一二三四五六七八九十百两兩]+\s*(?:集|话|話|回|期)"
+                r"(?:\s*(?:全|全集|完结))?\s*[）)\]]?\s*$",
+                "",
+                candidate,
+                flags=re.IGNORECASE,
+            ).strip()
+            # 画质/编码标签同理，避免 "诛仙 4K 完结" 残留成 "诛仙4k完结"。
+            for _ in range(4):
+                candidate_without_release_tags = re.sub(
+                    r"[\s._-]*(?:4k|uhd|2160p|1080p|720p|480p|360p|hdr10\+?|hdr|sdr|dv|dovi|"
+                    r"dolby|vision|web[- ]?dl|webrip|bluray|bdrip|x26[45]|h26[45]|hevc|avc|aac|ddp?|"
+                    r"atmos|10bit|8bit|高码率|普码|超清|蓝光|完结|已完结|全集)\s*$",
+                    "",
+                    candidate,
+                    flags=re.IGNORECASE,
+                ).strip()
+                if candidate_without_release_tags == candidate:
+                    break
+                candidate = candidate_without_release_tags
             key = compact_subscription_text(candidate)
             if key:
                 keys.append(key)
@@ -715,13 +748,11 @@ def filter_subscription_manifest_files_by_strict_identity(
         return {"manifest": payload, "skipped_files": 0, "reason": ""}
 
     task_tmdb_id = max(0, int((task or {}).get("tmdb_id", 0) or 0))
-    if task_tmdb_id <= 0:
-        return {"manifest": payload, "skipped_files": 0, "reason": ""}
 
     root_ids: Set[int] = set()
     for field in ("share_root_title", "share_scope_path", "auto_sharetitle"):
         root_ids.update(extract_subscription_tmdb_ids_from_text(payload.get(field, "")))
-    if root_ids and task_tmdb_id not in root_ids:
+    if task_tmdb_id > 0 and root_ids and task_tmdb_id not in root_ids:
         next_payload = {**payload, "files": [], "covered_episodes": [], "covered_preview": "--"}
         return {
             "manifest": next_payload,
@@ -733,15 +764,35 @@ def filter_subscription_manifest_files_by_strict_identity(
     files = payload.get("files", []) if isinstance(payload.get("files"), list) else []
     filtered_files: List[Dict[str, Any]] = []
     skipped = 0
+    title_mismatches = 0
     conflict_ids: Set[int] = set()
     for raw_entry in files:
         if not isinstance(raw_entry, dict):
             continue
-        entry_ids = extract_subscription_tmdb_ids_from_text(raw_entry.get("name", ""))
-        if entry_ids and task_tmdb_id not in entry_ids:
+        entry_name = str(raw_entry.get("name", "") or "")
+        entry_ids = extract_subscription_tmdb_ids_from_text(entry_name)
+        if task_tmdb_id > 0 and entry_ids and task_tmdb_id not in entry_ids:
             skipped += 1
             conflict_ids.update(entry_ids)
             continue
+        # 文件名要独立校验剧名：分享标题/父目录是对的，也不代表这个文件属于同一部剧。
+        # 只查视频文件，且只在文件名里带明确集号（S01E14 / 第14集）时才判断，
+        # 这样 "完美世界.S01E14.mkv" 会被拦下，"S01E14.mkv" 这类通用命名不受影响。
+        basename = entry_name.replace("\\", "/").rsplit("/", 1)[-1]
+        if basename.rsplit(".", 1)[-1].strip().lower() in VIDEO_EXTENSIONS:
+            marker = re.search(
+                r"s\d{1,2}e\d{1,4}\b|第\s*[0-9零〇一二三四五六七八九十百两兩]+\s*[集话話期]",
+                basename,
+                re.IGNORECASE,
+            )
+            if marker:
+                title_prefix = basename[: marker.start()].strip(" ._-–—[]()（）")
+                normalized_prefix = compact_subscription_text(title_prefix)
+                if normalized_prefix and normalized_prefix not in {"episode", "ep", "video", "第"}:
+                    if not _evaluate_subscription_title_signals_on_text(task, title_prefix, strict=True)["matched"]:
+                        skipped += 1
+                        title_mismatches += 1
+                        continue
         filtered_files.append(raw_entry)
     if skipped <= 0:
         return {"manifest": payload, "skipped_files": 0, "reason": ""}
@@ -763,7 +814,8 @@ def filter_subscription_manifest_files_by_strict_identity(
     return {
         "manifest": next_payload,
         "skipped_files": skipped,
-        "reason": "strict_file_tmdb_conflict",
+        "reason": "strict_file_tmdb_conflict" if conflict_ids else "strict_file_title_mismatch",
+        "title_mismatch_files": title_mismatches,
         "conflict_tmdb_ids": sorted(conflict_ids),
     }
 

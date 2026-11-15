@@ -5,6 +5,11 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..core import *  # noqa: F401,F403
+from ..runtime_files import SUBTITLE_EXTENSIONS, VIDEO_EXTENSIONS
+
+# 订阅入库认的文件类型：视频 + 外挂字幕。字幕要跟着视频一起进去，
+# 所以不能按「只收视频」排除；海报 JPG、NFO、压缩包这类才会被挡掉。
+SUBSCRIPTION_MEDIA_FILE_EXTENSIONS = VIDEO_EXTENSIONS | SUBTITLE_EXTENSIONS
 
 
 @dataclass(frozen=True)
@@ -72,6 +77,12 @@ def _is_subscription_excluded_file_type(task: Dict[str, Any], name: str) -> bool
     extension = _get_subscription_file_extension(name)
     if not extension:
         return False
+    # 影视订阅只收视频和外挂字幕：分享里混的海报 JPG、NFO、压缩包文件名同样
+    # 可能带 S01E01，会被当成"这一集"入库或被改名计划带走。无后缀条目不受影响，
+    # 交给原有逻辑处理。
+    media_type = str((task or {}).get("media_type", "movie") or "movie").strip().lower()
+    if media_type in {"tv", "movie"} and extension not in SUBSCRIPTION_MEDIA_FILE_EXTENSIONS:
+        return True
     excluded_extensions = set(resolve_subscription_exclude_file_extensions(task or {}))
     return extension in excluded_extensions
 

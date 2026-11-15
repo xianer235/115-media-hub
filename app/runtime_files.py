@@ -11,6 +11,14 @@ LOG_ROTATE_MAX_BYTES = max(
 )
 LOG_ROTATE_BACKUPS = max(1, min(10, int(os.environ.get("LOG_ROTATE_BACKUPS", 2) or 2)))
 DEFAULT_EXTENSIONS = "mp4,mkv,avi,mov,wmv,flv,webm,vob,mpg,mpeg,ts,m2ts,mts,rmvb,rm,asf,3gp,m4v,f4v,iso"
+# 订阅入库只认这些后缀：分享里常混着海报 JPG、NFO、字幕包，
+# 它们的文件名里也可能带 S01E01，会被误解析成"这一集"。
+VIDEO_EXTENSIONS = frozenset(
+    extension.strip().lower()
+    for extension in DEFAULT_EXTENSIONS.split(",")
+    if extension.strip()
+)
+SUBTITLE_EXTENSIONS = frozenset({"srt", "ass", "ssa", "sub", "vtt", "idx", "smi", "sup"})
 AUDIO_EXTENSIONS = {
     "aac",
     "ac3",
