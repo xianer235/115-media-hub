@@ -113,6 +113,22 @@ def _is_private_ip(host: str) -> bool:
     return ip.is_private or ip.is_loopback or ip.is_link_local
 
 
+def _path_allowed(path: str) -> bool:
+    """白名单判定。
+
+    前缀表里大多带尾斜杠（``/Users/``），但 Emby/Jellyfin 协议里有一批**裸路径**
+    端点，例如 Seerr 的 ``getUsers()`` 调的是 ``GET /Users``（没有尾斜杠）。
+    只按前缀比会把它们判成 404，Seerr 保存媒体服务器、同步用户时直接报失败。
+    所以额外放行「去掉尾斜杠后完全相等」这一种情况，其余仍按前缀匹配。
+    """
+    for prefix in _ALLOWED_PREFIXES:
+        if path == prefix or path.startswith(prefix):
+            return True
+        if prefix.endswith("/") and path == prefix.rstrip("/"):
+            return True
+    return False
+
+
 def _normalize_upstream(upstream: str) -> str:
     """补协议与去尾斜杠，供拼接 URL。"""
     value = str(upstream or "").strip().rstrip("/")
@@ -319,7 +335,7 @@ async def handle(method: str, path: str, query: str, headers: Dict[str, str], bo
         return 503, {}, {"error": "emby-bridge 未配置：请先在参数配置页填写极影视地址与媒体库账号"}
 
     # 白名单校验
-    if not any(path == prefix or path.startswith(prefix) for prefix in _ALLOWED_PREFIXES):
+    if not _path_allowed(path):
         return 404, {}, {"error": "emby-bridge 不转发该路径"}
 
     upstream = settings["upstream"]

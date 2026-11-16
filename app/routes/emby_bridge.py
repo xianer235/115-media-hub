@@ -34,7 +34,13 @@ async def emby_bridge_forward(request: Request, path: str) -> Response:
     if method in ("POST", "PUT", "PATCH"):
         body = await request.body()
 
-    status, resp_headers, payload = await emby_bridge.handle(method, path, query, headers, body)
+    # Starlette 的 ``{path:path}`` 捕获到的是**不带前导斜杠**的剩余部分
+    # （``/emby-bridge/System/Info`` → ``System/Info``），而服务层的白名单、
+    # ``/Auth/Keys``、``/Items?ids=`` 判断全部按「以 / 开头的绝对路径」写。
+    # 这里补回前导斜杠，否则所有请求都会被判成「不转发该路径」。
+    bridge_path = "/" + path.lstrip("/")
+
+    status, resp_headers, payload = await emby_bridge.handle(method, bridge_path, query, headers, body)
 
     # HEAD 请求不带 body
     if method == "HEAD":

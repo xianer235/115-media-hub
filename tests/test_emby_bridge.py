@@ -141,6 +141,20 @@ class HandleDispatchTest(unittest.TestCase):
         status, _, _ = self._run_sync(self._run("GET", "/Plugins"))
         self.assertEqual(status, 404)
 
+    def test_bare_users_path_is_forwarded(self):
+        """Seerr 的 getUsers() 调 `GET /Users`（无尾斜杠），不能被白名单判成 404。"""
+        seen = {}
+
+        def fake_forward(upstream, method, path, query, body, headers, read_timeout):
+            seen["path"] = path
+            return 200, {}, {"Items": []}
+
+        with mock.patch.object(bridge, "_forward_json", side_effect=fake_forward):
+            with mock.patch.object(bridge, "_get_token", return_value={"token": "t", "uid": "u", "server_id": "s"}):
+                status, _, _ = self._run_sync(self._run("GET", "/Users"))
+        self.assertEqual(status, 200)
+        self.assertEqual(seen["path"], "/Users")
+
     def test_public_source_returns_403_when_not_allowed(self):
         status, _, _ = self._run_sync(self._run("GET", "/System/Info", client_host="8.8.8.8"))
         self.assertEqual(status, 403)
@@ -193,6 +207,50 @@ class PseudoKeyTest(unittest.TestCase):
             k2 = bridge._stable_pseudo_key(_settings())
         self.assertEqual(k1, k2)
         self.assertEqual(len(k1), 64)
+
+
+class RoutePathTest(unittest.TestCase):
+    """路由层必须把 ``{path:path}`` 捕获到的无斜杠路径补回前导斜杠。
+
+    真实请求 ``/emby-bridge/System/Info`` 时 FastAPI 传进来的是 ``System/Info``；
+    服务层白名单按 ``/System/`` 这类绝对路径判断，少了斜杠会全部 404（2026-11-17
+    真机接 Seerr 时踩到，前端只报「无法连接到 Jellyfin 服务器」）。
+    """
+
+    def _request(self):
+        import asyncio  # noqa: F401  （保持与其它用例一致的显式导入习惯）
+        from starlette.requests import Request
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "scheme": "http",
+            "server": ("test", 80),
+            "path": "/emby-bridge/System/Info",
+            "root_path": "",
+            "query_string": b"",
+            "headers": [(b"host", b"test")],
+            "client": ("192.168.1.5", 1234),
+        }
+        return Request(scope)
+
+    def test_forwarded_path_gets_leading_slash(self):
+        import asyncio
+        from app.routes import emby_bridge as bridge_route
+
+        with mock.patch.object(bridge, "handle", return_value=(200, {}, {"ok": True})) as patched:
+            asyncio.run(bridge_route.emby_bridge_forward(self._request(), "System/Info"))
+        args = patched.call_args[0]
+        self.assertEqual(args[1], "/System/Info")
+
+    def test_leading_slash_not_doubled(self):
+        import asyncio
+        from app.routes import emby_bridge as bridge_route
+
+        with mock.patch.object(bridge, "handle", return_value=(200, {}, {"ok": True})) as patched:
+            asyncio.run(bridge_route.emby_bridge_forward(self._request(), "/System/Info"))
+        args = patched.call_args[0]
+        self.assertEqual(args[1], "/System/Info")
 
 
 if __name__ == "__main__":
