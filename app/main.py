@@ -2,6 +2,7 @@ from fastapi import Depends
 
 from .core import app, require_auth
 from .routes.cross_copy import router as cross_copy_router
+from .routes.emby_bridge import router as emby_bridge_router
 from .routes.events import router as events_router
 from .routes.monitor import router as monitor_router, webhook_router
 from .routes.pages import router as pages_router
@@ -31,6 +32,7 @@ app.include_router(monitor_router, dependencies=_auth_deps)
 app.include_router(recommendation_router, dependencies=_auth_deps)
 app.include_router(cross_copy_router, dependencies=_auth_deps)
 app.include_router(servarr_router)  # 自带 /api/v3 前缀与 X-Api-Key 鉴权，不走登录会话
+app.include_router(emby_bridge_router)  # 自带 /emby-bridge 前缀，对 Seerr 侧透明，不走登录会话
 
 from . import startup  # noqa: E402,F401
 

@@ -17103,6 +17103,36 @@
             border-top: 1px solid rgba(148, 163, 184, 0.14);
         }
         .settings-section-card:not(.is-open) > .settings-section-body { display: none; }
+        .settings-subgroup-anchors {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.45rem;
+            padding: 0.6rem 0.75rem;
+            margin-bottom: 1rem;
+            border: 1px solid rgba(51, 65, 85, 0.85);
+            border-radius: 0.85rem;
+            background: rgba(15, 23, 42, 0.5);
+        }
+        .settings-subgroup-anchor {
+            font-size: 0.74rem;
+            line-height: 1;
+            color: #94a3b8;
+            background: rgba(51, 65, 85, 0.5);
+            border: 1px solid transparent;
+            border-radius: 999px;
+            padding: 0.42rem 0.7rem;
+            cursor: pointer;
+            transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+        }
+        .settings-subgroup-anchor:hover {
+            color: #e2e8f0;
+            background: rgba(51, 65, 85, 0.85);
+        }
+        .settings-subgroup-anchor.is-active {
+            color: #7dd3fc;
+            border-color: rgba(125, 211, 252, 0.5);
+            background: rgba(14, 116, 144, 0.25);
+        }
         .settings-help-fold {
             border: 1px solid rgba(51, 65, 85, 0.95);
             border-radius: 0.9rem;
@@ -17161,6 +17191,23 @@
         }
         html.theme-day .settings-section-chevron { color: #64748b; }
         html.theme-day .settings-section-card.is-open > .settings-section-body { border-top-color: #e2e8f0; }
+        html.theme-day .settings-subgroup-anchors {
+            border-color: #dbe4ee;
+            background: rgba(248, 250, 252, 0.95);
+        }
+        html.theme-day .settings-subgroup-anchor {
+            color: #64748b;
+            background: rgba(226, 232, 240, 0.7);
+        }
+        html.theme-day .settings-subgroup-anchor:hover {
+            color: #0f172a;
+            background: #e2e8f0;
+        }
+        html.theme-day .settings-subgroup-anchor.is-active {
+            color: #075985;
+            border-color: #7dd3fc;
+            background: #e0f2fe;
+        }
         html.theme-day .settings-help-fold {
             border-color: #dbe4ee;
             background: rgba(248, 250, 252, 0.95);

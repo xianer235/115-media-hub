@@ -58,6 +58,14 @@
 - **相关代码**：`app/routes/servarr.py`、`app/providers/tmdb.py`（find_tmdb_id_by_tvdb_id）；设置页「后台安全管理」的「点播接口 API Key / 电影点播保存目录 / 电视剧点播保存目录」
 - **细节**：`docs/superpowers/plans/2026-10-24-servarr-seerr-api.md`
 
+### Emby 兼容桥（emby-bridge）
+- **用途**：让 Seerr（Jellyseerr）把极影视（极空间媒体库服务，Emby 兼容层）当成一台 Emby 服务器，**复用极影视已建好的媒体库索引判重**（库里已有什么片），省掉再部署一套重复扫描的 Jellyfin。目的只有一个：判重。
+- **入口**：Seerr 侧「设置 → 媒体服务器」添加 Emby 服务器（地址 = 面板地址，URL Base = `emby-bridge`，账号密码 = 极影视媒体库账号）；本侧入口是 `/emby-bridge/*` 端点，配置在设置页「播放与影视库」分区。
+- **会做**：协议翻译（五个翻译点）——① 头改写：把 Seerr 的 `Authorization: MediaBrowser ...` 转成极影视认的 `X-Emby-Authorization` / `X-Emby-Token`；② `/Auth/Keys` 本地实现（极影视没这接口，返回稳定伪 key 糊弄 Seerr）；③ 判重请求改写：`/Items?ids=` 改成 `/Users/{uid}/Items/{id}`（极影视忽略 ids 参数，不改判重必失败）；④ 媒体库列表补 `CollectionType`（极影视全 None，按库名补 movies/tvshows）；⑤ 来源白名单（默认只放内网）。token 用面板存的账号密码换取并缓存，401 单飞重登一次；转发用标准库 urllib 流式，不新增依赖。
+- **不会做**：不代理播放流；不做写操作（不建库、不删条目、不改极影视）；不替代极影视也不替代现有 Jellyfin；**不管下载/补源**（Seerr 点片后仍走上面的 servarr 点播对接，桥只管判重）。
+- **相关代码**：`app/routes/emby_bridge.py`、`app/services/emby_bridge.py`；设置页「播放与影视库」的「Emby 兼容桥」字段组（`emby_bridge_enabled` / `emby_bridge_upstream` / `emby_bridge_username` / `emby_bridge_password` / `emby_bridge_allow_public`）
+- **细节**：`docs/superpowers/specs/2026-11-17-emby-bridge-for-seerr-design.md`（含实测协议偏差）
+
 ### 文件夹监控（folder monitor）
 - **用途**：持续扫描网盘目录，为媒体文件生成 / 更新 `.strm`，并跟踪目录与文件的索引。
 - **入口**：页面「文件夹监控」的监控卡片（运行、停止、定时、Webhook `POST /webhook/{任务名}`）；刮削页「扫描监控」按钮（`POST /monitor/scan`，局部指定目录）；CLI `monitor start|stop|list|logs`。

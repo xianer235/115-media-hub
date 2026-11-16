@@ -12,6 +12,7 @@ _STATIC_SENSITIVE_KEYS: Tuple[str, ...] = (
     "pansou_token",
     "webhook_secret",
     "servarr_api_key",
+    "emby_bridge_password",
 )
 
 

@@ -218,12 +218,12 @@
                         </div>
                     </div>
                 </section>
-                <section id="settings-group-network" class="group-card settings-section-card" data-settings-section="network" data-settings-step="2" data-settings-title="网络与通知" data-settings-nav-label="网络与通知">
+                <section id="settings-group-network" class="group-card settings-section-card" data-settings-section="network" data-settings-step="2" data-settings-title="通知推送" data-settings-nav-label="通知推送">
                     <div class="settings-section-header">
                         <button type="button" class="settings-section-head" aria-expanded="false" aria-controls="settings-body-network">
                             <span class="settings-section-step" aria-hidden="true">2</span>
                             <span class="settings-section-heading">
-                                <span class="settings-section-title">网络与通知</span>
+                                <span class="settings-section-title">通知推送</span>
                                 <span class="settings-section-summary" data-settings-summary="network"></span>
                             </span>
                             <span class="settings-section-chevron" aria-hidden="true">
@@ -232,43 +232,7 @@
                         </button>
                     </div>
                     <div id="settings-body-network" class="space-y-4 settings-section-body" hidden>
-                        <div id="settings-network-proxy" class="settings-subgroup space-y-4" data-settings-subgroup="proxy">
-                            <div class="settings-subgroup-title">网络代理（TG / TMDB / 资源外链）</div>
-                            <label class="flex items-center gap-3 cursor-pointer text-sm">
-                                <input type="checkbox" id="tg_proxy_enabled" class="ui-checkbox">
-                                访问 TG / TMDB / 资源外链时启用代理
-                            </label>
-                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                <label class="block">
-                                    <span class="text-xs text-slate-500">代理协议</span>
-                                    <select id="tg_proxy_protocol" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1">
-                                        <option value="http">http</option>
-                                        <option value="https">https</option>
-                                    </select>
-                                </label>
-                                <label class="block">
-                                    <span class="text-xs text-slate-500">代理 IP / 域名</span>
-                                    <input id="tg_proxy_host" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="127.0.0.1">
-                                </label>
-                                <label class="block">
-                                    <span class="text-xs text-slate-500">代理端口</span>
-                                    <input id="tg_proxy_port" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="7890">
-                                </label>
-                            </div>
-                            <div class="flex flex-wrap items-center gap-3 pt-1">
-                                <button id="tg-proxy-test-btn" type="button" onclick="testTgProxyLatency()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">
-                                    测试 TG 延迟
-                                </button>
-                                <div class="text-xs text-slate-500">
-                                    优先使用当前表单里的代理地址测试；未填写代理时会自动回退为直连 TG 测试。
-                                </div>
-                            </div>
-                            <div id="tg-proxy-test-status" class="hidden rounded-xl border px-4 py-3 text-sm leading-6"></div>
-                            <div class="text-xs text-slate-500 leading-6">
-                                用于服务端访问 TG 公开频道页、TMDB API 与资源外链。当前环境内置按标准代理 URL 方式访问，建议优先使用 `http/https` 代理。
-                            </div>
-                        </div>
-                        <div id="settings-notify" class="settings-subgroup space-y-4" data-settings-subgroup="notify">
+                        <div id="settings-notify" class="settings-subgroup space-y-4" data-settings-subgroup="notify" data-settings-anchor="通知推送">
                             <div class="settings-subgroup-title">通知推送（企业微信）</div>
                             <label class="flex items-center gap-3 cursor-pointer text-sm">
                                 <input type="checkbox" id="notify_push_enabled" class="ui-checkbox">
@@ -339,12 +303,64 @@
                         </div>
                     </div>
                 </section>
-                <section id="settings-group-library" class="group-card settings-section-card" data-settings-section="library" data-settings-step="3" data-settings-title="播放与影视库" data-settings-nav-label="播放与库">
+                <section id="settings-group-proxy" class="group-card settings-section-card" data-settings-section="proxy" data-settings-step="3" data-settings-title="网络代理" data-settings-nav-label="网络代理">
                     <div class="settings-section-header">
-                        <button type="button" class="settings-section-head" aria-expanded="false" aria-controls="settings-body-library">
+                        <button type="button" class="settings-section-head" aria-expanded="false" aria-controls="settings-body-proxy">
                             <span class="settings-section-step" aria-hidden="true">3</span>
                             <span class="settings-section-heading">
-                                <span class="settings-section-title">播放与影视库</span>
+                                <span class="settings-section-title">网络代理</span>
+                                <span class="settings-section-summary" data-settings-summary="proxy"></span>
+                            </span>
+                            <span class="settings-section-chevron" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" width="16" height="16" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                            </span>
+                        </button>
+                    </div>
+                    <div id="settings-body-proxy" class="space-y-4 settings-section-body" hidden>
+                        <div id="settings-network-proxy" class="settings-subgroup space-y-4" data-settings-subgroup="proxy" data-settings-anchor="代理设置">
+                            <div class="settings-subgroup-title">网络代理（TG / TMDB / 资源外链）</div>
+                            <label class="flex items-center gap-3 cursor-pointer text-sm">
+                                <input type="checkbox" id="tg_proxy_enabled" class="ui-checkbox">
+                                访问 TG / TMDB / 资源外链时启用代理
+                            </label>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">代理协议</span>
+                                    <select id="tg_proxy_protocol" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1">
+                                        <option value="http">http</option>
+                                        <option value="https">https</option>
+                                    </select>
+                                </label>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">代理 IP / 域名</span>
+                                    <input id="tg_proxy_host" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="127.0.0.1">
+                                </label>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">代理端口</span>
+                                    <input id="tg_proxy_port" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="7890">
+                                </label>
+                            </div>
+                            <div class="flex flex-wrap items-center gap-3 pt-1">
+                                <button id="tg-proxy-test-btn" type="button" onclick="testTgProxyLatency()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">
+                                    测试 TG 延迟
+                                </button>
+                                <div class="text-xs text-slate-500">
+                                    优先使用当前表单里的代理地址测试；未填写代理时会自动回退为直连 TG 测试。
+                                </div>
+                            </div>
+                            <div id="tg-proxy-test-status" class="hidden rounded-xl border px-4 py-3 text-sm leading-6"></div>
+                            <div class="text-xs text-slate-500 leading-6">
+                                用于服务端访问 TG 公开频道页、TMDB API 与资源外链。当前环境内置按标准代理 URL 方式访问，建议优先使用 `http/https` 代理。
+                            </div>
+                        </div>
+                    </div>
+                </section>
+                <section id="settings-group-library" class="group-card settings-section-card" data-settings-section="library" data-settings-step="4" data-settings-title="播放与点播" data-settings-nav-label="播放与点播">
+                    <div class="settings-section-header">
+                        <button type="button" class="settings-section-head" aria-expanded="false" aria-controls="settings-body-library">
+                            <span class="settings-section-step" aria-hidden="true">4</span>
+                            <span class="settings-section-heading">
+                                <span class="settings-section-title">播放与点播</span>
                                 <span class="settings-section-summary" data-settings-summary="library"></span>
                             </span>
                             <span class="settings-section-chevron" aria-hidden="true">
@@ -353,7 +369,7 @@
                         </button>
                     </div>
                     <div id="settings-body-library" class="space-y-4 settings-section-body" hidden>
-                        <div id="settings-strm-core" class="settings-subgroup space-y-4" data-settings-subgroup="strm">
+                        <div id="settings-strm-core" class="settings-subgroup space-y-4" data-settings-subgroup="strm" data-settings-anchor="播放地址与扫描">
                             <div class="settings-subgroup-title">播放地址与扫描参数</div>
                             <label id="strm-proxy-base-url-wrap" class="block">
                                 <span class="text-xs text-slate-500 inline-flex items-center gap-2">
@@ -394,7 +410,7 @@
                                 <input id="extensions" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none focus:border-sky-500 transition-colors">
                             </label>
                         </div>
-                        <div id="settings-seerr" class="settings-subgroup space-y-4" data-settings-subgroup="seerr">
+                        <div id="settings-seerr" class="settings-subgroup space-y-4" data-settings-subgroup="seerr" data-settings-anchor="Seerr 点播">
                             <div class="settings-subgroup-title">Seerr 点播对接（家人在点播门户点一下就会自动建订阅任务）</div>
                             <label class="block">
                                 <span class="text-xs text-slate-500 inline-flex items-center gap-2">
@@ -428,12 +444,43 @@
                                 <br>家人在 Seerr 提交点播后，本面板「影视订阅」页会出现对应任务并自动搜索资源，找到后自动转存、入库、生成 STRM，与手动订阅完全同链路；在 Seerr 删除点播请求会同时删掉这里的订阅任务。
                             </div>
                         </div>
+                        <div id="settings-emby-bridge" class="settings-subgroup space-y-4" data-settings-subgroup="emby-bridge" data-settings-anchor="Emby 兼容桥">
+                            <div class="settings-subgroup-title">Emby 兼容桥（让 Seerr 直接读极影视的媒体库索引判重）</div>
+                            <label class="flex items-center gap-3 cursor-pointer">
+                                <input id="emby_bridge_enabled" type="checkbox" class="toggle-checkbox">
+                                <span class="text-sm text-slate-300">启用 Emby 兼容桥</span>
+                                <button type="button" class="info-dot" onclick="showHelp('用途：让 Seerr 把极影视（极空间的媒体库服务）当成一台 Emby 服务器，直接读它已建好的媒体库索引来判重（库里已有什么片），避免重复点播。无需再额外部署一套 Jellyfin 去重复扫描。只读不写、不代理播放。')">i</button>
+                            </label>
+                            <div class="block">
+                                <span class="text-xs text-slate-500">极影视地址（Emby 兼容层，通常是极空间内网 8021 端口）</span>
+                                <input id="emby_bridge_upstream" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：http://192.168.0.2:8021">
+                            </div>
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div class="block">
+                                    <span class="text-xs text-slate-500">媒体库账号（不是极空间登录号）</span>
+                                    <input id="emby_bridge_username" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="媒体库专用账号">
+                                </div>
+                                <div class="block">
+                                    <span class="text-xs text-slate-500">媒体库密码</span>
+                                    <input id="emby_bridge_password" type="password" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="媒体库账号密码">
+                                </div>
+                            </div>
+                            <label class="flex items-center gap-3 cursor-pointer">
+                                <input id="emby_bridge_allow_public" type="checkbox" class="toggle-checkbox">
+                                <span class="text-sm text-slate-300">允许非内网来源访问</span>
+                                <button type="button" class="info-dot" onclick="showHelp('安全开关。桥等于把极影视的媒体库能力暴露给 Seerr，默认只放行内网来源（同一局域网）。除非你的 Seerr 从公网访问，否则不要打开。')">i</button>
+                            </label>
+                            <div class="text-xs text-slate-500 leading-6">
+                                对接方法：在 Seerr（Jellyseerr）的「设置 → 媒体服务器」里添加一台 <code>Emby</code> 服务器，地址填本面板地址、URL Base 填 <code>emby-bridge</code>，账号密码填上面极影视的媒体库账号。同步完成后，库里已有的影片会显示「可获得」而不是「可请求」。
+                                <br>桥只负责「判重」，下载/补源仍走上面的 Radarr / Sonarr 点播对接，两者互不干扰；关掉上面的总开关后桥立即失效，不影响其它功能。
+                            </div>
+                        </div>
                     </div>
                 </section>
-                <section id="settings-group-sources" class="group-card settings-section-card" data-settings-section="sources" data-settings-step="4" data-settings-title="资源来源与订阅" data-settings-nav-label="来源与订阅">
+                <section id="settings-group-sources" class="group-card settings-section-card" data-settings-section="sources" data-settings-step="5" data-settings-title="资源来源与订阅" data-settings-nav-label="来源与订阅">
                     <div class="settings-section-header">
                         <button type="button" class="settings-section-head" aria-expanded="false" aria-controls="settings-body-sources">
-                            <span class="settings-section-step" aria-hidden="true">4</span>
+                            <span class="settings-section-step" aria-hidden="true">5</span>
                             <span class="settings-section-heading">
                                 <span class="settings-section-title">资源来源与订阅</span>
                                 <span class="settings-section-summary" data-settings-summary="sources"></span>
@@ -444,7 +491,7 @@
                         </button>
                     </div>
                     <div id="settings-body-sources" class="space-y-4 settings-section-body" hidden>
-                        <div id="settings-tg-sources" class="settings-subgroup space-y-4" data-settings-subgroup="tg">
+                        <div id="settings-tg-sources" class="settings-subgroup space-y-4" data-settings-subgroup="tg" data-settings-anchor="TG 频道">
                             <div class="settings-subgroup-title">TG 订阅源管理</div>
                             <div class="resource-source-panel-head">
                                 <div class="min-w-0">
@@ -512,7 +559,7 @@
                                 </div>
                             </div>
                         </div>
-                        <div id="settings-pansou" class="settings-subgroup space-y-4" data-settings-subgroup="pansou">
+                        <div id="settings-pansou" class="settings-subgroup space-y-4" data-settings-subgroup="pansou" data-settings-anchor="PanSou 盘搜">
                             <div class="settings-subgroup-title">PanSou 盘搜</div>
                             <label class="flex items-center gap-3 cursor-pointer text-sm">
                                 <input type="checkbox" id="pansou_enabled" class="ui-checkbox">
@@ -569,10 +616,10 @@
                         </div>
                     </div>
                 </section>
-                <section id="settings-group-metadata" class="group-card settings-section-card" data-settings-section="metadata" data-settings-step="5" data-settings-title="元数据与识别" data-settings-nav-label="元数据识别">
+                <section id="settings-group-metadata" class="group-card settings-section-card" data-settings-section="metadata" data-settings-step="6" data-settings-title="元数据与识别" data-settings-nav-label="元数据识别">
                     <div class="settings-section-header">
                         <button type="button" class="settings-section-head" aria-expanded="false" aria-controls="settings-body-metadata">
-                            <span class="settings-section-step" aria-hidden="true">5</span>
+                            <span class="settings-section-step" aria-hidden="true">6</span>
                             <span class="settings-section-heading">
                                 <span class="settings-section-title">元数据与识别</span>
                                 <span class="settings-section-summary" data-settings-summary="metadata"></span>
@@ -583,7 +630,7 @@
                         </button>
                     </div>
                     <div id="settings-body-metadata" class="space-y-4 settings-section-body" hidden>
-                        <div id="settings-tmdb" class="settings-subgroup space-y-4" data-settings-subgroup="tmdb">
+                        <div id="settings-tmdb" class="settings-subgroup space-y-4" data-settings-subgroup="tmdb" data-settings-anchor="TMDB">
                             <div class="settings-subgroup-title">TMDB 元数据增强（可选）</div>
                             <label class="flex items-center gap-3 cursor-pointer text-sm">
                                 <input type="checkbox" id="tmdb_enabled" class="ui-checkbox">
@@ -613,7 +660,7 @@
                                 推荐：`language=zh-CN`、`region=CN`。开启后可在订阅任务里绑定 TMDB，自动补充别名、年份、总集数与连载模式，降低重名误匹配。
                             </div>
                         </div>
-                        <div id="settings-ai-match" class="settings-subgroup space-y-4" data-settings-subgroup="ai">
+                        <div id="settings-ai-match" class="settings-subgroup space-y-4" data-settings-subgroup="ai" data-settings-anchor="AI 刮削">
                             <div class="settings-subgroup-title">AI 刮削辅助</div>
                             <label class="flex items-center gap-3 cursor-pointer text-sm">
                                 <input type="checkbox" id="ai_match_enabled" class="ui-checkbox">
@@ -689,7 +736,7 @@
                                 </div>
                             </details>
                         </div>
-                        <div id="settings-scraper-filter" class="settings-subgroup space-y-4" data-settings-subgroup="filter">
+                        <div id="settings-scraper-filter" class="settings-subgroup space-y-4" data-settings-subgroup="filter" data-settings-anchor="过滤词">
                             <div class="settings-subgroup-title settings-title-with-info">批量整理过滤词（可选）<button type="button" class="info-dot" aria-label="批量整理过滤词说明" title="批量整理过滤词说明" onclick="showScraperFilterHelp()">i</button></div>
                             <label class="block">
                                 <span class="text-xs text-slate-500">复合过滤词（每行一个，任意位置出现即删除）</span>
@@ -705,10 +752,10 @@
                         </div>
                     </div>
                 </section>
-                <section id="settings-group-system" class="group-card settings-section-card" data-settings-section="system" data-settings-step="6" data-settings-title="系统与存储" data-settings-nav-label="系统与存储">
+                <section id="settings-group-system" class="group-card settings-section-card" data-settings-section="system" data-settings-step="7" data-settings-title="系统与存储" data-settings-nav-label="系统与存储">
                     <div class="settings-section-header">
                         <button type="button" class="settings-section-head" aria-expanded="false" aria-controls="settings-body-system">
-                            <span class="settings-section-step" aria-hidden="true">6</span>
+                            <span class="settings-section-step" aria-hidden="true">7</span>
                             <span class="settings-section-heading">
                                 <span class="settings-section-title">系统与存储</span>
                                 <span class="settings-section-summary" data-settings-summary="system"></span>
@@ -719,7 +766,7 @@
                         </button>
                     </div>
                     <div id="settings-body-system" class="space-y-4 settings-section-body" hidden>
-                        <div id="settings-security" class="settings-subgroup space-y-4" data-settings-subgroup="security">
+                        <div id="settings-security" class="settings-subgroup space-y-4" data-settings-subgroup="security" data-settings-anchor="账号与密钥">
                             <div class="settings-subgroup-title">账号、签名密钥与油猴脚本</div>
                             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <label class="block"><span class="text-xs text-slate-500">管理账号</span><input id="username" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1"></label>
@@ -759,7 +806,7 @@
                                 <span class="text-xs text-slate-500">点击后会打开脚本文本，Tampermonkey 会自动弹出安装提示。</span>
                             </div>
                         </div>
-                        <div id="settings-storage" class="settings-subgroup space-y-4" data-settings-subgroup="storage">
+                        <div id="settings-storage" class="settings-subgroup space-y-4" data-settings-subgroup="storage" data-settings-anchor="本地存储位置">
                             <div class="settings-subgroup-title">本地存储位置</div>
                             <div class="text-xs text-slate-500 leading-6">
                                 跨盘复制（比如从 115 复制到其它网盘）时，大文件没法直接对传，会先完整下载到下面的目录，再上传到目标网盘，传完自动清理临时文件。所以这个目录要放在容量够大、剩余空间足够的盘上。

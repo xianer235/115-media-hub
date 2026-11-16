@@ -171,12 +171,14 @@ function buildSettingsSectionSummary(key) {
             return `${tmdb} · ${ai} · 过滤词 ${noise} 条`;
         }
         case 'network': {
-            const proxy = settingsChecked('tg_proxy_enabled')
-                ? `代理 ${settingsValue('tg_proxy_protocol') || 'http'}://${settingsValue('tg_proxy_host') || '未填'}${settingsValue('tg_proxy_port') ? ':' + settingsValue('tg_proxy_port') : ''}`
-                : '代理未启用';
             const channel = settingsValue('notify_channel') === 'wecom_app' ? '企业微信应用' : '企业微信群机器人';
             const switches = ['notify_push_enabled', 'notify_monitor_enabled', 'cross_copy_notify_subscription', 'cross_copy_notify_manual'].filter(id => settingsChecked(id)).length;
-            return `${proxy} · ${channel} · ${switches}/4 个推送开关`;
+            return `${channel} · ${switches}/4 个推送开关`;
+        }
+        case 'proxy': {
+            return settingsChecked('tg_proxy_enabled')
+                ? `代理 ${settingsValue('tg_proxy_protocol') || 'http'}://${settingsValue('tg_proxy_host') || '未填'}${settingsValue('tg_proxy_port') ? ':' + settingsValue('tg_proxy_port') : ''}`
+                : '代理未启用';
         }
         case 'system': {
             const account = settingsValue('username') ? '账号已填' : '账号未填';
@@ -212,6 +214,7 @@ export function initSettingsSectionNav() {
 
     if (page.dataset.settingsSectionNavReady !== '1') {
         page.dataset.settingsSectionNavReady = '1';
+        initSettingsSubgroupAnchors(cards);
         nav.innerHTML = cards.map((card) => {
             const key = settingsSectionKey(card);
             const step = String(card.dataset.settingsStep || '').trim();
@@ -268,6 +271,63 @@ export function initSettingsSectionNav() {
         }
     }
     refreshSettingsSectionSummaries();
+}
+
+// 组内锚点：在每个大组顶部注入一行子块快捷跳转，点击平滑滚动到对应子块并高亮。
+// 锚点标签优先取子块上的 data-settings-anchor（短名），否则退回取标题文字（去掉内嵌按钮）。
+function settingsSubgroupAnchorLabel(group) {
+    if (group.dataset && group.dataset.settingsAnchor) {
+        return String(group.dataset.settingsAnchor).trim();
+    }
+    const title = group.querySelector('.settings-subgroup-title');
+    if (!title) return '';
+    const clone = title.cloneNode(true);
+    clone.querySelectorAll('button, [role="button"]').forEach((el) => el.remove());
+    return String(clone.textContent || '').replace(/\s+/g, ' ').trim();
+}
+
+function initSettingsSubgroupAnchors(cards) {
+    cards.forEach((card) => {
+        const body = card.querySelector('.settings-section-body');
+        if (!body) return;
+        const groups = Array.from(body.querySelectorAll('[data-settings-subgroup]'));
+        if (groups.length < 2) return; // 只有一个子块时不加锚点，避免冗余
+
+        const existing = card.querySelector('.settings-subgroup-anchors');
+        if (existing) existing.remove();
+
+        const bar = document.createElement('div');
+        bar.className = 'settings-subgroup-anchors';
+        bar.setAttribute('role', 'navigation');
+        bar.setAttribute('aria-label', '组内快捷跳转');
+
+        groups.forEach((group, idx) => {
+            const label = settingsSubgroupAnchorLabel(group);
+            if (!label) return;
+            const anchorId = 'subgroup-anchor-' + settingsSectionKey(card) + '-' + idx;
+            group.setAttribute('data-settings-subgroup-id', anchorId);
+
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'settings-subgroup-anchor';
+            btn.textContent = label;
+            btn.setAttribute('data-settings-subgroup-target', anchorId);
+            btn.addEventListener('click', (event) => {
+                event.preventDefault();
+                const target = body.querySelector('[data-settings-subgroup-id="' + anchorId + '"]');
+                if (!target) return;
+                const top = target.getBoundingClientRect().top + window.scrollY - settingsSectionScrollOffset();
+                window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+                bar.querySelectorAll('.settings-subgroup-anchor').forEach((b) => b.classList.remove('is-active'));
+                btn.classList.add('is-active');
+            });
+            bar.appendChild(btn);
+        });
+
+        if (bar.children.length) {
+            body.insertBefore(bar, body.firstChild);
+        }
+    });
 }
 
 function escapeHtml(value = '') {
@@ -534,7 +594,10 @@ function collectSettingsPayload({
         'servarr_api_key',
         'servarr_default_savepath',
         'servarr_movie_savepath',
-        'servarr_tv_savepath'
+        'servarr_tv_savepath',
+        'emby_bridge_upstream',
+        'emby_bridge_username',
+        'emby_bridge_password'
     ];
     const sensitiveFieldSet = new Set(Array.isArray(sensitiveSettingFields) ? sensitiveSettingFields : []);
     standardIds.forEach((id) => {
@@ -557,6 +620,8 @@ function collectSettingsPayload({
     cfg.ai_match_enabled = !!document.getElementById('ai_match_enabled')?.checked;
     cfg.pansou_enabled = !!document.getElementById('pansou_enabled')?.checked;
     cfg.subscription_magnet_offline_fallback = !!document.getElementById('subscription_magnet_offline_fallback')?.checked;
+    cfg.emby_bridge_enabled = !!document.getElementById('emby_bridge_enabled')?.checked;
+    cfg.emby_bridge_allow_public = !!document.getElementById('emby_bridge_allow_public')?.checked;
     cfg.resource_favorite_dirs = collectResourceFavoriteDirs();
     cfg.scraper_noise_phrases = parseKeywordLines(document.getElementById('scraper_noise_phrases')?.value);
     cfg.scraper_standalone_noise_words = parseKeywordLines(document.getElementById('scraper_standalone_noise_words')?.value);

@@ -322,6 +322,7 @@
                 'pansou_password',
                 'webhook_secret',
                 'servarr_api_key',
+                'emby_bridge_password',
             ];
             const meta = window.providerMeta || [];
             meta.forEach(p => {

@@ -8,14 +8,14 @@
 
 ## 基线
 
-- **更新日期**: 2026-11-16（0.15.14：设置页重新分组 + 网盘目录选择器）
-- **分支**: `main`，0.15.13 及以前已推送；**0.15.14 待提交 / 推送**；tag 最新 `v0.15.13`，Docker 镜像同版本由 GitHub Actions 自动构建（测试不绿就不构建）
-- **版本**: `0.15.14`（2026-11-16：设置页 11 个分区合并为 6 组并按依赖排序；Seerr 两个点播目录、磁力中转目录、各网盘「常用目录」接上目录选择器；修上一批遗留的模块语法错误，JS 语法门改 ESM 模式）
+- **更新日期**: 2026-11-17（0.15.15：Emby 兼容桥 + 设置页分组优化）
+- **分支**: `main`，0.15.14 及以前已推送；**0.15.15 待提交 / 推送**；tag 最新 `v0.15.14`，Docker 镜像同版本由 GitHub Actions 自动构建（测试不绿就不构建）
+- **版本**: `0.15.15`（2026-11-17：新增 Emby 兼容桥，Seerr 直接读极影视索引判重，不再重复部署 Jellyfin；设置页加组内快捷跳转、网络代理独立成组、「播放与影视库」改名「播放与点播」）
 - **CI**: 单一工作流 `.github/workflows/ci.yml`（`docker-release.yml` 已并入并移除），**限定 `paths: version.json`，只在发版推送时触发**：`test` job 跑 `compileall` + `scripts/check_js_syntax.py`（复制成 `.mjs` 再 `node --check`；裸 `node --check` 对 ESM 文件静默放过，`--experimental-default-type=module` 在 Node 23+ 又被移除，两条路都走过弯路）+ `scripts/run_tests.py`，`build-and-push` 用 `needs: test` 挂在后面（`workflow_dispatch` 有 `publish` 开关，关掉只跑测试）。日常开发验证只用本机 `scripts/check.sh`，不要等 CI
 - **本地不入库文件**: `AGENTS.md` / `CLAUDE.md` / `.workbuddy/` / `.claude/` / `.worktrees/` 是本机开发用，**按约定不入库**。任何测试/代码读它们前必须判存在（`test_modules_doc` 已这么做），否则干净 clone 跑测试必挂。
 - **运行环境**: `docker compose` 服务名 `115-media-hub-test`（应用本体），端口 18080；`/app/storage` 已映射到宿主机 `/Users/xianer/Documents/docker/115strmxianer/storage`（virtiofs，空间读数正常）。挂载路径与端口已改为从根目录 `.env` 读取（模板 `.env.example`），本机 `.env` 写的是原来的绝对路径
-- **最近提交**: `0147c62` 设置页重新分组 + 网盘目录选择器（本版功能）；其前 `0793eba` 发版 0.15.13 已推送、tag `v0.15.13`
-- **工作区**: 0.15.14 发版四件套（`version.json` / `CHANGELOG.md` / `README.md` / `state.md`）已改，**待提交 → push → tag → release**。本次内容：① 设置页 11 个分区合并为 6 组（网盘与账号 / 网络与通知 / 播放与影视库 / 来源与订阅 / 元数据与识别 / 系统与存储），组内用 `data-settings-subgroup` 小标题分区，Seerr 点播从「账号密钥」拆进「播放与影视库」，代理提到第 2；② 三处网盘路径接上目录选择器（Seerr 两个点播目录、磁力中转目录、各网盘常用目录，用户已真机验证）；③ 修合并时多写一个 `}` 导致设置模块解析失败（分区展不开、导航失效），JS 语法门改 ESM 模式（原 `node --check` 对 `export` 文件静默放过）。仓库根无探针残骸
+- **最近提交**: `0147c62` 设置页重新分组 + 网盘目录选择器（0.15.14）；其前 `0793eba` 发版 0.15.13 已推送、tag `v0.15.13`
+- **工作区**: 0.15.15 发版四件套（`version.json` / `CHANGELOG.md` / `README.md` / `state.md`）已改，**待提交 → push → tag → release**。本次内容：① 新增 Emby 兼容桥 emby-bridge（`app/services/emby_bridge.py` + `app/routes/emby_bridge.py` + `tests/test_emby_bridge.py`，方案 `specs/2026-11-17-emby-bridge-for-seerr-design.md`；头转写 / `/Auth/Keys` 本地实现 / 判重 `/Items?ids=` 改写 / CollectionType 补全，单测 22 条 + 端到端真连极影视已通过，真机接 Seerr 判重见待办 A-12）；② 设置页分组优化（加组内快捷跳转、网络代理独立成组、播放与影视库改名播放与点播，`tests/test_settings_layout_frontend.py` SECTION_KEYS 加 proxy）。仓库根无探针残骸
 
 
 
@@ -55,6 +55,8 @@
 10. **验证订阅磁力离线兜底（2026-11-02 新增，仅单测）**：设置页「PanSou 盘搜」打开「订阅任务磁力离线兜底」（默认关），挑一个 115 剧集任务、故意让它缺集（把 `last_episode` 改小或等新集）。预期：① 补源能拿到时不出现磁力日志；② 补源也拿不到时日志出现「磁力离线兜底：本盘与跨盘补源都未拿到缺失集」，随后 115 离线任务入库、文件落到 `Season NN`；③ 任务状态变「已完成」且群里有 1 条成功通知。死种应被 `subscription_invalid_link_cache` 挡住、下一轮不再重试。④ 额外验一条容易翻车的：盘搜无候选但本盘已有前几集（例如临时改坏关键词），磁力整包下完应该只入库缺的集，不能把整季重复搬进 Season。
 
 11. **验证精准匹配修复（0.15.13 新增，仅单测）**：挑一个开着「精准匹配」的剧集任务跑一轮，看两点——① 日志里不再出现「简介提到剧名就被判同剧」的候选（`match_reason` 应为 `raw_text_only_match` 而不是 `identity_title_match`）；② 分享里混着的海报 / NFO 不再进「已选文件」清单，统计里「按类型跳过」有数。反例：正常的精确片名资源仍要能命中，命中不了就把该任务的精准匹配关掉（默认就是关的）。
+
+12. **验证 Emby 兼容桥（2026-11-17 新功能，单测 + 端到端已过，仅差真机接 Seerr）**：按 `specs/2026-11-17-emby-bridge-for-seerr-design.md` §6 验收——① 设置页「播放与影视库」里开 `emby_bridge_enabled`、填极影视地址（`http://192.168.0.2:8021` 内网地址）与媒体库账号密码；② 在 Seerr「设置 → 媒体服务器」加一台 Emby 服务器，地址填面板地址、URL Base 填 `emby-bridge`、账号密码填极影视媒体库账号；③ 同步完成后，搜索库里已有影片应显示「可获得」而不是「可请求」（判重改写的验证点）。**验证前不要删现有 Jellyfin**；桥只负责判重，点片后下载/补源仍走 Radarr/Sonarr 点播对接。关掉 `emby_bridge_enabled` 后 `/emby-bridge/*` 应全部 404、其它功能不受影响。
 
 ### B. 已真机验证通过（勿重复）
 
