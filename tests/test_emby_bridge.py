@@ -123,7 +123,9 @@ class HandleDispatchTest(unittest.TestCase):
 
     def _run_sync(self, coro):
         import asyncio
-        return asyncio.get_event_loop().run_until_complete(coro)
+        # 用 asyncio.run：Python 3.10+ 移除了 get_event_loop 的隐式建环（3.12 直接抛
+        # RuntimeError），run 从 3.7 起跨版本稳定，且这里每次只需跑单个 coroutine。
+        return asyncio.run(coro)
 
     def test_disabled_returns_404(self):
         status, _, _ = self._run_sync(self._run("GET", "/System/Info", settings={"enabled": False}))
