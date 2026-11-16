@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.15.16] - 2026-11-17
+
+修复 0.15.15 在 CI 上的测试失败，内容与 0.15.15 一致，仅补一个测试写法修复。
+
+- **修 CI 测试失败**：`test_emby_bridge` 的测试辅助函数用了 `asyncio.get_event_loop().run_until_complete()`，本机 Python 3.9 会隐式建环能跑通，但 CI 用的 Python 3.12 移除了隐式建环，直接抛 `RuntimeError`（8 条测试全挂）。改用 `asyncio.run()`（3.7 起跨版本稳定）。这是「本机全绿 ≠ 干净机器全绿」的典型：`get_event_loop` 行为在 3.9 / 3.12 / 3.13 之间飘忽。
+
 ## [0.15.15] - 2026-11-17
 
 这次解决两件事：让 Seerr 不用再重复部署 Jellyfin 就能正确判重（新增 Emby 兼容桥），以及把设置页改成更好找的布局。
