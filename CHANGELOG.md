@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.15.22] - 2026-11-17
+
+设置页「Emby 兼容桥」加一个「测试连通性」按钮。
+
+- **为什么**：媒体库账号（不是极空间登录号）填错时，只有等 Seerr 那边保存服务器才暴露，错误信息还笼统；先保存再试等于把错配置写进库里。
+- **做法**：按钮用**当前表单里**的极影视地址与账号密码，实际登录一次极影视（`/Users/AuthenticateByName`）再读一次媒体库列表（`/Users/{uid}/Views`），直接显示「读到 N 个媒体库」和库名；失败按类型给中文提示——账号或密码不对、连不上地址、登录成功但没库。
+- **边界**：只读探测，不写配置、不写 token 缓存（测试用的密码可能还没保存）；密码留空时后端沿用已保存的那份，避免每次测试都要重敲。
+- 单测新增 7 条（服务层 5 条 + 路由层 2 条），`tests.test_emby_bridge` 36 条全绿。
+
 ## [0.15.21] - 2026-11-17
 
 Emby 兼容桥通了，轮到点播这一环：Seerr 里点一部电影必然 `MEDIA_FAILED`。

@@ -8,9 +8,9 @@
 
 ## 基线
 
-- **更新日期**: 2026-11-17（0.15.21：修 Seerr 点播链路——Radarr 响应缺 `tags` 致 `movie.tags is not iterable`、PUT 不回写 monitored、缺 `/queue`）
-- **分支**: `main`，0.15.18 已推送；**0.15.19 / 0.15.20 / 0.15.21 本地已提交、待用户手动推送**（用户要求：AI 只做本地提交，push/tag/release 由他触发）；本地 tag 有 `v0.15.18` / `v0.15.19` / `v0.15.20` / `v0.15.21`，Docker 镜像同版本由 GitHub Actions 自动构建（测试不绿就不构建）
-- **版本**: `0.15.21`（2026-11-17：Seerr 点播链路修复——① `RadarrMovie` 缺 `tags` 字段，Seerr 合并标签时抛 `movie.tags is not iterable`，点播必 FAILED；② PUT `/movie` 对 `monitored=true` 回写任务 `enabled`，不再只读不写；③ 补 `GET /api/v3/queue` 空队列，消除 Download Sync 每分钟报错。桥本身已通，勿再动 `emby_bridge.py`）
+- **更新日期**: 2026-11-17（0.15.22：设置页桥加「测试连通性」按钮，只读登录+列库，密码留空沿用已保存值）
+- **分支**: `main`，0.15.18 / 0.15.19 / 0.15.20 已推送；**0.15.21 / 0.15.22 本地已提交、待用户手动推送**（用户要求：AI 只做本地提交，push/tag/release 由他触发）；本地 tag 有 `v0.15.19`~`v0.15.22`，Docker 镜像同版本由 GitHub Actions 自动构建（测试不绿就不构建）
+- **版本**: `0.15.22`（2026-11-17：桥设置页新增「测试连通性」——`POST /settings/emby_bridge/test` 用表单值登录极影视 + 读 `/Users/{uid}/Views`，返回库名清单；只读、不缓存 token、密码留空沿用已保存值。服务层 `emby_bridge.test_connection`，单测 36 条）
 - **CI**: 单一工作流 `.github/workflows/ci.yml`（`docker-release.yml` 已并入并移除），**限定 `paths: version.json`，只在发版推送时触发**：`test` job 跑 `compileall` + `scripts/check_js_syntax.py`（复制成 `.mjs` 再 `node --check`；裸 `node --check` 对 ESM 文件静默放过，`--experimental-default-type=module` 在 Node 23+ 又被移除，两条路都走过弯路）+ `scripts/run_tests.py`，`build-and-push` 用 `needs: test` 挂在后面（`workflow_dispatch` 有 `publish` 开关，关掉只跑测试）。日常开发验证只用本机 `scripts/check.sh`，不要等 CI
 - **本地不入库文件**: `AGENTS.md` / `CLAUDE.md` / `.workbuddy/` / `.claude/` / `.worktrees/` 是本机开发用，**按约定不入库**。任何测试/代码读它们前必须判存在（`test_modules_doc` 已这么做），否则干净 clone 跑测试必挂。
 - **运行环境**: `docker compose` 服务名 `115-media-hub-test`（应用本体），端口 18080；`/app/storage` 已映射到宿主机 `/Users/xianer/Documents/docker/115strmxianer/storage`（virtiofs，空间读数正常）。挂载路径与端口已改为从根目录 `.env` 读取（模板 `.env.example`），本机 `.env` 写的是原来的绝对路径

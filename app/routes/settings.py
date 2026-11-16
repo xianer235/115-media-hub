@@ -10,6 +10,7 @@ from ..core import *  # noqa: F401,F403
 from ..http_utils import http_request_bytes
 from ..providers.registry import get_or_none as _get_provider_or_none
 from ..services import ai_match as ai_match_service
+from ..services import emby_bridge as emby_bridge_service
 from ..providers.aliyun_oauth import create_aliyun_oauth_session, exchange_aliyun_code
 from ..providers.pan115_qr import (
     build_115_qrcode_image_url,
@@ -279,6 +280,28 @@ async def test_ai_match(request: Request) -> JSONResponse:
         failure.setdefault("msg", str(result.get("error") or "AI 测试失败"))
         return JSONResponse(status_code=400, content=failure)
     return JSONResponse(content=result)
+
+
+@router.post("/settings/emby_bridge/test")
+async def test_emby_bridge(request: Request) -> JSONResponse:
+    """测试极影视地址 + 媒体库账号密码是否可用（只读：登录一次 + 列一次库）。
+
+    直接用当前表单里的值测，不必先保存；密码留空时沿用已保存的那份。
+    """
+    incoming = await request.json()
+    incoming_payload = incoming if isinstance(incoming, dict) else {}
+    cfg = normalize_config(merge_settings_preserve_sensitive(get_config(), incoming_payload))
+    try:
+        result = await asyncio.to_thread(
+            emby_bridge_service.test_connection,
+            str(cfg.get("emby_bridge_upstream", "") or ""),
+            str(cfg.get("emby_bridge_username", "") or ""),
+            str(cfg.get("emby_bridge_password", "") or ""),
+        )
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
+    status_code = 200 if result.get("ok") else 400
+    return JSONResponse(status_code=status_code, content=result)
 
 
 @router.get("/settings/ai_match/usage")

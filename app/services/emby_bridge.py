@@ -25,6 +25,8 @@ import ipaddress
 import json
 import logging
 import re
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
@@ -167,6 +169,79 @@ def _bridge_settings() -> Dict[str, Any]:
 def bridge_configured(settings: Optional[Dict[str, Any]] = None) -> bool:
     s = settings if settings is not None else _bridge_settings()
     return bool(s["upstream"] and s["username"] and s["password"])
+
+
+def test_connection(upstream: str, username: str, password: str) -> Dict[str, Any]:
+    """设置页「测试连通性」：用给定地址与媒体库账号登录一次极影视，再读一次媒体库列表。
+
+    只做只读探测（登录 + 列库），不写配置、不进 token 缓存 —— 测试用的密码可能是
+    用户刚敲还没保存的，缓存住反而会和保存后的配置打架。
+    返回 {"ok", "msg", "latency_ms", "library_count", "libraries", "server_id"}。
+    """
+    started = time.monotonic()
+    base = _normalize_upstream(upstream)
+    user = str(username or "").strip()
+    pwd = str(password or "")
+
+    def done(ok: bool, msg: str, **extra: Any) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "ok": ok,
+            "msg": msg,
+            "latency_ms": max(0, int((time.monotonic() - started) * 1000)),
+            "library_count": 0,
+            "libraries": [],
+            "server_id": "",
+        }
+        payload.update(extra)
+        return payload
+
+    if not base:
+        return done(False, "请先填写极影视地址，例如 http://192.168.0.2:8021")
+    if not user:
+        return done(False, "请先填写媒体库账号（极影视里的媒体库账号，不是极空间登录号）")
+    if not pwd:
+        return done(False, "请先填写媒体库密码")
+
+    try:
+        info = _do_login(base, user, pwd)
+    except urllib.error.HTTPError as exc:
+        if int(exc.code or 0) in (401, 403):
+            return done(False, "登录被拒绝：媒体库账号或密码不对。这里要填极影视的媒体库账号，不是极空间登录号")
+        return done(False, f"极影视返回 HTTP {exc.code}，地址可能不对")
+    except urllib.error.URLError as exc:
+        return done(False, f"连不上极影视地址：{getattr(exc, 'reason', exc)}")
+    except Exception as exc:  # noqa: BLE001 - 设置页只关心「能不能用」
+        return done(False, f"登录极影视失败：{exc}")
+
+    token = str(info.get("token", "") or "")
+    uid = str(info.get("uid", "") or "")
+    if not uid:
+        return done(False, "登录成功但极影视没返回用户 ID，无法继续读媒体库")
+    status, _, payload = _forward_json(
+        base,
+        "GET",
+        f"/Users/{uid}/Views",
+        "",
+        b"",
+        {"X-Emby-Token": token, "Accept": "application/json"},
+        15,
+    )
+    if status != 200 or not isinstance(payload, dict):
+        return done(False, f"已登录，但读取媒体库失败（HTTP {status}）")
+    names = [
+        str(item.get("Name", "") or "").strip()
+        for item in (payload.get("Items") or [])
+        if isinstance(item, dict) and str(item.get("Name", "") or "").strip()
+    ]
+    if not names:
+        return done(False, "已登录，但极影视没有返回任何媒体库（检查该账号有没有媒体库查看权限）", server_id=str(info.get("server_id", "") or ""))
+    return done(
+        True,
+        f"已连上极影视，读到 {len(names)} 个媒体库",
+        library_count=len(names),
+        libraries=names,
+        server_id=str(info.get("server_id", "") or ""),
+    )
 
 
 # ---------------------------------------------------------------- 登录与 token

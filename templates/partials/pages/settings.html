@@ -465,6 +465,13 @@
                                     <input id="emby_bridge_password" type="password" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="媒体库账号密码">
                                 </div>
                             </div>
+                            <div class="block">
+                                <div class="flex flex-col sm:flex-row sm:items-center gap-2">
+                                    <button id="emby-bridge-test-btn" type="button" onclick="testEmbyBridgeConnection()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 disabled:opacity-60 text-white text-sm font-bold whitespace-nowrap">测试连通性</button>
+                                    <span class="text-[11px] text-slate-500">用当前表单里的地址和账号登录一次极影视、读一次媒体库列表；只读不写，不影响已保存的配置。密码留空时用已保存的那份。</span>
+                                </div>
+                                <div id="emby-bridge-test-status" class="mt-2 hidden"></div>
+                            </div>
                             <label class="flex items-center gap-3 cursor-pointer">
                                 <input id="emby_bridge_allow_public" type="checkbox" class="toggle-checkbox">
                                 <span class="text-sm text-slate-300">允许非内网来源访问</span>

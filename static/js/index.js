@@ -3565,6 +3565,51 @@
             showToast('PanSou 测试模块加载失败，请刷新页面后重试', { tone: 'error', duration: 3200, placement: 'top-center' });
         }
 
+        // Emby 兼容桥：用表单里的地址 + 媒体库账号密码登录一次极影视，读一次库列表。
+        // 不读已保存配置里的旧值（密码除外，留空时后端沿用），便于「改完先测再保存」。
+        async function testEmbyBridgeConnection() {
+            const btn = document.getElementById('emby-bridge-test-btn');
+            const statusEl = document.getElementById('emby-bridge-test-status');
+            if (!statusEl) return;
+            if (btn && btn.disabled) return;
+            const upstream = document.getElementById('emby_bridge_upstream')?.value?.trim() || '';
+            const username = document.getElementById('emby_bridge_username')?.value?.trim() || '';
+            const password = document.getElementById('emby_bridge_password')?.value || '';
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = '测试中…';
+            }
+            statusEl.classList.remove('hidden');
+            statusEl.className = 'mt-2 tg-proxy-status';
+            statusEl.innerHTML = '<div class="tg-proxy-status-title">正在连接极影视…</div>';
+            try {
+                const data = await window.MediaHubApi.postJson('/settings/emby_bridge/test', {
+                    emby_bridge_upstream: upstream,
+                    emby_bridge_username: username,
+                    emby_bridge_password: password,
+                });
+                const libraries = Array.isArray(data.libraries) ? data.libraries : [];
+                const latency = formatDurationText(Number(data.latency_ms || 0));
+                statusEl.className = 'mt-2 tg-proxy-status tg-proxy-status--success';
+                statusEl.innerHTML = `
+                    <div class="tg-proxy-status-title">${escapeHtml(String(data.msg || '连接成功'))}${latency ? ` · ${escapeHtml(latency)}` : ''}</div>
+                    <div class="tg-proxy-status-meta">${libraries.length ? `媒体库：${escapeHtml(libraries.join(' / '))}` : '未返回媒体库列表'}</div>
+                `;
+                showToast('极影视连接正常', { tone: 'success', duration: 2200, placement: 'top-center' });
+            } catch (e) {
+                statusEl.className = 'mt-2 tg-proxy-status tg-proxy-status--error';
+                statusEl.innerHTML = `
+                    <div class="tg-proxy-status-title">连接失败</div>
+                    <div class="tg-proxy-status-meta">${escapeHtml(e instanceof Error ? e.message : String(e || '未知错误'))}</div>
+                `;
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = '测试连通性';
+                }
+            }
+        }
+
         function renderNotifyTestStatus() {
             const settingsModule = tabRuntimeState.tabModuleCache.settings;
             if (settingsModule?.renderNotifyTestStatus) {

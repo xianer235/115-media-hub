@@ -1,10 +1,9 @@
 {
-  "version": "0.15.21",
-  "buildDate": "2026-11-17T07:40:00+08:00",
+  "version": "0.15.22",
+  "buildDate": "2026-11-17T07:55:00+08:00",
   "notes": [
-    "修 Seerr 点播电影必失败：Radarr 响应缺 tags 字段，Seerr 合并标签时抛 movie.tags is not iterable，整个点播被标成 FAILED",
-    "Seerr 把「monitored=false」PUT 回来时真的会恢复任务启用状态，不再读了旧值又返回 false 死循环",
-    "补 GET /api/v3/queue 空队列端点，Seerr 的 Download Sync 不再每分钟刷 Unable to get queue"
+    "Emby 兼容桥新增「测试连通性」按钮：用表单里的极影视地址与媒体库账号密码登录一次并读一次库列表，改完不必先保存就能验证",
+    "只读探测：不写配置、不缓存 token；密码留空时沿用已保存的那份"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

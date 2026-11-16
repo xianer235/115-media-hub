@@ -292,5 +292,108 @@ class RoutePathTest(unittest.TestCase):
         self.assertEqual(args[1], "/System/Info")
 
 
+class TestConnectionTest(unittest.TestCase):
+    """设置页「测试连通性」：只读探测，登录一次 + 列一次库。"""
+
+    def test_success_reports_libraries(self):
+        items = {"Items": [{"Name": "电影库"}, {"Name": "电视剧库"}, {"Name": "连载中"}]}
+        with mock.patch.object(bridge, "_do_login", return_value={"token": "t", "uid": "uid1", "server_id": "srv"}) as login, \
+                mock.patch.object(bridge, "_forward_json", return_value=(200, {}, items)) as forward:
+            result = bridge.test_connection("192.168.1.10:8021", "xianer", "secret")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["library_count"], 3)
+        self.assertEqual(result["libraries"], ["电影库", "电视剧库", "连载中"])
+        login.assert_called_once_with("http://192.168.1.10:8021", "xianer", "secret")
+        self.assertEqual(forward.call_args[0][2], "/Users/uid1/Views")
+
+    def test_wrong_password_returns_readable_message(self):
+        import urllib.error
+
+        err = urllib.error.HTTPError("http://x/Users/AuthenticateByName", 401, "Unauthorized", {}, None)
+        with mock.patch.object(bridge, "_do_login", side_effect=err):
+            result = bridge.test_connection("http://x", "xianer", "bad")
+        self.assertFalse(result["ok"])
+        self.assertIn("媒体库账号或密码", result["msg"])
+
+    def test_unreachable_upstream(self):
+        import urllib.error
+
+        with mock.patch.object(bridge, "_do_login", side_effect=urllib.error.URLError("Connection refused")):
+            result = bridge.test_connection("http://192.168.1.10:8021", "xianer", "secret")
+        self.assertFalse(result["ok"])
+        self.assertIn("连不上", result["msg"])
+
+    def test_missing_fields_rejected_without_request(self):
+        with mock.patch.object(bridge, "_do_login") as login:
+            self.assertFalse(bridge.test_connection("", "xianer", "secret")["ok"])
+            self.assertFalse(bridge.test_connection("http://x", "", "secret")["ok"])
+            self.assertFalse(bridge.test_connection("http://x", "xianer", "")["ok"])
+        login.assert_not_called()
+
+    def test_empty_library_list_is_failure(self):
+        with mock.patch.object(bridge, "_do_login", return_value={"token": "t", "uid": "u", "server_id": "s"}), \
+                mock.patch.object(bridge, "_forward_json", return_value=(200, {}, {"Items": []})):
+            result = bridge.test_connection("http://x", "xianer", "secret")
+        self.assertFalse(result["ok"])
+        self.assertIn("媒体库", result["msg"])
+
+
+class TestConnectionRouteTest(unittest.TestCase):
+    """路由层：密码留空时沿用已保存的密码（sensitive 合并），并把失败映射成 400。"""
+
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        from app.core import require_auth
+        from app.main import app
+
+        app.dependency_overrides[require_auth] = lambda: True
+        self._app = app
+        self._require_auth = require_auth
+        self.client = TestClient(app)
+
+    def tearDown(self):
+        self._app.dependency_overrides.pop(self._require_auth, None)
+
+    def test_route_preserves_saved_password_and_returns_payload(self):
+        from app.routes import settings as settings_route
+
+        seen = {}
+
+        def fake_test(upstream, username, password):
+            seen.update({"upstream": upstream, "username": username, "password": password})
+            return {"ok": True, "msg": "已连上极影视", "latency_ms": 5, "library_count": 1, "libraries": ["电影库"]}
+
+        with mock.patch.object(settings_route, "get_config", return_value={
+            "emby_bridge_upstream": "http://old",
+            "emby_bridge_username": "old-user",
+            "emby_bridge_password": "saved-password",
+        }), mock.patch.object(settings_route.emby_bridge_service, "test_connection", side_effect=fake_test):
+            resp = self.client.post(
+                "/settings/emby_bridge/test",
+                json={"emby_bridge_upstream": "http://new", "emby_bridge_username": "new-user", "emby_bridge_password": ""},
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.json()["ok"])
+        self.assertEqual(seen["upstream"], "http://new")
+        self.assertEqual(seen["username"], "new-user")
+        self.assertEqual(seen["password"], "saved-password")
+
+    def test_route_maps_failure_to_400_with_msg(self):
+        from app.routes import settings as settings_route
+
+        with mock.patch.object(settings_route, "get_config", return_value={
+            "emby_bridge_upstream": "http://x",
+            "emby_bridge_username": "u",
+            "emby_bridge_password": "p",
+        }), mock.patch.object(
+            settings_route.emby_bridge_service,
+            "test_connection",
+            return_value={"ok": False, "msg": "登录被拒绝", "latency_ms": 3},
+        ):
+            resp = self.client.post("/settings/emby_bridge/test", json={})
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json()["msg"], "登录被拒绝")
+
+
 if __name__ == "__main__":
     unittest.main()
