@@ -1,12 +1,10 @@
 {
-  "version": "0.15.16",
-  "buildDate": "2026-11-17T06:22:00+08:00",
+  "version": "0.15.17",
+  "buildDate": "2026-11-17T06:45:00+08:00",
   "notes": [
-    "新增 Emby 兼容桥：Seerr（Jellyseerr）不再需要重复部署 Jellyfin，直接读极影视（极空间）的媒体库索引判重，家人点播时能正确显示「已有片」而非「可请求」",
-    "桥自动适配极影视与标准 Emby 的协议差异：头转写（Authorization → X-Emby-*）、本地实现 /Auth/Keys、判重查询 /Items?ids= 改写、媒体库类型补全，全部按实测钉死",
-    "设置页重新分组：网络代理从「网络与通知」拆成独立组，通知组更纯；「播放与影视库」改名「播放与点播」，Seerr 点播、Emby 桥、STRM 播放聚在一起",
-    "每个设置分组顶部加「组内快捷跳转」：点一下直接滚到对应子块并高亮，不用再从上往下翻着找",
-    "修 CI 测试失败：emby_bridge 测试改用 asyncio.run（get_event_loop 在 Python 3.12 下不再隐式建环，导致本机 3.9 全绿、CI 3.12 全挂）"
+    "修 Emby 兼容桥接不上 Seerr：路由层丢掉了请求路径的前导斜杠，桥对任何请求都回「不转发该路径」404，Seerr 只能笼统报「无法连接到 Jellyfin 服务器」",
+    "修桥的白名单漏放行裸路径：Seerr 保存媒体服务器时会调 GET /Users（无尾斜杠），原来被白名单判成 404，现已放行",
+    "补路由层路径契约单测（RoutePathTest），避免同类问题再被「直接调服务层」的测试绕过去"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

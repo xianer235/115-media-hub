@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.15.17] - 2026-11-17
+
+修 0.15.15 / 0.15.16 的 Emby 兼容桥在真机上「接不上 Seerr」的问题：桥的代码没错在翻译逻辑，错在路径根本没传到翻译逻辑。
+
+- **桥对所有请求都回 404**：FastAPI 的 `{path:path}` 捕获到的是**不带前导斜杠**的剩余路径（`/emby-bridge/System/Info` → `System/Info`），而服务层的白名单、`/Auth/Keys` 本地实现、`/Items?ids=` 判重改写全部按 `/System/`、`/Auth/Keys` 这种绝对路径判断。斜杠一丢，每个请求都被判成「不转发该路径」。现在在路由层补回前导斜杠再交给服务层。
+- **Seerr 侧的表现极具误导性**：它只报「无法连接到 Jellyfin 服务器」，看不出是桥在回 404。定位方法是直接打桥的端点：`curl -H 'Authorization: MediaBrowser Client="Seerr", Device="Seerr", DeviceId="probe", Version="1.0.0"' http://面板地址:端口/emby-bridge/System/Info`，返回 `{"error":"emby-bridge 不转发该路径"}` 就是这个问题。
+- **白名单漏放行裸路径**：Seerr 保存媒体服务器 / 同步用户时调的是 `GET /Users`（没有尾斜杠），而白名单写的是 `/Users/`。现在前缀带尾斜杠时额外放行「去掉尾斜杠后相等」的路径，其余仍严格按前缀匹配（`/Plugins` 之类照样 404）。
+- **单测为什么没抓到**：原来的用例直接调服务层的 `handle(path="/System/Info")`，路径是带斜杠的形态，路由层的真实行为被绕过。这次补了 `RoutePathTest` 专门盯「路由传进服务层的路径必须以 `/` 开头」这个契约。
+
+升级后 Seerr 侧不用改任何配置，重新点一次保存（会重新登录换 API 密钥）即可。
+
 ## [0.15.16] - 2026-11-17
 
 修复 0.15.15 在 CI 上的测试失败，内容与 0.15.15 一致，仅补一个测试写法修复。

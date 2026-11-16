@@ -8,9 +8,9 @@
 
 ## 基线
 
-- **更新日期**: 2026-11-17（0.15.16：Emby 兼容桥 + 设置页分组优化 + CI 测试修复）
-- **分支**: `main`，0.15.14 及以前已推送；**0.15.16 待提交 / 推送**；tag 最新 `v0.15.14`，Docker 镜像同版本由 GitHub Actions 自动构建（测试不绿就不构建）
-- **版本**: `0.15.16`（2026-11-17：新增 Emby 兼容桥，Seerr 直接读极影视索引判重，不再重复部署 Jellyfin；设置页加组内快捷跳转、网络代理独立成组、「播放与影视库」改名「播放与点播」；另修 CI 测试失败——emby_bridge 测试改用 `asyncio.run`，`get_event_loop` 在 Python 3.12 下不再隐式建环，本机 3.9 全绿、CI 3.12 全挂）
+- **更新日期**: 2026-11-17（0.15.17：修 Emby 兼容桥路由丢前导斜杠导致全量 404）
+- **分支**: `main`，0.15.16 及以前已推送；**0.15.17 待提交 / 推送**；tag 最新 `v0.15.16`，Docker 镜像同版本由 GitHub Actions 自动构建（测试不绿就不构建）
+- **版本**: `0.15.17`（2026-11-17：修 Emby 兼容桥接不上 Seerr——FastAPI `{path:path}` 捕获的路径不带前导斜杠，服务层白名单/`/Auth/Keys`/`/Items?ids=` 全按绝对路径判断，导致所有请求 404「不转发该路径」；路由层补回斜杠 + 白名单放行 `GET /Users` 裸路径；新增 `RoutePathTest` 盯住路径契约。前两版 0.15.15/0.15.16 的单测直接调服务层，绕过了路由层所以全绿）
 - **CI**: 单一工作流 `.github/workflows/ci.yml`（`docker-release.yml` 已并入并移除），**限定 `paths: version.json`，只在发版推送时触发**：`test` job 跑 `compileall` + `scripts/check_js_syntax.py`（复制成 `.mjs` 再 `node --check`；裸 `node --check` 对 ESM 文件静默放过，`--experimental-default-type=module` 在 Node 23+ 又被移除，两条路都走过弯路）+ `scripts/run_tests.py`，`build-and-push` 用 `needs: test` 挂在后面（`workflow_dispatch` 有 `publish` 开关，关掉只跑测试）。日常开发验证只用本机 `scripts/check.sh`，不要等 CI
 - **本地不入库文件**: `AGENTS.md` / `CLAUDE.md` / `.workbuddy/` / `.claude/` / `.worktrees/` 是本机开发用，**按约定不入库**。任何测试/代码读它们前必须判存在（`test_modules_doc` 已这么做），否则干净 clone 跑测试必挂。
 - **运行环境**: `docker compose` 服务名 `115-media-hub-test`（应用本体），端口 18080；`/app/storage` 已映射到宿主机 `/Users/xianer/Documents/docker/115strmxianer/storage`（virtiofs，空间读数正常）。挂载路径与端口已改为从根目录 `.env` 读取（模板 `.env.example`），本机 `.env` 写的是原来的绝对路径
