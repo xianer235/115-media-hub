@@ -474,7 +474,8 @@ CLI 专属环境变量（见「命令行工具」）：`MH_USERNAME` / `MH_PASSW
 
 ## 近期更新（以 `version.json` 为准）
 
-- 当前版本：`0.15.20`
+- 当前版本：`0.15.21`
+- **Seerr 点播电影必失败的问题已修（0.15.21）**：`/api/v3/movie` 的响应缺 `tags` 字段，Seerr 合并标签时抛 `movie.tags is not iterable`，请求被标成 FAILED；同时 Seerr 要求「重新监控」时我们只读不写，读回来还是未监控。现已补 `tags`、按 `monitored` 回写任务启用状态，并补上 `GET /api/v3/queue` 空队列端点（Download Sync 不再每分钟刷 `Unable to get queue`）。升级后在 Seerr 里重试一次点播即可。
 - **Emby 兼容桥接不上 / 库类型判错 / 库列表拉不到，五个 bug 已修（0.15.17 ~ 0.15.20）**：① FastAPI 的 `{path:path}` 捕获到的路径不带前导斜杠（`System/Info`），桥的白名单和判重改写全按 `/System/` 判断，斜杠一丢整条链路 404，Seerr 只笼统报「无法连接到 Jellyfin 服务器」；② Seerr 保存服务器时调 `GET /Users`（无尾斜杠）被白名单判 404；③ 极影视没有 `/Library/MediaFolders`，Seerr 回退到 `/Users/{uid}/Views`，而这条路上的库 `CollectionType` 全是 null，桥没补 → 电影库被当成剧集库、电影判重失效。④ 极影视根本没实现 `/Library/MediaFolders`（404），Seerr 拉库列表直接报「Something went wrong while syncing libraries」，向导卡住；桥现在改用 `/Users/{uid}/Views` 顶替；⑤ 登录成功后仍满屏 401——桥伪造的 API Key 被透传给极影视，极影视不认，现在一律用桥自己登录换的真 token。五处都已修，升级后重走一遍 Seerr 向导即可（登录、库列表、库内容、判重四条链路已对着真实环境实测通）。
 - **Emby 兼容桥：Seerr 不用再重复部署 Jellyfin**：面板新增「Emby 兼容桥」，让 Seerr（Jellyseerr）把极影视（极空间自带的影视库）当成 Emby 服务器读，直接复用极影视已扫好的媒体索引判重——家人点播时库里已有的片会正确显示「可获得」，不再误判成「可请求」。极影视的 Emby 兼容层和标准 Emby 有 4 处对不上（鉴权头、`/Auth/Keys` 端点、判重查询 `/Items?ids=`、媒体库类型标记），桥全部按实测翻译掉；其中判重查询改写是关键，不修它 Seerr 会把已有片全当成「没有」。桥默认只放内网（拿的是极影视媒体库账号），只负责判重、不碰下载播放；开关在设置页「播放与点播 → Emby 兼容桥」，默认关。现有的 Jellyfin 先保留，桥跑稳再决定下线。
 - **设置页更好找了**：每个分组顶部加「组内快捷跳转」——打开一组，顶部一排小胶囊列出这组有哪些子块，点一下直接滚过去并高亮，不用从上往下翻（只有一个子块的组不显示）。网络代理从「网络与通知」拆成独立组，通知组更干净；「播放与影视库」改名「播放与点播」，Seerr 点播、Emby 桥、STRM 播放聚在一组。

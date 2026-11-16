@@ -4,8 +4,9 @@
 电影点播 → 一个电影订阅任务；剧集点播 → 按季拆成多个剧集订阅任务。
 鉴权用设置页生成的 API Key（X-Api-Key 请求头），不走面板登录会话。
 
-只做「伪装成 Radarr/Sonarr」必需的最小端点集（与 MoviePilot 同名适配层对齐），
-不实现 queue / command / health 等端点。端点契约见 docs/superpowers/plans/2026-10-24-servarr-seerr-api.md。
+只做「伪装成 Radarr/Sonarr」必需的最小端点集（与 MoviePilot 同名适配层对齐）；
+`/queue` 只回空队列（本项目不做下载器进度，Seerr 的 Download Sync 会每分钟拉），
+不实现 health / download 等端点。端点契约见 docs/superpowers/plans/2026-10-24-servarr-seerr-api.md。
 """
 
 import hmac
@@ -164,6 +165,9 @@ class RadarrMovie(BaseModel):
     qualityProfileId: int = SERVARR_QUALITY_PROFILE_ID
     rootFolderPath: Optional[str] = None
     minimumAvailability: str = "released"
+    # Seerr 在「库里已有但未监控」时会合并两端 tags（`[...movie.tags, ...options.tags]`），
+    # 响应里缺这个字段会直接抛 `movie.tags is not iterable`，整个点播判失败。
+    tags: List[int] = Field(default_factory=list)
     added: Optional[str] = None
 
 
@@ -349,6 +353,31 @@ def _append_subscription_tasks(new_tasks: List[Dict[str, Any]]) -> List[Dict[str
     save_config(updated)
     schedule_ui_state_push(0)
     return appended
+
+
+def _set_task_enabled(tmdb_id: int, enabled: bool, media_type: str = "movie") -> int:
+    """把某个 tmdb id 的订阅任务改成启用/停用，返回改动条数。
+
+    Seerr 的 Radarr/Sonarr 客户端把「monitored」映射到任务的 enabled：它读到
+    monitored=false 就会 PUT 回来要求恢复监控，回写后 `hasFile`/判重才不会反复失配。
+    """
+    cfg = get_config()
+    tasks = _subscription_tasks(cfg)
+    changed = 0
+    for task in tasks:
+        if str(task.get("media_type", "")) != media_type:
+            continue
+        if _task_tmdb_id(task) != tmdb_id:
+            continue
+        if bool(task.get("enabled", True)) != enabled:
+            task["enabled"] = enabled
+            changed += 1
+    if changed:
+        updated = dict(cfg)
+        updated["subscription_tasks"] = tasks
+        save_config(updated)
+        schedule_ui_state_push(0)
+    return changed
 
 
 def _drop_subscription_tasks(match) -> Dict[str, Any]:
@@ -574,6 +603,24 @@ async def servarr_language_profiles(_: None = servarr_auth) -> List[ServarrLangu
     return [ServarrLanguageProfile()]
 
 
+@router.get("/queue")
+async def servarr_queue(_: None = servarr_auth) -> Dict[str, Any]:
+    """下载队列：本项目由订阅链路自己跑，没有对外的下载器进度，固定返回空队列。
+
+    Seerr 的「Download Sync」定时任务每分钟拉一次 `/queue`，缺这个端点会一直刷
+    `Unable to get queue from Radarr server`。返回空队列只是「没有下载中项目」，
+    与真实状态一致；点播进度仍在面板的订阅页看。
+    """
+    return {
+        "page": 1,
+        "pageSize": 100,
+        "sortKey": "timeleft",
+        "sortDirection": "ascending",
+        "totalRecords": 0,
+        "records": [],
+    }
+
+
 # ---------------------------------------------------------------- 电影端点
 
 @router.get("/movie/lookup", response_model=List[RadarrMovie])
@@ -665,13 +712,20 @@ async def servarr_add_movie(movie: RadarrMovie, _: None = servarr_auth) -> Union
 
 @router.put("/movie", response_model=RadarrMovie)
 async def servarr_update_movie(movie: RadarrMovie, _: None = servarr_auth) -> RadarrMovie:
-    """Seerr 更新电影点播：库里没有就补建，有则原样回读（监控状态暂不支持反转）。"""
+    """Seerr 更新电影点播：库里没有就补建，有则回读（需要时把「未监控」改回监控）。"""
     tmdb_id = max(0, int(movie.tmdbId or 0))
     if tmdb_id <= 0:
         raise HTTPException(status_code=400, detail="请求缺少 tmdbId")
     cfg = get_config()
     existing = _find_movie_task(cfg, tmdb_id)
     if existing:
+        # Seerr 只在「已存在但 monitored=false」时走 PUT，语义就是「重新纳入监控」。
+        # 这里不回写会造成死循环：它读到 monitored=false → 再 PUT → 仍是 false → 点播判失败。
+        if movie.monitored and not bool(existing.get("enabled", True)):
+            _set_task_enabled(tmdb_id, True, media_type="movie")
+            updated = _find_movie_task(get_config(), tmdb_id)
+            if updated:
+                return _movie_task_to_radarr(updated)
         return _movie_task_to_radarr(existing)
     created = await servarr_add_movie(movie, _)
     if isinstance(created, RadarrMovie):

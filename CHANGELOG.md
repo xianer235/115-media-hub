@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.15.21] - 2026-11-17
+
+Emby 兼容桥通了，轮到点播这一环：Seerr 里点一部电影必然 `MEDIA_FAILED`。
+
+- **现象**：Seerr 日志 `Failed to add movie to Radarr ... {"errorMessage":"movie.tags is not iterable"}`，请求被标成 FAILED；同时每分钟一条 `Download Tracker: Unable to get queue from Radarr server`。
+- **根因一**：Radarr v3 的电影对象带 `tags` 数组，本项目的 `RadarrMovie` 模型没有这个字段，响应里就不出现。Seerr 在「库里已有但未监控」的分支里做 `[...movie.tags, ...options.tags]`，拿 `undefined` 去展开直接抛异常，整个点播失败。
+- **根因二**：同一条分支要求 `monitored`，Seerr 会 PUT 回来要求重新监控；我们原来只原样回读任务，`monitored` 仍是 false，Seerr 判「更新失败」。
+- **根因三**：`Download Sync` 定时任务每分钟拉 `GET /api/v3/queue`，此前按设计不实现该端点，于是稳定刷错误。
+- **改法**：`RadarrMovie` 补 `tags: []`；PUT `/movie` 在 `monitored=true` 而任务为停用时回写 `enabled=true`（不再只读不写）；新增 `/queue` 返回空队列（本项目不做下载器进度，空队列与真实状态一致）。
+- **未处理**：日志里的 `Failed to load Anime-List mappings: Unclosed root tag` 是 Seerr 自己下载的动漫映射文件损坏（容器出网走代理导致下载被截断），和本项目无关；重拉一次映射或忽略即可。
+
 ## [0.15.20] - 2026-11-17
 
 第五处、也是最后一道坎：Seerr 登录成功了，但之后所有请求都 401。

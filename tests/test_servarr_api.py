@@ -222,6 +222,17 @@ class ServarrStaticEndpointsTest(ServarrApiTestBase):
         self.assertEqual(len(data), 1)
         self.assertEqual(data[0]["id"], 1)
 
+    def test_queue_is_empty_but_well_formed(self):
+        """Seerr 每分钟拉一次 /queue；缺端点会一直刷 Unable to get queue。"""
+        with self._patched():
+            resp = self.client.get("/api/v3/queue?includeEpisode=true", headers=HEADERS)
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["records"], [])
+        self.assertEqual(data["totalRecords"], 0)
+        for key in ("page", "pageSize", "sortKey", "sortDirection"):
+            self.assertIn(key, data)
+
 
 # ------------------------------------------------------------------ 电影点播
 
@@ -302,6 +313,31 @@ class ServarrMovieApiTest(ServarrApiTestBase):
         self.assertEqual(resp.json()["id"], 603)
         self.assertEqual(ctx.save.call_count, 0)
         self.assertEqual(ctx.queue.call_count, 0)
+
+    def test_movie_payload_always_has_tags_array(self):
+        """Seerr 会 `[...movie.tags, ...options.tags]`，缺字段直接抛 movie.tags is not iterable。"""
+        cfg = {"subscription_tasks": [_movie_task()]}
+        with self._patched(cfg):
+            listed = self.client.get("/api/v3/movie?tmdbId=603", headers=HEADERS).json()
+            added = self.client.post("/api/v3/movie", json={"tmdbId": 603}, headers=HEADERS).json()
+        for payload in (listed[0], added):
+            self.assertIsInstance(payload["tags"], list)
+
+    def test_put_movie_reenables_disabled_task(self):
+        """库里已有但 monitored=false 时 Seerr 会 PUT 回来；必须回写 enabled，否则死循环判失败。"""
+        task = _movie_task()
+        task["enabled"] = False
+        cfg = {"subscription_tasks": [task]}
+        with self._patched(cfg) as ctx:
+            resp = self.client.put(
+                "/api/v3/movie",
+                json={"tmdbId": 603, "monitored": True, "tags": []},
+                headers=HEADERS,
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.json()["monitored"])
+        self.assertEqual(ctx.tasks()[0]["enabled"], True)
+        self.assertEqual(ctx.save.call_count, 1)
 
     def test_add_movie_without_tmdb_id_returns_400(self):
         with self._patched():

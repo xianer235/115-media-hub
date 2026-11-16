@@ -1,9 +1,10 @@
 {
-  "version": "0.15.20",
-  "buildDate": "2026-11-17T07:15:00+08:00",
+  "version": "0.15.21",
+  "buildDate": "2026-11-17T07:40:00+08:00",
   "notes": [
-    "修 Seerr 登录成功后满屏 401：Seerr 拿的是桥伪造的伪 API Key，桥却把它透传给极影视，极影视当然不认。现在一律用桥自己登录换的真 token，只有桥还没拿到 token 时才回退用 Seerr 的",
-    "这是接 Seerr 的最后一处：登录、库列表、库内容、判重四条链路现在都通了"
+    "修 Seerr 点播电影必失败：Radarr 响应缺 tags 字段，Seerr 合并标签时抛 movie.tags is not iterable，整个点播被标成 FAILED",
+    "Seerr 把「monitored=false」PUT 回来时真的会恢复任务启用状态，不再读了旧值又返回 false 死循环",
+    "补 GET /api/v3/queue 空队列端点，Seerr 的 Download Sync 不再每分钟刷 Unable to get queue"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"
