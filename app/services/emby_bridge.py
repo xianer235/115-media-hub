@@ -56,6 +56,18 @@ _LIBRARY_LIST_PATHS: Tuple[str, ...] = (
     "/Library/VirtualFolders",
 )
 
+
+def _is_library_list_path(path: str) -> bool:
+    """是否是「媒体库列表」请求。
+
+    两条路都要补 ``CollectionType``：标准版是 ``/Library/MediaFolders``，而极影视
+    根本没实现它（404），Seerr 会回退到 ``/Users/{uid}/Views``。回退路径的库同样
+    全是 ``CollectionType: null``，漏补就会把「电影库」判成剧集库，判重跟着失效。
+    """
+    if any(path.startswith(prefix) for prefix in _LIBRARY_LIST_PATHS):
+        return True
+    return path.rstrip("/").endswith("/Views")
+
 # token 缓存：{ (upstream, username) : {"token": str, "uid": str} }
 _TOKEN_CACHE: Dict[Tuple[str, str], Dict[str, str]] = {}
 
@@ -395,8 +407,8 @@ async def handle(method: str, path: str, query: str, headers: Dict[str, str], bo
                 upstream, method, upstream_path, query, body, retry_headers, read_timeout=120
             )
 
-    # T4：媒体库列表补 CollectionType
-    if status == 200 and any(path.startswith(p) for p in _LIBRARY_LIST_PATHS):
+    # T4：媒体库列表补 CollectionType（含 Seerr 回退的 /Users/{uid}/Views）
+    if status == 200 and _is_library_list_path(path):
         parsed = _fill_collection_types(parsed)
 
     # T3：判重改写后，把单条响应包装成 Jellyseerr 期望的 {Items:[单条]} 结构

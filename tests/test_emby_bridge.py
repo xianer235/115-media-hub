@@ -73,6 +73,12 @@ class RewriteHeadersTest(unittest.TestCase):
 
 
 class CollectionTypeTest(unittest.TestCase):
+    def test_views_fallback_counts_as_library_list(self):
+        """极影视没有 /Library/MediaFolders，Seerr 回退 /Users/{uid}/Views，也要补类型。"""
+        self.assertTrue(bridge._is_library_list_path("/Users/abc/Views"))
+        self.assertTrue(bridge._is_library_list_path("/Library/MediaFolders"))
+        self.assertFalse(bridge._is_library_list_path("/Users/abc/Items"))
+
     def test_movie_library_gets_movies(self):
         payload = {"Items": [{"Name": "电影库"}, {"Name": "电视剧库"}]}
         bridge._fill_collection_types(payload)
@@ -154,6 +160,16 @@ class HandleDispatchTest(unittest.TestCase):
                 status, _, _ = self._run_sync(self._run("GET", "/Users"))
         self.assertEqual(status, 200)
         self.assertEqual(seen["path"], "/Users")
+
+    def test_views_fallback_response_gets_collection_types(self):
+        """端到端：/Users/{uid}/Views 的库列表回来时补上 movies / tvshows。"""
+        payload = {"Items": [{"Name": "电影库"}, {"Name": "连载中"}]}
+        with mock.patch.object(bridge, "_forward_json", return_value=(200, {}, payload)):
+            with mock.patch.object(bridge, "_get_token", return_value={"token": "t", "uid": "u", "server_id": "s"}):
+                status, _, out = self._run_sync(self._run("GET", "/Users/u/Views"))
+        self.assertEqual(status, 200)
+        self.assertEqual(out["Items"][0]["CollectionType"], "movies")
+        self.assertEqual(out["Items"][1]["CollectionType"], "tvshows")
 
     def test_public_source_returns_403_when_not_allowed(self):
         status, _, _ = self._run_sync(self._run("GET", "/System/Info", client_host="8.8.8.8"))

@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.15.18] - 2026-11-17
+
+补齐 0.15.17 之后的第三处真机问题：桥能登上了，但媒体库类型没补对，电影库会被当成剧集库。
+
+- **媒体库类型补全漏了回退路径**：Seerr 拉库列表先请求 `GET /Library/MediaFolders`，极影视**没实现这个端点**（实测直接 404），于是 Seerr 回退到 `GET /Users/{uid}/Views`。而这条回退路径返回的每个库 `CollectionType` 都是 `null`（「电影库」「电视剧库」「连载中」全都一样），桥原来只在 `MediaFolders` 上补类型，回退路径直接透传 → Seerr 把所有库都当成剧集库，电影判重随之失效（搜电影全显示「可请求」）。
+- **改法**：`_is_library_list_path()` 把「路径以 `/Views` 结尾」也算媒体库列表，同样补 `movies` / `tvshows`。库名含「电影」→ 电影库，其余按剧集（与 0.15.15 的规则一致）。
+- **升级后**：Seerr 侧不用改配置，在「设置 → 媒体服务器」点一次同步 / 或者重新走一遍库选择即可。
+
 ## [0.15.17] - 2026-11-17
 
 修 0.15.15 / 0.15.16 的 Emby 兼容桥在真机上「接不上 Seerr」的问题：桥的代码没错在翻译逻辑，错在路径根本没传到翻译逻辑。

@@ -1,10 +1,9 @@
 {
-  "version": "0.15.17",
-  "buildDate": "2026-11-17T06:45:00+08:00",
+  "version": "0.15.18",
+  "buildDate": "2026-11-17T07:00:00+08:00",
   "notes": [
-    "修 Emby 兼容桥接不上 Seerr：路由层丢掉了请求路径的前导斜杠，桥对任何请求都回「不转发该路径」404，Seerr 只能笼统报「无法连接到 Jellyfin 服务器」",
-    "修桥的白名单漏放行裸路径：Seerr 保存媒体服务器时会调 GET /Users（无尾斜杠），原来被白名单判成 404，现已放行",
-    "补路由层路径契约单测（RoutePathTest），避免同类问题再被「直接调服务层」的测试绕过去"
+    "修 Emby 兼容桥的媒体库类型没补全：极影视没有 /Library/MediaFolders（直接 404），Seerr 必定回退到 /Users/{uid}/Views，而这条回退路径上的库 CollectionType 全是 null，桥没补 → 所有库被当成剧集库，电影判重失效",
+    "升级后在 Seerr 里重新同步一次媒体库即可，Seerr 侧不用改配置"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"
