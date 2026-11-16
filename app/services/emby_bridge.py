@@ -245,8 +245,12 @@ def _rewrite_headers(seerr_headers: Dict[str, str], token: str) -> Dict[str, str
     fields = _parse_media_browser_header(auth_value)
     if not fields.get("DeviceId"):
         fields["DeviceId"] = _BRIDGE_DEVICE_ID
-    # 抽 Token（若 Seerr 已带）；否则用桥自己缓存的真实 token
-    effective_token = fields.pop("Token", "") or token
+    # Seerr 头上的 Token 是**桥自己发的伪 key**（/Auth/Keys 本地伪造的那把），
+    # 极影视根本不认，透传过去只会 401（2026-11-17 真机日志：
+    # "getting libraries from the Jellyfin server: 401" 刷屏）。
+    # 所以一律用桥缓存的真实 token；只有桥还没拿到 token 时才退回去用 Seerr 的。
+    seerr_token = fields.pop("Token", "")
+    effective_token = token or seerr_token
     out["X-Emby-Authorization"] = _build_emby_authorization(fields)
     if effective_token:
         out["X-Emby-Token"] = effective_token

@@ -1,9 +1,9 @@
 {
-  "version": "0.15.19",
-  "buildDate": "2026-11-17T07:10:00+08:00",
+  "version": "0.15.20",
+  "buildDate": "2026-11-17T07:15:00+08:00",
   "notes": [
-    "修 Seerr 向导卡在「Configure Media Server」报 Something went wrong while syncing libraries：极影视没实现 /Library/MediaFolders（实测 404），桥现在用 /Users/{uid}/Views 顶替，库列表能正常返回",
-    "至此接 Seerr 的三段链路已实测通：库列表（Views 顶替 + 补 CollectionType）、库内容（/Items?ParentId=）、判重（/Items?ids= 改写后能拿到 Tmdb）"
+    "修 Seerr 登录成功后满屏 401：Seerr 拿的是桥伪造的伪 API Key，桥却把它透传给极影视，极影视当然不认。现在一律用桥自己登录换的真 token，只有桥还没拿到 token 时才回退用 Seerr 的",
+    "这是接 Seerr 的最后一处：登录、库列表、库内容、判重四条链路现在都通了"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

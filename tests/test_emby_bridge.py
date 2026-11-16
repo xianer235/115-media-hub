@@ -44,18 +44,26 @@ class ParseHeaderTest(unittest.TestCase):
 
 
 class RewriteHeadersTest(unittest.TestCase):
-    def test_rewrite_with_token_from_seerr(self):
+    def test_seerr_token_is_ignored_when_bridge_has_real_one(self):
+        """Seerr 头上带的是桥伪造的伪 key，透传给极影视只会 401，必须用桥的真 token。"""
         out = bridge._rewrite_headers(
             {
-                "Authorization": 'MediaBrowser Client="Seerr", Device="Seerr", DeviceId="abc", Version="1.0.0", Token="seerr-tok"',
+                "Authorization": 'MediaBrowser Client="Seerr", Device="Seerr", DeviceId="abc", Version="1.0.0", Token="pseudo-key"',
                 "Accept": "application/json",
             },
             token="real-token",
         )
         self.assertNotIn("Authorization", out)
-        self.assertEqual(out["X-Emby-Token"], "seerr-tok")
+        self.assertEqual(out["X-Emby-Token"], "real-token")
         self.assertIn("X-Emby-Authorization", out)
         self.assertIn('Client="Seerr"', out["X-Emby-Authorization"])
+
+    def test_falls_back_to_seerr_token_when_bridge_has_none(self):
+        out = bridge._rewrite_headers(
+            {"Authorization": 'MediaBrowser Client="Seerr", Device="Seerr", DeviceId="abc", Version="1.0.0", Token="user-key"'},
+            token="",
+        )
+        self.assertEqual(out["X-Emby-Token"], "user-key")
 
     def test_rewrite_uses_cached_token_when_seerr_has_none(self):
         out = bridge._rewrite_headers(

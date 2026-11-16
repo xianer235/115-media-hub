@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.15.20] - 2026-11-17
+
+第五处、也是最后一道坎：Seerr 登录成功了，但之后所有请求都 401。
+
+- **现象**：Seerr 端满屏 `Something went wrong while getting libraries from the Jellyfin server: 401`，向导库列表空。日志里登录是成功的（`creating initial admin user for Seerr {"jellyfinUsername":"xianer"}`），说明账号密码没问题。
+- **根因**：桥给 Seerr 发的 API Key 是**自己伪造的**（极影视没实现 `/Auth/Keys`，桥用 `sha256(ServerId+用户名)` 顶替）。Seerr 拿这把伪 key 放进 `Authorization: MediaBrowser ..., Token="..."` 头，而桥的头改写逻辑原本「Seerr 带了 Token 就优先用它」→ 把伪 key 原样送给极影视 → 极影视不认 → 401。桥虽然遇到 401 会重登一次，但重试时仍用伪 key，照样 401。
+- **改法**：一律用桥自己登录换来的真 token；只有桥还没拿到 token 时才回退用 Seerr 带的那把。这样无论 Seerr 存的是伪 key 还是用户手填的真实 key，上游鉴权都由桥负责。
+- **至此四条链路全通**：登录（`/Users/AuthenticateByName`）→ 库列表（`MediaFolders` 缺失时用 `Views` 顶替并补 `CollectionType`）→ 库内容（`/Items?ParentId=`）→ 判重（`/Items?ids=` 改写后返回 `ProviderIds.Tmdb`）。
+
 ## [0.15.19] - 2026-11-17
 
 第四个真机问题，也是 Seerr 向导卡住的那一步：库列表拉不到。
