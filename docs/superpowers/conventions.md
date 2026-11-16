@@ -13,6 +13,7 @@
 - **后台任务**：`app/background.py:73` 的 `submit_background(job_factory, ...)` 把长任务丢到独立线程的事件循环；不要在请求协程里直接跑长任务，也不要占用共享后台循环做慢请求。
 - **provider 注册**：provider 通过 `app/providers/registry.py:10` 的 `register()` 自注册，`app/core.py` 底部 import 触发。新增网盘要同时补注册、能力声明和前端 provider 列表。
 - **命名约定**：`normalize_*` 负责校验/归一化入参，`build_*` 负责构造响应，保持这个分工。
+- **网盘路径输入必须有选择器**：设置页 / 弹窗里凡是让用户填「115 或某网盘目录」的地方，都要给「选择目录」按钮，复用文件夹监控那套目录弹窗（`openMonitorFolderModal('', provider, { onPick })` 回调模式，回传 `relative_path` 不带挂载前缀），手填只作为兜底，不要要求用户自己记 `/115` 前缀和目录名。本地磁盘路径（容器内暂存目录）走存储位置那套候选目录探测，两者别混。
 
 ## 产品口径（容易写反）
 
@@ -53,6 +54,7 @@
 
 - **容器路径是硬编码的**：`app/db.py:11` 的 `DB_PATH = "/app/config/data.db"`、`app/core.py:387` 的 `CONFIG_PATH = "/app/config/settings.json"`、`TREE_DIR`、`STRM_ROOT` 都是 `/app/...`。本机直接起 uvicorn 会在 `/app` 上失败，容器行为的真实验证要用重建后的容器。
 - **Python 一律用 `.venv/bin/python`**，不要用系统 `python3`；语法验证加 `PYTHONPYCACHEPREFIX=/tmp/115-media-hub-pycache`。
+- **JS 语法校验必须按 ES Module 跑**：`node --check foo.js` 对带 `export` 的 `.js` 会**静默放过**语法错误（Node 22 实测返回 0）。正确做法是 `node --experimental-default-type=module --check foo.js`，或复制成 `.mjs` 再 check。`scripts/check.sh` 与 CI 已改用前者，`tests/test_js_module_syntax.py` 用后者兜底全量扫描。**判断标准**：改完前端只跑了 `node --check` 就说不报错，等于没验证——2026-11-16 设置页多一个 `}` 就是这样一路漏到工作区，页面导航能画出来但所有分区展不开。
 - **Docker 构建先设代理**：`export HTTP_PROXY/HTTPS_PROXY=http://127.0.0.1:7897`、`NO_PROXY=localhost,127.0.0.1,registry-1.docker.io`，再 `docker compose up -d --build`，否则可能用旧镜像得出错误结论。
 - **前端样式要先重新生成 Tailwind**：新增的工具类若不在 `static/css/tailwind.generated.css` 里就不生效，改模板类名后执行 `npm run build:css`。
 - **主题必须日夜双查**：页面用到 `html.theme-day` / `html:not(.theme-day)` 两套配色，只看夜间模式容易漏掉日间可见性问题。

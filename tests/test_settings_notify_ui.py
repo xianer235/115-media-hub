@@ -29,7 +29,8 @@ class SettingsNotifySectionFrontendTest(unittest.TestCase):
         self.index_js = INDEX_SCRIPT_PATH.read_text(encoding="utf-8")
 
     def _notify_body(self):
-        start = self.template.index('id="settings-body-notify"')
+        # 通知已并入「网络与通知」分组，按 subgroup 锚点取，不再有独立的 settings-body-notify。
+        start = self.template.index('data-settings-subgroup="notify"')
         end = self.template.index("</section>", start)
         return self.template[start:end]
 

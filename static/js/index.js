@@ -82,7 +82,10 @@
         let resourceTargetPreviewError = '';
         let monitorFolderTrail = [{ id: '0', name: '根目录' }];
         // 文件夹选择弹窗当前要写回哪个输入框（监控扫描路径 / 快捷导入接收夹）。
+        // 传空字符串表示「不写输入框，改走 monitorFolderPickerCallback」（设置页的路径选择器）。
         let monitorFolderPickerTargetId = 'monitor_scan_path';
+        // 设置页等外部调用方传入的回调：({ provider, path, relative_path, trail }) => void
+        let monitorFolderPickerCallback = null;
         // 文件夹选择弹窗当前浏览的网盘（扫描任务固定 115，接收夹跟随所选 provider）。
         let monitorFolderProvider = '115';
         let monitorFolderEntries = [];
@@ -4405,6 +4408,16 @@
             return normalizeRemotePathInput(joinRelativePathInput(getMonitorMountPrefix(monitorFolderProvider), relativePath));
         }
 
+        // 设置页传进来的是相对路径（例如「媒体库/网盘电影」），回溯目录时需要先补上挂载前缀。
+        // 已经是绝对路径（/115/xxx）的原样返回，两种写法都能用。
+        function buildMonitorAbsolutePath(path = '', provider = '115') {
+            const normalized = normalizeRemotePathInput(path || '');
+            if (!normalized || normalized === '/') return '';
+            const mountPrefix = getMonitorMountPrefix(provider);
+            if (normalized === mountPrefix || normalized.startsWith(`${mountPrefix}/`)) return normalized;
+            return normalizeRemotePathInput(joinRelativePathInput(mountPrefix, normalized));
+        }
+
         function renderMonitorFolderBreadcrumbs() {
             const container = document.getElementById('monitor-folder-breadcrumbs');
             if (!container) return;
@@ -4629,12 +4642,19 @@
             return '115';
         }
 
-        async function openMonitorFolderModal(targetInputId = 'monitor_scan_path', provider = '') {
-            monitorFolderPickerTargetId = String(targetInputId || 'monitor_scan_path');
-            const providerKey = normalizeMountProviderInput(provider) || resolveMonitorFolderProvider(monitorFolderPickerTargetId);
+        async function openMonitorFolderModal(targetInputId = 'monitor_scan_path', provider = '', options = {}) {
+            // targetInputId 传空串 = 纯回调模式（设置页复用同一个选择器，不往任何输入框里写值）
+            const pickerOptions = options && typeof options === 'object' ? options : {};
+            monitorFolderPickerTargetId = String(targetInputId || '').trim();
+            monitorFolderPickerCallback = typeof pickerOptions.onPick === 'function' ? pickerOptions.onPick : null;
+            const callbackMode = !monitorFolderPickerTargetId && !!monitorFolderPickerCallback;
+            const providerKey = callbackMode
+                ? (normalizeMountProviderInput(pickerOptions.provider || provider) || '115')
+                : (normalizeMountProviderInput(provider) || resolveMonitorFolderProvider(monitorFolderPickerTargetId));
             monitorFolderProvider = providerKey || '115';
             const providerLabel = getProviderLabel(monitorFolderProvider);
             if (!isProviderAuthConfigured(monitorFolderProvider)) {
+                monitorFolderPickerCallback = null;
                 showToast(`请先在参数配置中填写 ${providerLabel} 认证信息`, {
                     tone: 'warn',
                     duration: 2800,
@@ -4643,16 +4663,23 @@
                 return;
             }
             const titleEl = document.getElementById('monitor-folder-modal-title');
-            if (titleEl) titleEl.textContent = `选择 ${providerLabel} 文件夹`;
+            if (titleEl) {
+                titleEl.textContent = String(pickerOptions.title || '').trim() || `选择 ${providerLabel} 文件夹`;
+            }
             const pathLabelEl = document.getElementById('monitor-folder-path-label');
             if (pathLabelEl) {
-                pathLabelEl.textContent = String(monitorFolderPickerTargetId).startsWith('monitor_inbox_target')
-                    ? '当前分发目标'
-                    : (monitorFormTaskType() === 'inbox' ? '当前接收夹路径' : '当前监控路径');
+                if (callbackMode) {
+                    pathLabelEl.textContent = String(pickerOptions.pathLabel || '').trim() || '当前目录';
+                } else {
+                    pathLabelEl.textContent = String(monitorFolderPickerTargetId).startsWith('monitor_inbox_target')
+                        ? '当前分发目标'
+                        : (monitorFormTaskType() === 'inbox' ? '当前接收夹路径' : '当前监控路径');
+                }
             }
             const summaryEl = document.getElementById('monitor-folder-summary');
             if (summaryEl) {
-                summaryEl.textContent = `这里只展示 ${providerLabel} 当前目录下的子文件夹，选择后会直接保存成完整路径。`;
+                summaryEl.textContent = String(pickerOptions.summary || '').trim()
+                    || `这里只展示 ${providerLabel} 当前目录下的子文件夹，选择后会直接保存成完整路径。`;
             }
             const createInput = document.getElementById('monitor-folder-create-name');
             if (createInput) createInput.value = '';
@@ -4660,10 +4687,11 @@
             showLockedModal('monitor-folder-modal');
             renderMonitorFolderBreadcrumbs();
             renderMonitorFolderList();
+            const seedPath = callbackMode
+                ? buildMonitorAbsolutePath(pickerOptions.initialPath || '', monitorFolderProvider)
+                : (document.getElementById(monitorFolderPickerTargetId)?.value || '');
             try {
-                monitorFolderTrail = await resolveMonitorFolderTrailByPath(
-                    document.getElementById(monitorFolderPickerTargetId)?.value || ''
-                );
+                monitorFolderTrail = await resolveMonitorFolderTrailByPath(seedPath);
             } catch (e) {
                 monitorFolderTrail = [{ id: '0', name: '根目录' }];
             }
@@ -4671,6 +4699,8 @@
         }
 
         function closeMonitorFolderModal() {
+            monitorFolderPickerCallback = null;
+            monitorFolderPickerTargetId = 'monitor_scan_path';
             hideLockedModal('monitor-folder-modal');
         }
 
@@ -4753,6 +4783,17 @@
 
         function selectCurrentMonitorFolder() {
             const scanPath = buildMonitorScanPathFromTrail(monitorFolderTrail);
+            const relativePath = buildResourceFolderDisplayPathFromTrail(monitorFolderTrail);
+            if (monitorFolderPickerCallback) {
+                const callback = monitorFolderPickerCallback;
+                const provider = monitorFolderProvider;
+                const trail = monitorFolderTrail.slice();
+                closeMonitorFolderModal();
+                try {
+                    callback({ provider, path: scanPath, relative_path: relativePath, trail });
+                } catch (e) {}
+                return;
+            }
             const targetInputId = monitorFolderPickerTargetId || 'monitor_scan_path';
             const inputEl = document.getElementById(targetInputId);
             if (inputEl) inputEl.value = scanPath;

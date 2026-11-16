@@ -9,7 +9,7 @@ SETTINGS_MODULE_PATH = ROOT / "static/js/modules/tabs/settings.js"
 INDEX_SCRIPT_PATH = ROOT / "static/js/index.js"
 INDEX_CSS_PATH = ROOT / "static/css/index.css"
 
-SECTION_KEYS = ["auth", "strm", "storage", "tg", "pansou", "proxy", "tmdb", "ai", "notify", "security", "filter"]
+SECTION_KEYS = ["account", "network", "library", "sources", "metadata", "system"]
 
 
 class SettingsSectionLayoutFrontendTest(unittest.TestCase):
@@ -33,10 +33,38 @@ class SettingsSectionLayoutFrontendTest(unittest.TestCase):
 
     def test_template_drops_manual_order_and_numbered_titles(self):
         self.assertNotIn('style="order:', self.template)
-        for step in ("1", "2", "3", "4", "5", "6", "6b", "7", "8", "9"):
+        # 步骤号必须是 1..N 连续：出现过 2b / 6b 说明是补丁式追加，重排后不再允许。
+        for step in range(1, len(SECTION_KEYS) + 1):
             self.assertIn(f'data-settings-step="{step}"', self.template)
+        self.assertNotIn('data-settings-step="2b"', self.template)
+        self.assertNotIn('data-settings-step="6b"', self.template)
         self.assertNotIn(">9. 批量整理过滤词", self.template)
         self.assertIn(">批量整理过滤词（可选）<", self.template)
+
+    def test_proxy_section_precedes_sources_that_depend_on_it(self):
+        # TG 拉取、TMDB 查询、资源外链都走代理，代理必须排在它们前面。
+        proxy_at = self.template.index('data-settings-subgroup="proxy"')
+        for area in ("tg", "pansou", "tmdb", "ai"):
+            self.assertLess(proxy_at, self.template.index(f'data-settings-subgroup="{area}"'))
+
+    def test_all_original_areas_survive_the_merge(self):
+        # 11 个分区合并成 6 组后，原来每块内容都必须还在，且只出现一次（防止搬块时漏抄 / 重复）。
+        areas = [
+            "auth", "strm", "seerr", "tg", "pansou", "proxy",
+            "tmdb", "ai", "filter", "notify", "security", "storage",
+        ]
+        for area in areas:
+            self.assertEqual(
+                self.template.count(f'data-settings-subgroup="{area}"'), 1, f"分组 {area} 丢失或重复"
+            )
+        # 每组至少一块，总数对得上
+        self.assertEqual(self.template.count('class="settings-subgroup '), len(areas))
+
+    def test_merged_groups_keep_subgroup_titles(self):
+        # 一组里装多块时必须有小标题，否则合并后又变成一坨。
+        titles = re.findall(r'class="settings-subgroup-title[^"]*">([^<]+)<', self.template)
+        self.assertEqual(len(titles), 11)  # 12 块里「网盘与账号」只有一块，不需要小标题
+        self.assertIn("Seerr 点播对接（家人在点播门户点一下就会自动建订阅任务）", titles)
 
     def test_section_heads_control_existing_bodies(self):
         head_ids = re.findall(r'class="settings-section-head"[^>]*aria-controls="([^"]+)"', self.template)

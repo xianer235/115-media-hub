@@ -93,6 +93,7 @@
 - **入口**：页面「参数配置」；`/get_settings`、`/save_settings`、`/settings/...`。
 - **会做**：网盘认证（115 扫码或手动 Cookie、阿里云盘官方 OAuth、其余 Cookie / 凭证）、Cookie 体检与凭证复制、115 每日签到开关与手动签到、企业微信通知（四个场景开关：订阅更新成功、文件夹监控生成成功、跨盘复制按任务来源分订阅补源/手动复制；渠道配置共用，场景开关互不影响）、TG 代理与 PanSou / AI 连通测试、后台安全（登录密码、全局 `webhook_secret`）、本地暂存目录管理（单个容器内目录 `cross_copy_temp_dir`，空 = 默认 `/app/config/cross_copy_tmp`；保存前探测存在/可写/剩余空间；旧版「位置列表」配置读取时一次性迁移）、**夸克中转残留清理（`cross_copy_staging_retention_days`，0 = 关，默认 7 天；清理动作由 `cross_copy_staging_cleanup` 后台定时器执行，设置页只负责保存天数）**。
 - **不会做**：不改任务、不动网盘文件、不生成 STRM；换暂存目录只改配置，不碰磁盘上的实际文件。
+- **路径输入走选择器**：Seerr 电影 / 电视剧点播保存目录、磁力中转目录（`magnet_staging_root`）、各网盘「常用目录」都有「选择目录」按钮，复用文件夹监控的目录选择弹窗（`openMonitorFolderModal` 回调模式），回传不带挂载前缀的相对路径；手填入口保留，但不再要求用户自己记路径。
 - **相关代码**：`app/routes/settings.py`、`app/services/sign115.py`、`app/services/notify.py`、`app/services/local_storage.py`；页面 `templates/partials/pages/settings.html`
 
 ### 播放代理（STRM 网关）

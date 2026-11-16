@@ -53,9 +53,11 @@ jobs:
         run: |
           set -euo pipefail
           node --version
+          # 前端是 ES Module：node --check 对带 export 的 .js 默认按 CJS 解析并静默放过，
+          # 必须显式指定模块模式，否则语法错误会一路带到发版（2026-11-16 设置页事故）。
           fail=0
           while IFS= read -r js; do
-            node --check "$js" || fail=1
+            node --experimental-default-type=module --check "$js" || fail=1
           done < <(find static/js -name '*.js' -type f)
           exit "$fail"
 

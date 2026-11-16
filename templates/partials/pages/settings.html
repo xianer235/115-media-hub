@@ -115,9 +115,24 @@
                 border-radius: 0.3rem;
                 padding: 0.05rem 0.3rem;
             }
+            /* 合并后的分组内部小标题：一组里放了几块原来独立的分区时，用它区分。
+               颜色走全局 --muted / --border，日间夜间都自动跟随，不硬编码。 */
+            .settings-subgroup {
+                padding-top: 0.25rem;
+            }
+            .settings-subgroup + .settings-subgroup {
+                padding-top: 1.25rem;
+                border-top: 1px dashed var(--border, rgba(148, 163, 184, 0.35));
+            }
+            .settings-subgroup-title {
+                font-size: 0.8rem;
+                font-weight: 700;
+                letter-spacing: 0.02em;
+                color: var(--muted, #94a3b8);
+                margin-bottom: 0.25rem;
+            }
         </style>
-        <div id="page-settings" class="page-panel module-page hidden space-y-6">
-            <div id="settings-section-navbar" class="settings-section-navbar">
+        <div id="page-settings" class="page-panel module-page hidden space-y-6">            <div id="settings-section-navbar" class="settings-section-navbar">
                 <nav id="settings-section-nav" class="settings-section-nav" aria-label="设置分区导航"></nav>
                 <div class="settings-section-nav-actions">
                     <button type="button" class="settings-section-nav-action" onclick="expandAllSettingsSections()">展开全部</button>
@@ -129,756 +144,706 @@
                 </div>
             </div>
             <div class="grid grid-cols-1 gap-6 settings-grid">
-                <section id="settings-auth" class="group-card settings-section-card" data-settings-section="auth" data-settings-step="1" data-settings-title="网盘认证与签到" data-settings-nav-label="网盘认证">
+                <section id="settings-group-account" class="group-card settings-section-card" data-settings-section="account" data-settings-step="1" data-settings-title="网盘与账号" data-settings-nav-label="网盘与账号">
                     <div class="settings-section-header">
-                        <button type="button" class="settings-section-head" aria-expanded="false" aria-controls="settings-body-auth">
+                        <button type="button" class="settings-section-head" aria-expanded="false" aria-controls="settings-body-account">
                             <span class="settings-section-step" aria-hidden="true">1</span>
                             <span class="settings-section-heading">
-                                <span class="settings-section-title">网盘认证与签到</span>
-                                <span class="settings-section-summary" data-settings-summary="auth"></span>
+                                <span class="settings-section-title">网盘与账号</span>
+                                <span class="settings-section-summary" data-settings-summary="account"></span>
                             </span>
                             <span class="settings-section-chevron" aria-hidden="true">
                                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                             </span>
                         </button>
                     </div>
-                    <div id="settings-body-auth" class="space-y-4 settings-section-body" hidden>
-                        <div id="settings-provider-auth-container">
-                            <!-- JS dynamically renders provider auth blocks -->
-                        </div>
-                        <div id="settings-magnet-provider-container">
-                            <!-- JS dynamically renders magnet provider setting -->
-                        </div>
-                        <div class="text-xs text-slate-500 leading-6">
-                            获取方式建议：115 使用「115不大助手」；Quark 在网页版登录后用开发者工具或 Cookie-Editor 获取 `pan.quark.cn` Cookie。
-                        </div>
-                        <div class="text-xs text-slate-500 leading-6">
-                            安全提示：已保存的 Cookie、Token、账号密码属于敏感信息，前端默认不回显。输入框留空并保存不会修改后端现有值；只有填写新内容并点击“保存全部配置”时，才会覆盖后端值。
-                        </div>
-                        <div class="text-xs text-slate-500 leading-6">
-                            当前支持多网盘分享转存；保存路径会自动映射到对应网盘目录，只有支持离线下载的网盘会出现在 magnet 默认导入方式中。
-                        </div>
-
-                        <div class="rounded-2xl border border-slate-700/80 bg-slate-900/50 p-4 space-y-4">
-                            <div>
-                                <div class="text-sm font-bold text-slate-100">保存常用目录</div>
-                                <div class="text-xs text-slate-500 leading-6 mt-1">每行一个快捷目录，格式为 `名称=网盘内路径`；也可以只写路径，系统会用最后一级目录名作为按钮名称。</div>
+                    <div id="settings-body-account" class="space-y-4 settings-section-body" hidden>
+                        <div id="settings-auth" class="settings-subgroup space-y-4" data-settings-subgroup="auth">
+                            <div id="settings-provider-auth-container">
+                                <!-- JS dynamically renders provider auth blocks -->
                             </div>
-                            <div id="resource-favorite-dir-settings-grid" class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <label class="block">
-                                    <span class="text-xs text-slate-500">115 常用目录</span>
-                                    <textarea id="resource_favorite_dirs_115" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 min-h-[110px]" placeholder="电影=影视/电影&#10;电视剧=影视/电视剧"></textarea>
-                                </label>
-                                <label class="block">
-                                    <span class="text-xs text-slate-500">Quark 常用目录</span>
-                                    <textarea id="resource_favorite_dirs_quark" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 min-h-[110px]" placeholder="电影=影视/电影&#10;电视剧=影视/电视剧"></textarea>
-                                </label>
-                            </div>
-                            <div class="text-xs text-slate-500 leading-6">保存后，在资源导入弹窗的“保存设置”里会按当前资源所属网盘显示这些快捷按钮。</div>
-                        </div>
-
-                        <div class="rounded-2xl border border-slate-700/80 bg-slate-900/50 p-4 space-y-4">
-                            <div class="flex flex-wrap justify-between gap-3 items-center">
-                                <label class="flex items-center gap-3 cursor-pointer text-sm">
-                                    <input type="checkbox" id="sign115_enabled" class="ui-checkbox">
-                                    启用 115 每日签到
-                                </label>
-                                <button type="button" onclick="manualSign115(true)" class="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold">立即签到</button>
-                            </div>
-                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
-                                <label class="block">
-                                    <span class="text-xs text-slate-500">签到时间（每天）</span>
-                                    <input id="sign115_cron_time" type="time" step="60" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="09:00">
-                                </label>
-                                <div id="sign115-settings-status-card" class="sign115-settings-status-card text-xs text-slate-400 leading-6 rounded-xl border border-slate-700/70 bg-slate-950/70 px-3 py-3" data-sign-tone="idle">
-                                    <div class="sign115-settings-status-title text-slate-300 font-bold mb-1">签到状态</div>
-                                    <div id="sign115-settings-hint" class="sign115-settings-status-hint">尚未检查签到状态</div>
-                                </div>
+                            <div id="settings-magnet-provider-container">
+                                <!-- JS dynamically renders magnet provider setting -->
                             </div>
                             <div class="text-xs text-slate-500 leading-6">
-                                使用当前填写的 115 Cookie 执行签到。开启后每天会在指定时间自动签到，也可点击“立即签到”手动执行。
+                                获取方式建议：115 使用「115不大助手」；Quark 在网页版登录后用开发者工具或 Cookie-Editor 获取 `pan.quark.cn` Cookie。
+                            </div>
+                            <div class="text-xs text-slate-500 leading-6">
+                                安全提示：已保存的 Cookie、Token、账号密码属于敏感信息，前端默认不回显。输入框留空并保存不会修改后端现有值；只有填写新内容并点击“保存全部配置”时，才会覆盖后端值。
+                            </div>
+                            <div class="text-xs text-slate-500 leading-6">
+                                当前支持多网盘分享转存；保存路径会自动映射到对应网盘目录，只有支持离线下载的网盘会出现在 magnet 默认导入方式中。
+                            </div>
+
+                            <div class="rounded-2xl border border-slate-700/80 bg-slate-900/50 p-4 space-y-4">
+                                <div>
+                                    <div class="text-sm font-bold text-slate-100">保存常用目录</div>
+                                    <div class="text-xs text-slate-500 leading-6 mt-1">点「从网盘选目录加入」可以直接挑目录，名称默认取文件夹名；也可以手动按 `名称=网盘内路径` 一行一个填写，只写路径时系统会用最后一级目录名作为按钮名称。</div>
+                                </div>
+                                <div id="resource-favorite-dir-settings-grid" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <label class="block">
+                                        <span class="text-xs text-slate-500">115 常用目录</span>
+                                        <textarea id="resource_favorite_dirs_115" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 min-h-[110px]" placeholder="电影=影视/电影&#10;电视剧=影视/电视剧"></textarea>
+                                    </label>
+                                    <label class="block">
+                                        <span class="text-xs text-slate-500">Quark 常用目录</span>
+                                        <textarea id="resource_favorite_dirs_quark" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 min-h-[110px]" placeholder="电影=影视/电影&#10;电视剧=影视/电视剧"></textarea>
+                                    </label>
+                                </div>
+                                <div class="text-xs text-slate-500 leading-6">保存后，在资源导入弹窗的“保存设置”里会按当前资源所属网盘显示这些快捷按钮。</div>
+                            </div>
+
+                            <div class="rounded-2xl border border-slate-700/80 bg-slate-900/50 p-4 space-y-4">
+                                <div class="flex flex-wrap justify-between gap-3 items-center">
+                                    <label class="flex items-center gap-3 cursor-pointer text-sm">
+                                        <input type="checkbox" id="sign115_enabled" class="ui-checkbox">
+                                        启用 115 每日签到
+                                    </label>
+                                    <button type="button" onclick="manualSign115(true)" class="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold">立即签到</button>
+                                </div>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+                                    <label class="block">
+                                        <span class="text-xs text-slate-500">签到时间（每天）</span>
+                                        <input id="sign115_cron_time" type="time" step="60" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="09:00">
+                                    </label>
+                                    <div id="sign115-settings-status-card" class="sign115-settings-status-card text-xs text-slate-400 leading-6 rounded-xl border border-slate-700/70 bg-slate-950/70 px-3 py-3" data-sign-tone="idle">
+                                        <div class="sign115-settings-status-title text-slate-300 font-bold mb-1">签到状态</div>
+                                        <div id="sign115-settings-hint" class="sign115-settings-status-hint">尚未检查签到状态</div>
+                                    </div>
+                                </div>
+                                <div class="text-xs text-slate-500 leading-6">
+                                    使用当前填写的 115 Cookie 执行签到。开启后每天会在指定时间自动签到，也可点击“立即签到”手动执行。
+                                </div>
                             </div>
                         </div>
                     </div>
                 </section>
-
-                <section id="settings-strm-core" class="group-card settings-section-card" data-settings-section="strm" data-settings-step="2" data-settings-title="115 STRM 播放基础配置" data-settings-nav-label="播放基础">
+                <section id="settings-group-network" class="group-card settings-section-card" data-settings-section="network" data-settings-step="2" data-settings-title="网络与通知" data-settings-nav-label="网络与通知">
                     <div class="settings-section-header">
-                        <button type="button" class="settings-section-head" aria-expanded="false" aria-controls="settings-body-strm">
+                        <button type="button" class="settings-section-head" aria-expanded="false" aria-controls="settings-body-network">
                             <span class="settings-section-step" aria-hidden="true">2</span>
                             <span class="settings-section-heading">
-                                <span class="settings-section-title">115 STRM 播放基础配置</span>
-                                <span class="settings-section-summary" data-settings-summary="strm"></span>
+                                <span class="settings-section-title">网络与通知</span>
+                                <span class="settings-section-summary" data-settings-summary="network"></span>
                             </span>
                             <span class="settings-section-chevron" aria-hidden="true">
                                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                             </span>
                         </button>
                     </div>
-                    <div id="settings-body-strm" class="space-y-4 settings-section-body" hidden>
-                        <label id="strm-proxy-base-url-wrap" class="block">
-                            <span class="text-xs text-slate-500 inline-flex items-center gap-2">
-                                STRM 对外访问地址 (必填)
-                                <button type="button" class="info-dot" onclick="showHelp('填写媒体服务器能访问到本容器的地址，例如 http://192.168.1.20:18080。系统会生成 http://.../strm/proxy?path=... 的 302 播放链接。')">i</button>
-                            </span>
-                            <input id="strm_proxy_base_url" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none focus:border-sky-500 transition-colors" placeholder="例如 http://192.168.1.20:18080">
-                            <div class="text-[11px] text-slate-500 mt-2 leading-5">说明：容器会先解析 115 下载链接，再返回 302 给播放器跟随播放。</div>
-                        </label>
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <label class="block">
-                                <span class="text-xs text-slate-500 inline-flex items-center gap-2">
-                                    115 API 最小间隔 (秒)
-                                    <button type="button" class="info-dot" onclick="showHelp('全局限频。值越大越稳，值越小越快。建议 0.25~0.6。')">i</button>
-                                </span>
-                                <input id="api_115_rate_limit_seconds" type="number" min="0.05" max="2" step="0.05" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1">
+                    <div id="settings-body-network" class="space-y-4 settings-section-body" hidden>
+                        <div id="settings-network-proxy" class="settings-subgroup space-y-4" data-settings-subgroup="proxy">
+                            <div class="settings-subgroup-title">网络代理（TG / TMDB / 资源外链）</div>
+                            <label class="flex items-center gap-3 cursor-pointer text-sm">
+                                <input type="checkbox" id="tg_proxy_enabled" class="ui-checkbox">
+                                访问 TG / TMDB / 资源外链时启用代理
                             </label>
-                            <label class="block">
-                                <span class="text-xs text-slate-500 inline-flex items-center gap-2">
-                                    目录缓存 TTL (秒)
-                                    <button type="button" class="info-dot" onclick="showHelp('115 目录列表缓存时长。设为 0 表示每次都直连 115。')">i</button>
-                                </span>
-                                <input id="api_115_list_cache_ttl_seconds" type="number" min="0" max="3600" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1">
-                            </label>
-                            <label class="block">
-                                <span class="text-xs text-slate-500 inline-flex items-center gap-2">
-                                    下载链接缓存 TTL (秒)
-                                    <button type="button" class="info-dot" onclick="showHelp('同一 pickcode 的 115 下载地址缓存时长。设为 0 表示每次重新解析。')">i</button>
-                                </span>
-                                <input id="api_115_download_url_cache_ttl_seconds" type="number" min="0" max="600" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1">
-                            </label>
-                        </div>
-                        <label class="block">
-                            <div class="flex justify-between items-center mb-1">
-                                <span class="text-xs text-slate-500">扫描后缀名 (逗号分隔)</span>
-                                <button onclick="resetExtensions()" class="text-[10px] text-sky-400 hover:text-sky-300 transition-colors font-bold uppercase tracking-tighter">一键恢复默认</button>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">代理协议</span>
+                                    <select id="tg_proxy_protocol" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1">
+                                        <option value="http">http</option>
+                                        <option value="https">https</option>
+                                    </select>
+                                </label>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">代理 IP / 域名</span>
+                                    <input id="tg_proxy_host" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="127.0.0.1">
+                                </label>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">代理端口</span>
+                                    <input id="tg_proxy_port" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="7890">
+                                </label>
                             </div>
-                            <input id="extensions" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none focus:border-sky-500 transition-colors">
-                        </label>
-                    </div>
-                </section>
-
-                <section id="settings-storage" class="group-card settings-section-card" data-settings-section="storage" data-settings-step="2b" data-settings-title="本地存储位置" data-settings-nav-label="存储位置">
-                    <div class="settings-section-header">
-                        <button type="button" class="settings-section-head" aria-expanded="false" aria-controls="settings-body-storage">
-                            <span class="settings-section-step" aria-hidden="true">2b</span>
-                            <span class="settings-section-heading">
-                                <span class="settings-section-title">本地存储位置</span>
-                                <span class="settings-section-summary" data-settings-summary="storage"></span>
-                            </span>
-                            <span class="settings-section-chevron" aria-hidden="true">
-                                <svg viewBox="0 0 24 24" width="16" height="16" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                            </span>
-                        </button>
-                    </div>
-                    <div id="settings-body-storage" class="space-y-4 settings-section-body" hidden>
-                        <div class="text-xs text-slate-500 leading-6">
-                            跨盘复制（比如从 115 复制到其它网盘）时，大文件没法直接对传，会先完整下载到下面的目录，再上传到目标网盘，传完自动清理临时文件。所以这个目录要放在容量够大、剩余空间足够的盘上。
-                        </div>
-                        <div class="text-xs text-slate-500 leading-6">
-                            不配置也能用：默认放在 config 卷下的 <code class="font-mono">cross_copy_tmp</code> 目录。想换成容量更大的盘，就先把宿主机的目录挂载进容器（例如 <code class="font-mono">/mnt/hdd → /app/storage</code>），重建容器后回到这里点「更换目录」，扫出来的列表里会直接出现它，点一下就行，不用自己记路径。
-                        </div>
-
-                        <div class="settings-storage-card">
-                            <div class="settings-storage-card-head">
-                                <div class="settings-storage-card-title">当前暂存目录</div>
-                                <button type="button" onclick="reloadStorageTempDir()" class="px-3 py-2 rounded-lg bg-slate-700/60 hover:bg-slate-600/60 text-xs">刷新</button>
-                            </div>
-                            <div id="settings-storage-current" class="settings-storage-current">
-                                <div class="settings-storage-dir-path">读取中…</div>
-                                <div class="settings-storage-meta"></div>
-                            </div>
-                            <div id="settings-storage-warning" class="settings-storage-warning" hidden></div>
-                            <div class="settings-storage-actions-row">
-                                <button type="button" onclick="toggleStorageTempDirForm()" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">更换目录</button>
-                                <button type="button" id="settings-storage-reset" onclick="resetStorageTempDir()" class="hidden px-4 py-2 rounded-lg bg-slate-700/60 hover:bg-slate-600/60 text-xs">恢复默认目录</button>
-                            </div>
-                        </div>
-
-                        <div class="settings-storage-card">
-                            <div class="settings-storage-card-head">
-                                <div class="settings-storage-card-title">临时文件清理策略</div>
-                            </div>
-                            <div class="settings-storage-hint">
-                                跨盘复制下载到本目录的文件，按以下规则清理，不需要手动干预：
-                            </div>
-                            <div class="space-y-2">
-                                <div class="text-[11px] text-slate-500 leading-5">复制完成或失败后，本次下载的临时文件<strong class="text-slate-300">立即删除</strong>。</div>
-                                <div class="text-[11px] text-slate-500 leading-5">容器被强行停止等异常中断留下的残留：启动时扫一遍，之后每 30 分钟再扫一遍，超过 24 小时没有更新的自动删除。</div>
-                                <div class="text-[11px] text-slate-500 leading-5">取消或失败的任务会保留已下载的部分以便续传（重试接着下，不重复下载）；确定不需要了，到「任务中心」删掉该任务记录，临时文件会一起清掉。</div>
-                            </div>
-                        </div>
-
-                        <div id="settings-storage-form-card" class="settings-storage-card" hidden>
-                            <div class="settings-storage-card-title">更换暂存目录</div>
-                            <div class="settings-storage-hint">
-                                下面是容器里能用的目录，点一个选中再保存。列表带剩余空间，挂载了新盘只要重建容器、回来点「重新扫描」就能看到。
-                            </div>
-                            <div id="settings-storage-candidates" class="settings-storage-candidates">
-                                <div class="settings-storage-empty">正在扫描容器里的目录…</div>
-                            </div>
-                            <div class="settings-storage-actions-row">
-                                <button type="button" onclick="saveStorageTempDir()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">保存</button>
-                                <button type="button" onclick="rescanStorageCandidates()" class="px-4 py-3 rounded-lg bg-slate-700/60 hover:bg-slate-600/60 text-sm">重新扫描</button>
-                                <button type="button" onclick="toggleStorageTempDirForm()" class="px-4 py-3 rounded-lg bg-slate-700/60 hover:bg-slate-600/60 text-sm">取消</button>
-                            </div>
-                            <details class="settings-storage-manual">
-                                <summary>扫描不到要用的目录？手动填容器内路径</summary>
-                                <div class="settings-storage-form mt-3">
-                                    <label class="block min-w-0">
-                                        <span class="text-xs text-slate-500">容器内路径</span>
-                                        <input id="settings-storage-dir-input" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 font-mono" placeholder="例如 /app/storage/cross_copy_tmp">
-                                    </label>
-                                    <button type="button" onclick="saveStorageTempDirFromInput()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">用这个路径</button>
+                            <div class="flex flex-wrap items-center gap-3 pt-1">
+                                <button id="tg-proxy-test-btn" type="button" onclick="testTgProxyLatency()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">
+                                    测试 TG 延迟
+                                </button>
+                                <div class="text-xs text-slate-500">
+                                    优先使用当前表单里的代理地址测试；未填写代理时会自动回退为直连 TG 测试。
                                 </div>
-                                <div class="text-[11px] text-slate-500 mt-2 leading-5">
-                                    填<strong class="text-slate-300">容器内</strong>的目录，不是宿主机的路径。把宿主机 <code class="font-mono">/mnt/hdd</code> 挂到容器 <code class="font-mono">/app/storage</code> 之后，这里要填 <code class="font-mono">/app/storage</code> 或它下面的子目录，填 <code class="font-mono">/mnt/hdd</code> 是找不到的。保存前会检查目录存在、能不能写；目录不存在时只在已挂载的盘里自动建，不会往容器临时层里建。
+                            </div>
+                            <div id="tg-proxy-test-status" class="hidden rounded-xl border px-4 py-3 text-sm leading-6"></div>
+                            <div class="text-xs text-slate-500 leading-6">
+                                用于服务端访问 TG 公开频道页、TMDB API 与资源外链。当前环境内置按标准代理 URL 方式访问，建议优先使用 `http/https` 代理。
+                            </div>
+                        </div>
+                        <div id="settings-notify" class="settings-subgroup space-y-4" data-settings-subgroup="notify">
+                            <div class="settings-subgroup-title">通知推送（企业微信）</div>
+                            <label class="flex items-center gap-3 cursor-pointer text-sm">
+                                <input type="checkbox" id="notify_push_enabled" class="ui-checkbox">
+                                启用订阅更新成功推送（同盘导入 / 跨盘补源，仅推送成功）
+                            </label>
+                            <label class="flex items-center gap-3 cursor-pointer text-sm">
+                                <input type="checkbox" id="notify_monitor_enabled" class="ui-checkbox">
+                                启用文件夹监控生成成功推送（基于 `.strm` 路径/文件名匹配影视信息）
+                            </label>
+                            <label class="flex items-center gap-3 cursor-pointer text-sm">
+                                <input type="checkbox" id="cross_copy_notify_subscription" class="ui-checkbox">
+                                启用订阅补源通知（补源成功与失败）
+                            </label>
+                            <label class="flex items-center gap-3 cursor-pointer text-sm">
+                                <input type="checkbox" id="cross_copy_notify_manual" class="ui-checkbox">
+                                启用手动跨盘复制通知（成功/失败）
+                            </label>
+                            <div class="text-[11px] text-slate-500 leading-5">
+                                跨盘复制指从其他网盘复制文件到本网盘（如夸克 → 115）。补源补进来的几集算订阅更新：上面「订阅更新成功推送」和「订阅补源通知」都开着时，只发一条汇总，不再一个文件一条；只开「订阅补源通知」时按文件逐条推送。手动复制是你自己在页面上点发起的，单独开关。
+                            </div>
+                            <label class="block">
+                                <span class="text-xs text-slate-500">通知渠道</span>
+                                <select id="notify_channel" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" onchange="syncNotifyChannelUI()">
+                                    <option value="wecom_bot">企业微信群机器人（Webhook）</option>
+                                    <option value="wecom_app">企业微信应用 API（发给个人成员）</option>
+                                </select>
+                            </label>
+                            <div id="notify-bot-fields" class="space-y-4">
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">群机器人 Webhook</span>
+                                    <input id="notify_wecom_webhook" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...">
+                                </label>
+                            </div>
+                            <div id="notify-app-fields" class="space-y-4 hidden">
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <label class="block">
+                                        <span class="text-xs text-slate-500">CorpID</span>
+                                        <input id="notify_wecom_app_corp_id" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="wwxxxxxxxxxxxxxxxx">
+                                    </label>
+                                    <label class="block">
+                                        <span class="text-xs text-slate-500">AgentID</span>
+                                        <input id="notify_wecom_app_agent_id" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="1000002">
+                                    </label>
+                                </div>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">AppSecret</span>
+                                    <input id="notify_wecom_app_secret" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="企业微信自建应用 Secret">
+                                </label>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">接收人 UserID（多个用 | 分隔）</span>
+                                    <input id="notify_wecom_app_touser" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="zhangsan|lisi">
+                                </label>
+                            </div>
+                            <div class="flex flex-wrap items-center gap-3">
+                                <button id="notify-test-btn" type="button" onclick="testNotifyPush()" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">发送测试消息</button>
+                                <span class="text-[11px] text-slate-500">测试消息可单独发送，不依赖“启用”开关。</span>
+                            </div>
+                            <div id="notify-test-status" class="hidden tg-proxy-status rounded-xl border px-4 py-3 text-sm leading-6"></div>
+                            <details class="settings-help-fold">
+                                <summary>查看说明：推送范围与去重规则</summary>
+                                <div class="settings-help-fold-body">
+                                    推送范围：订阅成功入库（同盘导入、跨盘补源）、文件夹监控成功生成 `.strm`、手动跨盘复制结果——均可独立开关。
+                                    <br>补源补进来的几集算订阅更新：「订阅更新成功推送」和「订阅补源通知」都开着时只发一条汇总，不再一个文件一条；只开「订阅补源通知」时按文件逐条推送。补源失败始终单独提醒。
+                                    <br>其余失败、无更新、过滤跳过等情况保留在 Web 日志查看。
+                                    <br>去重规则：任务名 + 集数 + 保存路径，避免同一更新重复提醒。
                                 </div>
                             </details>
-                            <div id="settings-storage-form-status" class="settings-storage-status" hidden></div>
-                        </div>
-
-                        <div class="settings-storage-card">
-                            <div class="settings-storage-card-head">
-                                <div class="settings-storage-card-title">夸克中转残留清理</div>
-                            </div>
-                            <div class="settings-storage-hint">
-                                订阅跨盘补源会先把缺的集转存到夸克 <code class="font-mono">云下载/跨盘中转</code>。复制成功后中转副本会自动删；被取消或失败的任务为了能续传会先留着。这里按天兜底清理，防止它们长期占着夸克空间。
-                            </div>
-                            <div class="settings-storage-form">
-                                <label class="block min-w-0">
-                                    <span class="text-xs text-slate-500">保留天数（0 = 不自动清理）</span>
-                                    <input id="cross_copy_staging_retention_days" type="number" min="0" max="365" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="7">
-                                </label>
-                            </div>
-                            <div class="text-[11px] text-slate-500 mt-2 leading-5">
-                                只清理超过该天数、且没有任务在跑的中转文件；正在复制的、以及还没超期的取消/失败任务一律不动。删除是移到<strong class="text-slate-300">夸克回收站</strong>，配额要等回收站被清空或系统回收之后才真正释放。清理之后，旧任务「重试可续传」就不再成立，重试会重新转存一遍。
-                            </div>
                         </div>
                     </div>
                 </section>
-
-                <section id="settings-tg-sources" class="group-card settings-section-card" data-settings-section="tg" data-settings-step="3" data-settings-title="TG 订阅源管理" data-settings-nav-label="TG 订阅源">
+                <section id="settings-group-library" class="group-card settings-section-card" data-settings-section="library" data-settings-step="3" data-settings-title="播放与影视库" data-settings-nav-label="播放与库">
                     <div class="settings-section-header">
-                        <button type="button" class="settings-section-head" aria-expanded="false" aria-controls="settings-body-tg">
+                        <button type="button" class="settings-section-head" aria-expanded="false" aria-controls="settings-body-library">
                             <span class="settings-section-step" aria-hidden="true">3</span>
                             <span class="settings-section-heading">
-                                <span class="settings-section-title">TG 订阅源管理</span>
-                                <span class="settings-section-summary" data-settings-summary="tg"></span>
+                                <span class="settings-section-title">播放与影视库</span>
+                                <span class="settings-section-summary" data-settings-summary="library"></span>
                             </span>
                             <span class="settings-section-chevron" aria-hidden="true">
                                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                             </span>
                         </button>
                     </div>
-                    <div id="settings-body-tg" class="resource-source-panel settings-section-body" hidden>
-                        <div class="resource-source-panel-head">
-                            <div class="min-w-0">
-                                <div class="settings-hero-eyebrow">Telegram Sources</div>
-                                <div class="resource-source-panel-copy">只需要填写公开频道 ID，例如 `QukanMovie`。支持直接粘贴 `@QukanMovie` 或完整的 `https://t.me/s/QukanMovie` 链接，保存时会自动规范化。</div>
-                                <div class="mt-3 max-w-2xl">
-                                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                        <label class="block">
-                                            <span class="text-xs text-slate-500">频道抓取线程数（1-20）</span>
-                                            <input id="tg_channel_threads" type="number" min="1" max="20" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="6">
-                                        </label>
-                                        <label class="block">
-                                            <span class="text-xs text-slate-500">每频道同步资源数（1-30）</span>
-                                            <input id="tg_channel_sync_limit" type="number" min="1" max="30" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="10">
-                                        </label>
-                                    </div>
-                                    <div class="text-[11px] text-slate-500 mt-2 leading-5">线程数控制 TG 频道“同步”和“关键词搜索”的并发；每频道同步资源数控制点击“同步频道”时，每个频道最多抓取并保留的资源条数。</div>
-                                </div>
+                    <div id="settings-body-library" class="space-y-4 settings-section-body" hidden>
+                        <div id="settings-strm-core" class="settings-subgroup space-y-4" data-settings-subgroup="strm">
+                            <div class="settings-subgroup-title">播放地址与扫描参数</div>
+                            <label id="strm-proxy-base-url-wrap" class="block">
+                                <span class="text-xs text-slate-500 inline-flex items-center gap-2">
+                                    STRM 对外访问地址 (必填)
+                                    <button type="button" class="info-dot" onclick="showHelp('填写媒体服务器能访问到本容器的地址，例如 http://192.168.1.20:18080。系统会生成 http://.../strm/proxy?path=... 的 302 播放链接。')">i</button>
+                                </span>
+                                <input id="strm_proxy_base_url" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none focus:border-sky-500 transition-colors" placeholder="例如 http://192.168.1.20:18080">
+                                <div class="text-[11px] text-slate-500 mt-2 leading-5">说明：容器会先解析 115 下载链接，再返回 302 给播放器跟随播放。</div>
+                            </label>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <label class="block">
+                                    <span class="text-xs text-slate-500 inline-flex items-center gap-2">
+                                        115 API 最小间隔 (秒)
+                                        <button type="button" class="info-dot" onclick="showHelp('全局限频。值越大越稳，值越小越快。建议 0.25~0.6。')">i</button>
+                                    </span>
+                                    <input id="api_115_rate_limit_seconds" type="number" min="0.05" max="2" step="0.05" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1">
+                                </label>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500 inline-flex items-center gap-2">
+                                        目录缓存 TTL (秒)
+                                        <button type="button" class="info-dot" onclick="showHelp('115 目录列表缓存时长。设为 0 表示每次都直连 115。')">i</button>
+                                    </span>
+                                    <input id="api_115_list_cache_ttl_seconds" type="number" min="0" max="3600" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1">
+                                </label>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500 inline-flex items-center gap-2">
+                                        下载链接缓存 TTL (秒)
+                                        <button type="button" class="info-dot" onclick="showHelp('同一 pickcode 的 115 下载地址缓存时长。设为 0 表示每次重新解析。')">i</button>
+                                    </span>
+                                    <input id="api_115_download_url_cache_ttl_seconds" type="number" min="0" max="600" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1">
+                                </label>
                             </div>
-                            <div class="resource-source-summary">
-                                <div class="resource-source-summary-card">
-                                    <div class="resource-source-summary-title">频道统计</div>
-                                    <div class="resource-source-summary-metrics">
-                                        <div class="resource-source-summary-item">
-                                            <div class="resource-source-summary-label">总数</div>
-                                            <div id="resource-source-total-count" class="resource-source-summary-value">0</div>
-                                        </div>
-                                        <div class="resource-source-summary-item">
-                                            <div class="resource-source-summary-label">同步展示</div>
-                                            <div id="resource-source-enabled-count" class="resource-source-summary-value resource-source-summary-value-enabled">0</div>
-                                        </div>
-                                        <div class="resource-source-summary-item">
-                                            <div class="resource-source-summary-label">参与搜索</div>
-                                            <div id="resource-source-search-count" class="resource-source-summary-value">0</div>
-                                        </div>
-                                        <div class="resource-source-summary-item">
-                                            <div class="resource-source-summary-label">关闭</div>
-                                            <div id="resource-source-disabled-count" class="resource-source-summary-value resource-source-summary-value-disabled">0</div>
-                                        </div>
-                                        <div class="resource-source-summary-item">
-                                            <div class="resource-source-summary-label">有产出</div>
-                                            <div id="resource-source-output-count" class="resource-source-summary-value">0</div>
-                                        </div>
-                                    </div>
+                            <label class="block">
+                                <div class="flex justify-between items-center mb-1">
+                                    <span class="text-xs text-slate-500">扫描后缀名 (逗号分隔)</span>
+                                    <button onclick="resetExtensions()" class="text-[10px] text-sky-400 hover:text-sky-300 transition-colors font-bold uppercase tracking-tighter">一键恢复默认</button>
                                 </div>
-                            </div>
+                                <input id="extensions" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none focus:border-sky-500 transition-colors">
+                            </label>
                         </div>
-                        <div class="resource-source-panel-body">
-                            <div class="resource-source-panel-note">频道列表、分类检测、筛选、批量启停/删除和频道顺序调整统一收在“管理频道”弹窗里；频道导入导出属于数据维护，放在本设置区处理。</div>
-                            <div class="resource-source-data-card">
-                                <div class="resource-source-data-copy">
-                                    <div class="resource-source-data-title">频道数据</div>
-                                    <div class="resource-source-data-desc">用于备份、迁移或批量恢复频道源。导入会即时保存频道配置，导出会生成可下载的 JSON。</div>
+                        <div id="settings-seerr" class="settings-subgroup space-y-4" data-settings-subgroup="seerr">
+                            <div class="settings-subgroup-title">Seerr 点播对接（家人在点播门户点一下就会自动建订阅任务）</div>
+                            <label class="block">
+                                <span class="text-xs text-slate-500 inline-flex items-center gap-2">
+                                    点播接口 API Key（Seerr / Jellyseerr / Overseerr 用）
+                                    <button type="button" class="info-dot" onclick="showHelp('用途：让 Seerr 等点播门户把 115 Media Hub 当成 Radarr / Sonarr 服务器。家人在 Seerr 点播后，这里会自动创建对应的订阅任务并立即开始找资源。留空则关闭点播接口。')">i</button>
+                                </span>
+                                <input id="servarr_api_key" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="建议 32 位随机字符串">
+                                <div class="mt-2 flex items-center gap-2 flex-wrap">
+                                    <button type="button" onclick="generateServarrApiKey()" class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold">随机生成密钥</button>
+                                    <span class="text-[11px] text-slate-500">生成后请点击“保存全部配置”。</span>
                                 </div>
-                                <div class="resource-source-data-actions">
-                                    <button type="button" onclick="openResourceSourceImportModal()" class="resource-source-secondary-btn">导入频道</button>
-                                    <button type="button" onclick="exportResourceSources()" class="resource-source-secondary-btn">导出频道</button>
+                            </label>
+                            <div class="block">
+                                <span class="text-xs text-slate-500">电影点播保存目录（115 网盘相对路径）</span>
+                                <div class="mt-1 flex flex-col sm:flex-row gap-2">
+                                    <input id="servarr_movie_savepath" class="w-full sm:flex-1 bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" placeholder="例如：媒体库/网盘电影">
+                                    <button type="button" onclick="pickServarrSavepath('movie')" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold whitespace-nowrap">选择目录</button>
                                 </div>
+                                <div class="mt-1 text-[11px] text-slate-500">Seerr 电影点播自动建「片名 (年份)」子目录并落盘于此。留空则回退到旧版默认保存目录。</div>
                             </div>
-                            <div class="resource-source-panel-footer">
-                                <div class="resource-source-panel-footer-copy">频道订阅会即时保存；其余参数仍然需要点顶部悬浮条里的“保存全部配置”。</div>
-                                <div class="resource-source-footer-actions">
-                                    <button type="button" onclick="openResourceSourceManagerModal()" class="resource-source-add-btn">管理频道</button>
+                            <div class="block">
+                                <span class="text-xs text-slate-500">电视剧点播保存目录（115 网盘相对路径）</span>
+                                <div class="mt-1 flex flex-col sm:flex-row gap-2">
+                                    <input id="servarr_tv_savepath" class="w-full sm:flex-1 bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" placeholder="例如：媒体库/网盘电视剧">
+                                    <button type="button" onclick="pickServarrSavepath('tv')" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold whitespace-nowrap">选择目录</button>
                                 </div>
+                                <div class="mt-1 text-[11px] text-slate-500">Seerr 剧集点播自动建「剧名 (年份)/Season NN」子目录并落盘于此。留空则回退到旧版默认保存目录。</div>
+                            </div>
+                            <div class="text-xs text-slate-500 leading-6">
+                                对接方法：在 Seerr（Jellyseerr / Overseerr）的「设置 → Radarr / Sonarr」里各添加一条服务器，地址填 <code>http://面板地址</code>，API Key 填上面生成的同一个密钥；Radarr 对应电影点播，Sonarr 对应剧集点播，保存后 Seerr 会显示连接成功。
+                                <br>家人在 Seerr 提交点播后，本面板「影视订阅」页会出现对应任务并自动搜索资源，找到后自动转存、入库、生成 STRM，与手动订阅完全同链路；在 Seerr 删除点播请求会同时删掉这里的订阅任务。
                             </div>
                         </div>
                     </div>
                 </section>
-
-                <section id="settings-pansou" class="group-card settings-section-card" data-settings-section="pansou" data-settings-step="4" data-settings-title="PanSou 盘搜（可选）" data-settings-nav-label="PanSou">
+                <section id="settings-group-sources" class="group-card settings-section-card" data-settings-section="sources" data-settings-step="4" data-settings-title="资源来源与订阅" data-settings-nav-label="来源与订阅">
                     <div class="settings-section-header">
-                        <button type="button" class="settings-section-head" aria-expanded="false" aria-controls="settings-body-pansou">
+                        <button type="button" class="settings-section-head" aria-expanded="false" aria-controls="settings-body-sources">
                             <span class="settings-section-step" aria-hidden="true">4</span>
                             <span class="settings-section-heading">
-                                <span class="settings-section-title">PanSou 盘搜（可选）</span>
-                                <span class="settings-section-summary" data-settings-summary="pansou"></span>
+                                <span class="settings-section-title">资源来源与订阅</span>
+                                <span class="settings-section-summary" data-settings-summary="sources"></span>
                             </span>
                             <span class="settings-section-chevron" aria-hidden="true">
                                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                             </span>
                         </button>
                     </div>
-                    <div id="settings-body-pansou" class="space-y-4 settings-section-body" hidden>
-                        <label class="flex items-center gap-3 cursor-pointer text-sm">
-                            <input type="checkbox" id="pansou_enabled" class="ui-checkbox">
-                            启用 PanSou 盘搜
-                        </label>
-                        <label class="flex items-start gap-3 cursor-pointer text-sm">
-                            <input type="checkbox" id="subscription_magnet_offline_fallback" class="ui-checkbox mt-0.5">
-                            <span>
-                                订阅任务磁力离线兜底
-                                <span class="block text-xs text-slate-500 mt-1">本盘转存与跨盘补源都拿不到缺失集时，才用盘搜到的磁力/电驴链接提交 115 离线下载。会占用 115 离线队列与配额，默认关闭。</span>
-                            </span>
-                        </label>
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <label class="block">
-                                <span class="text-xs text-slate-500">PanSou 服务地址</span>
-                                <input id="pansou_base_url" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如 http://127.0.0.1:8888">
-                            </label>
-                            <label class="block">
-                                <span class="text-xs text-slate-500">认证账号（可选）</span>
-                                <input id="pansou_username" autocomplete="username" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="PanSou 登录用户名">
-                            </label>
-                            <label class="block">
-                                <span class="text-xs text-slate-500">认证密码（可选）</span>
-                                <input id="pansou_password" type="password" autocomplete="current-password" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="已保存时不会回显">
-                            </label>
-                        </div>
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <label class="block">
-                                <span class="text-xs text-slate-500">搜索来源 src</span>
-                                <select id="pansou_src" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1">
-                                    <option value="all">all（全部）</option>
-                                    <option value="tg">tg</option>
-                                    <option value="plugin">plugin</option>
-                                </select>
-                            </label>
-                            <label class="block">
-                                <span class="text-xs text-slate-500">限定 channels（逗号分隔，可选）</span>
-                                <input id="pansou_channels" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如 QukanMovie,Aliyun_4K_Movies">
-                            </label>
-                            <label class="block">
-                                <span class="text-xs text-slate-500">限定 plugins（逗号分隔，可选）</span>
-                                <input id="pansou_plugins" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如 quark,pan115">
-                            </label>
-                        </div>
-                        <div class="flex flex-wrap items-center gap-3 pt-1">
-                            <button id="pansou-test-btn" type="button" onclick="testPansouConnection()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">
-                                测试 PanSou
-                            </button>
-                            <div class="text-xs text-slate-500">
-                                盘搜只在资源中心切到“盘搜”后请求；开启 PanSou 认证时填写账号密码，项目会自动登录获取 JWT。
+                    <div id="settings-body-sources" class="space-y-4 settings-section-body" hidden>
+                        <div id="settings-tg-sources" class="settings-subgroup space-y-4" data-settings-subgroup="tg">
+                            <div class="settings-subgroup-title">TG 订阅源管理</div>
+                            <div class="resource-source-panel-head">
+                                <div class="min-w-0">
+                                    <div class="settings-hero-eyebrow">Telegram Sources</div>
+                                    <div class="resource-source-panel-copy">只需要填写公开频道 ID，例如 `QukanMovie`。支持直接粘贴 `@QukanMovie` 或完整的 `https://t.me/s/QukanMovie` 链接，保存时会自动规范化。</div>
+                                    <div class="mt-3 max-w-2xl">
+                                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                            <label class="block">
+                                                <span class="text-xs text-slate-500">频道抓取线程数（1-20）</span>
+                                                <input id="tg_channel_threads" type="number" min="1" max="20" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="6">
+                                            </label>
+                                            <label class="block">
+                                                <span class="text-xs text-slate-500">每频道同步资源数（1-30）</span>
+                                                <input id="tg_channel_sync_limit" type="number" min="1" max="30" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="10">
+                                            </label>
+                                        </div>
+                                        <div class="text-[11px] text-slate-500 mt-2 leading-5">线程数控制 TG 频道“同步”和“关键词搜索”的并发；每频道同步资源数控制点击“同步频道”时，每个频道最多抓取并保留的资源条数。</div>
+                                    </div>
+                                </div>
+                                <div class="resource-source-summary">
+                                    <div class="resource-source-summary-card">
+                                        <div class="resource-source-summary-title">频道统计</div>
+                                        <div class="resource-source-summary-metrics">
+                                            <div class="resource-source-summary-item">
+                                                <div class="resource-source-summary-label">总数</div>
+                                                <div id="resource-source-total-count" class="resource-source-summary-value">0</div>
+                                            </div>
+                                            <div class="resource-source-summary-item">
+                                                <div class="resource-source-summary-label">同步展示</div>
+                                                <div id="resource-source-enabled-count" class="resource-source-summary-value resource-source-summary-value-enabled">0</div>
+                                            </div>
+                                            <div class="resource-source-summary-item">
+                                                <div class="resource-source-summary-label">参与搜索</div>
+                                                <div id="resource-source-search-count" class="resource-source-summary-value">0</div>
+                                            </div>
+                                            <div class="resource-source-summary-item">
+                                                <div class="resource-source-summary-label">关闭</div>
+                                                <div id="resource-source-disabled-count" class="resource-source-summary-value resource-source-summary-value-disabled">0</div>
+                                            </div>
+                                            <div class="resource-source-summary-item">
+                                                <div class="resource-source-summary-label">有产出</div>
+                                                <div id="resource-source-output-count" class="resource-source-summary-value">0</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="resource-source-panel-body">
+                                <div class="resource-source-panel-note">频道列表、分类检测、筛选、批量启停/删除和频道顺序调整统一收在“管理频道”弹窗里；频道导入导出属于数据维护，放在本设置区处理。</div>
+                                <div class="resource-source-data-card">
+                                    <div class="resource-source-data-copy">
+                                        <div class="resource-source-data-title">频道数据</div>
+                                        <div class="resource-source-data-desc">用于备份、迁移或批量恢复频道源。导入会即时保存频道配置，导出会生成可下载的 JSON。</div>
+                                    </div>
+                                    <div class="resource-source-data-actions">
+                                        <button type="button" onclick="openResourceSourceImportModal()" class="resource-source-secondary-btn">导入频道</button>
+                                        <button type="button" onclick="exportResourceSources()" class="resource-source-secondary-btn">导出频道</button>
+                                    </div>
+                                </div>
+                                <div class="resource-source-panel-footer">
+                                    <div class="resource-source-panel-footer-copy">频道订阅会即时保存；其余参数仍然需要点顶部悬浮条里的“保存全部配置”。</div>
+                                    <div class="resource-source-footer-actions">
+                                        <button type="button" onclick="openResourceSourceManagerModal()" class="resource-source-add-btn">管理频道</button>
+                                    </div>
+                                </div>
                             </div>
                         </div>
-                        <div id="pansou-test-status" class="hidden rounded-xl border px-4 py-3 text-sm leading-6"></div>
+                        <div id="settings-pansou" class="settings-subgroup space-y-4" data-settings-subgroup="pansou">
+                            <div class="settings-subgroup-title">PanSou 盘搜</div>
+                            <label class="flex items-center gap-3 cursor-pointer text-sm">
+                                <input type="checkbox" id="pansou_enabled" class="ui-checkbox">
+                                启用 PanSou 盘搜
+                            </label>
+                            <label class="flex items-start gap-3 cursor-pointer text-sm">
+                                <input type="checkbox" id="subscription_magnet_offline_fallback" class="ui-checkbox mt-0.5">
+                                <span>
+                                    订阅任务磁力离线兜底
+                                    <span class="block text-xs text-slate-500 mt-1">本盘转存与跨盘补源都拿不到缺失集时，才用盘搜到的磁力/电驴链接提交 115 离线下载。会占用 115 离线队列与配额，默认关闭。</span>
+                                </span>
+                            </label>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">PanSou 服务地址</span>
+                                    <input id="pansou_base_url" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如 http://127.0.0.1:8888">
+                                </label>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">认证账号（可选）</span>
+                                    <input id="pansou_username" autocomplete="username" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="PanSou 登录用户名">
+                                </label>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">认证密码（可选）</span>
+                                    <input id="pansou_password" type="password" autocomplete="current-password" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="已保存时不会回显">
+                                </label>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">搜索来源 src</span>
+                                    <select id="pansou_src" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1">
+                                        <option value="all">all（全部）</option>
+                                        <option value="tg">tg</option>
+                                        <option value="plugin">plugin</option>
+                                    </select>
+                                </label>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">限定 channels（逗号分隔，可选）</span>
+                                    <input id="pansou_channels" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如 QukanMovie,Aliyun_4K_Movies">
+                                </label>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">限定 plugins（逗号分隔，可选）</span>
+                                    <input id="pansou_plugins" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如 quark,pan115">
+                                </label>
+                            </div>
+                            <div class="flex flex-wrap items-center gap-3 pt-1">
+                                <button id="pansou-test-btn" type="button" onclick="testPansouConnection()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">
+                                    测试 PanSou
+                                </button>
+                                <div class="text-xs text-slate-500">
+                                    盘搜只在资源中心切到“盘搜”后请求；开启 PanSou 认证时填写账号密码，项目会自动登录获取 JWT。
+                                </div>
+                            </div>
+                            <div id="pansou-test-status" class="hidden rounded-xl border px-4 py-3 text-sm leading-6"></div>
+                        </div>
                     </div>
                 </section>
-
-                <section id="settings-network-proxy" class="group-card settings-section-card" data-settings-section="proxy" data-settings-step="5" data-settings-title="网络代理（TG / TMDB / 资源外链）" data-settings-nav-label="网络代理">
+                <section id="settings-group-metadata" class="group-card settings-section-card" data-settings-section="metadata" data-settings-step="5" data-settings-title="元数据与识别" data-settings-nav-label="元数据识别">
                     <div class="settings-section-header">
-                        <button type="button" class="settings-section-head" aria-expanded="false" aria-controls="settings-body-proxy">
+                        <button type="button" class="settings-section-head" aria-expanded="false" aria-controls="settings-body-metadata">
                             <span class="settings-section-step" aria-hidden="true">5</span>
                             <span class="settings-section-heading">
-                                <span class="settings-section-title">网络代理（TG / TMDB / 资源外链）</span>
-                                <span class="settings-section-summary" data-settings-summary="proxy"></span>
+                                <span class="settings-section-title">元数据与识别</span>
+                                <span class="settings-section-summary" data-settings-summary="metadata"></span>
                             </span>
                             <span class="settings-section-chevron" aria-hidden="true">
                                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                             </span>
                         </button>
                     </div>
-                    <div id="settings-body-proxy" class="space-y-4 settings-section-body" hidden>
-                        <label class="flex items-center gap-3 cursor-pointer text-sm">
-                            <input type="checkbox" id="tg_proxy_enabled" class="ui-checkbox">
-                            访问 TG / TMDB / 资源外链时启用代理
-                        </label>
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <label class="block">
-                                <span class="text-xs text-slate-500">代理协议</span>
-                                <select id="tg_proxy_protocol" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1">
-                                    <option value="http">http</option>
-                                    <option value="https">https</option>
-                                </select>
+                    <div id="settings-body-metadata" class="space-y-4 settings-section-body" hidden>
+                        <div id="settings-tmdb" class="settings-subgroup space-y-4" data-settings-subgroup="tmdb">
+                            <div class="settings-subgroup-title">TMDB 元数据增强（可选）</div>
+                            <label class="flex items-center gap-3 cursor-pointer text-sm">
+                                <input type="checkbox" id="tmdb_enabled" class="ui-checkbox">
+                                启用 TMDB 元数据增强（用于更准匹配与总集数补全）
                             </label>
-                            <label class="block">
-                                <span class="text-xs text-slate-500">代理 IP / 域名</span>
-                                <input id="tg_proxy_host" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="127.0.0.1">
-                            </label>
-                            <label class="block">
-                                <span class="text-xs text-slate-500">代理端口</span>
-                                <input id="tg_proxy_port" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="7890">
-                            </label>
-                        </div>
-                        <div class="flex flex-wrap items-center gap-3 pt-1">
-                            <button id="tg-proxy-test-btn" type="button" onclick="testTgProxyLatency()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">
-                                测试 TG 延迟
-                            </button>
-                            <div class="text-xs text-slate-500">
-                                优先使用当前表单里的代理地址测试；未填写代理时会自动回退为直连 TG 测试。
-                            </div>
-                        </div>
-                        <div id="tg-proxy-test-status" class="hidden rounded-xl border px-4 py-3 text-sm leading-6"></div>
-                        <div class="text-xs text-slate-500 leading-6">
-                            用于服务端访问 TG 公开频道页、TMDB API 与资源外链。当前环境内置按标准代理 URL 方式访问，建议优先使用 `http/https` 代理。
-                        </div>
-                    </div>
-                </section>
-
-                <section id="settings-tmdb" class="group-card settings-section-card" data-settings-section="tmdb" data-settings-step="6" data-settings-title="TMDB 元数据增强（可选）" data-settings-nav-label="TMDB">
-                    <div class="settings-section-header">
-                        <button type="button" class="settings-section-head" aria-expanded="false" aria-controls="settings-body-tmdb">
-                            <span class="settings-section-step" aria-hidden="true">6</span>
-                            <span class="settings-section-heading">
-                                <span class="settings-section-title">TMDB 元数据增强（可选）</span>
-                                <span class="settings-section-summary" data-settings-summary="tmdb"></span>
-                            </span>
-                            <span class="settings-section-chevron" aria-hidden="true">
-                                <svg viewBox="0 0 24 24" width="16" height="16" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                            </span>
-                        </button>
-                    </div>
-                    <div id="settings-body-tmdb" class="space-y-4 settings-section-body" hidden>
-                        <label class="flex items-center gap-3 cursor-pointer text-sm">
-                            <input type="checkbox" id="tmdb_enabled" class="ui-checkbox">
-                            启用 TMDB 元数据增强（用于更准匹配与总集数补全）
-                        </label>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <label class="block">
-                                <span class="text-xs text-slate-500">TMDB API Key</span>
-                                <input id="tmdb_api_key" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx">
-                            </label>
-                            <label class="block">
-                                <span class="text-xs text-slate-500">缓存时长（小时）</span>
-                                <input id="tmdb_cache_ttl_hours" type="number" min="1" max="720" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="24">
-                            </label>
-                        </div>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <label class="block">
-                                <span class="text-xs text-slate-500">语言（language）</span>
-                                <input id="tmdb_language" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="zh-CN">
-                            </label>
-                            <label class="block">
-                                <span class="text-xs text-slate-500">地区（region）</span>
-                                <input id="tmdb_region" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="CN">
-                            </label>
-                        </div>
-                        <div class="text-xs text-slate-500 leading-6">
-                            推荐：`language=zh-CN`、`region=CN`。开启后可在订阅任务里绑定 TMDB，自动补充别名、年份、总集数与连载模式，降低重名误匹配。
-                        </div>
-                    </div>
-                </section>
-
-                <section id="settings-ai-match" class="group-card settings-section-card" data-settings-section="ai" data-settings-step="6b" data-settings-title="AI 刮削辅助（可选，OpenAI 兼容接口）" data-settings-nav-label="AI 刮削">
-                    <div class="settings-section-header">
-                        <button type="button" class="settings-section-head" aria-expanded="false" aria-controls="settings-body-ai">
-                            <span class="settings-section-step" aria-hidden="true">6b</span>
-                            <span class="settings-section-heading">
-                                <span class="settings-section-title">AI 刮削辅助（可选，OpenAI 兼容接口）</span>
-                                <span class="settings-section-summary" data-settings-summary="ai"></span>
-                            </span>
-                            <span class="settings-section-chevron" aria-hidden="true">
-                                <svg viewBox="0 0 24 24" width="16" height="16" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                            </span>
-                        </button>
-                    </div>
-                    <div id="settings-body-ai" class="space-y-4 settings-section-body" hidden>
-                        <label class="flex items-center gap-3 cursor-pointer text-sm">
-                            <input type="checkbox" id="ai_match_enabled" class="ui-checkbox">
-                            在批量识别时，对未自动匹配的条目调用大模型补充候选
-                        </label>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <label class="block">
-                                <span class="text-xs text-slate-500">接口地址（base_url）</span>
-                                <input id="ai_match_base_url" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如 https://api.deepseek.com（官方写法，也可带 /v1）">
-                            </label>
-                            <label class="block">
-                                <span class="text-xs text-slate-500">API Key</span>
-                                <input id="ai_match_api_key" type="password" autocomplete="new-password" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="留空表示不修改已保存的 Key">
-                            </label>
-                        </div>
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <label class="block">
-                                <span class="text-xs text-slate-500">模型名称</span>
-                                <input id="ai_match_model" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如 deepseek-flash">
-                            </label>
-                            <label class="block">
-                                <span class="text-xs text-slate-500">超时（秒）</span>
-                                <input id="ai_match_timeout_seconds" type="number" min="3" max="120" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="20">
-                            </label>
-                            <label class="block">
-                                <span class="text-xs text-slate-500">并发数</span>
-                                <input id="ai_match_max_concurrency" type="number" min="1" max="8" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="3">
-                            </label>
-                        </div>
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <label class="block">
-                                <span class="text-xs text-slate-500">temperature</span>
-                                <input id="ai_match_temperature" type="number" min="0" max="2" step="0.1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
-                            </label>
-                            <label class="block">
-                                <span class="text-xs text-slate-500">最低采纳置信度（默认 60，低于此值的 AI 结果不采纳；填 0 按默认处理）</span>
-                                <input id="ai_match_min_confidence" type="number" min="0" max="100" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="60">
-                            </label>
-                            <label class="block">
-                                <span class="text-xs text-slate-500">结果缓存（小时，0 = 关闭）</span>
-                                <input id="ai_match_cache_ttl_hours" type="number" min="0" max="720" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="24">
-                            </label>
-                        </div>
-                        <label class="block max-w-xl">
-                            <span class="text-xs text-slate-500">思考模式</span>
-                            <select id="ai_match_thinking_mode" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1">
-                                <option value="auto">自动：仅识别到 DeepSeek 时关闭思考（推荐）</option>
-                                <option value="disabled">始终关闭：对所有端点都发送 thinking 参数（仅中转/自建网关兼容时使用）</option>
-                                <option value="enabled">保持开启：不发送该参数，交给端点默认</option>
-                            </select>
-                        </label>
-                        <div class="flex flex-wrap items-center gap-3 pt-1">
-                            <button id="ai-match-test-btn" type="button" onclick="testAiMatchConnection()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">
-                                测试 AI 可用性
-                            </button>
-                            <div class="text-xs text-slate-500">
-                                用当前表单里的配置发一条最小样例，验证地址 / Key / 模型 / JSON 输出是否正常（不受「启用」开关限制，Key 留空则沿用已保存的）。
-                            </div>
-                        </div>
-                        <div id="ai-match-test-status" class="hidden rounded-xl border px-4 py-3 text-sm leading-6"></div>
-                        <div class="flex flex-wrap items-center justify-between gap-3 pt-1">
-                            <div class="text-sm font-medium">用量统计（本次进程累计）</div>
-                            <div class="flex items-center gap-2">
-                                <button type="button" onclick="loadAiMatchUsage()" class="px-3 py-2 rounded-lg bg-slate-700/60 hover:bg-slate-600/60 text-xs">刷新</button>
-                                <button type="button" onclick="resetAiMatchUsage()" class="px-3 py-2 rounded-lg bg-slate-700/60 hover:bg-slate-600/60 text-xs">重置</button>
-                            </div>
-                        </div>
-                        <div id="ai-match-usage" class="rounded-xl border px-4 py-3 text-sm leading-6"></div>
-                        <details class="settings-help-fold">
-                            <summary>查看说明：兼容的接口与范围</summary>
-                            <div class="settings-help-fold-body">
-                                兼容 DeepSeek / Qwen / OpenAI / 本地 Ollama 等任意 OpenAI 格式的 <code>/chat/completions</code> 接口（DeepSeek 填 <code>https://api.deepseek.com</code> 或 <code>https://api.deepseek.com/v1</code>；Ollama 填 <code>http://127.0.0.1:11434/v1</code>）。此处只支持 OpenAI 兼容端点，请不要填 Anthropic 端点（<code>/anthropic</code>）。开启后 AI 只会对未自动匹配的条目给出候选建议，仍需在批量整理里人工确认后才会改名，不会自动执行。
-                            </div>
-                        </details>
-                    </div>
-                </section>
-
-                <section id="settings-notify" class="group-card settings-section-card" data-settings-section="notify" data-settings-step="7" data-settings-title="通知推送（企业微信）" data-settings-nav-label="通知推送">
-                    <div class="settings-section-header">
-                        <button type="button" class="settings-section-head" aria-expanded="false" aria-controls="settings-body-notify">
-                            <span class="settings-section-step" aria-hidden="true">7</span>
-                            <span class="settings-section-heading">
-                                <span class="settings-section-title">通知推送（企业微信）</span>
-                                <span class="settings-section-summary" data-settings-summary="notify"></span>
-                            </span>
-                            <span class="settings-section-chevron" aria-hidden="true">
-                                <svg viewBox="0 0 24 24" width="16" height="16" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                            </span>
-                        </button>
-                    </div>
-                    <div id="settings-body-notify" class="space-y-4 settings-section-body" hidden>
-                        <label class="flex items-center gap-3 cursor-pointer text-sm">
-                            <input type="checkbox" id="notify_push_enabled" class="ui-checkbox">
-                            启用订阅更新成功推送（同盘导入 / 跨盘补源，仅推送成功）
-                        </label>
-                        <label class="flex items-center gap-3 cursor-pointer text-sm">
-                            <input type="checkbox" id="notify_monitor_enabled" class="ui-checkbox">
-                            启用文件夹监控生成成功推送（基于 `.strm` 路径/文件名匹配影视信息）
-                        </label>
-                        <label class="flex items-center gap-3 cursor-pointer text-sm">
-                            <input type="checkbox" id="cross_copy_notify_subscription" class="ui-checkbox">
-                            启用订阅补源通知（补源成功与失败）
-                        </label>
-                        <label class="flex items-center gap-3 cursor-pointer text-sm">
-                            <input type="checkbox" id="cross_copy_notify_manual" class="ui-checkbox">
-                            启用手动跨盘复制通知（成功/失败）
-                        </label>
-                        <div class="text-[11px] text-slate-500 leading-5">
-                            跨盘复制指从其他网盘复制文件到本网盘（如夸克 → 115）。补源补进来的几集算订阅更新：上面「订阅更新成功推送」和「订阅补源通知」都开着时，只发一条汇总，不再一个文件一条；只开「订阅补源通知」时按文件逐条推送。手动复制是你自己在页面上点发起的，单独开关。
-                        </div>
-                        <label class="block">
-                            <span class="text-xs text-slate-500">通知渠道</span>
-                            <select id="notify_channel" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" onchange="syncNotifyChannelUI()">
-                                <option value="wecom_bot">企业微信群机器人（Webhook）</option>
-                                <option value="wecom_app">企业微信应用 API（发给个人成员）</option>
-                            </select>
-                        </label>
-                        <div id="notify-bot-fields" class="space-y-4">
-                            <label class="block">
-                                <span class="text-xs text-slate-500">群机器人 Webhook</span>
-                                <input id="notify_wecom_webhook" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...">
-                            </label>
-                        </div>
-                        <div id="notify-app-fields" class="space-y-4 hidden">
                             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <label class="block">
-                                    <span class="text-xs text-slate-500">CorpID</span>
-                                    <input id="notify_wecom_app_corp_id" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="wwxxxxxxxxxxxxxxxx">
+                                    <span class="text-xs text-slate-500">TMDB API Key</span>
+                                    <input id="tmdb_api_key" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx">
                                 </label>
                                 <label class="block">
-                                    <span class="text-xs text-slate-500">AgentID</span>
-                                    <input id="notify_wecom_app_agent_id" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="1000002">
+                                    <span class="text-xs text-slate-500">缓存时长（小时）</span>
+                                    <input id="tmdb_cache_ttl_hours" type="number" min="1" max="720" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="24">
                                 </label>
                             </div>
-                            <label class="block">
-                                <span class="text-xs text-slate-500">AppSecret</span>
-                                <input id="notify_wecom_app_secret" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="企业微信自建应用 Secret">
-                            </label>
-                            <label class="block">
-                                <span class="text-xs text-slate-500">接收人 UserID（多个用 | 分隔）</span>
-                                <input id="notify_wecom_app_touser" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="zhangsan|lisi">
-                            </label>
-                        </div>
-                        <div class="flex flex-wrap items-center gap-3">
-                            <button id="notify-test-btn" type="button" onclick="testNotifyPush()" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">发送测试消息</button>
-                            <span class="text-[11px] text-slate-500">测试消息可单独发送，不依赖“启用”开关。</span>
-                        </div>
-                        <div id="notify-test-status" class="hidden tg-proxy-status rounded-xl border px-4 py-3 text-sm leading-6"></div>
-                        <details class="settings-help-fold">
-                            <summary>查看说明：推送范围与去重规则</summary>
-                            <div class="settings-help-fold-body">
-                                推送范围：订阅成功入库（同盘导入、跨盘补源）、文件夹监控成功生成 `.strm`、手动跨盘复制结果——均可独立开关。
-                                <br>补源补进来的几集算订阅更新：「订阅更新成功推送」和「订阅补源通知」都开着时只发一条汇总，不再一个文件一条；只开「订阅补源通知」时按文件逐条推送。补源失败始终单独提醒。
-                                <br>其余失败、无更新、过滤跳过等情况保留在 Web 日志查看。
-                                <br>去重规则：任务名 + 集数 + 保存路径，避免同一更新重复提醒。
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">语言（language）</span>
+                                    <input id="tmdb_language" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="zh-CN">
+                                </label>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">地区（region）</span>
+                                    <input id="tmdb_region" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="CN">
+                                </label>
                             </div>
-                        </details>
+                            <div class="text-xs text-slate-500 leading-6">
+                                推荐：`language=zh-CN`、`region=CN`。开启后可在订阅任务里绑定 TMDB，自动补充别名、年份、总集数与连载模式，降低重名误匹配。
+                            </div>
+                        </div>
+                        <div id="settings-ai-match" class="settings-subgroup space-y-4" data-settings-subgroup="ai">
+                            <div class="settings-subgroup-title">AI 刮削辅助</div>
+                            <label class="flex items-center gap-3 cursor-pointer text-sm">
+                                <input type="checkbox" id="ai_match_enabled" class="ui-checkbox">
+                                在批量识别时，对未自动匹配的条目调用大模型补充候选
+                            </label>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">接口地址（base_url）</span>
+                                    <input id="ai_match_base_url" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如 https://api.deepseek.com（官方写法，也可带 /v1）">
+                                </label>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">API Key</span>
+                                    <input id="ai_match_api_key" type="password" autocomplete="new-password" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="留空表示不修改已保存的 Key">
+                                </label>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">模型名称</span>
+                                    <input id="ai_match_model" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如 deepseek-flash">
+                                </label>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">超时（秒）</span>
+                                    <input id="ai_match_timeout_seconds" type="number" min="3" max="120" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="20">
+                                </label>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">并发数</span>
+                                    <input id="ai_match_max_concurrency" type="number" min="1" max="8" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="3">
+                                </label>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">temperature</span>
+                                    <input id="ai_match_temperature" type="number" min="0" max="2" step="0.1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
+                                </label>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">最低采纳置信度（默认 60，低于此值的 AI 结果不采纳；填 0 按默认处理）</span>
+                                    <input id="ai_match_min_confidence" type="number" min="0" max="100" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="60">
+                                </label>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">结果缓存（小时，0 = 关闭）</span>
+                                    <input id="ai_match_cache_ttl_hours" type="number" min="0" max="720" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="24">
+                                </label>
+                            </div>
+                            <label class="block max-w-xl">
+                                <span class="text-xs text-slate-500">思考模式</span>
+                                <select id="ai_match_thinking_mode" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1">
+                                    <option value="auto">自动：仅识别到 DeepSeek 时关闭思考（推荐）</option>
+                                    <option value="disabled">始终关闭：对所有端点都发送 thinking 参数（仅中转/自建网关兼容时使用）</option>
+                                    <option value="enabled">保持开启：不发送该参数，交给端点默认</option>
+                                </select>
+                            </label>
+                            <div class="flex flex-wrap items-center gap-3 pt-1">
+                                <button id="ai-match-test-btn" type="button" onclick="testAiMatchConnection()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">
+                                    测试 AI 可用性
+                                </button>
+                                <div class="text-xs text-slate-500">
+                                    用当前表单里的配置发一条最小样例，验证地址 / Key / 模型 / JSON 输出是否正常（不受「启用」开关限制，Key 留空则沿用已保存的）。
+                                </div>
+                            </div>
+                            <div id="ai-match-test-status" class="hidden rounded-xl border px-4 py-3 text-sm leading-6"></div>
+                            <div class="flex flex-wrap items-center justify-between gap-3 pt-1">
+                                <div class="text-sm font-medium">用量统计（本次进程累计）</div>
+                                <div class="flex items-center gap-2">
+                                    <button type="button" onclick="loadAiMatchUsage()" class="px-3 py-2 rounded-lg bg-slate-700/60 hover:bg-slate-600/60 text-xs">刷新</button>
+                                    <button type="button" onclick="resetAiMatchUsage()" class="px-3 py-2 rounded-lg bg-slate-700/60 hover:bg-slate-600/60 text-xs">重置</button>
+                                </div>
+                            </div>
+                            <div id="ai-match-usage" class="rounded-xl border px-4 py-3 text-sm leading-6"></div>
+                            <details class="settings-help-fold">
+                                <summary>查看说明：兼容的接口与范围</summary>
+                                <div class="settings-help-fold-body">
+                                    兼容 DeepSeek / Qwen / OpenAI / 本地 Ollama 等任意 OpenAI 格式的 <code>/chat/completions</code> 接口（DeepSeek 填 <code>https://api.deepseek.com</code> 或 <code>https://api.deepseek.com/v1</code>；Ollama 填 <code>http://127.0.0.1:11434/v1</code>）。此处只支持 OpenAI 兼容端点，请不要填 Anthropic 端点（<code>/anthropic</code>）。开启后 AI 只会对未自动匹配的条目给出候选建议，仍需在批量整理里人工确认后才会改名，不会自动执行。
+                                </div>
+                            </details>
+                        </div>
+                        <div id="settings-scraper-filter" class="settings-subgroup space-y-4" data-settings-subgroup="filter">
+                            <div class="settings-subgroup-title settings-title-with-info">批量整理过滤词（可选）<button type="button" class="info-dot" aria-label="批量整理过滤词说明" title="批量整理过滤词说明" onclick="showScraperFilterHelp()">i</button></div>
+                            <label class="block">
+                                <span class="text-xs text-slate-500">复合过滤词（每行一个，任意位置出现即删除）</span>
+                                <textarea id="scraper_noise_phrases" rows="4" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="国语音轨&#10;无水印&#10;夸克网盘"></textarea>
+                            </label>
+                            <label class="block">
+                                <span class="text-xs text-slate-500">独立过滤词（每行一个，按词边界删除）</span>
+                                <textarea id="scraper_standalone_noise_words" rows="3" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="国语&#10;中文"></textarea>
+                            </label>
+                            <div class="text-xs text-slate-500 leading-6">
+                                内置默认过滤词表始终生效，这里只追加自定义词；短词请放在“独立过滤词”，避免把真实片名里的字删掉。
+                            </div>
+                        </div>
                     </div>
                 </section>
-
-                <section id="settings-security" class="group-card settings-section-card" data-settings-section="security" data-settings-step="8" data-settings-title="后台安全管理" data-settings-nav-label="后台安全">
+                <section id="settings-group-system" class="group-card settings-section-card" data-settings-section="system" data-settings-step="6" data-settings-title="系统与存储" data-settings-nav-label="系统与存储">
                     <div class="settings-section-header">
-                        <button type="button" class="settings-section-head" aria-expanded="false" aria-controls="settings-body-security">
-                            <span class="settings-section-step" aria-hidden="true">8</span>
+                        <button type="button" class="settings-section-head" aria-expanded="false" aria-controls="settings-body-system">
+                            <span class="settings-section-step" aria-hidden="true">6</span>
                             <span class="settings-section-heading">
-                                <span class="settings-section-title">后台安全管理</span>
-                                <span class="settings-section-summary" data-settings-summary="security"></span>
+                                <span class="settings-section-title">系统与存储</span>
+                                <span class="settings-section-summary" data-settings-summary="system"></span>
                             </span>
                             <span class="settings-section-chevron" aria-hidden="true">
                                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                             </span>
                         </button>
                     </div>
-                    <div id="settings-body-security" class="space-y-4 settings-section-body" hidden>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <label class="block"><span class="text-xs text-slate-500">管理账号</span><input id="username" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1"></label>
-                            <label class="block"><span class="text-xs text-slate-500">管理密码</span><input id="password" type="password" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1"></label>
-                        </div>
-                        <label class="block">
-                            <span class="text-xs text-slate-500 inline-flex items-center gap-2">
-                                Webhook 签名密钥（可选）
-                                <button type="button" class="info-dot" onclick="showHelp('用途：油猴脚本导入磁力链接时用于防伪签名。脚本和后台需配置同一个密钥。留空则不校验签名。')">i</button>
-                            </span>
-                            <input id="webhook_secret" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="建议 16 位以上随机字符串">
-                            <div class="mt-2 flex items-center gap-2 flex-wrap">
-                                <button type="button" onclick="generateWebhookSecret()" class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold">随机生成密钥</button>
-                                <span class="text-[11px] text-slate-500">生成后请点击“保存全部配置”。</span>
+                    <div id="settings-body-system" class="space-y-4 settings-section-body" hidden>
+                        <div id="settings-security" class="settings-subgroup space-y-4" data-settings-subgroup="security">
+                            <div class="settings-subgroup-title">账号、签名密钥与油猴脚本</div>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <label class="block"><span class="text-xs text-slate-500">管理账号</span><input id="username" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1"></label>
+                                <label class="block"><span class="text-xs text-slate-500">管理密码</span><input id="password" type="password" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1"></label>
                             </div>
-                        </label>
-                        <div class="text-xs text-slate-500 leading-6">
-                            主要用于“油猴脚本导入磁力链接”的请求防伪；这是全站唯一的密钥，所有文件夹监控任务（含接收夹任务）共用它，脚本里配一次即可长期校验。未配置则不校验。
-                            <br>当前支持：`X-Webhook-Token` 或 `X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign`。
-                        </div>
-                        <label class="block">
-                            <span class="text-xs text-slate-500 inline-flex items-center gap-2">
-                                点播接口 API Key（Seerr / Jellyseerr / Overseerr 用）
-                                <button type="button" class="info-dot" onclick="showHelp('用途：让 Seerr 等点播门户把 115 Media Hub 当成 Radarr / Sonarr 服务器。家人在 Seerr 点播后，这里会自动创建对应的订阅任务并立即开始找资源。留空则关闭点播接口。')">i</button>
-                            </span>
-                            <input id="servarr_api_key" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="建议 32 位随机字符串">
-                            <div class="mt-2 flex items-center gap-2 flex-wrap">
-                                <button type="button" onclick="generateServarrApiKey()" class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold">随机生成密钥</button>
-                                <span class="text-[11px] text-slate-500">生成后请点击“保存全部配置”。</span>
+                            <label class="block">
+                                <span class="text-xs text-slate-500 inline-flex items-center gap-2">
+                                    Webhook 签名密钥（可选）
+                                    <button type="button" class="info-dot" onclick="showHelp('用途：油猴脚本导入磁力链接时用于防伪签名。脚本和后台需配置同一个密钥。留空则不校验签名。')">i</button>
+                                </span>
+                                <input id="webhook_secret" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="建议 16 位以上随机字符串">
+                                <div class="mt-2 flex items-center gap-2 flex-wrap">
+                                    <button type="button" onclick="generateWebhookSecret()" class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold">随机生成密钥</button>
+                                    <span class="text-[11px] text-slate-500">生成后请点击“保存全部配置”。</span>
+                                </div>
+                            </label>
+                            <div class="text-xs text-slate-500 leading-6">
+                                主要用于“油猴脚本导入磁力链接”的请求防伪；这是全站唯一的密钥，所有文件夹监控任务（含接收夹任务）共用它，脚本里配一次即可长期校验。未配置则不校验。
+                                <br>当前支持：`X-Webhook-Token` 或 `X-Webhook-Ts / X-Webhook-Nonce / X-Webhook-Sign`。
                             </div>
-                        </label>
-                        <label class="block">
-                            <span class="text-xs text-slate-500">电影点播保存目录（115 网盘相对路径）</span>
-                            <input id="servarr_movie_savepath" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：媒体库/网盘电影">
-                            <div class="mt-1 text-[11px] text-slate-500">Seerr 电影点播自动建「片名 (年份)」子目录并落盘于此。留空则回退到旧版默认保存目录。</div>
-                        </label>
-                        <label class="block">
-                            <span class="text-xs text-slate-500">电视剧点播保存目录（115 网盘相对路径）</span>
-                            <input id="servarr_tv_savepath" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：媒体库/网盘电视剧">
-                            <div class="mt-1 text-[11px] text-slate-500">Seerr 剧集点播自动建「剧名 (年份)/Season NN」子目录并落盘于此。留空则回退到旧版默认保存目录。</div>
-                        </label>
-                        <div class="text-xs text-slate-500 leading-6">
-                            对接方法：在 Seerr（Jellyseerr / Overseerr）的「设置 → Radarr / Sonarr」里各添加一条服务器，地址填 <code>http://面板地址</code>，API Key 填上面生成的同一个密钥；Radarr 对应电影点播，Sonarr 对应剧集点播，保存后 Seerr 会显示连接成功。
-                            <br>家人在 Seerr 提交点播后，本面板「影视订阅」页会出现对应任务并自动搜索资源，找到后自动转存、入库、生成 STRM，与手动订阅完全同链路；在 Seerr 删除点播请求会同时删掉这里的订阅任务。
-                        </div>
-                        <details class="settings-help-fold">
-                            <summary>查看说明：油猴脚本和文件夹监控的关系</summary>
-                            <div class="settings-help-fold-body">
-                                <div class="settings-info-note-title">油猴脚本和文件夹监控的关系</div>
-                                <div>油猴脚本里的“请求地址”填某个任务的 `/webhook/任务名`，脚本推送后就会绑定并触发这条任务；该任务要先开启 Webhook，且任务处于启用状态。</div>
-                                <div>普通监控任务：“保存路径 savepath”是磁力离线下载到 115 的目标目录，会映射到 115 挂载前缀后和该任务的“扫描路径”匹配。只有保存路径落在扫描路径内，导入成功后才会自动刷新并生成 strm。</div>
-                                <div>接收夹任务（可选，每个网盘一个）：接收夹是「分类前的中转文件夹」，也是新增的便捷入口——不想每次保存前先挑电影还是电视剧时，就先把磁力 / 分享统一落到这里；下载完成后自动识别类型，按接收夹自己的整理选项重命名，再搬到同一个网盘的电影 / 电视剧目标文件夹。不用它也没关系，照旧把保存路径填到分类监控任务的目录即可，两种用法可以并存。请求地址同样填 `/webhook/任务名`，保存路径填接收夹本身或它的子目录、留空即默认落到接收夹。内置的「接收」任务保留给 115；要用别的网盘，就在「文件夹监控」页点「新增接收夹」给它配一个（同一个网盘只能有一个，重复添加会被拦下）。</div>
-                                <div>签名密钥只有一套：接收夹任务和普通监控任务共用上面这个 `webhook_secret`，不用为接收夹单独配密钥；两者的区别只是收到请求之后的处理流程不同。</div>
-                                <div>“延迟”只控制导入成功后等待多久再刷新 / 整理，留 0 会使用任务自己的默认延迟；“名称”只方便在脚本里识别任务，不参与后台匹配。</div>
-                                <div>保存路径统一填接收夹所在网盘根目录下的相对路径（115 上就是 115 根目录），例如 `接收`、`接收/子目录`。面板里选择的接收夹路径可能显示成 `/115/接收`，照抄进脚本也能识别，但推荐只写 `接收`。</div>
+                            <details class="settings-help-fold">
+                                <summary>查看说明：油猴脚本和文件夹监控的关系</summary>
+                                <div class="settings-help-fold-body">
+                                    <div class="settings-info-note-title">油猴脚本和文件夹监控的关系</div>
+                                    <div>油猴脚本里的“请求地址”填某个任务的 `/webhook/任务名`，脚本推送后就会绑定并触发这条任务；该任务要先开启 Webhook，且任务处于启用状态。</div>
+                                    <div>普通监控任务：“保存路径 savepath”是磁力离线下载到 115 的目标目录，会映射到 115 挂载前缀后和该任务的“扫描路径”匹配。只有保存路径落在扫描路径内，导入成功后才会自动刷新并生成 strm。</div>
+                                    <div>接收夹任务（可选，每个网盘一个）：接收夹是「分类前的中转文件夹」，也是新增的便捷入口——不想每次保存前先挑电影还是电视剧时，就先把磁力 / 分享统一落到这里；下载完成后自动识别类型，按接收夹自己的整理选项重命名，再搬到同一个网盘的电影 / 电视剧目标文件夹。不用它也没关系，照旧把保存路径填到分类监控任务的目录即可，两种用法可以并存。请求地址同样填 `/webhook/任务名`，保存路径填接收夹本身或它的子目录、留空即默认落到接收夹。内置的「接收」任务保留给 115；要用别的网盘，就在「文件夹监控」页点「新增接收夹」给它配一个（同一个网盘只能有一个，重复添加会被拦下）。</div>
+                                    <div>签名密钥只有一套：接收夹任务和普通监控任务共用上面这个 `webhook_secret`，不用为接收夹单独配密钥；两者的区别只是收到请求之后的处理流程不同。</div>
+                                    <div>“延迟”只控制导入成功后等待多久再刷新 / 整理，留 0 会使用任务自己的默认延迟；“名称”只方便在脚本里识别任务，不参与后台匹配。</div>
+                                    <div>保存路径统一填接收夹所在网盘根目录下的相对路径（115 上就是 115 根目录），例如 `接收`、`接收/子目录`。面板里选择的接收夹路径可能显示成 `/115/接收`，照抄进脚本也能识别，但推荐只写 `接收`。</div>
+                                </div>
+                            </details>
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <a href="/userscript/magnet-helper.user.js" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">
+                                    安装油猴脚本（115-media-hub助手）
+                                </a>
+                                <span class="text-xs text-slate-500">点击后会打开脚本文本，Tampermonkey 会自动弹出安装提示。</span>
                             </div>
-                        </details>
-                        <div class="flex items-center gap-2 flex-wrap">
-                            <a href="/userscript/magnet-helper.user.js" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">
-                                安装油猴脚本（115-media-hub助手）
-                            </a>
-                            <span class="text-xs text-slate-500">点击后会打开脚本文本，Tampermonkey 会自动弹出安装提示。</span>
                         </div>
-                    </div>
-                </section>
+                        <div id="settings-storage" class="settings-subgroup space-y-4" data-settings-subgroup="storage">
+                            <div class="settings-subgroup-title">本地存储位置</div>
+                            <div class="text-xs text-slate-500 leading-6">
+                                跨盘复制（比如从 115 复制到其它网盘）时，大文件没法直接对传，会先完整下载到下面的目录，再上传到目标网盘，传完自动清理临时文件。所以这个目录要放在容量够大、剩余空间足够的盘上。
+                            </div>
+                            <div class="text-xs text-slate-500 leading-6">
+                                不配置也能用：默认放在 config 卷下的 <code class="font-mono">cross_copy_tmp</code> 目录。想换成容量更大的盘，就先把宿主机的目录挂载进容器（例如 <code class="font-mono">/mnt/hdd → /app/storage</code>），重建容器后回到这里点「更换目录」，扫出来的列表里会直接出现它，点一下就行，不用自己记路径。
+                            </div>
 
-                <section id="settings-scraper-filter" class="group-card settings-section-card" data-settings-section="filter" data-settings-step="9" data-settings-title="批量整理过滤词（可选）" data-settings-nav-label="过滤词">
-                    <div class="settings-section-header settings-title-with-info">
-                        <button type="button" class="settings-section-head" aria-expanded="false" aria-controls="settings-body-filter">
-                            <span class="settings-section-step" aria-hidden="true">9</span>
-                            <span class="settings-section-heading">
-                                <span class="settings-section-title">批量整理过滤词（可选）</span>
-                                <span class="settings-section-summary" data-settings-summary="filter"></span>
-                            </span>
-                            <span class="settings-section-chevron" aria-hidden="true">
-                                <svg viewBox="0 0 24 24" width="16" height="16" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                            </span>
-                        </button>
-                        <button type="button" class="info-dot" aria-label="批量整理过滤词说明" title="批量整理过滤词说明" onclick="showScraperFilterHelp()">i</button>
-                    </div>
-                    <div id="settings-body-filter" class="space-y-4 settings-section-body" hidden>
-                        <label class="block">
-                            <span class="text-xs text-slate-500">复合过滤词（每行一个，任意位置出现即删除）</span>
-                            <textarea id="scraper_noise_phrases" rows="4" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="国语音轨&#10;无水印&#10;夸克网盘"></textarea>
-                        </label>
-                        <label class="block">
-                            <span class="text-xs text-slate-500">独立过滤词（每行一个，按词边界删除）</span>
-                            <textarea id="scraper_standalone_noise_words" rows="3" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="国语&#10;中文"></textarea>
-                        </label>
-                        <div class="text-xs text-slate-500 leading-6">
-                            内置默认过滤词表始终生效，这里只追加自定义词；短词请放在“独立过滤词”，避免把真实片名里的字删掉。
+                            <div class="settings-storage-card">
+                                <div class="settings-storage-card-head">
+                                    <div class="settings-storage-card-title">当前暂存目录</div>
+                                    <button type="button" onclick="reloadStorageTempDir()" class="px-3 py-2 rounded-lg bg-slate-700/60 hover:bg-slate-600/60 text-xs">刷新</button>
+                                </div>
+                                <div id="settings-storage-current" class="settings-storage-current">
+                                    <div class="settings-storage-dir-path">读取中…</div>
+                                    <div class="settings-storage-meta"></div>
+                                </div>
+                                <div id="settings-storage-warning" class="settings-storage-warning" hidden></div>
+                                <div class="settings-storage-actions-row">
+                                    <button type="button" onclick="toggleStorageTempDirForm()" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">更换目录</button>
+                                    <button type="button" id="settings-storage-reset" onclick="resetStorageTempDir()" class="hidden px-4 py-2 rounded-lg bg-slate-700/60 hover:bg-slate-600/60 text-xs">恢复默认目录</button>
+                                </div>
+                            </div>
+
+                            <div class="settings-storage-card">
+                                <div class="settings-storage-card-head">
+                                    <div class="settings-storage-card-title">临时文件清理策略</div>
+                                </div>
+                                <div class="settings-storage-hint">
+                                    跨盘复制下载到本目录的文件，按以下规则清理，不需要手动干预：
+                                </div>
+                                <div class="space-y-2">
+                                    <div class="text-[11px] text-slate-500 leading-5">复制完成或失败后，本次下载的临时文件<strong class="text-slate-300">立即删除</strong>。</div>
+                                    <div class="text-[11px] text-slate-500 leading-5">容器被强行停止等异常中断留下的残留：启动时扫一遍，之后每 30 分钟再扫一遍，超过 24 小时没有更新的自动删除。</div>
+                                    <div class="text-[11px] text-slate-500 leading-5">取消或失败的任务会保留已下载的部分以便续传（重试接着下，不重复下载）；确定不需要了，到「任务中心」删掉该任务记录，临时文件会一起清掉。</div>
+                                </div>
+                            </div>
+
+                            <div id="settings-storage-form-card" class="settings-storage-card" hidden>
+                                <div class="settings-storage-card-title">更换暂存目录</div>
+                                <div class="settings-storage-hint">
+                                    下面是容器里能用的目录，点一个选中再保存。列表带剩余空间，挂载了新盘只要重建容器、回来点「重新扫描」就能看到。
+                                </div>
+                                <div id="settings-storage-candidates" class="settings-storage-candidates">
+                                    <div class="settings-storage-empty">正在扫描容器里的目录…</div>
+                                </div>
+                                <div class="settings-storage-actions-row">
+                                    <button type="button" onclick="saveStorageTempDir()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">保存</button>
+                                    <button type="button" onclick="rescanStorageCandidates()" class="px-4 py-3 rounded-lg bg-slate-700/60 hover:bg-slate-600/60 text-sm">重新扫描</button>
+                                    <button type="button" onclick="toggleStorageTempDirForm()" class="px-4 py-3 rounded-lg bg-slate-700/60 hover:bg-slate-600/60 text-sm">取消</button>
+                                </div>
+                                <details class="settings-storage-manual">
+                                    <summary>扫描不到要用的目录？手动填容器内路径</summary>
+                                    <div class="settings-storage-form mt-3">
+                                        <label class="block min-w-0">
+                                            <span class="text-xs text-slate-500">容器内路径</span>
+                                            <input id="settings-storage-dir-input" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 font-mono" placeholder="例如 /app/storage/cross_copy_tmp">
+                                        </label>
+                                        <button type="button" onclick="saveStorageTempDirFromInput()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">用这个路径</button>
+                                    </div>
+                                    <div class="text-[11px] text-slate-500 mt-2 leading-5">
+                                        填<strong class="text-slate-300">容器内</strong>的目录，不是宿主机的路径。把宿主机 <code class="font-mono">/mnt/hdd</code> 挂到容器 <code class="font-mono">/app/storage</code> 之后，这里要填 <code class="font-mono">/app/storage</code> 或它下面的子目录，填 <code class="font-mono">/mnt/hdd</code> 是找不到的。保存前会检查目录存在、能不能写；目录不存在时只在已挂载的盘里自动建，不会往容器临时层里建。
+                                    </div>
+                                </details>
+                                <div id="settings-storage-form-status" class="settings-storage-status" hidden></div>
+                            </div>
+
+                            <div class="settings-storage-card">
+                                <div class="settings-storage-card-head">
+                                    <div class="settings-storage-card-title">夸克中转残留清理</div>
+                                </div>
+                                <div class="settings-storage-hint">
+                                    订阅跨盘补源会先把缺的集转存到夸克 <code class="font-mono">云下载/跨盘中转</code>。复制成功后中转副本会自动删；被取消或失败的任务为了能续传会先留着。这里按天兜底清理，防止它们长期占着夸克空间。
+                                </div>
+                                <div class="settings-storage-form">
+                                    <label class="block min-w-0">
+                                        <span class="text-xs text-slate-500">保留天数（0 = 不自动清理）</span>
+                                        <input id="cross_copy_staging_retention_days" type="number" min="0" max="365" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="7">
+                                    </label>
+                                </div>
+                                <div class="text-[11px] text-slate-500 mt-2 leading-5">
+                                    只清理超过该天数、且没有任务在跑的中转文件；正在复制的、以及还没超期的取消/失败任务一律不动。删除是移到<strong class="text-slate-300">夸克回收站</strong>，配额要等回收站被清空或系统回收之后才真正释放。清理之后，旧任务「重试可续传」就不再成立，重试会重新转存一遍。
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </section>

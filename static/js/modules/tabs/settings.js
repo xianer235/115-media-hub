@@ -142,59 +142,54 @@ function buildAuthSectionSummary() {
 
 function buildSettingsSectionSummary(key) {
     switch (key) {
-        case 'auth':
+        case 'account':
             return buildAuthSectionSummary();
-        case 'strm': {
+        case 'library': {
             const base = settingsValue('strm_proxy_base_url');
             const rate = settingsValue('api_115_rate_limit_seconds');
-            return [base ? '对外地址已填' : '未填对外地址', rate ? `限频 ${rate}s` : ''].filter(Boolean).join(' · ');
+            const servarrConfigured = !!settingsValue('servarr_api_key') || !!latestSettingsSensitiveMeta.servarr_api_key;
+            return [
+                base ? '对外地址已填' : '未填对外地址',
+                rate ? `限频 ${rate}s` : '',
+                servarrConfigured ? '点播接口已开启' : '点播接口未开启',
+            ].filter(Boolean).join(' · ');
         }
-        case 'tg': {
+        case 'sources': {
             const total = String(document.getElementById('resource-source-total-count')?.textContent || '0').trim();
             const search = String(document.getElementById('resource-source-search-count')?.textContent || '0').trim();
-            return `频道 ${total} 个 · 参与搜索 ${search} 个`;
+            const pansou = settingsChecked('pansou_enabled') ? 'PanSou 已启用' : 'PanSou 未启用';
+            return `频道 ${total} 个 · 参与搜索 ${search} 个 · ${pansou}`;
         }
-        case 'pansou':
-            if (!settingsChecked('pansou_enabled')) return '未启用';
-            return `已启用 · ${settingsValue('pansou_base_url') || '未填服务地址'}`;
-        case 'proxy': {
-            if (!settingsChecked('tg_proxy_enabled')) return '未启用';
-            const protocol = settingsValue('tg_proxy_protocol') || 'http';
-            const host = settingsValue('tg_proxy_host') || '未填地址';
-            const port = settingsValue('tg_proxy_port');
-            return `已启用 · ${protocol}://${host}${port ? ':' + port : ''}`;
+        case 'metadata': {
+            const tmdb = settingsChecked('tmdb_enabled')
+                ? `TMDB ${settingsValue('tmdb_language') || 'zh-CN'}`
+                : 'TMDB 未启用';
+            const ai = settingsChecked('ai_match_enabled')
+                ? `AI ${settingsValue('ai_match_model') || '已启用'}`
+                : 'AI 未启用';
+            const noise = settingsLineCount('scraper_noise_phrases') + settingsLineCount('scraper_standalone_noise_words');
+            return `${tmdb} · ${ai} · 过滤词 ${noise} 条`;
         }
-        case 'tmdb':
-            if (!settingsChecked('tmdb_enabled')) return '未启用';
-            return `已启用 · ${settingsValue('tmdb_language') || 'zh-CN'} / ${settingsValue('tmdb_region') || 'CN'}`;
-        case 'ai': {
-            if (!settingsChecked('ai_match_enabled')) return '未启用';
-            const model = settingsValue('ai_match_model') || '未填模型';
-            const concurrency = settingsValue('ai_match_max_concurrency') || '3';
-            const confidence = settingsValue('ai_match_min_confidence') || '60';
-            return `已启用 · ${model} · 并发 ${concurrency} · 阈值 ${confidence}`;
-        }
-        case 'notify': {
+        case 'network': {
+            const proxy = settingsChecked('tg_proxy_enabled')
+                ? `代理 ${settingsValue('tg_proxy_protocol') || 'http'}://${settingsValue('tg_proxy_host') || '未填'}${settingsValue('tg_proxy_port') ? ':' + settingsValue('tg_proxy_port') : ''}`
+                : '代理未启用';
             const channel = settingsValue('notify_channel') === 'wecom_app' ? '企业微信应用' : '企业微信群机器人';
             const switches = ['notify_push_enabled', 'notify_monitor_enabled', 'cross_copy_notify_subscription', 'cross_copy_notify_manual'].filter(id => settingsChecked(id)).length;
-            return `${channel} · ${switches}/4 个推送开关`;
+            return `${proxy} · ${channel} · ${switches}/4 个推送开关`;
         }
-        case 'security': {
+        case 'system': {
             const account = settingsValue('username') ? '账号已填' : '账号未填';
             const secretConfigured = !!settingsValue('webhook_secret') || !!latestSettingsSensitiveMeta.webhook_secret;
-            const servarrConfigured = !!settingsValue('servarr_api_key') || !!latestSettingsSensitiveMeta.servarr_api_key;
-            return `${account} · ${secretConfigured ? '签名密钥已配置' : '签名密钥未配置'}${servarrConfigured ? ' · 点播接口已开启' : ''}`;
-        }
-        case 'storage': {
             const dir = String(latestStorageState.dir || '').trim();
-            if (!dir) return '读取中…';
-            const probe = latestStorageState.probe;
-            if (!probe?.ok) return '暂存目录不可用';
-            const free = formatStorageBytes(probe.free_bytes);
-            return latestStorageState.isDefault ? `默认目录 · 剩余 ${free}` : `自定义目录 · 剩余 ${free}`;
+            let storage = '暂存目录读取中…';
+            if (dir) {
+                const probe = latestStorageState.probe;
+                if (!probe?.ok) storage = '暂存目录不可用';
+                else storage = `${latestStorageState.isDefault ? '默认' : '自定义'}暂存 · 剩余 ${formatStorageBytes(probe.free_bytes)}`;
+            }
+            return `${account} · ${secretConfigured ? '签名密钥已配置' : '签名密钥未配置'} · ${storage}`;
         }
-        case 'filter':
-            return `复合词 ${settingsLineCount('scraper_noise_phrases')} 条 · 独立词 ${settingsLineCount('scraper_standalone_noise_words')} 条`;
         default:
             return '';
     }
@@ -346,8 +341,101 @@ function formatFavoriteDirLines(items = []) {
         .join('\n');
 }
 
-function parseKeywordLines(value = '', maxItems = 200) {
-    const seen = new Set();
+/* ---------------- 网盘目录选择器（设置页统一入口） ----------------
+   复用「文件夹监控」那套选择弹窗（provider 感知、可新建目录），
+   传空 targetInputId + onPick 回调，选择结果以相对路径回传，
+   避免用户在设置页手打「电影/新片」这种路径打错一个字就落错目录。 */
+
+function settingsToast(message, tone = 'info', duration = 2600) {
+    if (typeof window.showToast === 'function') {
+        window.showToast(message, { tone, duration, placement: 'top-center' });
+    }
+}
+
+function openSettingsFolderPicker({
+    provider = '115',
+    initialPath = '',
+    title = '',
+    summary = '',
+    onPick,
+} = {}) {
+    const opener = window.openMonitorFolderModal;
+    if (typeof opener !== 'function') {
+        settingsToast('目录选择器还没加载好，请刷新页面重试或直接手动填写路径', 'warn', 3200);
+        return;
+    }
+    opener('', provider, {
+        title,
+        summary,
+        pathLabel: '当前目录',
+        initialPath: normalizeFavoriteDirPath(initialPath),
+        onPick,
+    });
+}
+
+function applyPickedRelativePath(input, picked, { emptyMessage = '不能选择网盘根目录，请进到具体文件夹再选' } = {}) {
+    const relativePath = normalizeFavoriteDirPath(picked?.relative_path || '');
+    if (!relativePath) {
+        settingsToast(emptyMessage, 'warn', 3000);
+        return '';
+    }
+    if (input) input.value = relativePath;
+    return relativePath;
+}
+
+export function pickServarrSavepath(kind = 'movie') {
+    const isTv = String(kind) === 'tv';
+    const input = document.getElementById(isTv ? 'servarr_tv_savepath' : 'servarr_movie_savepath');
+    openSettingsFolderPicker({
+        provider: '115',
+        initialPath: String(input?.value || ''),
+        title: isTv ? '选择电视剧点播保存目录' : '选择电影点播保存目录',
+        summary: '选择后会写成 115 网盘根目录下的相对路径（不带 /115 前缀）。',
+        onPick: (picked) => applyPickedRelativePath(input, picked),
+    });
+}
+
+export function pickMagnetStagingRoot() {
+    const input = document.getElementById('magnet_staging_root');
+    openSettingsFolderPicker({
+        provider: '115',
+        initialPath: String(input?.value || ''),
+        title: '选择磁力中转目录',
+        summary: '离线下载先落到这里，命中文件后再移动入库。建议选一个不参与扫描的独立目录。',
+        onPick: (picked) => applyPickedRelativePath(input, picked),
+    });
+}
+
+export function appendFavoriteDirFromPicker(provider = '115') {
+    const providerName = String(provider || '').trim() || '115';
+    const textarea = document.querySelector(`[data-resource-favorite-provider="${providerName}"]`)
+        || document.getElementById(`resource_favorite_dirs_${providerName.replace(/[^A-Za-z0-9_-]/g, '_')}`);
+    if (!textarea) return;
+    openSettingsFolderPicker({
+        provider: providerName,
+        initialPath: '',
+        title: `添加${providerName === '115' ? ' 115' : ` ${providerName} `}常用目录`,
+        summary: '选中的目录会追加到上面的列表，名称默认取文件夹名，保存后出现在资源导入弹窗的快捷按钮里。',
+        onPick: (picked) => {
+            const relativePath = normalizeFavoriteDirPath(picked?.relative_path || '');
+            if (!relativePath) {
+                settingsToast('不能把网盘根目录加成常用目录，请进到具体文件夹再选', 'warn', 3000);
+                return;
+            }
+            const items = parseFavoriteDirLines(textarea.value || '');
+            if (items.some(item => item.path === relativePath)) {
+                settingsToast('这个目录已经在列表里了', 'info', 2200);
+                return;
+            }
+            const name = relativePath.split('/').filter(Boolean).pop() || relativePath;
+            items.push({ name: name.slice(0, 32), path: relativePath });
+            textarea.value = formatFavoriteDirLines(items);
+            settingsToast(`已添加常用目录：${relativePath}`, 'success', 2600);
+        },
+    });
+}
+
+function parseKeywordLines(value = '', maxItems = 200) {    const seen = new Set();
     return String(value || '')
         .split(/\r?\n/)
         .map(line => line.trim())
@@ -374,10 +462,14 @@ export function renderResourceFavoriteDirSettings(favoriteDirs = {}) {
         const providerLabel = String(p.label || providerName).trim();
         const textareaId = `resource_favorite_dirs_${providerName.replace(/[^A-Za-z0-9_-]/g, '_')}`;
         return `
-            <label class="block">
+            <div class="block">
                 <span class="text-xs text-slate-500">${escapeHtml(providerLabel)} 常用目录</span>
                 <textarea id="${escapeHtml(textareaId)}" data-resource-favorite-provider="${escapeHtml(providerName)}" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 min-h-[110px]" placeholder="电影=影视/电影&#10;电视剧=影视/电视剧">${escapeHtml(formatFavoriteDirLines(source[providerName] || []))}</textarea>
-            </label>
+                <div class="mt-2 flex flex-wrap items-center gap-2">
+                    <button type="button" data-favorite-dir-picker="${escapeHtml(providerName)}" onclick="appendFavoriteDirFromPicker('${escapeHtml(providerName)}')" class="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-100 text-xs font-bold">从网盘选目录加入</button>
+                    <span class="text-[11px] text-slate-500">也可以手动按「名称=路径」一行一个填写</span>
+                </div>
+            </div>
         `;
     }).join('');
 }
@@ -1603,7 +1695,10 @@ export function renderMagnetProviderSetting(cfg) {
             </div>
             <label class="block p-3 pt-0">
                 <span class="text-xs text-slate-500">磁力中转目录（115 离线下载先落到这里，命中文件再移动入库）</span>
-                <input id="magnet_staging_root" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="${escapeHtml(stagingRoot)}" placeholder="云下载/磁力中转">
+                <div class="mt-1 flex flex-col sm:flex-row gap-2">
+                    <input id="magnet_staging_root" class="w-full sm:flex-1 bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" value="${escapeHtml(stagingRoot)}" placeholder="云下载/磁力中转">
+                    <button type="button" onclick="pickMagnetStagingRoot()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold whitespace-nowrap">选择目录</button>
+                </div>
             </label>
         </div>
     `;
@@ -2206,6 +2301,9 @@ if (typeof window !== 'undefined') {
     window.renderProviderAuthBlocks = renderProviderAuthBlocks;
     window.renderMagnetProviderSetting = renderMagnetProviderSetting;
     window.renderResourceFavoriteDirSettings = renderResourceFavoriteDirSettings;
+    window.pickServarrSavepath = pickServarrSavepath;
+    window.pickMagnetStagingRoot = pickMagnetStagingRoot;
+    window.appendFavoriteDirFromPicker = appendFavoriteDirFromPicker;
     window.toggleProviderBlock = toggleProviderBlock;
     window.toggleProviderEnabled = toggleProviderEnabled;
     window.testProviderCookie = testProviderCookie;

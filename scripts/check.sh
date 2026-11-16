@@ -84,10 +84,18 @@ if [ "${#js_targets[@]}" -eq 0 ]; then
 fi
 
 if [ "${#js_targets[@]}" -gt 0 ]; then
-  step "node --check（${#js_targets[@]} 个 JS）"
+  step "node --check（${#js_targets[@]} 个 JS，ESM 模式）"
   if command -v node >/dev/null 2>&1; then
+    # 前端是 ES Module，但 node --check 对「带 export 的 .js」会静默放过语法错误
+    # （2026-11-16 设置页多一个 } 就是这样漏过本地与 CI 的）。加这个参数强制按模块解析。
+    js_esm_flag=""
+    if node --experimental-default-type=module -e '' >/dev/null 2>&1; then
+      js_esm_flag="--experimental-default-type=module"
+    else
+      echo "提示：当前 node 不支持 --experimental-default-type=module，按旧方式校验（可能漏报 ESM 语法错误）"
+    fi
     for path in "${js_targets[@]}"; do
-      node --check "$path" || failed=1
+      node $js_esm_flag --check "$path" || failed=1
     done
   else
     echo "跳过：未找到 node"
