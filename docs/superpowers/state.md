@@ -8,14 +8,14 @@
 
 ## 基线
 
-- **更新日期**: 2026-11-15（0.15.13：订阅精准匹配误入库修复）
-- **分支**: `main`，0.15.1 ~ 0.15.12 已推送；**0.15.13 已发版待推送**；tag 最新 `v0.15.12`，Docker 镜像同版本由 GitHub Actions 自动构建（测试不绿就不构建）
-- **版本**: `0.15.13`（2026-11-15：修 issue #18 两个「精准匹配开着也把别的剧收进来」的问题——简介提及不再算片名证据、分享内容按文件校验剧名且无 tmdb_id 也校验；影视订阅只收视频与外挂字幕；精准匹配开关仍默认关）
-- **CI**: 单一工作流 `.github/workflows/ci.yml`（`docker-release.yml` 已并入并移除），**限定 `paths: version.json`，只在发版推送时触发**：`test` job 跑 `compileall` + 全量 `node --check` + `scripts/run_tests.py`，`build-and-push` 用 `needs: test` 挂在后面（`workflow_dispatch` 有 `publish` 开关，关掉只跑测试）。日常开发验证只用本机 `scripts/check.sh`，不要等 CI
+- **更新日期**: 2026-11-16（0.15.14：设置页重新分组 + 网盘目录选择器）
+- **分支**: `main`，0.15.13 及以前已推送；**0.15.14 待提交 / 推送**；tag 最新 `v0.15.13`，Docker 镜像同版本由 GitHub Actions 自动构建（测试不绿就不构建）
+- **版本**: `0.15.14`（2026-11-16：设置页 11 个分区合并为 6 组并按依赖排序；Seerr 两个点播目录、磁力中转目录、各网盘「常用目录」接上目录选择器；修上一批遗留的模块语法错误，JS 语法门改 ESM 模式）
+- **CI**: 单一工作流 `.github/workflows/ci.yml`（`docker-release.yml` 已并入并移除），**限定 `paths: version.json`，只在发版推送时触发**：`test` job 跑 `compileall` + 全量 `node --experimental-default-type=module --check`（原 `node --check` 对 ESM 文件静默放过，已改） + `scripts/run_tests.py`，`build-and-push` 用 `needs: test` 挂在后面（`workflow_dispatch` 有 `publish` 开关，关掉只跑测试）。日常开发验证只用本机 `scripts/check.sh`，不要等 CI
 - **本地不入库文件**: `AGENTS.md` / `CLAUDE.md` / `.workbuddy/` / `.claude/` / `.worktrees/` 是本机开发用，**按约定不入库**。任何测试/代码读它们前必须判存在（`test_modules_doc` 已这么做），否则干净 clone 跑测试必挂。
 - **运行环境**: `docker compose` 服务名 `115-media-hub-test`（应用本体），端口 18080；`/app/storage` 已映射到宿主机 `/Users/xianer/Documents/docker/115strmxianer/storage`（virtiofs，空间读数正常）。挂载路径与端口已改为从根目录 `.env` 读取（模板 `.env.example`），本机 `.env` 写的是原来的绝对路径
-- **最近提交**: `4382b81` 修订阅精准匹配误入库（issue #18）；其前 `f9a495f` 发版 0.15.12 已推送、tag `v0.15.12`
-- **工作区**: 0.15.13 发版四件套（`version.json` / `CHANGELOG.md` / `README.md` / `state.md`）已改，待 push → tag → release；仓库根无探针残骸
+- **最近提交**: `0147c62` 设置页重新分组 + 网盘目录选择器（本版功能）；其前 `0793eba` 发版 0.15.13 已推送、tag `v0.15.13`
+- **工作区**: 0.15.14 发版四件套（`version.json` / `CHANGELOG.md` / `README.md` / `state.md`）已改，**待提交 → push → tag → release**。本次内容：① 设置页 11 个分区合并为 6 组（网盘与账号 / 网络与通知 / 播放与影视库 / 来源与订阅 / 元数据与识别 / 系统与存储），组内用 `data-settings-subgroup` 小标题分区，Seerr 点播从「账号密钥」拆进「播放与影视库」，代理提到第 2；② 三处网盘路径接上目录选择器（Seerr 两个点播目录、磁力中转目录、各网盘常用目录，用户已真机验证）；③ 修合并时多写一个 `}` 导致设置模块解析失败（分区展不开、导航失效），JS 语法门改 ESM 模式（原 `node --check` 对 `export` 文件静默放过）。仓库根无探针残骸
 
 
 
