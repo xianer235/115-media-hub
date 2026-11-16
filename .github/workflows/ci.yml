@@ -50,16 +50,10 @@ jobs:
         run: python -m compileall -q app main.py
 
       - name: Check JS syntax
-        run: |
-          set -euo pipefail
-          node --version
-          # 前端是 ES Module：node --check 对带 export 的 .js 默认按 CJS 解析并静默放过，
-          # 必须显式指定模块模式，否则语法错误会一路带到发版（2026-11-16 设置页事故）。
-          fail=0
-          while IFS= read -r js; do
-            node --experimental-default-type=module --check "$js" || fail=1
-          done < <(find static/js -name '*.js' -type f)
-          exit "$fail"
+        # 前端是 ES Module：直接 `node --check foo.js` 会静默放过语法错误，
+        # `--experimental-default-type=module` 又在 Node 23+ 被移除（runner 是 Node 24）。
+        # 统一走脚本：复制成 .mjs 再 check，不依赖 Node 版本。
+        run: python scripts/check_js_syntax.py
 
       - name: Run unit tests
         # CI 机器上没有本机那条「禁止删除文件」的限制，所以直接跑全量，

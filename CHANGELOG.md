@@ -23,7 +23,7 @@ All notable changes to this project will be documented in this file. The format 
 ### 顺手修掉的两个问题
 
 - **设置页展开与快捷定位**：合并分区的过程中，摘要函数末尾多写了一个右括号，导致整个前端模块解析失败——页面框架能画出来，但六个分区全都展不开、左侧导航点了没反应。已修。
-- **前端 JS 语法检查一直是假绿**：`node --check` 对含 `export` 的 `.js` 文件会静默返回「通过」（Node 22 实测），也就是说之前本地和 CI 的这道门对前端模块不起作用。现在 `scripts/check.sh` 与 CI 都改用 ES Module 模式校验，并新增 `tests/test_js_module_syntax.py` 把所有前端文件按模块解析一遍兜底。
+- **前端 JS 语法检查一直是假绿**：`node --check` 对含 `export` 的 `.js` 文件会静默返回「通过」（Node 22 实测），也就是说之前本地和 CI 的这道门对前端模块不起作用。现在 `scripts/check.sh` 与 CI 都走 `scripts/check_js_syntax.py`——把文件复制成 `.mjs` 再交给 `node --check`，后缀决定解析模式，从 Node 10 到 24 行为一致（换成 `--experimental-default-type=module` 这类实验参数会在 Node 24 上直接报错，CI 2026-11-16 就这么挂过一次）；`tests/test_js_module_syntax.py` 再全量兜底一遍。
 
 ## [0.15.13] - 2026-11-15
 
