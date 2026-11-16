@@ -1,9 +1,9 @@
 {
-  "version": "0.15.18",
-  "buildDate": "2026-11-17T07:00:00+08:00",
+  "version": "0.15.19",
+  "buildDate": "2026-11-17T07:10:00+08:00",
   "notes": [
-    "修 Emby 兼容桥的媒体库类型没补全：极影视没有 /Library/MediaFolders（直接 404），Seerr 必定回退到 /Users/{uid}/Views，而这条回退路径上的库 CollectionType 全是 null，桥没补 → 所有库被当成剧集库，电影判重失效",
-    "升级后在 Seerr 里重新同步一次媒体库即可，Seerr 侧不用改配置"
+    "修 Seerr 向导卡在「Configure Media Server」报 Something went wrong while syncing libraries：极影视没实现 /Library/MediaFolders（实测 404），桥现在用 /Users/{uid}/Views 顶替，库列表能正常返回",
+    "至此接 Seerr 的三段链路已实测通：库列表（Views 顶替 + 补 CollectionType）、库内容（/Items?ParentId=）、判重（/Items?ids= 改写后能拿到 Tmdb）"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

@@ -161,6 +161,21 @@ class HandleDispatchTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(seen["path"], "/Users")
 
+    def test_media_folders_rewritten_to_views(self):
+        """极影视没有 /Library/MediaFolders（404），桥用 /Users/{uid}/Views 顶替并补类型。"""
+        seen = {}
+
+        def fake_forward(upstream, method, path, query, body, headers, read_timeout):
+            seen["path"] = path
+            return 200, {}, {"Items": [{"Name": "电影库"}]}
+
+        with mock.patch.object(bridge, "_forward_json", side_effect=fake_forward):
+            with mock.patch.object(bridge, "_get_token", return_value={"token": "t", "uid": "u", "server_id": "s"}):
+                status, _, out = self._run_sync(self._run("GET", "/Library/MediaFolders"))
+        self.assertEqual(status, 200)
+        self.assertEqual(seen["path"], "/Users/u/Views")
+        self.assertEqual(out["Items"][0]["CollectionType"], "movies")
+
     def test_views_fallback_response_gets_collection_types(self):
         """端到端：/Users/{uid}/Views 的库列表回来时补上 movies / tvshows。"""
         payload = {"Items": [{"Name": "电影库"}, {"Name": "连载中"}]}

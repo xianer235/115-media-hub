@@ -384,6 +384,14 @@ async def handle(method: str, path: str, query: str, headers: Dict[str, str], bo
         logger.warning("emby-bridge 登录极影视失败：%s", exc)
         return 502, {}, {"error": "emby-bridge 无法登录极影视"}
 
+    # T4a：极影视没实现 /Library/MediaFolders（实测 404，VirtualFolders 同理），
+    # Seerr 拉库列表会直接报「Something went wrong while syncing libraries」。
+    # 用标准的 /Users/{uid}/Views 顶替，返回结构同为 {Items:[...]}，Id 也是 class_* 一致。
+    if path.rstrip("/") in ("/Library/MediaFolders", "/Library/VirtualFolders"):
+        uid = token_info.get("uid", "")
+        if uid:
+            upstream_path = f"/Users/{uid}/Views"
+
     token = token_info.get("token", "")
     upstream_headers = _rewrite_headers(headers, token)
 

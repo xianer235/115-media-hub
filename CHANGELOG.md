@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.15.19] - 2026-11-17
+
+第四个真机问题，也是 Seerr 向导卡住的那一步：库列表拉不到。
+
+- **Seerr 向导报「Something went wrong while syncing libraries」**：Seerr 拉库列表固定先请求 `GET /Library/MediaFolders`，而**极影视没有实现这个端点**（实测 `404 page not found`）。原来桥老实转发，Seerr 拿到 404 就报错，库列表空白，向导走不下去。
+- **改法**：桥看到 `/Library/MediaFolders`（以及 `/Library/VirtualFolders`）就改用标准的 `/Users/{uid}/Views` 去问极影视。两者返回结构一致（都是 `{Items:[...]}`），库的 `Id` 也同为 `class_*`，Seerr 拿去做后续 `/Items?ParentId=` 查询完全兼容。
+- **实测三段链路全通**（对着真实环境打了一遍）：库列表 → 返回「电影库 / 电视剧库 / 连载中」并补上 `CollectionType`；库内容 → `/Items?ParentId=class_xxx&IncludeItemTypes=Movie` 返回条目；判重 → `/Items?ids=collection_xxx` 拿到 `ProviderIds.Tmdb`（`{Items:[1 条], TotalRecordCount:1}`），这正是 T3 改写要的效果。
+
 ## [0.15.18] - 2026-11-17
 
 补齐 0.15.17 之后的第三处真机问题：桥能登上了，但媒体库类型没补对，电影库会被当成剧集库。
