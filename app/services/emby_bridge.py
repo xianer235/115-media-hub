@@ -447,20 +447,25 @@ def _aggregate_items(
 ) -> Tuple[int, Dict[str, str], Any]:
     """按 StartIndex/Limit 翻页拉全 Items。
 
+    游标按**上游实际返回的条数**推进（``cursor += len(items)``），而不是按请求的
+    ``Limit`` 推进：极影视等实现可能把单页压到比 Limit 更小（比如只给 200 条），
+    若按 1000 步进会直接跳过中间那批，库越大漏得越多。
+
     三重护栏，任何一个不满足就停手，绝不死循环：
     1. 上游反复返回同一页（忽略 StartIndex）→ 没有新条目即停；
-    2. 上游忽略 Limit、一次全给出 → 返回条数不足一页即停；
-    3. 页数上限 ``_SCAN_MAX_PAGES``。
+    2. 已取回条数达到上游声明的 TotalRecordCount；
+    3. 页数上限 ``_SCAN_MAX_PAGES``（1000 条/页 × 200 页 = 20 万条封顶）。
 
     中途某页失败时，前面已经聚合到的条目照常返回（宁可少几条，也别让整库白扫）。
     """
     merged: List[Any] = []
     seen: set = set()
     total = 0
+    cursor = 0
     status, resp_headers, parsed = 200, {}, {}
     pages = 0
     while pages < _SCAN_MAX_PAGES:
-        page_query = _query_with_page(query, pages * _SCAN_PAGE_SIZE, _SCAN_PAGE_SIZE)
+        page_query = _query_with_page(query, cursor, _SCAN_PAGE_SIZE)
         status, resp_headers, parsed = _forward_json(
             upstream, "GET", path, page_query, b"", headers, read_timeout=120
         )
@@ -484,9 +489,8 @@ def _aggregate_items(
         merged.extend(fresh)
         seen.update(str(item.get("Id")) for item in fresh)
         pages += 1
+        cursor += len(items)
         if total and len(merged) >= total:
-            break
-        if len(items) < _SCAN_PAGE_SIZE:
             break
     logger.info(
         "emby-bridge 聚合库条目：%s 上游 total=%s 实际取回=%s 分页=%s",

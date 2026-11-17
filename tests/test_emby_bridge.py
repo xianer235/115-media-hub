@@ -278,6 +278,28 @@ class ScanPaginationTest(_BridgeHandleTestBase):
         self.assertEqual(payload["TotalRecordCount"], 2500)
         self.assertEqual(calls, [0, 1000, 2000])
 
+    def test_upstream_capping_page_size_still_fetches_everything(self):
+        """极影视把单页压到 200 条时，游标必须按实际返回条数推进，否则跨页漏条目。"""
+        calls = []
+        upstream_cap = 200
+        total_items = 700
+
+        def fake_forward(upstream, method, path, query, body, headers, read_timeout):
+            qs = dict(bridge.urllib.parse.parse_qsl(query))
+            start = int(qs["StartIndex"])
+            calls.append(start)
+            count = min(upstream_cap, total_items - start)
+            return 200, {}, self._items(start, max(0, count), total_items)
+
+        with mock.patch.object(bridge, "_forward_json", side_effect=fake_forward):
+            with mock.patch.object(bridge, "_get_token", return_value={"token": "t", "uid": "uid123", "server_id": "s"}):
+                status, _, payload = self._run_sync(
+                    self._run("GET", "/Items", query="Recursive=true&ParentId=class_movies")
+                )
+        self.assertEqual(status, 200)
+        self.assertEqual(len(payload["Items"]), total_items)
+        self.assertEqual(calls, [0, 200, 400, 600])
+
     def test_upstream_ignoring_start_index_does_not_loop_forever(self):
         """极影视若忽略 StartIndex，反复给同一页，桥必须靠「没有新条目」停手。"""
         calls = []
