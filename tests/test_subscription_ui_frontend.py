@@ -260,5 +260,45 @@ class SubscriptionUiFrontendTest(unittest.TestCase):
         self.assertNotIn("已到", html)
 
 
+    def test_subscription_season_badge_shows_padded_season_for_tv(self):
+        html = run_subscription_ui("buildSubscriptionTaskSeasonBadge({ media_type: 'tv', season: 3 })")
+        self.assertIn("S03", html)
+        self.assertIn("第3季", html)
+        # 必须是 sky 系：日间主题有 text-sky-200 深色覆盖，cyan 在浅色卡片上会发白
+        self.assertIn("text-sky-200", html)
+
+    def test_subscription_season_badge_uses_all_seasons_label(self):
+        html = run_subscription_ui(
+            "buildSubscriptionTaskSeasonBadge({ media_type: 'tv', season: 2, multi_season_mode: true })"
+        )
+        self.assertIn("全季", html)
+        self.assertNotIn("S02", html)
+
+    def test_subscription_season_badge_hidden_for_movie(self):
+        self.assertEqual(
+            run_subscription_ui("buildSubscriptionTaskSeasonBadge({ media_type: 'movie', season: 1 })"),
+            "",
+        )
+
+    def test_subscription_task_intro_mentions_season(self):
+        # buildSubscriptionTaskIntro 还依赖 resource 模块的工具函数，这里只做源码断言，
+        # 避免为了一个文案把整个前端依赖树搬进 vm。
+        source = UI_PATH.read_text(encoding="utf-8")
+        self.assertIn(
+            "const seasonText = !isTv ? '' : (multiSeasonMode ? '全季' : (seasonNo > 0 ? `第${seasonNo}季` : ''));",
+            source,
+        )
+        self.assertIn("《${titleText}》${seasonText}保存到", source)
+
+    def test_subscription_task_card_renders_season_badge_after_title(self):
+        source = UI_PATH.read_text(encoding="utf-8")
+        self.assertIn("function buildSubscriptionTaskSeasonBadge(", source)
+        self.assertIn("const seasonBadgeHtml = seasonLabel &&", source)
+        self.assertLess(
+            source.index("${escapeHtml(displayTitle)}"),
+            source.index("${seasonBadgeHtml}"),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

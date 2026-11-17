@@ -8,14 +8,14 @@
 
 ## 基线
 
-- **更新日期**: 2026-11-17（0.15.24：桥代替 Seerr 翻页拉全库，修「库大时只扫到前一批」）
-- **分支**: `main`，0.15.18 ~ 0.15.23 已推送（用户手动推的）；**0.15.24 本地已提交、待用户手动推送**（用户要求：AI 只做本地提交，push/tag/release 由他触发）；tag 打到 `v0.15.22`，**0.15.23 与 0.15.24 均未打 tag / 未发 release**，Docker 镜像同版本由 GitHub Actions 自动构建（测试不绿就不构建）
-- **版本**: `0.15.24`（2026-11-17：`emby_bridge._aggregate_items` 对「`GET /Items` + `Recursive=true` + `ParentId` + 无 `ids=`」代翻页，`Limit=1000` 合并返回；游标 `cursor += len(items)` 按上游实际返回条数推进，去掉「不足一页即停」的误判护栏；护栏=无新条目 / 达 `TotalRecordCount` / 200 页；`asyncio.to_thread` 跑；日志「聚合库条目：上游 total / 实际取回 / 分页」。`tests.test_emby_bridge` 41 条全绿）
+- **更新日期**: 2026-11-17（0.15.25：订阅任务季徽章 + Seerr 任务名按剧带季号；README 重构 606→211 行，部署运维补齐）
+- **分支**: `main`，0.15.18 ~ 0.15.24 已推送；**0.15.25 本地已提交、待用户手动推送**（用户要求：AI 只做本地提交，push/tag/release 由他触发）；tag 打到 `v0.15.22`，**0.15.23~0.15.25 均未打 tag / 未发 release**，Docker 镜像同版本由 GitHub Actions 自动构建（测试不绿就不构建）
+- **版本**: `0.15.25`（2026-11-17：订阅卡片季徽章 `S03` / 「全季」+ 简介「第N季」（`static/js/modules/subscription/ui.js`）；`servarr._servarr_series_has_multiple_seasons` 按该剧 TMDB 季数决定任务名是否带 `S%02d`，`_build_servarr_series_task` 去掉 `multi_season` 形参；`_series_tasks_to_sonarr` 的 `folderName` / `sortTitle` 固定用 `剧名 (年份)`；README 606→211 行 + `docs/{cross-copy,cli,webhook,configuration,browser-script}.md` 新增。`tests.test_servarr_api` 60 条、`test_subscription_ui_frontend`、`test_quick_import_frontend` 全绿）
 - **CI**: 单一工作流 `.github/workflows/ci.yml`（`docker-release.yml` 已并入并移除），**限定 `paths: version.json`，只在发版推送时触发**：`test` job 跑 `compileall` + `scripts/check_js_syntax.py`（复制成 `.mjs` 再 `node --check`；裸 `node --check` 对 ESM 文件静默放过，`--experimental-default-type=module` 在 Node 23+ 又被移除，两条路都走过弯路）+ `scripts/run_tests.py`，`build-and-push` 用 `needs: test` 挂在后面（`workflow_dispatch` 有 `publish` 开关，关掉只跑测试）。日常开发验证只用本机 `scripts/check.sh`，不要等 CI
 - **本地不入库文件**: `AGENTS.md` / `CLAUDE.md` / `.workbuddy/` / `.claude/` / `.worktrees/` 是本机开发用，**按约定不入库**。任何测试/代码读它们前必须判存在（`test_modules_doc` 已这么做），否则干净 clone 跑测试必挂。
 - **运行环境**: `docker compose` 服务名 `115-media-hub-test`（应用本体），端口 18080；`/app/storage` 已映射到宿主机 `/Users/xianer/Documents/docker/115strmxianer/storage`（virtiofs，空间读数正常）。挂载路径与端口已改为从根目录 `.env` 读取（模板 `.env.example`），本机 `.env` 写的是原来的绝对路径
 - **最近提交**: `f9f7d8e` 桥翻页游标改按实际返回条数推进；`ba9701c` 桥代 Seerr 翻页；`0cb5446` 发版 0.15.23（剧集列表补 tvdbId）
-- **工作区**: 0.15.24 发版四件套（`version.json` / `CHANGELOG.md` / `README.md` / `state.md`）已改，**待提交 → push → tag → release**。本次内容只涉及 `app/services/emby_bridge.py` 的 `_aggregate_items`（代翻页 + 游标修正）与 `tests/test_emby_bridge.py` 的 5 条新用例，代码已提交（`ba9701c` / `f9f7d8e`）。仓库根无探针残骸
+- **工作区**: 干净（0.15.25 发版四件套已改：`version.json` / `CHANGELOG.md` / `README.md` / `state.md`）。本轮内容：① 订阅卡片季徽章 + servarr 任务名按剧带季号（`app/routes/servarr.py` / `static/js/modules/subscription/ui.js` + 两套测试）；② README 重构（606→211 行）与 `docs/{cross-copy,cli,webhook,configuration,browser-script}.md` 新增；③ 设置路径旧名修正（README / Seerr 教程 / `templates/partials/modals/monitor.html` / `static/js/index.js` 帮助文案）。仓库根无探针残骸
 
 
 
@@ -45,7 +45,7 @@
 
 1. **升到 0.15.11 并重启**（含 Seerr 点播补齐与保存目录拆分、0.15.10 的命中后冷却与已完结停查、0.15.9 的补源触发监控、0.15.8 的断点回退；此前不少修复只是 `docker cp` 热更文件，重启后才算正式生效）：`docker compose up -d --build`。**重启后先看设置页**：「后台安全管理」里会出现「电影点播保存目录 / 电视剧点播保存目录」两个输入框，原来的「点播默认保存目录」不再显示但仍作为回退值保留。
 2. **真机看一眼冷却是否生效（0.15.10 新增，只有单测 + 时间线模拟）**：找一个日更 / 周更且绑了 TMDB 的剧集任务，等它命中一集后看两处——① 卡片简介会写「命中后按播出排期冷却」，② 「下次执行」跳到下一集播出前（日更约 20 小时后、周更约 6 天后），且这段时间不再跑；手动点「运行」仍应立刻执行。若「下次执行」还停在 2 小时后，先确认该任务 `tmdb_id > 0`（没有 TMDB 绑定就没有排期，冷却无从推算，这是预期行为）。冷却方式在任务弹窗「自动查询」区块可改成手动小时数或关闭。
-3. **真机联调 Seerr 点播对接（0.15.11 起流程变了，按新教程走）**：`docs/seerr-setup-guide.md` 起 Seerr / Jellyfin 测试容器 → 面板「后台安全管理」生成 API Key、填**两个**保存目录 → Seerr 里加 Radarr / Sonarr 各一条（地址 `host.docker.internal`，Root Folder 选 **`/`**）。预期四步都成立：① 点电影 → 订阅页出现电影任务，落 `<电影目录>/片名 年份/`；② 点剧集 → 每季一条任务，落 `<电视剧目录>/剧名 (年份)/Season NN/`；③ 在 Seerr 里点「重新搜索」→ 面板订阅日志真的多一轮搜索（`POST /command` 已接通）；④ 删除请求 → 对应订阅任务消失，**无关任务不受影响**（回归钉：只按 tmdbId 精确匹配）。Seerr 剧集详情页的「剧集清单」是空的属预期（`GET /episode` 恒空）。
+3. **真机联调 Seerr 点播对接（0.15.11 起流程变了，按新教程走）**：`docs/seerr-setup-guide.md` 起 Seerr / Jellyfin 测试容器 → 面板「后台安全管理」生成 API Key、填**两个**保存目录 → Seerr 里加 Radarr / Sonarr 各一条（地址 `host.docker.internal`，Root Folder 选 **`/`**）。预期四步都成立：① 点电影 → 订阅页出现电影任务，落 `<电影目录>/片名 年份/`；② 点剧集 → 每季一条任务，落 `<电视剧目录>/剧名 (年份)/Season NN/`；③ 在 Seerr 里点「重新搜索」→ 面板订阅日志真的多一轮搜索（`POST /command` 已接通）；④ 在 Seerr 里点「从 Sonarr 中删除」→ 对应订阅任务消失，**无关任务不受影响**（回归钉：只按 tmdbId 精确匹配）；只点「删除请求」不会删面板任务（Seerr 删请求不调 Radarr/Sonarr，属预期）。Seerr 剧集详情页的「剧集清单」是空的属预期（`GET /episode` 恒空）。
 4. **验证坏断点自愈（0.15.8 新增）**：现网那条报「续传起始偏移未按分段边界对齐（3828076306）」的补源任务，重建镜像后直接点「重试」——预期只补最后约 2.9MB、算完哈希后上传成功，不再需要「删除记录」。日志里应有 `cross-cloud resume offset 3828076306 not segment-aligned, rewinding to 3825205248`。
 5. **跑完一次完整补源**（现在只差最后一段）：把取消的 3 条任务（`id=12/13/14`）点「重试」——前两条已有断点会续传，不必重下 214MB 以上的部分；预期看到落到 `115连载中/光阴之外 (2025)/Season 01` 并各出一个文件、夸克 `/云下载/跨盘中转/光阴之外` 三个中转副本被自动删。**0.15.9 起还应看到（补源触发监控，本次新修）**：订阅日志出现「跨盘补源已触发监控精准刷新」，「文件夹监控」页面对应任务自动跑一轮，「本地文件」页签里出现改名后的 `片名 (年份) - S01E42.strm`；若那里还是分享原名 `S01E42.strm`，说明改名没生效（查「入库后整理」开关与 TMDB 绑定）。**不打算重试的话要清中转目录**，那 3 个文件约 10.3GB 占着夸克配额。
 6. 测试产物清理（都在各盘「跨盘复制测试」文件夹，确认不要就整目录删）：115 侧 `xcopy-a/b/c-aliyun/pan115`、`秒传验证`、`文件夹用例`、`xcopy-d-quark-src-3m.bin`、`监控联动`（已空）；阿里侧 `xcopy-a/b/c`、`文件夹用例`；夸克侧 `xcopy-d-quark-src-3m.bin`（原片）+ 空的「跨盘复制自测」。任务记录 14 条界面点「清空复制」即可。

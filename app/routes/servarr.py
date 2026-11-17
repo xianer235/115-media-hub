@@ -304,6 +304,32 @@ def _servarr_title_year(title: str, year: str) -> str:
     return f"{title} ({year})" if year else title
 
 
+def _servarr_series_has_multiple_seasons(binding: Dict[str, Any]) -> bool:
+    """按「这部剧本身有几季」判定要不要在任务名里带季号，而不是「本次建了几季」。
+
+    Seerr 的多季点播是一季一次请求（每季一条 request），而且它的 addSeries 只要拿到
+    id 就走 PUT，所以我们每次只新建一季；用 len(left_seasons) > 1 判断的话，
+    逐季点播的任务名永远拿不到季号，13 条任务会全叫同一个名字再被去重成 tmdb1234 / (2)。
+
+    优先看季集映射：TMDB 的 number_of_seasons 会把特别季（season 0）算进去，
+    「1 个正季 + 特别季」不该被当成多季剧；映射拿不到时才退回总季数。
+    """
+    payload = binding if isinstance(binding, dict) else {}
+    season_numbers = set()
+    season_map = payload.get("tmdb_season_episode_map")
+    if isinstance(season_map, dict):
+        for key in season_map.keys():
+            try:
+                number = int(key)
+            except (TypeError, ValueError):
+                continue
+            if number > 0:
+                season_numbers.add(number)
+    if season_numbers:
+        return len(season_numbers) > 1
+    return max(0, int(payload.get("tmdb_total_seasons", 0) or 0)) > 1
+
+
 def _servarr_title_slug(title: str, tmdb_id: int) -> str:
     """Seerr 会把它存进数据库（MediaRequestSubscriber），不能是空值。
 
@@ -465,16 +491,22 @@ def _series_tasks_to_sonarr(tasks: List[Dict[str, Any]], tvdb_id: int = 0) -> Op
     )
     # 注意：订阅任务不持久化海报地址（normalize_subscription_task 会丢弃 tmdb_poster_url），
     # 这里不读海报；lookup 端点用的是实时 TMDB binding，才有海报。
+    # folderName / sortTitle 不能用 task.name：剧集任务名带季号（`剧名 (年份) S03`），
+    # 而媒体库与 Seerr 认的是「一部剧一个文件夹」= `剧名 (年份)`，两者必须拆开。
+    series_folder = _servarr_title_year(
+        str(first.get("title", "") or "").strip(),
+        str(first.get("year", "") or "").strip(),
+    ) or str(first.get("name", "") or "")
     return SonarrSeries(
         id=tmdb_id,
         title=str(first.get("title", "") or "").strip() or str(first.get("name", "") or ""),
-        sortTitle=str(first.get("name", "") or ""),
+        sortTitle=series_folder,
         titleSlug=_servarr_title_slug(
             str(first.get("tmdb_original_title", "") or "").strip()
             or str(first.get("title", "") or ""),
             tmdb_id,
         ),
-        folderName=str(first.get("name", "") or ""),
+        folderName=series_folder,
         seasonCount=len(seasons),
         seasons=[SonarrSeason(seasonNumber=season, monitored=True) for season in seasons],
         remotePoster=None,
@@ -532,12 +564,11 @@ def _build_servarr_series_task(
     year: str,
     binding: Dict[str, Any],
     cfg: Dict[str, Any],
-    multi_season: bool,
 ) -> Dict[str, Any]:
     title = str(title or "").strip()
     year = str(year or "").strip()
     name = _servarr_title_year(title, year)
-    if multi_season:
+    if _servarr_series_has_multiple_seasons(binding):
         name = f"{name} S{season:02d}"
     season_episode_map = (binding.get("tmdb_season_episode_map") or {}) if isinstance(binding, dict) else {}
     total_episodes = max(0, int(season_episode_map.get(str(season), 0) or 0))
@@ -942,9 +973,8 @@ async def servarr_add_series(tv: SonarrSeries, _: None = servarr_auth) -> Sonarr
     }
     left_seasons = [season for season in wanted if season not in existing_seasons]
     if left_seasons:
-        multi_season = len(left_seasons) > 1
         new_tasks = [
-            _build_servarr_series_task(tmdb_id, season, title, year, binding, cfg, multi_season)
+            _build_servarr_series_task(tmdb_id, season, title, year, binding, cfg)
             for season in left_seasons
         ]
         appended = _append_subscription_tasks(new_tasks)

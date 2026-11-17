@@ -49,10 +49,10 @@
 - **细节**：README 的「方案三 / 方案四」；磁力 / 电驴手动离线入库的实现说明用 `rg "磁力/电驴离线入库" docs/superpowers/handoff-archive.md` 定位
 
 ### Seerr 点播对接（servarr）
-- **用途**：让 Seerr / Jellyseerr / Overseerr 把本面板当成 Radarr / Sonarr 服务器，家人的点播请求自动转成订阅任务（电影一部一任务、剧集按季拆多任务，provider 固定 115），立即触发一次全量搜索，之后与手动订阅完全同链路。
+- **用途**：让 Seerr / Jellyseerr / Overseerr 把本面板当成 Radarr / Sonarr 服务器，家人的点播请求自动转成订阅任务（电影一部一任务、剧集按季拆多任务，provider 固定 115），立即触发一次全量搜索，之后与手动订阅完全同链路。剧集任务名带季号：该剧在 TMDB 有多个正季时为 `剧名 (年份) S03`，全剧只有 1 季才用 `剧名 (年份)`（判定按「这部剧有几季」，不按「本次请求建了几季」，因为 Seerr 是一季一次请求）。
 - **入口**：Seerr 侧「设置 → Radarr / Sonarr」添加服务器（地址 = 面板地址，API Key = 设置页生成）；本侧入口是 `/api/v3/*` 端点。
-- **会做**：18 个 Radarr/Sonarr v3 端点（system/status、qualityProfile、rootfolder、tag、languageprofile、movie 的 lookup/list/detail/add/update/delete、series 的 lookup/list/detail/add/update/delete、command 的 MoviesSearch/SeriesSearch、episode）；鉴权认 `X-Api-Key` / `Authorization: Bearer` / 网址参数 `?apikey=`；tvdbId 经 TMDB /find 转 tmdbId；删除点播连带删订阅任务（只按 tmdbId 精确匹配，不按名字模糊匹配）。
-- **不会做**：不实现 queue / health / rescan 类端点（`POST /command` 只认检索命令，其余只回执不动作）；`GET /episode` 恒返回空列表（按季管订阅、不维护逐集清单）；不接 TVDB 直连；不管 Seerr 用户权限；不代理播放；不新建第二套任务存储。
+- **会做**：18 个 Radarr/Sonarr v3 端点（system/status、qualityProfile、rootfolder、tag、languageprofile、movie 的 lookup/list/detail/add/update/delete、series 的 lookup/list/detail/add/update/delete、command 的 MoviesSearch/SeriesSearch、episode）；鉴权认 `X-Api-Key` / `Authorization: Bearer` / 网址参数 `?apikey=`；tvdbId 经 TMDB /find 转 tmdbId；Seerr 的「从 Radarr / Sonarr 中删除」会调 DELETE 并连带删该 tmdbId 的订阅任务（只按 tmdbId 精确匹配，不按名字模糊匹配）。
+- **不会做**：不响应 Seerr 的「仅删除请求」——Seerr 删请求默认不调 Radarr/Sonarr，只有勾「从 Sonarr / Radarr 中删除」才会调本面板 DELETE，因此删请求不会删面板任务；不实现 queue / health / rescan 类端点（`POST /command` 只认检索命令，其余只回执不动作）；`GET /episode` 恒返回空列表（按季管订阅、不维护逐集清单）；不接 TVDB 直连；不管 Seerr 用户权限；不代理播放；不新建第二套任务存储。
 - **落点**：电影任务 savepath = `servarr_movie_savepath`（空则回退 `servarr_default_savepath`），整理后是 `<电影目录>/片名 年份/`；剧集任务 savepath = `<servarr_tv_savepath>/剧名 (年份)`，整理后是 `<电视剧目录>/剧名 (年份)/Season NN/`。目录名必须过 `sanitize_115_folder_name`，不要在这里手拼字符串。
 - **默认开跨盘补源**：点播建的订阅任务 `cross_copy_mode=fallback`、源取 `core.SUBSCRIPTION_CROSS_COPY_SOURCE_PROVIDERS`（当前只有夸克），用户可在订阅页按任务关掉。
 - **相关代码**：`app/routes/servarr.py`、`app/providers/tmdb.py`（find_tmdb_id_by_tvdb_id）；设置页「后台安全管理」的「点播接口 API Key / 电影点播保存目录 / 电视剧点播保存目录」

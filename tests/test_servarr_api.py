@@ -60,6 +60,14 @@ FAKE_TV_DETAIL = {
     "episode_mode": "seasonal",
 }
 
+# 全剧只有 1 季：任务名不该带季号（否则单季剧会平白多出 S01，与手动建的订阅不一致）
+FAKE_TV_SINGLE_SEASON_DETAIL = {
+    **FAKE_TV_DETAIL,
+    "total_episodes": 22,
+    "total_seasons": 1,
+    "season_episode_map": {"1": 22},
+}
+
 
 class _Patched:
     """_patched 上下文的产出：内存配置 + 各 mock。"""
@@ -427,12 +435,13 @@ class ServarrSeriesApiTest(ServarrApiTestBase):
         self.assertEqual(body["folderName"], "绝命毒师 (2008)")
         tasks = ctx.tasks()
         self.assertEqual(len(tasks), 1)
-        self.assertEqual(tasks[0]["name"], "绝命毒师 (2008)")
+        # FAKE_TV_DETAIL 在 TMDB 有 2 季 → 按「该剧有几季」判定，单季点播也带季号
+        self.assertEqual(tasks[0]["name"], "绝命毒师 (2008) S01")
         self.assertEqual(tasks[0]["season"], 1)
         self.assertEqual(tasks[0]["total_episodes"], 22)
         # 剧集落点 = 电视剧目录 / 剧名 (年份)，Season NN 由导入侧再拼
         self.assertEqual(tasks[0]["savepath"], "媒体库/网盘电视剧/绝命毒师 (2008)")
-        ctx.queue.assert_called_once_with("绝命毒师 (2008)", "servarr")
+        ctx.queue.assert_called_once_with("绝命毒师 (2008) S01", "servarr")
 
     def test_add_series_multi_season_creates_one_task_per_season(self):
         with self._patched() as ctx:
@@ -514,7 +523,7 @@ class ServarrSeriesApiTest(ServarrApiTestBase):
         tasks = ctx.tasks()
         self.assertEqual(len(tasks), 1)
         self.assertEqual(tasks[0]["season"], 2)
-        self.assertEqual(tasks[0]["name"], "绝命毒师 (2008)")
+        self.assertEqual(tasks[0]["name"], "绝命毒师 (2008) S02")
 
     def test_add_series_without_seasons_falls_back_to_tmdb_seasons(self):
         with self._patched() as ctx:
@@ -540,7 +549,7 @@ class ServarrSeriesApiTest(ServarrApiTestBase):
         self.assertIn("未配置电视剧点播保存目录", resp.json()["detail"])
 
     def test_add_series_name_collision_gets_tmdb_suffix(self):
-        cfg = {"subscription_tasks": [_movie_task(tmdb_id=999, name="绝命毒师 (2008)")]}
+        cfg = {"subscription_tasks": [_movie_task(tmdb_id=999, name="绝命毒师 (2008) S01")]}
         with self._patched(cfg) as ctx:
             resp = self.client.post(
                 "/api/v3/series",
@@ -549,7 +558,61 @@ class ServarrSeriesApiTest(ServarrApiTestBase):
             )
         self.assertEqual(resp.status_code, 200)
         new_task = ctx.tasks()[-1]
-        self.assertEqual(new_task["name"], f"绝命毒师 (2008) tmdb{TV_TMDB_ID}")
+        self.assertEqual(new_task["name"], f"绝命毒师 (2008) S01 tmdb{TV_TMDB_ID}")
+
+    def test_add_series_single_season_show_keeps_plain_name(self):
+        """全剧只有 1 季 → 名字不带季号（与手动建订阅的写法一致）。"""
+        with self._patched(tv_detail=FAKE_TV_SINGLE_SEASON_DETAIL) as ctx:
+            resp = self.client.post(
+                "/api/v3/series",
+                json={"tmdbId": TV_TMDB_ID, "seasons": [{"seasonNumber": 1, "monitored": True}]},
+                headers=HEADERS,
+            )
+        self.assertEqual(resp.status_code, 200)
+        tasks = ctx.tasks()
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["name"], "绝命毒师 (2008)")
+        ctx.queue.assert_called_once_with("绝命毒师 (2008)", "servarr")
+
+    def test_add_series_season_suffix_uses_season_map_over_total_seasons(self):
+        """季集映射有 2 季、total_seasons 只有 1 → 仍按多季处理带季号。"""
+        detail = {**FAKE_TV_SINGLE_SEASON_DETAIL, "season_episode_map": {"1": 22, "2": 22}}
+        with self._patched(tv_detail=detail) as ctx:
+            resp = self.client.post(
+                "/api/v3/series",
+                json={"tmdbId": TV_TMDB_ID, "seasons": [{"seasonNumber": 2, "monitored": True}]},
+                headers=HEADERS,
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(ctx.tasks()[0]["name"], "绝命毒师 (2008) S02")
+
+    def test_add_series_ignores_specials_when_judging_season_suffix(self):
+        """单正季 + 特别季（total_seasons=2，映射只有 1 季）→ 不当作多季剧，名字不带季号。"""
+        detail = {**FAKE_TV_SINGLE_SEASON_DETAIL, "total_seasons": 2}
+        with self._patched(tv_detail=detail) as ctx:
+            resp = self.client.post(
+                "/api/v3/series",
+                json={"tmdbId": TV_TMDB_ID, "seasons": [{"seasonNumber": 1, "monitored": True}]},
+                headers=HEADERS,
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(ctx.tasks()[0]["name"], "绝命毒师 (2008)")
+
+    def test_series_has_multiple_seasons_helper(self):
+        self.assertTrue(
+            servarr_routes._servarr_series_has_multiple_seasons({"tmdb_season_episode_map": {"1": 8, "2": 8}})
+        )
+        self.assertFalse(
+            servarr_routes._servarr_series_has_multiple_seasons(
+                {"tmdb_total_seasons": 1, "tmdb_season_episode_map": {}}
+            )
+        )
+        # 映射为空时退回总季数
+        self.assertTrue(
+            servarr_routes._servarr_series_has_multiple_seasons(
+                {"tmdb_total_seasons": 3, "tmdb_season_episode_map": {}}
+            )
+        )
 
     def test_add_series_unresolvable_tvdb_id_returns_400(self):
         with self._patched(tvdb_to_tmdb=0):
@@ -683,8 +746,8 @@ class ServarrDeleteApiTest(ServarrApiTestBase):
         self.assertEqual(resp.json()["id"], TV_TMDB_ID)
         tasks = ctx.tasks()
         self.assertEqual(len(tasks), 1)
-        self.assertEqual(tasks[0]["name"], "绝命毒师 (2008)")
-        ctx.queue.assert_called_once_with("绝命毒师 (2008)", "servarr")
+        self.assertEqual(tasks[0]["name"], "绝命毒师 (2008) S01")
+        ctx.queue.assert_called_once_with("绝命毒师 (2008) S01", "servarr")
 
     def test_delete_movie_only_matches_exact_tmdb_id(self):
         """回归：曾用「名字里包含这个数字」兜底，删 id=2 会把名字带 2 的电影一起删。"""

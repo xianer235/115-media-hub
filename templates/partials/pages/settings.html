@@ -441,7 +441,7 @@
                             </div>
                             <div class="text-xs text-slate-500 leading-6">
                                 对接方法：在 Seerr（Jellyseerr / Overseerr）的「设置 → Radarr / Sonarr」里各添加一条服务器，地址填 <code>http://面板地址</code>，API Key 填上面生成的同一个密钥；Radarr 对应电影点播，Sonarr 对应剧集点播，保存后 Seerr 会显示连接成功。
-                                <br>家人在 Seerr 提交点播后，本面板「影视订阅」页会出现对应任务并自动搜索资源，找到后自动转存、入库、生成 STRM，与手动订阅完全同链路；在 Seerr 删除点播请求会同时删掉这里的订阅任务。
+                                <br>家人在 Seerr 提交点播后，本面板「影视订阅」页会出现对应任务并自动搜索资源，找到后自动转存、入库、生成 STRM，与手动订阅完全同链路；只有在 Seerr 里勾选「从 Sonarr / Radarr 中删除」时才会同时删掉这里的订阅任务，只删点播请求不会删。
                             </div>
                         </div>
                         <div id="settings-emby-bridge" class="settings-subgroup space-y-4" data-settings-subgroup="emby-bridge" data-settings-anchor="Emby 兼容桥">

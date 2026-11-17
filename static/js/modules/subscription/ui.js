@@ -156,6 +156,8 @@
             const _pMeta = (window.providerMeta || []).find(m => m.name === provider);
             const providerText = _pMeta ? _pMeta.label : (provider === 'quark' ? '夸克' : '115');
             const titleText = String(task?.title || task?.name || '').trim() || '未命名影视';
+            const seasonNo = isTv ? resolveSubscriptionTaskSeasonNo(task) : 0;
+            const seasonText = !isTv ? '' : (multiSeasonMode ? '全季' : (seasonNo > 0 ? `第${seasonNo}季` : ''));
             const savepath = String(task?.savepath || '').trim() || '--';
             const fixedShareLink = String(task?.share_link_url || '').trim();
             const fixedLinkChannelSearch = !!task?.fixed_link_channel_search;
@@ -219,7 +221,7 @@
             const minFileSizeMb = normalizeSubscriptionMinFileSizeMb(task?.min_file_size_mb ?? 0);
             const sizeFilterText = minFileSizeMb > 0 ? `，小于 ${formatSubscriptionMinFileSizeMb(minFileSizeMb)}MB 不导入` : '';
             const strictMatchText = task?.strict_title_match ? '，精准匹配：简介命中不算同剧证据' : '';
-            return `状态：${statusText}（${enabledText}）。${providerText} · ${mediaText}《${titleText}》保存到 ${savepath}${fixedShareText}${shareScopeText}${providerRuleText}${excludeText}${excludeFileText}${sizeFilterText}${strictMatchText}，${modeText}，${episodeText}；${scheduleText}${cooldownText}；${latestText}。`;
+            return `状态：${statusText}（${enabledText}）。${providerText} · ${mediaText}《${titleText}》${seasonText}保存到 ${savepath}${fixedShareText}${shareScopeText}${providerRuleText}${excludeText}${excludeFileText}${sizeFilterText}${strictMatchText}，${modeText}，${episodeText}；${scheduleText}${cooldownText}；${latestText}。`;
         }
 
         function buildSubscriptionTaskProgressBar({ progress = 0, detail = '' } = {}) {
@@ -962,6 +964,30 @@
 
         function resolveTaskMultiSeasonMode(task) {
             return !!(task?.multi_season_mode ?? task?.anime_mode);
+        }
+
+        // 剧集订阅要让人一眼看出订的是第几季：多季合一显示「全季」，单季显示 S03，电影不显示。
+        // Seerr 的多季点播是「一季一条任务」，标题又只取剧名，不靠徽章就完全分不清。
+        function resolveSubscriptionTaskSeasonNo(task) {
+            if (normalizeSubscriptionMediaType(task?.media_type || 'movie') !== 'tv') return 0;
+            if (resolveTaskMultiSeasonMode(task)) return 0;
+            return Math.max(1, parseInt(task?.season || '1', 10) || 1);
+        }
+
+        function formatSubscriptionTaskSeasonBadge(task) {
+            if (normalizeSubscriptionMediaType(task?.media_type || 'movie') !== 'tv') return '';
+            if (resolveTaskMultiSeasonMode(task)) return '全季';
+            const seasonNo = resolveSubscriptionTaskSeasonNo(task);
+            return seasonNo > 0 ? `S${String(seasonNo).padStart(2, '0')}` : '';
+        }
+
+        function buildSubscriptionTaskSeasonBadge(task) {
+            const label = formatSubscriptionTaskSeasonBadge(task);
+            if (!label) return '';
+            const seasonNo = resolveSubscriptionTaskSeasonNo(task);
+            const hint = seasonNo > 0 ? `第${seasonNo}季` : '多季合一追更';
+            // 用 sky 系：日间主题有 text-sky-200 的深色覆盖，浅色卡片上也读得清。
+            return `<span class="text-[10px] px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-200 border border-sky-400/25" title="${escapeHtml(hint)}" aria-label="${escapeHtml(hint)}">${escapeHtml(label)}</span>`;
         }
 
         function normalizeTmdbYear(value) {
@@ -2505,6 +2531,11 @@
             container.innerHTML = tasks.map(task => {
                 const taskName = String(task.name || '').trim();
                 const displayTitle = String(task.title || taskName || '').trim() || taskName;
+                const seasonLabel = formatSubscriptionTaskSeasonBadge(task);
+                // title 为空时会回退成 name，此时 name 可能已带季号，避免重复显示。
+                const seasonBadgeHtml = seasonLabel && !displayTitle.toUpperCase().includes(seasonLabel)
+                    ? buildSubscriptionTaskSeasonBadge(task)
+                    : '';
                 const provider = normalizeSubscriptionProvider(task.provider || '115', '115');
                 const providerBadgeHtml = buildSubscriptionProviderBadge(provider);
                 const strictBadgeHtml = task?.strict_title_match
@@ -2620,6 +2651,7 @@
                                 >
                                     <div class="flex flex-wrap items-center gap-2">
                                         <span class="text-lg font-black text-white break-all leading-tight">${escapeHtml(displayTitle)}</span>
+                                        ${seasonBadgeHtml}
                                         ${providerBadgeHtml}
                                         ${crossCopyBadgeHtml}
                                         ${strictBadgeHtml}

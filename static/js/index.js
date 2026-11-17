@@ -2392,7 +2392,7 @@
             </div>
             <div class="help-rich-section">
                 <div class="help-rich-title">什么时候不会生成</div>
-                <div class="help-rich-text">后缀名不在「参数配置 → 115 STRM 播放基础配置」的「扫描后缀名」列表内，或文件小于任务里的「文件大小过滤 (MB)」，会被跳过并计入运行记录的跳过数。</div>
+                <div class="help-rich-text">后缀名不在「参数配置 → 播放与点播 → 播放地址与扫描参数」的「扫描后缀名」列表内，或文件小于任务里的「文件大小过滤 (MB)」，会被跳过并计入运行记录的跳过数。</div>
                 <div class="help-rich-text">没有纳入任何监控任务、任务被停用、网盘目录读取失败时也不会生成；跳过与失败原因都会写进运行记录和 Web 日志。</div>
             </div>
         `;

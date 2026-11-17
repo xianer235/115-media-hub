@@ -44,7 +44,7 @@
 | --- | --- | --- |
 | D5 | API Key | 单一全局配置 `servarr_api_key`；空 = 接口关闭（所有端点 503）；校验用 `hmac.compare_digest`；请求头 `X-Api-Key`，兼容 `Authorization: Bearer <key>` |
 | D6 | servarr 侧资源 id | 项目订阅任务没有数字 id，**用 tmdbId 充当**（`GET /movie/{id}`、`DELETE /movie/{id}` 都按 tmdbId 查） |
-| D7 | 剧集多季命名 | 一次点播多季 → 每季一个任务，name = `片名 (年份) S%02d`；只点一季 → name = `片名 (年份)`。与既有任务重名且（tmdbId, 季）不同 → 追加 ` tmdb{tmdbId}` 后缀 |
+| D7 | 剧集多季命名 | 按「这部剧有几季」判定：TMDB 季集映射有多个正季（映射为空时看总季数 > 1）→ name = `片名 (年份) S%02d`；全剧只有 1 季 → `片名 (年份)`。每季一个任务。与既有任务重名 → 追加 ` tmdb{tmdbId}` 后缀。**2026-11-17 修订**：原规则是「一次点播多季才带季号」，但 Seerr 是一季一次请求（且我们的 lookup 恒返回 id，它总走 PUT），结果逐季点播的任务名全都不带季号、互相去重成 ` tmdb1234` / ` (2)`；改为按剧判定 |
 | D8 | 剧集身份解析 | Seerr 的 POST /series 只带 `tvdbId`，必须经 TMDB `/find/{tvdbId}?external_source=tvdb_id` 转 tmdbId。**TMDB 未配置或解析失败 → 明确报错，不创建无 TMDB 绑定的降级任务** |
 | D9 | `hasFile` / `isAvailable` | 恒 `false` / `true`（Seerr 的「已可观看」状态靠它自己的 Plex/Emby 集成判断，不经我们） |
 | D10 | `PUT /series` | 与 `POST /series` 同一处理函数 |
@@ -1154,7 +1154,7 @@ export function generateServarrApiKey({ showToast } = {}) {
 20. `GET /movie/603` 有订阅 → 200；无 → 404
 
 剧集点播：
-21. `POST /series` 只带 tvdbId=83245 → `find_tmdb_id_by_tvdb_id` 被调用并补出 tmdbId，建 1 个任务（seasons=[{seasonNumber:1,monitored:true}]），name 不带季后缀
+21. `POST /series` 只带 tvdbId=83245 → `find_tmdb_id_by_tvdb_id` 被调用并补出 tmdbId，建 1 个任务（seasons=[{seasonNumber:1,monitored:true}]），name = `绝命毒师 (2008) S01`（按剧判定：测试用的 TMDB 详情有 2 季）
 22. `POST /series` seasons=[1,2,3] 全 monitored → 建 3 个任务，name 分别为 `片名 (年份) S01/S02/S03`，`total_episodes` 分别取 season_episode_map 的 22/22/0
 23. 第 2 季已存在时再 POST seasons=[2,3] → 只建第 3 季
 24. 全部季已存在 → save_config 不调用，返回 `{"id": tmdbId}`
