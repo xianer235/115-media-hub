@@ -8,14 +8,14 @@
 
 ## 基线
 
-- **更新日期**: 2026-11-17（0.15.23：servarr 剧集列表补真实 tvdbId，修 Seerr 的 Sonarr 扫描 404）
-- **分支**: `main`，0.15.18 / 0.15.19 / 0.15.20 已推送；**0.15.21 ~ 0.15.23 本地已提交、待用户手动推送**（用户要求：AI 只做本地提交，push/tag/release 由他触发）；本地 tag 有 `v0.15.19`~`v0.15.22`，Docker 镜像同版本由 GitHub Actions 自动构建（测试不绿就不构建）
-- **版本**: `0.15.23`（2026-11-17：新增 `providers.tmdb.find_tvdb_id_by_tmdb_id`（`/tv/{id}/external_ids`），`GET /api/v3/series`、`/series/{id}`、`/series/lookup` 补真实 tvdbId。根因：列表此前恒返回 `tvdbId=null`，Seerr 扫描调 `/find/undefined` → 404「Failed to process Sonarr media」，剧集进不了索引。`tests.test_servarr_api` 56 条全绿）
+- **更新日期**: 2026-11-17（0.15.24：桥代替 Seerr 翻页拉全库，修「库大时只扫到前一批」）
+- **分支**: `main`，0.15.18 ~ 0.15.23 已推送（用户手动推的）；**0.15.24 本地已提交、待用户手动推送**（用户要求：AI 只做本地提交，push/tag/release 由他触发）；tag 打到 `v0.15.22`，**0.15.23 与 0.15.24 均未打 tag / 未发 release**，Docker 镜像同版本由 GitHub Actions 自动构建（测试不绿就不构建）
+- **版本**: `0.15.24`（2026-11-17：`emby_bridge._aggregate_items` 对「`GET /Items` + `Recursive=true` + `ParentId` + 无 `ids=`」代翻页，`Limit=1000` 合并返回；游标 `cursor += len(items)` 按上游实际返回条数推进，去掉「不足一页即停」的误判护栏；护栏=无新条目 / 达 `TotalRecordCount` / 200 页；`asyncio.to_thread` 跑；日志「聚合库条目：上游 total / 实际取回 / 分页」。`tests.test_emby_bridge` 41 条全绿）
 - **CI**: 单一工作流 `.github/workflows/ci.yml`（`docker-release.yml` 已并入并移除），**限定 `paths: version.json`，只在发版推送时触发**：`test` job 跑 `compileall` + `scripts/check_js_syntax.py`（复制成 `.mjs` 再 `node --check`；裸 `node --check` 对 ESM 文件静默放过，`--experimental-default-type=module` 在 Node 23+ 又被移除，两条路都走过弯路）+ `scripts/run_tests.py`，`build-and-push` 用 `needs: test` 挂在后面（`workflow_dispatch` 有 `publish` 开关，关掉只跑测试）。日常开发验证只用本机 `scripts/check.sh`，不要等 CI
 - **本地不入库文件**: `AGENTS.md` / `CLAUDE.md` / `.workbuddy/` / `.claude/` / `.worktrees/` 是本机开发用，**按约定不入库**。任何测试/代码读它们前必须判存在（`test_modules_doc` 已这么做），否则干净 clone 跑测试必挂。
 - **运行环境**: `docker compose` 服务名 `115-media-hub-test`（应用本体），端口 18080；`/app/storage` 已映射到宿主机 `/Users/xianer/Documents/docker/115strmxianer/storage`（virtiofs，空间读数正常）。挂载路径与端口已改为从根目录 `.env` 读取（模板 `.env.example`），本机 `.env` 写的是原来的绝对路径
-- **最近提交**: `0147c62` 设置页重新分组 + 网盘目录选择器（0.15.14）；其前 `0793eba` 发版 0.15.13 已推送、tag `v0.15.13`
-- **工作区**: 0.15.23 发版四件套（`version.json` / `CHANGELOG.md` / `README.md` / `state.md`）已改，**待提交 → push → tag → release**。本次内容：`app/providers/tmdb.py` 新增 `find_tvdb_id_by_tmdb_id`，`app/routes/servarr.py` 的 `/series`、`/series/{id}`、`/series/lookup` 补真实 tvdbId（修 Seerr 的 Sonarr 扫描 404），`tests/test_servarr_api.py` 加 4 条用例。此前 0.15.15 的 Emby 兼容桥与设置页分组优化已随 0.15.16~0.15.22 陆续提交。仓库根无探针残骸
+- **最近提交**: `f9f7d8e` 桥翻页游标改按实际返回条数推进；`ba9701c` 桥代 Seerr 翻页；`0cb5446` 发版 0.15.23（剧集列表补 tvdbId）
+- **工作区**: 0.15.24 发版四件套（`version.json` / `CHANGELOG.md` / `README.md` / `state.md`）已改，**待提交 → push → tag → release**。本次内容只涉及 `app/services/emby_bridge.py` 的 `_aggregate_items`（代翻页 + 游标修正）与 `tests/test_emby_bridge.py` 的 5 条新用例，代码已提交（`ba9701c` / `f9f7d8e`）。仓库根无探针残骸
 
 
 

@@ -1,9 +1,10 @@
 {
-  "version": "0.15.23",
-  "buildDate": "2026-11-17T08:25:00+08:00",
+  "version": "0.15.24",
+  "buildDate": "2026-11-17T08:45:00+08:00",
   "notes": [
-    "修 Seerr 剧集扫描 404：面板的剧集列表补上真实 tvdbId，Seerr 不再报「Failed to process Sonarr media」，已成库的剧能正确显示「可获得」",
-    "反查不到 tvdbId 时保持为空，不拿 tmdb id 冒充，避免 Seerr 认错剧"
+    "Emby 兼容桥代替 Seerr 翻页拉全库：Seerr 拉库内容只发一次请求、从不翻页，库大时只扫到前一批，大量已成库的片子仍显示「提交请求」；桥现在按页拉全后合并返回",
+    "翻页游标按上游实际返回条数推进，极影视若把单页压得比请求更小也不会跳过中间的条目",
+    "修 Seerr 剧集扫描 404：面板的剧集列表补上真实 tvdbId，已成库的剧能正确显示「可获得」"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

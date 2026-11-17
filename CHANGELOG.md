@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.15.24] - 2026-11-17
+
+Seerr 的媒体库扫描「几秒就完成」，只有一小部分片子显示「可获得」，其余已成库的仍显示「提交请求」。
+
+- **根因**：Seerr 拉库内容时只发一次 `GET /Items?Recursive=true&ParentId=<库>&StartIndex=0`，**从不翻页，也不看 `TotalRecordCount`**。极影视单次返回有条数上限，于是每个库只扫到前一批，其余条目永远进不了 Seerr 索引。手动扫描「几秒跑完」就是这个现象的确凿证据。
+- **改法**：Emby 兼容桥对「递归列某个库全部条目」的请求（`GET /Items` + `Recursive=true` + `ParentId` + 无 `ids=`）**代为翻页**，按 `Limit=1000` 递增 `StartIndex` 拉完再合并成一个 `{Items:[...]}` 返回。Seerr 侧一行不用改；判重（`ids=`）、搜索等请求一律不介入。
+- **游标按实际返回条数推进**（`cursor += len(items)`）：上游若把单页压到比 `Limit` 更小（极影视这类实现常见只给 200 条），按请求的 `Limit` 步进会跳过中间那批，库越大漏得越多。此前「返回不足一页即停」的护栏在压页场景下会误判成到底，一并去掉。
+- **不死循环的三道保险**：上游反复返回同一页（忽略 `StartIndex`）→ 没有新条目即停；已取回条数达到 `TotalRecordCount`；页数上限 200（1000 条/页 × 200 页 = 20 万条封顶）。中途某页失败时返回已聚合部分，不让整库白扫。
+- **不堵事件循环**：翻页跑在 `asyncio.to_thread` 里，扫描期间面板界面不会卡住。
+- **可验证证据**：每轮聚合在面板日志写一条 `emby-bridge 聚合库条目：<path> 上游 total=X 实际取回=Y 分页=N`，`X == Y` 才算真的拉全。
+- 单测新增 5 条（分页合并、上游压页仍取全、上游忽略 `StartIndex` 不死循环、非递归只发一次、`ids=` 不误入翻页），`tests.test_emby_bridge` 41 条全绿。
+
 ## [0.15.23] - 2026-11-17
 
 Seerr 里已成库的剧集仍显示「提交请求」，日志刷 `Failed to process Sonarr media ... 404`。
