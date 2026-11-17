@@ -116,11 +116,13 @@ class ServarrApiTestBase(unittest.TestCase):
         tv_detail=None,
         tvdb_to_tmdb=0,
         detail_exc=None,
+        tmdb_to_tvdb=TVDB_ID,
     ):
         """把 servarr 路由的配置/TMDB/队列函数换成内存实现。
 
         save_config 真正写回 store（否则追加/删除逻辑测不到）；
-        tmdb_config_error 非空模拟「TMDB 未配置」；tvdb_to_tmdb 模拟 find 结果。
+        tmdb_config_error 非空模拟「TMDB 未配置」；tvdb_to_tmdb 模拟 find 结果；
+        tmdb_to_tvdb 模拟 /tv/{id}/external_ids 的 tvdbId（0 = 查不到）。
         """
         store = dict(BASE_CFG)
         store.update(cfg or {})
@@ -143,6 +145,7 @@ class ServarrApiTestBase(unittest.TestCase):
                 mock.patch.object(servarr_routes, "validate_tmdb_runtime_config", return_value=tmdb_config_error), \
                 mock.patch.object(servarr_routes, "get_tmdb_media_detail", side_effect=fake_detail), \
                 mock.patch.object(servarr_routes, "find_tmdb_id_by_tvdb_id", return_value=tvdb_to_tmdb), \
+                mock.patch.object(servarr_routes, "find_tvdb_id_by_tmdb_id", return_value=tmdb_to_tvdb), \
                 mock.patch.object(servarr_routes, "prune_subscription_state_for_missing_tasks") as prune_mock:
             yield _Patched(store=store, save=save_mock, queue=queue_mock, push=push_mock, prune=prune_mock)
 
@@ -602,6 +605,36 @@ class ServarrSeriesApiTest(ServarrApiTestBase):
         with self._patched(cfg, tvdb_to_tmdb=0):
             resp = self.client.get("/api/v3/series", params={"tvdbId": TVDB_ID}, headers=HEADERS)
             self.assertEqual(resp.json(), [])
+
+    def test_series_list_fills_tvdb_id_for_seerr_scan(self):
+        """回归：列表里 tvdbId 为空时，Seerr 的 Sonarr 扫描会调 /find/undefined → 404。"""
+        cfg = {"subscription_tasks": [_tv_task(season=1), _tv_task(season=2)]}
+        with self._patched(cfg, tmdb_to_tvdb=TVDB_ID):
+            body = self.client.get("/api/v3/series", headers=HEADERS).json()
+        self.assertEqual(len(body), 1)
+        self.assertEqual(body[0]["tvdbId"], TVDB_ID)
+        self.assertEqual(body[0]["tmdbId"], TV_TMDB_ID)
+
+    def test_series_list_tvdb_lookup_failure_leaves_null(self):
+        """反查不到 tvdbId 时保持 null，不拿 tmdbId 冒充（两套编号空间不同）。"""
+        cfg = {"subscription_tasks": [_tv_task()]}
+        with self._patched(cfg, tmdb_to_tvdb=0):
+            body = self.client.get("/api/v3/series", headers=HEADERS).json()
+        self.assertEqual(len(body), 1)
+        self.assertIsNone(body[0]["tvdbId"])
+
+    def test_series_detail_fills_tvdb_id(self):
+        cfg = {"subscription_tasks": [_tv_task(season=1), _tv_task(season=2)]}
+        with self._patched(cfg, tmdb_to_tvdb=TVDB_ID):
+            body = self.client.get(f"/api/v3/series/{TV_TMDB_ID}", headers=HEADERS).json()
+        self.assertEqual(body["tvdbId"], TVDB_ID)
+
+    def test_series_lookup_by_tmdb_term_fills_tvdb_id(self):
+        with self._patched(tmdb_to_tvdb=TVDB_ID):
+            body = self.client.get(
+                "/api/v3/series/lookup", params={"term": f"tmdb:{TV_TMDB_ID}"}, headers=HEADERS
+            ).json()
+        self.assertEqual(body[0]["tvdbId"], TVDB_ID)
 
     def test_series_detail_found_and_not_found(self):
         cfg = {"subscription_tasks": [_tv_task(season=1), _tv_task(season=2)]}

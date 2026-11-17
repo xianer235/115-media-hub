@@ -794,6 +794,10 @@ async def servarr_series_lookup(term: str, _: None = servarr_auth) -> List[Sonar
     except Exception:
         return [SonarrSeries()]
     binding = build_tmdb_task_binding(detail, media_type="tv")
+    if tvdb_id <= 0:
+        # Seerr 按 tvdbId 认剧（Sonarr 扫描也用它反查 TMDB），只带 tmdb: 查询时补上，
+        # 否则这条剧在 Seerr 里没有稳定身份，扫描会 404 且无法判重。
+        tvdb_id = find_tvdb_id_by_tmdb_id(tmdb_id, cfg)
     season_episode_map = binding.get("tmdb_season_episode_map") or {}
     season_numbers = sorted(
         {int(key) for key in season_episode_map.keys() if int(key) > 0}
@@ -863,7 +867,11 @@ async def servarr_series(tvdbId: Optional[int] = None, _: None = servarr_auth) -
         grouped.setdefault(key, []).append(task)
     result = []
     for tmdb_key in sorted(grouped.keys()):
-        series = _series_tasks_to_sonarr(grouped[tmdb_key], tvdb_id=tvdbId or 0)
+        # Seerr 的 Sonarr 扫描会对每条 series 调 TMDB /find/{tvdbId}：
+        # 列表里 tvdbId 为空 → 请求变成 /find/undefined → 404「Failed to process Sonarr media」。
+        # 所以每部剧都必须带上真实 tvdbId；查询参数已带 tvdbId 时直接用，省一次请求。
+        series_tvdb_id = tvdbId or find_tvdb_id_by_tmdb_id(tmdb_key, cfg)
+        series = _series_tasks_to_sonarr(grouped[tmdb_key], tvdb_id=series_tvdb_id)
         if series:
             result.append(series)
     return result
@@ -872,7 +880,9 @@ async def servarr_series(tvdbId: Optional[int] = None, _: None = servarr_auth) -
 @router.get("/series/{tid}", response_model=SonarrSeries)
 async def servarr_series_detail(tid: int, _: None = servarr_auth) -> SonarrSeries:
     cfg = get_config()
-    series = _series_tasks_to_sonarr(_series_season_tasks(cfg, tid))
+    series = _series_tasks_to_sonarr(
+        _series_season_tasks(cfg, tid), tvdb_id=find_tvdb_id_by_tmdb_id(tid, cfg)
+    )
     if not series:
         raise HTTPException(status_code=404, detail="未找到该剧集订阅")
     return series

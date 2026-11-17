@@ -575,6 +575,32 @@ def find_tmdb_id_by_tvdb_id(
             return tmdb_id
     return 0
 
+def find_tvdb_id_by_tmdb_id(
+    tmdb_id: int,
+    cfg: Optional[Dict[str, Any]] = None,
+    force_refresh: bool = False,
+) -> int:
+    """按 TMDB 剧集 ID 反查 TVDB ID（Seerr 的 Sonarr 扫描必须拿到 tvdbId）。
+
+    走 TMDB /tv/{id}/external_ids，命中返回 tvdb id，拿不到返回 0。
+    与 find_tmdb_id_by_tvdb_id 是两条独立请求：TMDB 的 /find 只保证 tvdb→tmdb 方向，
+    反向必须读 external_ids，别拿 tmdb id 冒充。
+    """
+    normalized_tmdb_id = max(0, int(tmdb_id or 0))
+    if normalized_tmdb_id <= 0:
+        return 0
+    try:
+        payload = tmdb_request_json(
+            f"/tv/{normalized_tmdb_id}/external_ids",
+            cfg=cfg,
+            force_refresh=force_refresh,
+        )
+    except Exception:
+        return 0
+    if not isinstance(payload, dict):
+        return 0
+    return max(0, parse_int(payload.get("tvdb_id", 0), 0))
+
 def build_tmdb_task_binding(detail: Dict[str, Any], media_type: str = "") -> Dict[str, Any]:
     normalized_media_type = normalize_tmdb_media_type(detail.get("media_type", ""), fallback=media_type)
     task_binding = {

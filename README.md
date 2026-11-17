@@ -474,7 +474,8 @@ CLI 专属环境变量（见「命令行工具」）：`MH_USERNAME` / `MH_PASSW
 
 ## 近期更新（以 `version.json` 为准）
 
-- 当前版本：`0.15.22`
+- 当前版本：`0.15.23`
+- **Seerr 里已成库的剧集不再显示「可请求」（0.15.23）**：面板的剧集列表此前不带 `tvdbId`，Seerr 的 Sonarr 扫描拿空值去 TMDB 反查，每条剧都 404（`Failed to process Sonarr media`），剧集一直进不了 Seerr 索引，所以库里已有的剧也会被当成「没有」。现在 `GET /api/v3/series` 会补上真实 tvdbId，升级后重跑一次 Seerr 的 Sonarr 扫描即可；反查不到时保持为空，不会拿 tmdb id 冒充。
 - **Emby 兼容桥可以一键测连通性（0.15.22）**：设置页「Emby 兼容桥」里的媒体库账号/密码旁多了「测试连通性」按钮，用当前表单里的地址和账号实际登录一次极影视并读一次库列表，直接告诉你读到几个媒体库；账号或密码填错会明确提示，不用先保存、也不用等 Seerr 那边报笼统错误。只读探测，不写配置。
 - **Seerr 点播电影必失败的问题已修（0.15.21）**：`/api/v3/movie` 的响应缺 `tags` 字段，Seerr 合并标签时抛 `movie.tags is not iterable`，请求被标成 FAILED；同时 Seerr 要求「重新监控」时我们只读不写，读回来还是未监控。现已补 `tags`、按 `monitored` 回写任务启用状态，并补上 `GET /api/v3/queue` 空队列端点（Download Sync 不再每分钟刷 `Unable to get queue`）。升级后在 Seerr 里重试一次点播即可。
 - **Emby 兼容桥接不上 / 库类型判错 / 库列表拉不到，五个 bug 已修（0.15.17 ~ 0.15.20）**：① FastAPI 的 `{path:path}` 捕获到的路径不带前导斜杠（`System/Info`），桥的白名单和判重改写全按 `/System/` 判断，斜杠一丢整条链路 404，Seerr 只笼统报「无法连接到 Jellyfin 服务器」；② Seerr 保存服务器时调 `GET /Users`（无尾斜杠）被白名单判 404；③ 极影视没有 `/Library/MediaFolders`，Seerr 回退到 `/Users/{uid}/Views`，而这条路上的库 `CollectionType` 全是 null，桥没补 → 电影库被当成剧集库、电影判重失效。④ 极影视根本没实现 `/Library/MediaFolders`（404），Seerr 拉库列表直接报「Something went wrong while syncing libraries」，向导卡住；桥现在改用 `/Users/{uid}/Views` 顶替；⑤ 登录成功后仍满屏 401——桥伪造的 API Key 被透传给极影视，极影视不认，现在一律用桥自己登录换的真 token。五处都已修，升级后重走一遍 Seerr 向导即可（登录、库列表、库内容、判重四条链路已对着真实环境实测通）。

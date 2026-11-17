@@ -1,9 +1,9 @@
 {
-  "version": "0.15.22",
-  "buildDate": "2026-11-17T07:55:00+08:00",
+  "version": "0.15.23",
+  "buildDate": "2026-11-17T08:25:00+08:00",
   "notes": [
-    "Emby 兼容桥新增「测试连通性」按钮：用表单里的极影视地址与媒体库账号密码登录一次并读一次库列表，改完不必先保存就能验证",
-    "只读探测：不写配置、不缓存 token；密码留空时沿用已保存的那份"
+    "修 Seerr 剧集扫描 404：面板的剧集列表补上真实 tvdbId，Seerr 不再报「Failed to process Sonarr media」，已成库的剧能正确显示「可获得」",
+    "反查不到 tvdbId 时保持为空，不拿 tmdb id 冒充，避免 Seerr 认错剧"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

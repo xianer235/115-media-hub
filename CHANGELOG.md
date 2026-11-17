@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.15.23] - 2026-11-17
+
+Seerr 里已成库的剧集仍显示「提交请求」，日志刷 `Failed to process Sonarr media ... 404`。
+
+- **现象**：Seerr 的 Sonarr 扫描对每条剧报 `[TMDB] Failed to fetch TV show scan details: Request failed with status code 404`，剧集永远进不了 Seerr 的索引，于是库里已有的剧也被当成「没有」，可以重复点播。
+- **根因**：Seerr 扫描时拿每条剧的 `tvdbId` 去 TMDB 反查详情（`/find/{tvdbId}`）。本项目的 `GET /api/v3/series` 此前**恒返回 `tvdbId: null`**——列表接口只从订阅任务读 `tmdb_id`，从没去 TMDB 反查过 tvdb id。Seerr 实际发出的是 `/find/undefined`，TMDB 直接 404，所以这个错误对每一条剧都会出现，不是某一部剧的数据问题。
+- **改法**：新增 `find_tvdb_id_by_tmdb_id()`（走 TMDB `/tv/{id}/external_ids`），`GET /series`、`GET /series/{id}`、`/series/lookup` 三处都补上真实 tvdbId；查询参数里已带 tvdbId 时不重复请求。
+- **边界**：反查不到时仍返回 `null`，不拿 tmdbId 冒充 tvdbId（两套编号空间不同，冒充会让 Seerr 认成别的剧）。极少数在 TMDB 上没有 tvdb 映射的剧（部分国漫）会继续被 Seerr 跳过，属数据源缺失。
+- 单测新增 4 条（列表补 tvdbId、反查失败保持 null、详情、lookup），`tests.test_servarr_api` 56 条全绿。
+
 ## [0.15.22] - 2026-11-17
 
 设置页「Emby 兼容桥」加一个「测试连通性」按钮。

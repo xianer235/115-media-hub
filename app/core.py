@@ -7700,6 +7700,7 @@ from .providers.tmdb import (
     build_tmdb_image_url,
     discover_tmdb_media,
     find_tmdb_id_by_tvdb_id,
+    find_tvdb_id_by_tmdb_id,
     get_tmdb_genre_list,
     get_tmdb_media_detail,
     get_tmdb_popular,
