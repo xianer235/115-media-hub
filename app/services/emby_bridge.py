@@ -38,6 +38,13 @@ logger = logging.getLogger("emby_bridge")
 # 上游请求统一打的客户端标识（补 DeviceId 用，极影视要求非空）
 _BRIDGE_DEVICE_ID = "115-media-hub-bridge"
 
+# T6 全库扫描分页：Seerr 拉库内容只发一次 /Items（StartIndex=0，从不翻页，也不看
+# TotalRecordCount），极影视单次返回有条数上限 → 每个库只能扫到前一批，其余条目不进
+# Seerr 索引（真机表现为「手动扫描几秒就跑完」，且只有前一批片子显示「可获得」）。
+# 桥对带 ParentId 的递归查询代为翻页，聚合后再一次性返回。
+_SCAN_PAGE_SIZE = 1000
+_SCAN_MAX_PAGES = 200
+
 # 允许透传给上游的路径前缀（白名单外一律 404，避免暴露极影视管理接口）
 _ALLOWED_PREFIXES: Tuple[str, ...] = (
     "/System/",
@@ -411,6 +418,90 @@ def _fill_collection_types(payload: Any) -> Any:
     return payload
 
 
+def _query_with_page(query: str, start: int, limit: int) -> str:
+    """替换 query 里的 StartIndex / Limit，其余参数原样保留。"""
+    pairs = urllib.parse.parse_qsl(query, keep_blank_values=True)
+    kept = [(k, v) for k, v in pairs if k.lower() not in ("startindex", "limit", "take")]
+    kept.append(("StartIndex", str(start)))
+    kept.append(("Limit", str(limit)))
+    return urllib.parse.urlencode(kept)
+
+
+def _is_full_scan_items(method: str, path: str, query: str) -> bool:
+    """只有「递归列某个库的全部条目」才需要代翻页；判重(ids=)、搜索等一律不动。"""
+    if method.upper() != "GET" or path.rstrip("/") != "/Items":
+        return False
+    qs = {k.lower(): v for k, v in urllib.parse.parse_qs(query).items()}
+    if qs.get("ids", [""])[0].strip():
+        return False
+    if not qs.get("parentid", [""])[0].strip():
+        return False
+    return str(qs.get("recursive", [""])[0]).lower() == "true"
+
+
+def _aggregate_items(
+    upstream: str,
+    path: str,
+    query: str,
+    headers: Dict[str, str],
+) -> Tuple[int, Dict[str, str], Any]:
+    """按 StartIndex/Limit 翻页拉全 Items。
+
+    三重护栏，任何一个不满足就停手，绝不死循环：
+    1. 上游反复返回同一页（忽略 StartIndex）→ 没有新条目即停；
+    2. 上游忽略 Limit、一次全给出 → 返回条数不足一页即停；
+    3. 页数上限 ``_SCAN_MAX_PAGES``。
+
+    中途某页失败时，前面已经聚合到的条目照常返回（宁可少几条，也别让整库白扫）。
+    """
+    merged: List[Any] = []
+    seen: set = set()
+    total = 0
+    status, resp_headers, parsed = 200, {}, {}
+    pages = 0
+    while pages < _SCAN_MAX_PAGES:
+        page_query = _query_with_page(query, pages * _SCAN_PAGE_SIZE, _SCAN_PAGE_SIZE)
+        status, resp_headers, parsed = _forward_json(
+            upstream, "GET", path, page_query, b"", headers, read_timeout=120
+        )
+        if status != 200 or not isinstance(parsed, dict):
+            if merged:
+                break
+            return status, resp_headers, parsed
+        items = parsed.get("Items")
+        if not isinstance(items, list):
+            if merged:
+                break
+            return status, resp_headers, parsed
+        if pages == 0:
+            try:
+                total = max(0, int(parsed.get("TotalRecordCount") or 0))
+            except (TypeError, ValueError):
+                total = 0
+        fresh = [item for item in items if str(item.get("Id")) not in seen]
+        if not fresh:
+            break
+        merged.extend(fresh)
+        seen.update(str(item.get("Id")) for item in fresh)
+        pages += 1
+        if total and len(merged) >= total:
+            break
+        if len(items) < _SCAN_PAGE_SIZE:
+            break
+    logger.info(
+        "emby-bridge 聚合库条目：%s 上游 total=%s 实际取回=%s 分页=%s",
+        path,
+        total,
+        len(merged),
+        pages,
+    )
+    return 200, resp_headers, {
+        "Items": merged,
+        "TotalRecordCount": len(merged),
+        "StartIndex": 0,
+    }
+
+
 async def handle(method: str, path: str, query: str, headers: Dict[str, str], body: bytes) -> Tuple[int, Dict[str, str], Any]:
     """桥的统一入口。返回 (status, response_headers, payload)。"""
     settings = _bridge_settings()
@@ -474,9 +565,20 @@ async def handle(method: str, path: str, query: str, headers: Dict[str, str], bo
     token = token_info.get("token", "")
     upstream_headers = _rewrite_headers(headers, token)
 
-    status, resp_headers, parsed = _forward_json(
-        upstream, method, upstream_path, query, body, upstream_headers, read_timeout=120
-    )
+    aggregate_scan = _is_full_scan_items(method, path, query)
+
+    async def fetch_upstream(hdrs: Dict[str, str]):
+        if aggregate_scan:
+            # 全库翻页可能持续几十秒到几分钟（1 万条 / 每页 1000），放线程里跑，
+            # 不能堵住事件循环，否则面板界面在扫描期间会整体卡住。
+            return await asyncio.to_thread(
+                _aggregate_items, upstream, upstream_path, query, hdrs
+            )
+        return _forward_json(
+            upstream, method, upstream_path, query, body, hdrs, read_timeout=120
+        )
+
+    status, resp_headers, parsed = await fetch_upstream(upstream_headers)
 
     # 401 单飞重登一次后重试
     if status == 401:
@@ -490,9 +592,7 @@ async def handle(method: str, path: str, query: str, headers: Dict[str, str], bo
                 return status, resp_headers, parsed
             token = token_info.get("token", "")
             retry_headers = _rewrite_headers(headers, token)
-            status, resp_headers, parsed = _forward_json(
-                upstream, method, upstream_path, query, body, retry_headers, read_timeout=120
-            )
+            status, resp_headers, parsed = await fetch_upstream(retry_headers)
 
     # T4：媒体库列表补 CollectionType（含 Seerr 回退的 /Users/{uid}/Views）
     if status == 200 and _is_library_list_path(path):

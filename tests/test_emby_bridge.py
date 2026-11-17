@@ -120,7 +120,9 @@ class PrivateIpTest(unittest.TestCase):
         self.assertFalse(bridge._is_private_ip("not-an-ip"))
 
 
-class HandleDispatchTest(unittest.TestCase):
+class _BridgeHandleTestBase(unittest.TestCase):
+    """直接调 bridge.handle 的公共夹具（不继承具体用例，避免子类把父类用例重跑一遍）。"""
+
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="wb_embridge_")
 
@@ -141,6 +143,8 @@ class HandleDispatchTest(unittest.TestCase):
         # RuntimeError），run 从 3.7 起跨版本稳定，且这里每次只需跑单个 coroutine。
         return asyncio.run(coro)
 
+
+class HandleDispatchTest(_BridgeHandleTestBase):
     def test_disabled_returns_404(self):
         status, _, _ = self._run_sync(self._run("GET", "/System/Info", settings={"enabled": False}))
         self.assertEqual(status, 404)
@@ -237,6 +241,79 @@ class HandleDispatchTest(unittest.TestCase):
         self.assertIn("Items", payload)
         self.assertEqual(payload["TotalRecordCount"], 1)
         self.assertEqual(payload["Items"][0]["ProviderIds"]["Tmdb"], "332911")
+
+
+class ScanPaginationTest(_BridgeHandleTestBase):
+    """T6：Seerr 只发一次 /Items 且不翻页，桥代为翻页聚合成整个库。"""
+
+    def _items(self, start, count, total):
+        return {
+            "Items": [{"Id": f"video_{i}", "Type": "Movie"} for i in range(start, start + count)],
+            "TotalRecordCount": total,
+            "StartIndex": start,
+        }
+
+    def test_recursive_library_query_is_paginated_and_merged(self):
+        calls = []
+
+        def fake_forward(upstream, method, path, query, body, headers, read_timeout):
+            qs = dict(bridge.urllib.parse.parse_qsl(query))
+            start = int(qs["StartIndex"])
+            calls.append(start)
+            # 上游按页返回：共 2500 条，每页 1000
+            count = min(bridge._SCAN_PAGE_SIZE, 2500 - start)
+            return 200, {}, self._items(start, count, 2500)
+
+        with mock.patch.object(bridge, "_forward_json", side_effect=fake_forward):
+            with mock.patch.object(bridge, "_get_token", return_value={"token": "t", "uid": "uid123", "server_id": "s"}):
+                status, _, payload = self._run_sync(
+                    self._run(
+                        "GET",
+                        "/Items",
+                        query="Recursive=true&StartIndex=0&ParentId=class_movies&IncludeItemTypes=Series,Movie",
+                    )
+                )
+        self.assertEqual(status, 200)
+        self.assertEqual(len(payload["Items"]), 2500)
+        self.assertEqual(payload["TotalRecordCount"], 2500)
+        self.assertEqual(calls, [0, 1000, 2000])
+
+    def test_upstream_ignoring_start_index_does_not_loop_forever(self):
+        """极影视若忽略 StartIndex，反复给同一页，桥必须靠「没有新条目」停手。"""
+        calls = []
+
+        def fake_forward(upstream, method, path, query, body, headers, read_timeout):
+            calls.append(query)
+            return 200, {}, self._items(0, bridge._SCAN_PAGE_SIZE, 999999)
+
+        with mock.patch.object(bridge, "_forward_json", side_effect=fake_forward):
+            with mock.patch.object(bridge, "_get_token", return_value={"token": "t", "uid": "uid123", "server_id": "s"}):
+                status, _, payload = self._run_sync(
+                    self._run("GET", "/Items", query="Recursive=true&ParentId=class_movies")
+                )
+        self.assertEqual(status, 200)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(payload["Items"]), bridge._SCAN_PAGE_SIZE)
+
+    def test_non_recursive_items_query_is_forwarded_once(self):
+        calls = []
+
+        def fake_forward(upstream, method, path, query, body, headers, read_timeout):
+            calls.append(query)
+            return 200, {}, {"Items": [], "TotalRecordCount": 0}
+
+        with mock.patch.object(bridge, "_forward_json", side_effect=fake_forward):
+            with mock.patch.object(bridge, "_get_token", return_value={"token": "t", "uid": "uid123", "server_id": "s"}):
+                self._run_sync(self._run("GET", "/Items", query="Limit=10&SearchTerm=abc"))
+        self.assertEqual(len(calls), 1)
+
+    def test_ids_query_still_uses_rewrite_path(self):
+        """ids= 判重请求不能被卷进翻页逻辑。"""
+        self.assertFalse(bridge._is_full_scan_items("GET", "/Items", "ids=collection_1&Recursive=true&ParentId=class_1"))
+        self.assertTrue(bridge._is_full_scan_items("GET", "/Items", "Recursive=true&ParentId=class_1"))
+        self.assertTrue(bridge._is_full_scan_items("GET", "/Items", "recursive=True&ParentId=class_1"))
+        self.assertFalse(bridge._is_full_scan_items("GET", "/Items", "Recursive=true"))
+        self.assertFalse(bridge._is_full_scan_items("POST", "/Items", "Recursive=true&ParentId=class_1"))
 
 
 class PseudoKeyTest(unittest.TestCase):
