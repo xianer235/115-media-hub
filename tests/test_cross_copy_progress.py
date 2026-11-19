@@ -211,6 +211,79 @@ class ProgressMarkingTest(ProgressTestBase):
         self.assertEqual(row["progress_detail"], "")
 
 
+class ProgressFailureTest(ProgressTestBase):
+    """补源失败也要回写订阅侧。
+
+    以前失败任务根本不进「待回写」队列：卡片上的「跨盘补源中」消失后直接退回
+    「尚未命中」，订阅日志里一个字都没有，看起来像兜底连资源都没找到，实际是
+    找到了、复制挂了。
+    """
+
+    def _failed_pending(self, **overrides):
+        finished_at = overrides.pop("finished_at", "2026-10-22T10:00:00")
+        error_message = overrides.pop("error_message", "115 直链 403")
+        job_id = self._job(**overrides)
+        ccj.update_cross_copy_job(
+            job_id,
+            status="failed",
+            finished_at=finished_at,
+            error_message=error_message,
+            progress_state="pending",
+        )
+        return job_id
+
+    def _run_once(self):
+        log_mock = mock.AsyncMock()
+        with mock.patch.object(progress, "write_subscription_log", log_mock), mock.patch.object(
+            progress, "get_config", return_value=self.cfg
+        ):
+            stats = asyncio.run(progress.run_pending_progress_once())
+        return stats, log_mock
+
+    def test_subscription_failure_is_marked_pending(self):
+        job_id = self._job()
+        with mock.patch.object(ccj, "get_config", return_value=self.cfg):
+            ccj._fail_job(job_id, "下载失败：115 直链 403")
+
+        row = self._row(job_id)
+        self.assertEqual(row["status"], "failed")
+        self.assertEqual(row["progress_state"], "pending")
+
+    def test_manual_failure_is_not_marked(self):
+        job_id = self._job(origin="manual", origin_ref="")
+        with mock.patch.object(ccj, "get_config", return_value=self.cfg):
+            ccj._fail_job(job_id, "下载失败")
+
+        self.assertEqual(self._row(job_id)["progress_state"], "")
+
+    def test_failed_group_writes_one_warn_log(self):
+        job_id = self._failed_pending()
+        stats, log_mock = self._run_once()
+
+        self.assertEqual(stats["copy_failed"], 1)
+        self.assertEqual(stats["done"], 0)
+        log_mock.assert_awaited()
+        args = log_mock.await_args.args
+        self.assertIn("跨盘补源失败", args[0])
+        self.assertIn("E42", args[0])
+        self.assertIn("115 直链 403", args[0])
+        self.assertEqual(args[1], "warn")
+        # 失败不该改写成功语义的字段
+        self.assertNotEqual(self._state().get("status"), "completed")
+        self.assertEqual(self._state().get("last_success_at", ""), "")
+        self.assertEqual(self._row(job_id)["progress_state"], "done")
+
+    def test_mixed_group_splits_success_and_failure(self):
+        # 同一批里既有成功的也有失败的：成功的照常推进度，失败的只写日志
+        self._failed_pending(filename="S01E42.mp4")
+        self._pending(filename="S01E43.mp4")
+        stats, _ = self._run_once()
+
+        self.assertEqual(stats["copy_failed"], 1)
+        self.assertEqual(stats["done"], 1)
+        self.assertEqual(self._state().get("last_episode"), 43)
+
+
 class ProgressSelectionTest(ProgressTestBase):
     """待回写任务的筛选、成组与抢占。"""
 

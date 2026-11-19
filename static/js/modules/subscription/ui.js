@@ -640,12 +640,36 @@
 
         function buildSubscriptionLastHitBadge(task, taskName = '') {
             const payload = task && typeof task === 'object' ? task : {};
+            const isTv = normalizeSubscriptionMediaType(payload.media_type || 'movie') === 'tv';
+            // 补源任务已入队、还在下载/上传：在命中徽章**前面叠一个**「跨盘补源中」。
+            // 不能只靠「尚未命中」——那会让人以为兜底也没找到资源；也不能顶掉已有
+            // 命中记录，否则「上次命中」的信息就丢了。计数由后端实时聚合，不落库。
+            const copyingCount = Math.max(0, Number(payload.cross_copy_active_count || 0) || 0);
+            const copyingBadgeHtml = copyingCount > 0
+                ? `<span class="subscription-last-hit-badge subscription-last-hit-badge-copying" title="${escapeHtml(`${copyingCount} 个跨盘复制任务正在从夸克下载并上传，完成后会自动更新命中记录`)}">跨盘补源中 · ${copyingCount} 个任务</span>`
+                : '';
+            // 补源失败：资源是找到了，但复制（下载/上传）没成功。和「尚未命中」必须
+            // 一眼分得开，否则用户会以为兜底也没找到、白白去手动找资源。只在没有
+            // 任务在跑时显示：正在重试就直接展示「补源中」，别同时挂一个红标。
+            const failedCount = Math.max(0, Number(payload.cross_copy_failure_count || 0) || 0);
+            const failedReason = String(payload.cross_copy_failure_reason || '').trim();
+            const failedDateText = formatSubscriptionLastHitDateTime(payload.cross_copy_failure_at);
+            const failedBadgeHtml = (failedCount > 0 && copyingCount === 0)
+                ? (() => {
+                    const unit = isTv ? '集' : '个文件';
+                    const failedTitle = [
+                        `最近一次补源失败：${failedReason || '原因未记录'}`,
+                        failedDateText ? `时间：${failedDateText}` : '',
+                        '下一轮订阅会自动重试，也可以到「任务中心」手动重试',
+                    ].filter(Boolean).join('；');
+                    return `<span class="subscription-last-hit-badge subscription-last-hit-badge-failed" title="${escapeHtml(failedTitle)}">补源失败 · ${failedCount} ${unit}</span>`;
+                })()
+                : '';
             const matchedTitle = String(payload.matched_resource_title || '').trim();
             const timestamp = String(payload.last_success_at || '').trim();
             const dateText = formatSubscriptionLastHitDateTime(timestamp);
             const hasDate = !!dateText;
             // 「资源库里已经保存到第几集」和卡片里的「追更进度」取同一个值，避免两处说法不一致
-            const isTv = normalizeSubscriptionMediaType(payload.media_type || 'movie') === 'tv';
             const episodeNo = isTv
                 ? resolveSubscriptionTaskEpisodeProgress(payload, taskName || payload.name).episode
                 : 0;
@@ -658,13 +682,26 @@
             const titleParts = [hasDate ? `最近命中：${dateText}` : baseLabel];
             if (episodeLabel) titleParts.push(`资源库里已保存到 E${episodeNo}`);
             const title = titleParts.join('；');
-            return `<span class="${className}" title="${escapeHtml(title)}">${escapeHtml(label)}</span>`;
+            return `${copyingBadgeHtml}${failedBadgeHtml}<span class="${className}" title="${escapeHtml(title)}">${escapeHtml(label)}</span>`;
         }
 
         function buildSubscriptionLatestMatchText(task) {
             const payload = task && typeof task === 'object' ? task : {};
+            const copyingCount = Math.max(0, Number(payload.cross_copy_active_count || 0) || 0);
+            const failedCount = Math.max(0, Number(payload.cross_copy_failure_count || 0) || 0);
+            const failedReason = String(payload.cross_copy_failure_reason || '').trim();
             const matchedTitle = String(payload.matched_resource_title || '').trim();
             const dateText = formatSubscriptionLastHitDateTime(payload.last_success_at);
+            // 卡片说明文字也得跟上，否则徽章红了、这段还写「最近尚未命中资源」，
+            // 两处说法打架。进行中优先于失败：正在重试就不用再强调上次失败。
+            if (copyingCount > 0) {
+                return `${copyingCount} 个跨盘补源任务正在复制，完成后会自动更新命中记录`;
+            }
+            if (failedCount > 0) {
+                const unit = normalizeSubscriptionMediaType(payload.media_type || 'movie') === 'tv' ? '集' : '个文件';
+                const base = `最近一次补源失败 ${failedCount} ${unit}${failedReason ? `（${failedReason}）` : ''}，下一轮订阅会自动重试`;
+                return matchedTitle && dateText ? `${base}；上一次命中 ${dateText}` : base;
+            }
             if (matchedTitle && dateText) return `最近命中：${matchedTitle} · ${dateText}`;
             if (matchedTitle) return `最近命中：${matchedTitle}（日期未记录）`;
             if (dateText) return `最近命中时间：${dateText}`;

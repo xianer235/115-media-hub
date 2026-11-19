@@ -65,6 +65,14 @@ _LIBRARY_LIST_PATHS: Tuple[str, ...] = (
     "/Library/VirtualFolders",
 )
 
+# T7 Recently Added Scan 顶替：Jellyseerr 的「最近添加扫描」（每 5 分钟一次）在 Emby
+# 模式下调的是 ``/Users/{uid}/Items/Latest?Limit=12&ParentId={库}``，只取「最近添加」
+# 的前 12 条。用户手动往极影视存片后，只有挤进这 12 条的会被判重变绿，其余新片要等
+# 每 24 小时的全量扫描（Full Scan）才轮到 → 表现为「有的电影绿、有的不绿」。
+# 桥顶替该端点：改成按 DateCreated 降序拉最近 ``_LATEST_ITEMS_LIMIT`` 条，覆盖手动
+# 新存的片，又不至于像全量扫描那样把整个库拉一遍（Seerr 侧限速 5 条/秒，全量很慢）。
+_LATEST_ITEMS_LIMIT = 500
+
 
 def _is_library_list_path(path: str) -> bool:
     """是否是「媒体库列表」请求。
@@ -76,6 +84,12 @@ def _is_library_list_path(path: str) -> bool:
     if any(path.startswith(prefix) for prefix in _LIBRARY_LIST_PATHS):
         return True
     return path.rstrip("/").endswith("/Views")
+
+
+def _is_latest_items_path(path: str) -> bool:
+    """是否是「最近添加」列表请求（Seerr 的 Recently Added Scan）。"""
+    return path.rstrip("/").endswith("/Items/Latest")
+
 
 # token 缓存：{ (upstream, username) : {"token": str, "uid": str} }
 _TOKEN_CACHE: Dict[Tuple[str, str], Dict[str, str]] = {}
@@ -565,6 +579,24 @@ async def handle(method: str, path: str, query: str, headers: Dict[str, str], bo
         uid = token_info.get("uid", "")
         if uid:
             upstream_path = f"/Users/{uid}/Views"
+
+    # T7：Recently Added Scan 顶替 /Users/{uid}/Items/Latest?Limit=12 → 按 DateCreated
+    # 降序拉最近 _LATEST_ITEMS_LIMIT 条，覆盖手动新存的片（否则只判重最近 12 条）。
+    # 改写后路径是 /Users/{uid}/Items，不等于 /Items，不会触发 _is_full_scan_items 的
+    # 全库翻页，只拉一页，保持增量扫描的轻量。
+    if _is_latest_items_path(path):
+        qs = urllib.parse.parse_qs(query)
+        parent_id = qs.get("ParentId", [""])[0].strip()
+        if parent_id:
+            upstream_path = re.sub(r"/Items/Latest$", "/Items", path)
+            query = (
+                f"ParentId={urllib.parse.quote(parent_id, safe='')}"
+                "&Recursive=true"
+                "&IncludeItemTypes=Series,Movie,Others"
+                "&SortBy=DateCreated"
+                "&SortOrder=Descending"
+                f"&Limit={_LATEST_ITEMS_LIMIT}"
+            )
 
     token = token_info.get("token", "")
     upstream_headers = _rewrite_headers(headers, token)

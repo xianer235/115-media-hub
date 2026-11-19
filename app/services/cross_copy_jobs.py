@@ -1112,17 +1112,24 @@ def _fail_job(job_id: int, message: str, resume_state: Optional[Dict[str, Any]] 
         # 文案与取消分支一致——用户看到「已保留断点」才知道重试能续传
         _persist_final_resume(job_id, resume_state)
         detail = f"{detail}{_RESUME_KEPT_SUFFIX}"
-    update_cross_copy_job(
-        job_id,
-        status=STATUS_FAILED,
-        status_detail=detail,
-        error_message=message[:2000],
-        finished_at=now_text(),
-    )
+    job = get_cross_copy_job(job_id) or {}
+    fields: Dict[str, Any] = {
+        "status": STATUS_FAILED,
+        "status_detail": detail,
+        "error_message": message[:2000],
+        "finished_at": now_text(),
+    }
+    if str(job.get("origin", "") or "").strip().lower() == "subscription":
+        # 失败也要进「待回写」队列，和成功一样。不进队列的话订阅日志里一个字都
+        # 没有，卡片上的「跨盘补源中」消失后又退回「尚未命中」——用户会以为兜底
+        # 根本没找到资源，实际是找到了、复制挂了。真正的日志由
+        # subscription_cross_copy_progress 的定时器成组写一条（一轮失败好几集，
+        # 逐条写会把日志刷满）。
+        fields["progress_state"] = "pending"
+    update_cross_copy_job(job_id, **fields)
     _clear_job_progress(job_id)
     try:
         cfg = get_config()
-        job = get_cross_copy_job(job_id) or {}
         _push_cross_copy_notification(cfg, job, ok=False, message=message)
     except Exception:  # noqa: BLE001 - 通知失败不影响任务收口
         logger.info("cross-copy failure notify skipped (job=%s)", job_id)

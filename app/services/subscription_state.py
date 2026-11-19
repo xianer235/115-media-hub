@@ -1,5 +1,5 @@
 from ..core import *  # noqa: F401,F403
-from ..db import db_connection, retry_sqlite_locked
+from ..db import db_connection, ensure_db, retry_sqlite_locked
 
 def has_subscription_match(task_name: str, resource_id: int) -> bool:
     with db_connection() as conn:
@@ -720,11 +720,122 @@ def upsert_subscription_task_state(task_name: str, **fields: Any) -> None:
     retry_sqlite_locked(upsert_state)
     schedule_ui_state_push(0)
 
+def cross_copy_active_counts() -> Dict[str, int]:
+    """按订阅任务名统计还在排队/进行中的跨盘补源任务数。
+
+    **不写进 subscription_task_state**：订阅主链路每次写状态都是整份覆盖
+    ``stats``（见「等待资源」分支），旁路写进去会在下一轮被冲掉；而且「有没有
+    补源在跑」本来就是 ``cross_copy_jobs`` 里的实时事实，落库只会和真值不同步。
+    这里一次聚合全部任务，读多写零。
+
+    用途：订阅任务卡要能显示「正在跨盘补源」。不显示的话，补源入队后到复制完成
+    这段时间界面只剩「尚未命中」，看着像兜底也没找到资源。
+    """
+    counts: Dict[str, int] = {}
+    ensure_db()
+    try:
+        with db_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT origin_ref, COUNT(*) FROM cross_copy_jobs
+                WHERE origin = 'subscription' AND status IN ('pending', 'running')
+                GROUP BY origin_ref
+                """
+            )
+            for row in cursor.fetchall():
+                name = str(row[0] or "").strip()
+                if not name:
+                    continue
+                counts[name] = int(row[1] or 0)
+    except Exception:
+        # 任务表读不出来只是少一个徽章，不该让整个任务列表报错
+        return {}
+    return counts
+
+
+# 补源失败在卡片上最多挂多久。超过这个窗口就不显示了——一次失败（比如分享过期）
+# 不该让卡片永远红着；补源本身每轮都会重试，真持续失败会不断刷新时间。
+CROSS_COPY_FAILURE_WINDOW_HOURS = 24
+
+
+def cross_copy_failure_counts() -> Dict[str, Dict[str, Any]]:
+    """按订阅任务名统计「最近失败、且失败之后没成功过」的跨盘补源任务。
+
+    为什么和 ``cross_copy_active_counts`` 一样实时查作业表、不落
+    ``subscription_task_state``：主链路每轮都会整份覆盖 ``stats``，旁路写进去
+    下一轮就被冲掉。
+
+    **「之后成功了就不算」是关键**：补源失败 → 下一轮重试成功之后，卡片必须
+    回到「最近命中」，不能还挂着上一次的失败。所以按 origin_ref 分组后还要和
+    「最新一次成功的时间」比一次。
+
+    返回 ``{任务名: {"count": 失败数, "reason": 最新失败原因, "at": 时间}}``。
+    """
+    ensure_db()
+    cutoff = (datetime.now() - timedelta(hours=CROSS_COPY_FAILURE_WINDOW_HOURS)).isoformat(timespec="seconds")
+    try:
+        with db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT origin_ref, id, filename, error_message, status_detail, finished_at
+                FROM cross_copy_jobs
+                WHERE origin = 'subscription' AND status = 'failed' AND finished_at >= ?
+                ORDER BY id DESC
+                """,
+                (cutoff,),
+            )
+            failed_rows = cursor.fetchall() or []
+            if not failed_rows:
+                return {}
+            cursor.execute(
+                """
+                SELECT origin_ref, MAX(finished_at) FROM cross_copy_jobs
+                WHERE origin = 'subscription' AND status = 'completed'
+                GROUP BY origin_ref
+                """
+            )
+            last_success = {
+                str(row[0] or "").strip(): str(row[1] or "").strip()
+                for row in (cursor.fetchall() or [])
+                if str(row[0] or "").strip()
+            }
+    except Exception:
+        # 作业表读不出来只是少一个徽章，不该让整个任务列表报错
+        return {}
+    seen: Dict[str, set] = {}
+    latest: Dict[str, Dict[str, str]] = {}
+    for row in failed_rows:
+        name = str(row[0] or "").strip()
+        if not name:
+            continue
+        finished_at = str(row[5] or "").strip()
+        # 这批失败之后已经成功过 → 问题解决了，不再展示
+        if last_success.get(name) and last_success[name] > finished_at:
+            continue
+        # 按文件名去重：同一集重试失败 3 次只是 1 集没补上，直接数记录会虚报成 3 集
+        key = str(row[2] or "").strip() or f"#{int(row[1] or 0)}"
+        seen.setdefault(name, set()).add(key)
+        # ORDER BY id DESC：该任务第一次出现的那条就是最新的
+        if name not in latest:
+            latest[name] = {
+                "reason": str(row[3] or row[4] or "").strip()[:160],
+                "at": finished_at,
+            }
+    return {
+        name: {"count": len(keys), **latest.get(name, {})}
+        for name, keys in seen.items()
+    }
+
+
 def list_subscription_task_runtime(cfg: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     cfg = cfg or get_config()
     tasks = cfg.get("subscription_tasks", []) if isinstance(cfg.get("subscription_tasks"), list) else []
     global_running = bool(subscription_status.get("running"))
     current_running_task = str(subscription_status.get("current_task", "") or "").strip()
+    # 一次查出所有任务的「补源进行中」计数，避免在循环里逐任务查库
+    cross_copy_active = cross_copy_active_counts()
+    cross_copy_failed = cross_copy_failure_counts()
     result: List[Dict[str, Any]] = []
     for raw_task in tasks:
         task = normalize_subscription_task(raw_task or {})
@@ -768,6 +879,21 @@ def list_subscription_task_runtime(cfg: Optional[Dict[str, Any]] = None) -> List
             "matched_score": state.get("matched_score", 0),
             "queued_job_id": state.get("queued_job_id", 0),
             "stats": state.get("stats", {}),
+            # 还在排队/复制中的补源任务数（实时值，不落库）。>0 时前端显示
+            # 「跨盘补源中」，不要退化成「尚未命中」。
+            "cross_copy_active_count": int(cross_copy_active.get(task["name"], 0) or 0),
+            # 最近补源失败且之后还没成功过（实时值，不落库）。>0 时前端显示
+            # 「补源失败 · N 集」，不能退化成「尚未命中」——那会让人以为连兜底
+            # 都没找到资源，实际是找到了但复制挂了。
+            "cross_copy_failure_count": int(
+                (cross_copy_failed.get(task["name"]) or {}).get("count", 0) or 0
+            ),
+            "cross_copy_failure_reason": str(
+                (cross_copy_failed.get(task["name"]) or {}).get("reason", "") or ""
+            ),
+            "cross_copy_failure_at": str(
+                (cross_copy_failed.get(task["name"]) or {}).get("at", "") or ""
+            ),
             "next_run": subscription_next_run.get(task["name"], ""),
         }
         if str(task.get("media_type", "movie") or "movie").strip().lower() == "tv":

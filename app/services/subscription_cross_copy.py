@@ -18,6 +18,7 @@ import logging
 import os
 import re
 import time
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..core import (
@@ -37,6 +38,12 @@ logger = logging.getLogger(__name__)
 
 # 夸克侧中转目录（与订阅离线中转同级的独立目录，删除只删此目录内文件）
 CROSS_COPY_STAGING_ROOT = "云下载/跨盘中转"
+
+# 同一分享补源失败后的冷却（分钟）。见 share_candidate_cooldown_minutes：
+# 单条失败等一会儿（多半是单集抖动），成片失败等更久（分享整体不可用）。
+CROSS_COPY_RETRY_COOLDOWN_MINUTES = 60
+CROSS_COPY_RETRY_COOLDOWN_MINUTES_REPEATED = 360
+CROSS_COPY_REPEAT_FAILURE_THRESHOLD = 3
 
 
 def staging_fallback_max_bytes() -> int:
@@ -176,6 +183,8 @@ def find_processed_cross_copy_job(
     origin_ref: str,
     source_share_url: str,
     source_file_id: str = "",
+    *,
+    any_share: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """查重：这个分享条目以前是否已经处理完（成功 / 跳过 / 被用户取消）。
 
@@ -187,14 +196,21 @@ def find_processed_cross_copy_job(
         日志持续膨胀；
       - 用户手动取消过 → 跳过，尊重用户的决定；
       - 失败过（failed）→ 允许重试，订阅每轮都该有机会补上。
+
+    ``any_share=True`` 时不看分享链接：那一步的前提是「中转目录里已有同名同大小
+    的文件」，而中转目录里的同一个文件只会有一份——不同分享是同一资源转贴时，
+    按分享链接查重查不到，会再建一个复制任务指向同一份文件（目标盘重复）。
     """
     ensure_db()
     sql = """
         SELECT * FROM cross_copy_jobs
-        WHERE origin = 'subscription' AND origin_ref = ? AND source_share_url = ?
+        WHERE origin = 'subscription' AND origin_ref = ?
           AND status IN ('completed', 'cancelled', 'skipped')
     """
-    params: List[Any] = [str(origin_ref or ""), str(source_share_url or "")]
+    params: List[Any] = [str(origin_ref or "")]
+    if not any_share:
+        sql += " AND source_share_url = ?"
+        params.append(str(source_share_url or ""))
     wanted_file_id = str(source_file_id or "").strip()
     if wanted_file_id:
         sql += " AND source_file_id = ?"
@@ -215,20 +231,27 @@ def find_active_cross_copy_job(
     origin_ref: str,
     source_share_url: str,
     source_file_id: str = "",
+    *,
+    any_share: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """查重：同一订阅任务 + 同一分享链接是否已有未完成的补源任务。
 
     source_file_id 传了就再收窄到「同一源条目」——一个分享会注册多个任务，
     只按分享查重会把同一分享里的第二个条目误判成「已在队列中」。
     不传（默认空）时行为和以前完全一致：只看任务 + 分享链接。
+
+    ``any_share`` 口径同上：源条目 id 已能唯一定位中转文件时，不必再绑分享链接。
     """
     ensure_db()
     sql = """
         SELECT * FROM cross_copy_jobs
-        WHERE origin = 'subscription' AND origin_ref = ? AND source_share_url = ?
+        WHERE origin = 'subscription' AND origin_ref = ?
           AND status IN ('pending', 'running')
     """
-    params: List[Any] = [str(origin_ref or ""), str(source_share_url or "")]
+    params: List[Any] = [str(origin_ref or "")]
+    if not any_share:
+        sql += " AND source_share_url = ?"
+        params.append(str(source_share_url or ""))
     wanted_file_id = str(source_file_id or "").strip()
     if wanted_file_id:
         sql += " AND source_file_id = ?"
@@ -243,6 +266,85 @@ def find_active_cross_copy_job(
     from ..db import sqlite_row_to_dict
 
     return sqlite_row_to_dict(row)
+
+
+def share_candidate_cooldown_minutes(origin_ref: str, share_url: str) -> int:
+    """同一分享刚失败过就先等一会儿，返回还要等多少分钟（0 = 现在就能试）。
+
+    为什么需要：失败的补源任务允许重试，但没有节流。分享被删、被限流封禁这类
+    **确定性**失败会「扫描成功 → 转存/下载失败」，而订阅默认半小时一轮，于是每
+    一轮都白扫一次目录、白试一次转存，永远不停。
+
+    冷却时长分两档（**不按失败条数判「连续失败」**）：一次失败会一次性产生
+    N 条任务记录（一集一条），按条数算会让偶发失败立刻被当成「连续失败 3 次」。
+    这里改成看「最近这一段连续失败里有几条」：
+      - 只有 1 条 → 等 ``CROSS_COPY_RETRY_COOLDOWN_MINUTES``（默认 60 分钟，
+        多半是单集下载抖动，断点还在，短等足够）；
+      - ≥ ``CROSS_COPY_REPEAT_FAILURE_THRESHOLD`` 条 → 等
+        ``CROSS_COPY_RETRY_COOLDOWN_MINUTES_REPEATED``（默认 360 分钟），
+        这种情况基本是分享整体不可用，多等一会儿把机会留给别的候选。
+
+    冷却到期后自动放行（分享可能恢复）。成功、取消、跳过都算「连续失败中断」。
+    """
+    share = str(share_url or "").strip()
+    if not share:
+        return 0
+    ensure_db()
+    try:
+        with db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT status, finished_at FROM cross_copy_jobs
+                WHERE origin = 'subscription' AND origin_ref = ? AND source_share_url = ?
+                ORDER BY id DESC LIMIT 40
+                """,
+                (str(origin_ref or ""), share),
+            )
+            rows = cursor.fetchall() or []
+    except Exception:  # noqa: BLE001 - 查不到历史就按「不需要冷却」处理
+        return 0
+    consecutive = 0
+    latest_failed_at = ""
+    for row in rows:
+        status = str(row[0] or "").strip().lower()
+        if status != "failed":
+            break
+        consecutive += 1
+        if not latest_failed_at:
+            latest_failed_at = str(row[1] or "").strip()
+    if not consecutive or not latest_failed_at:
+        return 0
+    window_minutes = (
+        CROSS_COPY_RETRY_COOLDOWN_MINUTES_REPEATED
+        if consecutive >= CROSS_COPY_REPEAT_FAILURE_THRESHOLD
+        else CROSS_COPY_RETRY_COOLDOWN_MINUTES
+    )
+    try:
+        finished = datetime.fromisoformat(latest_failed_at)
+    except (TypeError, ValueError):
+        return window_minutes
+    elapsed = (datetime.now() - finished).total_seconds() / 60.0
+    remain = window_minutes - elapsed
+    return int(remain) + 1 if remain > 0 else 0
+
+
+def candidate_wait_reason(origin_ref: str, candidate: Dict[str, Any]) -> str:
+    """这个候选现在该不该跳过？返回空串表示可以处理。
+
+    两件事都在**只读评估之前**判断，省掉一次目录递归扫描：
+      ① 该分享已有 pending/running 的补源任务——正在下载/上传，扫了也用不上；
+      ② 该分享刚失败过且在冷却窗口内（见 ``share_candidate_cooldown_minutes``）。
+    """
+    share_url = _extract_share_url(candidate) if isinstance(candidate, dict) else ""
+    if not share_url:
+        return ""
+    if find_active_cross_copy_job(origin_ref, share_url):
+        return f"该分享的补源任务还在进行中，本轮不重复扫描：{share_url[:40]}"
+    wait_minutes = share_candidate_cooldown_minutes(origin_ref, share_url)
+    if wait_minutes > 0:
+        return f"该分享刚补源失败，{wait_minutes} 分钟后再试：{share_url[:40]}"
+    return ""
 
 
 def _extract_share_url(candidate: Dict[str, Any]) -> str:
@@ -352,6 +454,8 @@ def _stage_share_to_quark(
     task: Optional[Dict[str, Any]] = None,
     last_episode: int = 0,
     existing_episodes: Optional[Set[int]] = None,
+    prescanned_files: Optional[List[Dict[str, Any]]] = None,
+    share_payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """把夸克分享转存到中转目录，返回本次真正新进来的条目。
 
@@ -377,8 +481,15 @@ def _stage_share_to_quark(
     剧集任务传了 ``task`` + 进度（``last_episode`` / ``existing_episodes``）时，
     会**先扫分享、只转存缺的集**（返回里 ``episode_filtered=True``），不再整包
     转存；转存这一步省下的是夸克侧配额，后面的复制本来也只做缺的集。
+
+    传了 ``prescanned_files``（调用方已经只读扫过分享、算好缺集）时直接按这份
+    清单转存：省掉一次重复扫目录，也**不再依赖「本盘已有进度」这个前提**——
+    首轮补源（本盘一集都没有）同样按集转存，不会整包搬一份重复的进中转。
+    ``share_payload`` 同理，评估阶段解析过就直接复用。
     """
-    share_payload = quark_provider.resolve_share_payload(cookie, share_url, "", receive_code)
+    share_payload = share_payload or quark_provider.resolve_share_payload(
+        cookie, share_url, "", receive_code
+    )
     listed = quark_provider.list_share_entries(cookie, share_payload, cid="0")
     # 真实 provider 返回 {"entries": [...], "summary": ...}（见 base.list_share_entries
     # 的 Dict 契约），不是裸列表；2026-10-20 真机发现这里按列表迭代导致分享永远
@@ -415,7 +526,42 @@ def _stage_share_to_quark(
     # 占住（不付费账号一个 30GB 的季包就塞满），转存那几秒也白等。
     # 扫不出文件（目录读取失败 / 层级太深）才退回整包，至少不会一集都补不上。
     episode_filtered = False
-    if (
+    if prescanned_files is not None:
+        # 调用方（register_cross_copy_from_candidates）已经只读扫过这个分享、
+        # 按「本盘缺哪几集」算好了清单。这里直接照单转存：
+        # ① 不重复扫一次分享目录；② 不再要求「本盘已有进度」才筛集——
+        # 首轮补源正是最容易把整包重复搬进中转的场景。
+        pending_files = [
+            item
+            for item in prescanned_files
+            if isinstance(item, dict) and _entry_id(item) and str(item.get("name", "") or "").strip()
+        ]
+        if not pending_files:
+            return {
+                "folder_id": "",
+                "folders": [],
+                "files": [],
+                "skipped": skipped + ["分享里没有本盘缺的集，本次不转存（不占配额）"],
+                "already_staged": False,
+                "episode_filtered": True,
+            }
+        share_entries = [
+            {
+                "id": _entry_id(item),
+                "name": str(item.get("name", "") or "").strip(),
+                "size": int(item.get("size", 0) or 0),
+                "is_dir": False,
+                "fid_token": str(item.get("fid_token", "") or ""),
+                "parent_id": str(item.get("parent_id", "") or "0"),
+            }
+            for item in pending_files
+        ]
+        episode_filtered = True
+        skipped.append(
+            "只转存本盘缺的集："
+            + "、".join(f"E{int(item.get('episode', 0) or 0)}" for item in pending_files)
+        )
+    elif (
         task is not None
         and str(task.get("media_type", "") or "").strip().lower() == "tv"
         and (int(last_episode or 0) > 0 or existing_episodes)
@@ -818,6 +964,127 @@ def _select_missing_episode_files(
     return selected, skipped
 
 
+def _evaluate_share_candidate(
+    provider: Any,
+    cookie: str,
+    candidate: Dict[str, Any],
+    task: Dict[str, Any],
+    last_episode: int,
+    existing_episodes: Optional[Set[int]],
+) -> Dict[str, Any]:
+    """只读扫一个候选分享，算出它到底能补哪些缺集。**不转存、不占配额**。
+
+    返回::
+
+        {
+          "candidate": 原始候选,
+          "share_url": "...",
+          "share_payload": {...},   # 后续转存复用，省一次解析
+          "scan_ok": True/False,    # 分享目录是否扫出了能认集数的视频
+          "files": [...],           # 本盘缺的、可直接按文件转存的条目（同集去重）
+          "episodes": {1, 2, ...},  # 上面这些文件覆盖的集
+          "notes": ["人话说明", ...],
+        }
+
+    为什么要先评估：候选只按标题/评分排序，**和「这个分享里到底有没有缺的集」
+    完全无关**。以前的做法是每个候选都先转存再筛，同一部剧的三个分享就会各
+    转一份进夸克中转，目标盘也跟着复制三遍（2026-11 实测：3 份 E01~E10）。
+
+    注意 ``scan_ok`` 与「没有缺集」是两件事：前者为 False 表示目录读不出来
+    （层级太深 / 被限流），调用方可以退回整包兜底；后者只是本盘真的不缺。
+    """
+    share_url = _extract_share_url(candidate)
+    receive_code = _extract_receive_code(candidate)
+    result: Dict[str, Any] = {
+        "candidate": candidate,
+        "share_url": share_url,
+        "share_payload": {},
+        "scan_ok": False,
+        "files": [],
+        "episodes": set(),
+        "notes": [],
+    }
+    try:
+        payload = provider.resolve_share_payload(cookie, share_url, "", receive_code)
+    except Exception as exc:  # noqa: BLE001 - 单个候选打不开不该拖垮整轮
+        result["notes"].append(f"打开分享失败：{share_url[:40]}（{exc}）")
+        return result
+    if isinstance(payload, dict):
+        result["share_payload"] = payload
+    scanned, scan_notes = _scan_share_media_files(provider, cookie, payload)
+    result["notes"].extend(scan_notes)
+    if not scanned:
+        result["notes"].append(f"分享里没扫到视频文件：{share_url[:40]}")
+        return result
+    # 先按「本盘一集都没有」的口径跑一遍，只为了确认「这份分享里到底有没有能认出
+    # 集数的正片」。全是花絮/预告/非标准命名时不能记成「本盘不缺」——那样会把
+    # 「认不出」误判成「不用补」，一集都补不上。这种情况交给调用方退回整包。
+    recognizable, _ = _select_missing_episode_files(task, scanned, "", 0, None)
+    if not recognizable:
+        result["notes"].append(f"分享里的文件都认不出集数：{share_url[:40]}")
+        return result
+    missing, why = _select_missing_episode_files(
+        task, scanned, "", last_episode, existing_episodes
+    )
+    result["notes"].extend(why)
+    missing = _dedupe_episode_files(missing)
+    result["scan_ok"] = True
+    result["files"] = missing
+    result["episodes"] = {
+        int(item.get("episode", 0) or 0)
+        for item in missing
+        if int(item.get("episode", 0) or 0) > 0
+    }
+    if not missing:
+        result["notes"].append(f"分享里没有本盘缺的集：{share_url[:40]}")
+    return result
+
+
+def _choose_share_plan(evaluations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """从评估结果里挑出真正要转存的分享：按「能补的缺集数」贪心，绝不重复搬。
+
+    排序口径：能补的集数降序；同分沿用候选原顺序——``find_subscription_cross_copy_candidates``
+    已按「标题命中 → 评分」排过，``sorted`` 是稳定排序，原顺序自然保留。
+
+    为什么是贪心集合覆盖，而不是「只取第一个」：最常见的情况是三个分享都是同一
+    部剧的 E01~E10 全集，第一个就覆盖全部缺集，后两个一个都不会转存；但也存在
+    「A 只有 E01~E05、B 有 E06~E10」的拆包分享，只取第一个会漏掉一半。
+    """
+    ranked = sorted(
+        (
+            item
+            for item in (evaluations or [])
+            if isinstance(item, dict) and item.get("scan_ok") and item.get("episodes")
+        ),
+        key=lambda item: -len(item.get("episodes") or ()),
+    )
+    plan: List[Dict[str, Any]] = []
+    covered: Set[int] = set()
+    for item in ranked:
+        remain = set(item.get("episodes") or set()) - covered
+        if not remain:
+            continue
+        files = [
+            file_item
+            for file_item in (item.get("files") or [])
+            if int(file_item.get("episode", 0) or 0) in remain
+        ]
+        if not files:
+            continue
+        plan.append(
+            {
+                "candidate": item.get("candidate") or {},
+                "share_url": str(item.get("share_url", "") or ""),
+                "share_payload": item.get("share_payload") or {},
+                "mode": "episodes",
+                "files": files,
+                "notes": list(item.get("notes") or []),
+            }
+        )
+        covered |= remain
+    return plan
+
+
 def cleanup_staging_empty_folders(provider: Any, cookie: str, task_name: str) -> int:
     """删掉补源中转目录里的空文件夹，返回删除个数。
 
@@ -948,10 +1215,79 @@ def register_cross_copy_from_candidates(
     registered: List[int] = []
     skipped: List[str] = []
     claimed_episodes: set = set()
+    is_tv = str(task.get("media_type", "") or "").strip().lower() == "tv"
 
+    # 转存之前先决定「只搬哪一个」。以前是 picked 里的候选逐个「先转存、再筛」：
+    # 新剧首轮（本盘一集都没有）连筛集这一步都会被跳过，于是三个分享各整包转存
+    # 一份进夸克中转，目标盘跟着复制三遍。现在剧集先只读扫一遍分享，按能补多少
+    # 缺集择优；电影没有「集」的概念，按候选顺序只搬第一个，成功即止。
+    plan: List[Dict[str, Any]] = []
+    # 只读评估要递归列一遍分享目录（最多 3 个候选）。所以先排除两种「现在处理也
+    # 没意义」的候选：① 这个分享已经有补源任务在下载/上传（一轮补源可能跑几小时，
+    # 期间每轮订阅都会把同样的目录重扫一遍）；② 刚失败过还在冷却窗口内。
+    ready_candidates: List[Dict[str, Any]] = []
     for candidate in picked:
-        share_url = _extract_share_url(candidate)
+        wait_reason = candidate_wait_reason(task_name, candidate)
+        if wait_reason:
+            skipped.append(wait_reason)
+            continue
+        ready_candidates.append(candidate)
+    if not ready_candidates:
+        logs.append(
+            ("跨盘补源：候选分享都还在补源或失败冷却中，本轮不重复扫描", "info")
+        )
+        return {"registered": [], "skipped": skipped, "logs": logs}
+    if is_tv:
+        evaluations = [
+            _evaluate_share_candidate(
+                quark_provider, cookie_quark, candidate, task, last_episode, existing_episodes
+            )
+            for candidate in ready_candidates
+        ]
+        plan = _choose_share_plan(evaluations)
+        if not plan:
+            # 一个能补的缺集都没算出来，两种原因必须分开：
+            #   ① 都扫成功但本盘不缺 → 本轮不转存（正确，别白占配额）；
+            #   ② 有分享扫不出来（层级太深 / 限流）→ 兜底整包试一个，
+            #      否则「扫描失败」会被当成「没东西可补」，一集都补不上。
+            fallback = next((item for item in evaluations if not item.get("scan_ok")), None)
+            if fallback is None:
+                # 扫得出来、但每一集本盘都有了。写一条日志明说「没缺集，未转存」，
+                # 否则界面只剩「尚未命中」，看起来像是连候选都没找到。
+                logs.append(("跨盘补源：候选里没有本盘缺的集，本轮未转存（未占用夸克空间）", "info"))
+                return {
+                    "registered": [],
+                    "skipped": skipped + ["分享里没有本盘缺的集，本轮不转存"],
+                    "logs": logs,
+                }
+            plan = [
+                {
+                    "candidate": fallback.get("candidate") or {},
+                    "share_url": str(fallback.get("share_url", "") or ""),
+                    "share_payload": fallback.get("share_payload") or {},
+                    "mode": "whole",
+                    "files": [],
+                    "notes": list(fallback.get("notes") or []),
+                }
+            ]
+    else:
+        plan = [
+            {
+                "candidate": candidate,
+                "share_url": _extract_share_url(candidate),
+                "share_payload": {},
+                "mode": "whole",
+                "files": [],
+                "notes": [],
+            }
+            for candidate in ready_candidates
+        ]
+
+    for item in plan:
+        candidate = item.get("candidate") or {}
+        share_url = str(item.get("share_url", "") or _extract_share_url(candidate))
         receive_code = _extract_receive_code(candidate)
+        skipped.extend(item.get("notes") or [])
         # 同一轮里前几个分享已经补过的集，后面的分享不用再转存一份（省夸克配额）。
         if claimed_episodes:
             stage_existing_episodes = set(existing_episodes or set()) | set(claimed_episodes)
@@ -967,6 +1303,8 @@ def register_cross_copy_from_candidates(
                 task=task,
                 last_episode=last_episode,
                 existing_episodes=stage_existing_episodes,
+                prescanned_files=item.get("files") if item.get("mode") == "episodes" else None,
+                share_payload=item.get("share_payload") or None,
             )
         except Exception as exc:
             skipped.append(f"转存失败：{share_url[:40]}（{exc}）")
@@ -1069,13 +1407,20 @@ def register_cross_copy_from_candidates(
         for item, is_folder in register_items:
             item_name = str(item.get("name", "") or "").strip()
             item_id = str(item.get("id", "") or "").strip()
-            if find_active_cross_copy_job(task_name, share_url, source_file_id=item_id):
+            # already_staged = 这个条目是从中转目录复用的（本轮没有真转存）。
+            # 那种情况下中转里只可能有这一份文件，查重就不能再绑分享链接：
+            # 同一资源的不同分享链接会各自查不到、各建一个任务指向同一份文件，
+            # 目标盘就重复了。
+            reused = bool(staged.get("already_staged"))
+            if find_active_cross_copy_job(
+                task_name, share_url, source_file_id=item_id, any_share=reused
+            ):
                 skipped.append(f"已在补源队列中，跳过：{item_name}")
                 continue
             # 「中转目录里已经有文件」这条分支会走到这里：如果上次其实已经复制成功，
             # 再注册一次会往目标目录塞第二份，所以按已完成/已取消再挡一道。
-            if staged.get("already_staged") and find_processed_cross_copy_job(
-                task_name, share_url, source_file_id=item_id
+            if reused and find_processed_cross_copy_job(
+                task_name, share_url, source_file_id=item_id, any_share=True
             ):
                 skipped.append(f"以前已补过，跳过：{item_name}")
                 continue
@@ -1118,7 +1463,10 @@ def register_cross_copy_from_candidates(
                 (
                     f"跨盘补源已入队：夸克{'文件夹' if is_folder else ''} → {target_label}"
                     f"（{item_name or share_url[:40]}，任务 #{job_id}）",
-                    "info",
+                    # 「命中并已入队」是补源这条链上最该被看见的结论，用 success 让它在
+                    # 日志里显绿；以前是 info，和「搜索中/等待中」一个颜色，读者要逐行
+                    # 找才知道到底补没补上。
+                    "success",
                 )
             )
 
@@ -1127,10 +1475,14 @@ def register_cross_copy_from_candidates(
                 (
                     f"本次从该分享注册了 {registered_here} 个任务"
                     f"（{folders_here} 个文件夹、{files_here} 个文件）：{share_url[:60]}",
-                    "info",
+                    "success",
                 )
             )
+        # 电影/其它只搬第一个候选：成功注册就不再试后面的分享，避免同一部电影
+        # 落三份；失败（没注册出任务）才继续下一个。
+        if not is_tv and registered_here:
+            break
 
     if registered:
-        logs.append((f"跨盘补源：本轮注册 {len(registered)} 个复制任务（目标 {target_label}）", "info"))
+        logs.append((f"跨盘补源：本轮注册 {len(registered)} 个复制任务（目标 {target_label}）", "success"))
     return {"registered": registered, "skipped": skipped, "logs": logs}

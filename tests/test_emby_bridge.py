@@ -242,6 +242,47 @@ class HandleDispatchTest(_BridgeHandleTestBase):
         self.assertEqual(payload["TotalRecordCount"], 1)
         self.assertEqual(payload["Items"][0]["ProviderIds"]["Tmdb"], "332911")
 
+    def test_items_latest_rewritten_to_recent_items(self):
+        """Recently Added Scan 的 /Items/Latest?Limit=12 被改成按日期降序拉最近 N 条。"""
+        captured = {}
+
+        def fake_forward(upstream, method, path, query, body, headers, read_timeout):
+            captured["path"] = path
+            captured["query"] = query
+            return 200, {}, {"Items": [{"Id": "video_1", "Type": "Movie"}]}
+
+        with mock.patch.object(bridge, "_forward_json", side_effect=fake_forward):
+            with mock.patch.object(bridge, "_get_token", return_value={"token": "t", "uid": "uid123", "server_id": "s"}):
+                status, _, payload = self._run_sync(
+                    self._run("GET", "/Users/uid123/Items/Latest", query="Limit=12&ParentId=class_movies")
+                )
+        self.assertEqual(status, 200)
+        # 路径 /Items/Latest → /Items（保留 /Users/{uid} 前缀）
+        self.assertEqual(captured["path"], "/Users/uid123/Items")
+        qs = dict(bridge.urllib.parse.parse_qsl(captured["query"]))
+        self.assertEqual(qs["ParentId"], "class_movies")
+        self.assertEqual(qs["SortBy"], "DateCreated")
+        self.assertEqual(qs["SortOrder"], "Descending")
+        self.assertEqual(qs["Recursive"], "true")
+        self.assertEqual(int(qs["Limit"]), bridge._LATEST_ITEMS_LIMIT)
+
+    def test_items_latest_without_parentid_passed_through(self):
+        """缺 ParentId 时不动，直接透传（不给上游发坏查询）。"""
+        captured = {}
+
+        def fake_forward(upstream, method, path, query, body, headers, read_timeout):
+            captured["path"] = path
+            captured["query"] = query
+            return 200, {}, {"Items": []}
+
+        with mock.patch.object(bridge, "_forward_json", side_effect=fake_forward):
+            with mock.patch.object(bridge, "_get_token", return_value={"token": "t", "uid": "uid123", "server_id": "s"}):
+                status, _, _ = self._run_sync(
+                    self._run("GET", "/Users/uid123/Items/Latest", query="Limit=12")
+                )
+        self.assertEqual(status, 200)
+        self.assertEqual(captured["path"], "/Users/uid123/Items/Latest")
+
 
 class ScanPaginationTest(_BridgeHandleTestBase):
     """T6：Seerr 只发一次 /Items 且不翻页，桥代为翻页聚合成整个库。"""

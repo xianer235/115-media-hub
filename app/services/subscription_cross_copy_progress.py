@@ -562,6 +562,57 @@ async def _push_merged_success_notification(
             logger.warning("跨盘补源通知：推进游标失败（%s）：%s", task_name, exc)
 
 
+def _shorten_reason(text: str, limit: int = 80) -> str:
+    value = " ".join(str(text or "").split())
+    return value if len(value) <= limit else f"{value[: limit - 1]}…"
+
+
+def build_failure_detail(task: Dict[str, Any], jobs: List[Dict[str, Any]]) -> str:
+    """把一组失败的补源任务压成一条订阅日志。
+
+    为什么成组而不是逐条：一轮可能失败 10 集，逐条写会把订阅日志刷满；但也不能
+    只写「失败」两个字——用户需要知道是哪几集、为什么挂的。集数认得出来用
+    ``E03``，认不出来（整包文件夹补源）就说文件数。
+    """
+    job_list = [job for job in (jobs or []) if isinstance(job, dict)]
+    episodes = _collect_episodes(task, job_list)
+    if episodes:
+        head = f"跨盘补源失败 {len(job_list)} 集（{_format_episode_brief(episodes)}）"
+    else:
+        head = f"跨盘补源失败 {len(job_list)} 个文件"
+    reasons: List[str] = []
+    for job in job_list:
+        reason = str(job.get("error_message", "") or job.get("status_detail", "") or "").strip()
+        reason = _shorten_reason(reason)
+        if reason and reason not in reasons:
+            reasons.append(reason)
+    detail = head
+    if reasons:
+        detail += "：" + "；".join(reasons[:2])
+    return detail + "，下一轮订阅会自动重试"
+
+
+async def _apply_failed_group(task_name: str, jobs: List[Dict[str, Any]], stats: Dict[str, Any]) -> None:
+    """失败组的收尾：写一条 warn 日志，不动订阅状态。
+
+    不动 ``subscription_task_state`` 的原因：失败不该改写「最近命中 / 追更进度」
+    这些成功语义的字段；卡片上的「补源失败 · N 集」由
+    ``subscription_state.cross_copy_failure_counts()`` 实时查作业表得出。
+    """
+    job_ids = [int(job.get("id", 0) or 0) for job in jobs if int(job.get("id", 0) or 0) > 0]
+    if not job_ids:
+        return
+    try:
+        task = find_subscription_task(get_config(), task_name)
+    except Exception:  # noqa: BLE001 - 取不到任务只影响文案里的集数解析
+        task = {}
+    detail = build_failure_detail(task or {}, jobs)
+    _finish_jobs(job_ids, PROGRESS_STATE_DONE, detail)
+    stats["copy_failed"] = int(stats.get("copy_failed", 0) or 0) + len(job_ids)
+    # 订阅任务正在运行时也照写：这条描述的是已经结束的补源任务，不碰主流程状态
+    await write_subscription_log(detail, "warn")
+
+
 async def _apply_group(task_name: str, jobs: List[Dict[str, Any]], stats: Dict[str, Any]) -> None:
     job_ids = [int(job.get("id", 0) or 0) for job in jobs if int(job.get("id", 0) or 0) > 0]
     claimed = _claim_jobs(job_ids)
@@ -570,24 +621,36 @@ async def _apply_group(task_name: str, jobs: List[Dict[str, Any]], stats: Dict[s
     stats["groups"] += 1
     claimed_set = set(claimed)
     claimed_jobs = [job for job in jobs if int(job.get("id", 0) or 0) in claimed_set]
+    # 同一批里成功和失败要分开处理：``apply_progress_for_task`` 是「这批补进来了
+    # 什么」的语义，把失败的任务混进去会把 file_count / 集数算多。
+    failed_jobs = [
+        job for job in claimed_jobs if str(job.get("status", "") or "").strip().lower() == "failed"
+    ]
+    ok_jobs = [job for job in claimed_jobs if job not in failed_jobs]
     token = _log_context(task_name)
     try:
+        if failed_jobs:
+            await _apply_failed_group(task_name, failed_jobs, stats)
+        if not ok_jobs:
+            return
         cfg = get_config()
-        result = await asyncio.to_thread(apply_progress_for_task, task_name, claimed_jobs, cfg)
+        result = await asyncio.to_thread(apply_progress_for_task, task_name, ok_jobs, cfg)
         if result.get("retry"):
-            _release_jobs(claimed)
+            _release_jobs([int(job.get("id", 0) or 0) for job in ok_jobs])
             return
         if result.get("ok"):
-            _finish_jobs(claimed, PROGRESS_STATE_DONE, str(result.get("detail", "") or "已回写订阅进度"))
-            stats["done"] += len(claimed)
+            claimed_ok = [int(job.get("id", 0) or 0) for job in ok_jobs]
+            _finish_jobs(claimed_ok, PROGRESS_STATE_DONE, str(result.get("detail", "") or "已回写订阅进度"))
+            stats["done"] += len(claimed_ok)
             await write_subscription_log(str(result.get("detail", "") or ""), "success")
             # 补源成功也算订阅成功：这里发那一条「订阅更新成功」，
             # 逐文件的「跨盘复制完成」已在成功收口处按开关跳过。
             await _push_merged_success_notification(cfg, result.get("task"), stats)
             return
         reason = str(result.get("detail", "") or "回写未完成").strip()
-        _finish_jobs(claimed, PROGRESS_STATE_SKIPPED, reason)
-        stats["skipped"] += len(claimed)
+        claimed_ok = [int(job.get("id", 0) or 0) for job in ok_jobs]
+        _finish_jobs(claimed_ok, PROGRESS_STATE_SKIPPED, reason)
+        stats["skipped"] += len(claimed_ok)
     except Exception as exc:  # noqa: BLE001 - 一组出错不能把整个定时器打死
         logger.exception("跨盘补源进度回写失败（%s）", task_name)
         _finish_jobs(claimed, PROGRESS_STATE_FAILED, f"回写异常：{str(exc)[:120]}")
@@ -603,6 +666,8 @@ async def run_pending_progress_once() -> Dict[str, Any]:
         "done": 0,
         "skipped": 0,
         "failed": 0,
+        # 补源任务本身失败的条数（区别于 failed = 回写异常）
+        "copy_failed": 0,
         "reset": 0,
         "notified": 0,
         "notify_failed": 0,
@@ -614,7 +679,7 @@ async def run_pending_progress_once() -> Dict[str, Any]:
     groups = group_jobs(jobs)
     for task_name, group in list(groups.items())[:PROGRESS_MAX_GROUPS_PER_TICK]:
         await _apply_group(task_name, group, stats)
-    if stats["done"] or stats["failed"]:
+    if stats["done"] or stats["failed"] or stats["copy_failed"]:
         logger.info("跨盘补源进度回写：%s", stats)
     return stats
 

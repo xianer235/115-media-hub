@@ -259,6 +259,91 @@ class SubscriptionUiFrontendTest(unittest.TestCase):
         self.assertIn("尚未命中", html)
         self.assertNotIn("已到", html)
 
+    def test_subscription_last_hit_badge_shows_cross_copy_in_progress(self):
+        """补源已入队但没复制完时，卡片要明说「跨盘补源中」。
+
+        否则界面只剩「尚未命中」，看起来像兜底也没找到资源（2026-11 用户反馈）。
+        """
+        html = run_subscription_ui(
+            "buildSubscriptionLastHitBadge({ media_type: 'tv', cross_copy_active_count: 3 })"
+        )
+        self.assertIn("跨盘补源中", html)
+        self.assertIn("3 个任务", html)
+        self.assertIn("subscription-last-hit-badge-copying", html)
+
+    def test_subscription_last_hit_badge_keeps_previous_hit_while_copying(self):
+        """正在补源时不能顶掉已有命中记录，两个徽章并存。"""
+        task = {
+            "media_type": "tv",
+            "cross_copy_active_count": 2,
+            "last_success_at": "2026-08-02T04:34:25",
+        }
+        html = run_subscription_ui(
+            f"buildSubscriptionLastHitBadge({json.dumps(task, ensure_ascii=False)})"
+        )
+        self.assertIn("跨盘补源中", html)
+        self.assertIn("最近命中", html)
+
+    def test_subscription_last_hit_badge_without_copying_has_no_copying_badge(self):
+        html = run_subscription_ui("buildSubscriptionLastHitBadge({ media_type: 'tv' })")
+        self.assertNotIn("跨盘补源中", html)
+
+    def test_subscription_last_hit_badge_shows_copy_failure(self):
+        """补源失败要明说「补源失败」。
+
+        资源是找到了、复制挂了；如果还显示「尚未命中」，用户会以为兜底没找到，
+        白白再去手动找资源（2026-11 用户反馈的同一类误解）。
+        """
+        task = {
+            "media_type": "tv",
+            "cross_copy_failure_count": 2,
+            "cross_copy_failure_reason": "115 直链 403",
+            "cross_copy_failure_at": "2026-08-02T04:34:25",
+        }
+        html = run_subscription_ui(
+            f"buildSubscriptionLastHitBadge({json.dumps(task, ensure_ascii=False)})"
+        )
+        self.assertIn("补源失败", html)
+        self.assertIn("2 集", html)
+        self.assertIn("subscription-last-hit-badge-failed", html)
+        self.assertIn("115 直链 403", html)
+
+    def test_subscription_last_hit_badge_failure_uses_file_unit_for_movie(self):
+        html = run_subscription_ui(
+            "buildSubscriptionLastHitBadge({ media_type: 'movie', cross_copy_failure_count: 1 })"
+        )
+        self.assertIn("补源失败", html)
+        self.assertIn("1 个文件", html)
+
+    def test_subscription_last_hit_badge_hides_failure_while_copying(self):
+        """有新任务在跑时不挂红标：正在重试，别让两个状态打架。"""
+        task = {
+            "media_type": "tv",
+            "cross_copy_active_count": 2,
+            "cross_copy_failure_count": 1,
+        }
+        html = run_subscription_ui(
+            f"buildSubscriptionLastHitBadge({json.dumps(task, ensure_ascii=False)})"
+        )
+        self.assertIn("跨盘补源中", html)
+        self.assertNotIn("补源失败", html)
+
+    def test_subscription_detail_text_mentions_copy_failure(self):
+        task = {
+            "media_type": "tv",
+            "cross_copy_failure_count": 3,
+            "cross_copy_failure_reason": "上传超时",
+            "last_success_at": "2026-08-02T04:34:25",
+            "matched_resource_title": "仙逆",
+        }
+        text = run_subscription_ui(
+            f"buildSubscriptionLatestMatchText({json.dumps(task, ensure_ascii=False)})"
+        )
+        self.assertIn("补源失败 3 集", text)
+        self.assertIn("上传超时", text)
+        # 有上次命中记录时也要带上，不能因为失败把历史抹掉
+        self.assertIn("上一次命中", text)
+
 
     def test_subscription_season_badge_shows_padded_season_for_tv(self):
         html = run_subscription_ui("buildSubscriptionTaskSeasonBadge({ media_type: 'tv', season: 3 })")
