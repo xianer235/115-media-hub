@@ -3688,6 +3688,44 @@ function endIdentifyPathGesture(event) {
     }
 }
 
+let duplicatesControllerPromise = null;
+
+async function getDuplicatesController() {
+    if (!duplicatesControllerPromise) {
+        // 查重模块懒加载：不开查重面板的用户不为它多付一次请求。
+        // 版本号由 tabs/scraper.js 在加载 core.js 时塞到 window，避免子模块被旧缓存命中。
+        // 这里刻意不用 import.meta.url：core.js 会被前端测试当普通脚本执行（node vm）。
+        const query = (() => {
+            try {
+                return String(window.__scraperModuleQuery || '');
+            } catch (e) {
+                return '';
+            }
+        })();
+        duplicatesControllerPromise = import(`./duplicates.js${query}`)
+            .then(module => module.createDuplicatesController({
+                getProvider: () => state.provider,
+                getCid: () => state.cid,
+                showToast,
+                showConfirm,
+                formatFileSize,
+                escapeHtml,
+                buildMutationRequestId,
+                onAfterDelete: () => loadEntries({ force: true }),
+            }))
+            .catch((error) => {
+                showToast(`查重模块加载失败：${error?.message || '未知错误'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
+                return null;
+            });
+    }
+    return duplicatesControllerPromise;
+}
+
+async function withDuplicatesPanel(handler) {
+    const controller = await getDuplicatesController();
+    if (controller && typeof handler === 'function') handler(controller);
+}
+
 function handleClick(event) {
     if (event.target?.id === 'scraper-identify-panel') {
         closeIdentifyPanel();
@@ -3776,6 +3814,10 @@ function handleClick(event) {
     const actionButton = event.target.closest('[data-scraper-action]');
     if (!actionButton) return;
     const action = String(actionButton.dataset.scraperAction || '').trim();
+    if (action === 'open-duplicates' || action === 'close-duplicates' || action.startsWith('dup-')) {
+        void withDuplicatesPanel(controller => controller.handleAction(action));
+        return;
+    }
     if (action === 'refresh') void loadEntries({ force: true });
     if (action === 'load-more-entries') void loadEntries({ more: true });
     if (action === 'back-top') scrollScraperToTop();
@@ -3852,6 +3894,13 @@ function handleClick(event) {
 }
 
 function handleChange(event) {
+    const dupPick = event.target.closest('[data-dup-pick]');
+    if (dupPick) {
+        const entryId = dupPick.dataset.dupPick || '';
+        const checked = !!dupPick.checked;
+        void withDuplicatesPanel(controller => controller.togglePick(entryId, checked));
+        return;
+    }
     const check = event.target.closest('[data-scraper-check]');
     if (check) {
         setSelected(check.dataset.scraperCheck, check.checked);

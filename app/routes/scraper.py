@@ -5,7 +5,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from ..core import normalize_relative_path, parse_int
-from ..services import quick_import
+from ..services import duplicate_scan, quick_import
 from ..services.scraper import (
     build_scraper_batch_plan,
     build_scraper_providers_payload,
@@ -43,6 +43,66 @@ def _error_response(exc: Exception, status_code: int = 400) -> JSONResponse:
 async def get_scraper_providers_endpoint() -> Dict[str, Any]:
     try:
         return await asyncio.to_thread(build_scraper_providers_payload)
+    except Exception as exc:
+        return _error_response(exc)
+
+
+@router.post("/scraper/duplicates/scan")
+async def scan_duplicate_media_endpoint(request: Request) -> Dict[str, Any]:
+    """查重扫描：只读，不产生任何写操作。"""
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    payload = data if isinstance(data, dict) else {}
+    provider = str(payload.get("provider", "115") or "115").strip() or "115"
+    cid = str(payload.get("cid", "0") or "0").strip() or "0"
+    options = {
+        "max_depth": payload.get("max_depth"),
+        "max_dirs": payload.get("max_dirs"),
+        "max_entries": payload.get("max_entries"),
+    }
+    try:
+        return await asyncio.to_thread(duplicate_scan.scan_duplicate_media, provider, cid, options)
+    except Exception as exc:
+        return _error_response(exc)
+
+
+@router.post("/scraper/duplicates/plan")
+async def plan_duplicate_deletion_endpoint(request: Request) -> Dict[str, Any]:
+    """把勾选结果变成删除清单：服务端重新校验「每组至少留一份 / 只删视频」。"""
+    data = await request.json()
+    payload = data if isinstance(data, dict) else {}
+    provider = str(payload.get("provider", "115") or "115").strip() or "115"
+    groups = payload.get("groups") if isinstance(payload.get("groups"), list) else []
+    delete_ids = payload.get("delete_ids") if isinstance(payload.get("delete_ids"), list) else []
+    try:
+        return await asyncio.to_thread(duplicate_scan.plan_duplicate_deletion, provider, groups, delete_ids)
+    except Exception as exc:
+        return _error_response(exc)
+
+
+@router.post("/scraper/duplicates/delete")
+async def delete_duplicate_files_endpoint(request: Request) -> Dict[str, Any]:
+    """执行查重清理。
+
+    不信任前端传来的清单：这里拿 groups + delete_ids 再 plan 一次，通过校验才删。
+    走的是文件管理同一个删除通道（115 进回收站），不另开一条删除路径。
+    """
+    data = await request.json()
+    payload = data if isinstance(data, dict) else {}
+    provider = str(payload.get("provider", "115") or "115").strip() or "115"
+    groups = payload.get("groups") if isinstance(payload.get("groups"), list) else []
+    delete_ids = payload.get("delete_ids") if isinstance(payload.get("delete_ids"), list) else []
+    request_id = str(payload.get("request_id", "") or "").strip()
+    try:
+        plan = await asyncio.to_thread(
+            duplicate_scan.plan_duplicate_deletion, provider, groups, delete_ids
+        )
+        result = await asyncio.to_thread(
+            duplicate_scan.delete_duplicate_files, provider, plan.get("items", []), request_id
+        )
+        return {"ok": True, "planned": plan, **result}
     except Exception as exc:
         return _error_response(exc)
 

@@ -100,9 +100,9 @@
 ### 文件管理（scraper）
 - **用途**：网盘文件浏览 + 常用文件操作（复制 / 移动 / 重命名 / 删除 / 新建文件夹）+ TMDB 识别绑定 + 批量重命名，让文件名符合播放器与刮削器预期。跨网盘复制也从这里发起（复制 → 切到目标网盘 → 跨网盘粘贴），支持一次选多个文件和整个文件夹。**跨网盘只支持复制，不提供移动**：移动要删源文件，跨盘删源出错无法回滚，所以跨盘时「移动」按钮置灰并提示改用复制（待移动清单可一键转成待复制）；同盘移动不受影响。接口层 `/scraper/{provider}/move` 也会校验 `source_provider`，不一致直接 400，防止脚本绕过前端。
 - **入口**：页面「文件管理」（模块名仍是 `scraper`，路由不变）；`/scraper/...`；`/cross_copy/...`；CLI `scrape ...`（含批量偏好设置）。
-- **会做**：浏览多网盘目录、单个或批量识别（规则识别，可选 AI 候选兜底）、生成命名预览 → 确认执行 → 生成刮削任务并可回滚；115 的批量改名 / 移动会先等「受理结果回验落地」再按成功收尾监控同步事件（未确认落地时事件转 `needs_reconcile` 兜底重试，不判死）；跨网盘粘贴时先查能力矩阵，再弹确认框写明「先下载到本地暂存再上传、大文件慢、秒传命中只下载」，文件夹会额外提示逐个文件复制。
+- **会做**：浏览多网盘目录、单个或批量识别（规则识别，可选 AI 候选兜底）、生成命名预览 → 确认执行 → 生成刮削任务并可回滚；115 的批量改名 / 移动会先等「受理结果回验落地」再按成功收尾监控同步事件（未确认落地时事件转 `needs_reconcile` 兜底重试，不判死）；跨网盘粘贴时先查能力矩阵，再弹确认框写明「先下载到本地暂存再上传、大文件慢、秒传命中只下载」，文件夹会额外提示逐个文件复制；**查重**：扫当前目录（含 4 层子目录）找「同一集/同一部电影存了两份以上」，按 SHA1 是否相同分两档——`exact`（同一份文件换了名字，可一键清理）与 `episode`（同集不同版本，默认一个都不勾，需人工确认），另给「同一部剧存在两个不同命名目录」的提示。只读扫描，删除复用文件管理删除通道（115 进回收站）。
 - **不会做**：不生成 STRM（改完由变更同步刷新播放文件）；页面操作必须先出预览再确认（自动整理链路除外，见文件夹监控 / 接收夹）；**不把已经落成 `剧名/Season NN/` 的内容再套一层媒体文件夹**（选中的是季目录、父目录名就是这部剧时就地整理，详见 `conventions.md` 的「整理锚点」）；跨网盘**移动**不支持文件夹，也不删源。
-- **相关代码**：`app/routes/scraper.py`、`app/services/scraper.py`、`app/services/ai_match.py`、`app/services/cross_cloud_copy.py`、`app/services/cross_cloud_copy_folder.py`、`app/services/cross_copy_jobs.py`；页面 `templates/partials/pages/scraper.html`、弹窗 `templates/partials/modals/cross_copy.html`
+- **相关代码**：`app/routes/scraper.py`、`app/services/scraper.py`、`app/services/duplicate_scan.py`、`app/services/ai_match.py`、`app/services/cross_cloud_copy.py`、`app/services/cross_cloud_copy_folder.py`、`app/services/cross_copy_jobs.py`；页面 `templates/partials/pages/scraper.html`、`static/js/modules/scraper/duplicates.js`、弹窗 `templates/partials/modals/cross_copy.html`
 
 ### 参数配置（settings）
 - **用途**：全局配置与运维入口：认证、签到、通知、代理、安全、AI、版本。
@@ -155,6 +155,7 @@
 | `app/services/monitor_runs.py` | 监控运行记录的结构化生命周期（run / event / 父子链路 / 保留清理） |
 | `app/services/strm_files.py` | 受管 STRM 文件读写删除、空目录清理、孤儿元数据目录判定 |
 | `app/services/quick_import.py` | 接收夹：识别 → 整理 → 分发到同盘目标文件夹（仅 115 命中扫描范围才刷 STRM） |
+| `app/services/duplicate_scan.py` | 媒体库查重：目录 BFS 扫描 + 季集解析分组 + SHA1 判「同一份文件」+ 建议保留项；删除前做「每组至少留一份 / 只删视频 / 不认伪造 id」三道校验，删除复用 `delete_scraper_entries` |
 | `app/services/tree.py` | 目录树 TXT → STRM 生成与增量对比 |
 | `app/services/scraper.py` | 刮削核心：识别、命名计划、批量作业执行与回滚 |
 | `app/services/ai_match.py` | OpenAI 兼容大模型辅助识别（关键词生成 + 候选选择，带缓存 / 重试 / 用量统计） |

@@ -30,6 +30,12 @@
                                         <path d="M20 4.7V9.3H15.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
                                     </svg>
                                 </button>
+                                <button id="scraper-duplicates-btn" type="button" class="scraper-icon-btn" data-scraper-action="open-duplicates" title="查重：找出同一集/同一部电影存了两份的情况（扫描当前目录）" aria-label="查重">
+                                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                        <rect x="4" y="3.5" width="11" height="14" rx="2" stroke="currentColor" stroke-width="1.8"/>
+                                        <path d="M8.5 20.5h9a2 2 0 0 0 2-2v-9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                                    </svg>
+                                </button>
                             </div>
                         </div>
 
@@ -75,6 +81,24 @@
                         </div>
 
                         <div id="scraper-move-buffer" class="scraper-move-buffer hidden"></div>
+
+                        <section id="scraper-duplicates-panel" class="scraper-duplicates-panel hidden" aria-label="查重结果">
+                            <div class="scraper-duplicates-head">
+                                <div class="scraper-duplicates-heading">
+                                    <div class="scraper-panel-kicker">Duplicates</div>
+                                    <h4 class="scraper-duplicates-title">查重</h4>
+                                    <div id="scraper-duplicates-meta" class="scraper-duplicates-meta">正在扫描当前目录…</div>
+                                </div>
+                                <div class="scraper-duplicates-actions">
+                                    <button type="button" class="scraper-compact-btn" data-scraper-action="dup-keep-best" title="每组只保留画质最高的那一份，其余勾选待删">每组保留最高画质</button>
+                                    <button type="button" class="scraper-compact-btn" data-scraper-action="dup-rescan">重新扫描</button>
+                                    <button id="scraper-duplicates-delete-btn" type="button" class="scraper-compact-btn scraper-danger-soft" data-scraper-action="dup-delete" disabled>清理选中 0 项</button>
+                                    <button type="button" class="scraper-compact-btn" data-scraper-action="close-duplicates">关闭</button>
+                                </div>
+                            </div>
+                            <div id="scraper-duplicates-summary" class="scraper-duplicates-summary"></div>
+                            <div id="scraper-duplicates-list" class="scraper-duplicates-list"></div>
+                        </section>
 
                         <div class="scraper-entry-table">
                             <div class="scraper-entry-header">
