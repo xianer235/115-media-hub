@@ -8,19 +8,20 @@
 
 ## 基线
 
-- **更新日期**: 2026-11-22（0.15.27：文件管理新增「查重」——SHA1 相同的多余副本一键清理，订阅任务零改动）
-- **分支**: `main`，0.15.26 已推送（`7e2503d`）；**0.15.27 本地待提交**（用户要求：AI 只做本地提交，push/tag/release 由他触发）；tag 打到 `v0.15.22`，**0.15.23~0.15.27 均未打 tag / 未发 release**，Docker 镜像同版本由 GitHub Actions 自动构建（测试不绿就不构建）
-- **版本**: `0.15.27`（2026-11-22：新增 `app/services/duplicate_scan.py`——目录遍历（深度上限 4）、季集/片名归一化分组、三档分流（SHA1 相同 / 同集不同版本 / 同剧两目录）、保留建议；`app/routes/scraper.py` 新增 `/scraper/duplicates/{scan,plan,delete}`，删除复用原有 `delete_scraper_entries`（115 进回收站、`request_id` 幂等、单次上限 200）；前端 `static/js/modules/scraper/duplicates.js` 由 `core.js` 动态 import 懒加载，工具栏「查重」按钮 + 结果面板；`tests/test_duplicate_scan.py` 26 条）
+- **更新日期**: 2026-11-22（0.15.28：查重入口改为「先勾选文件夹」+ 面板补日间模式配色）
+- **分支**: `main`，0.15.27 已推送（`6ea7d07`）；**0.15.28 本地已提交、待用户推送**（用户要求：AI 只做本地提交，push/tag/release 由他触发）；tag 打到 `v0.15.22`，**0.15.23~0.15.28 均未打 tag / 未发 release**，Docker 镜像同版本由 GitHub Actions 自动构建（测试不绿就不构建）
+- **版本**: `0.15.28`（2026-11-22：查重入口从工具栏图标搬到**勾选操作栏**——必须只勾**一个**文件夹才可用（勾文件则扫其所在目录），未勾/多选置灰并提示原因；面板 meta 显示服务端返回的真实扫描路径，`enterFolder` / `goTrail` / `switchProvider` 自动关面板；`index.css` 补 `html.theme-day .scraper-dup*` 全套；新增 `tests/test_scraper_duplicates_frontend.py` 13 条。功能本体仍是 0.15.27 的 `app/services/duplicate_scan.py` + `/scraper/duplicates/{scan,plan,delete}` + `static/js/modules/scraper/duplicates.js` 懒加载）
 - **CI**: 单一工作流 `.github/workflows/ci.yml`（`docker-release.yml` 已并入并移除），**限定 `paths: version.json`，只在发版推送时触发**：`test` job 跑 `compileall` + `scripts/check_js_syntax.py`（复制成 `.mjs` 再 `node --check`；裸 `node --check` 对 ESM 文件静默放过，`--experimental-default-type=module` 在 Node 23+ 又被移除，两条路都走过弯路）+ `scripts/run_tests.py`，`build-and-push` 用 `needs: test` 挂在后面（`workflow_dispatch` 有 `publish` 开关，关掉只跑测试）。日常开发验证只用本机 `scripts/check.sh`，不要等 CI
 - **本地不入库文件**: `AGENTS.md` / `CLAUDE.md` / `.workbuddy/` / `.claude/` / `.worktrees/` 是本机开发用，**按约定不入库**。任何测试/代码读它们前必须判存在（`test_modules_doc` 已这么做），否则干净 clone 跑测试必挂。
 - **运行环境**: `docker compose` 服务名 `115-media-hub-test`（应用本体），端口 18080；`/app/storage` 已映射到宿主机 `/Users/xianer/Documents/docker/115strmxianer/storage`（virtiofs，空间读数正常）。挂载路径与端口已改为从根目录 `.env` 读取（模板 `.env.example`），本机 `.env` 写的是原来的绝对路径
-- **最近提交**: `7e2503d` 发版 0.15.26；`5ede0c4` 发版 0.15.25（订阅任务季徽章 + README 重构）
-- **工作区**: 有未提交改动（0.15.27 已推送；查重的入口调整 + 日间模式配色待提交）。本轮内容：文件管理「查重」——`duplicate_scan.py` 遍历目标目录（深度 4）→ 按 `(剧集目录, 季, 集)` / 片名分组 → 三档：SHA1 相同（默认勾多余副本）、同集不同版本（默认全不勾，只给「每组保留最高画质」）、同剧两目录（仅提示）；`routes/scraper.py` 三个接口，`/delete` 走 `delete_scraper_entries`（115 进回收站、`request_id` 幂等、单次 ≤200）；前端 `duplicates.js` 懒加载 + 结果面板。**入口只在勾选一个文件夹后可用**（勾文件则扫其所在目录），不跟随当前浏览目录；面板有 `html.theme-day` 全套配色。**订阅任务零改动、零新增依赖**。仓库根无探针残骸。
+- **最近提交**: `2ed77e4` 查重入口改为先勾选文件夹 + 日间模式；`6ea7d07` 删掉 Seerr 扫描排查记录（已推送）
+- **工作区**: 干净（0.15.28 已本地提交，待用户推送）。本轮内容：查重入口从工具栏图标按钮**搬到勾选操作栏**（`templates/partials/pages/scraper.html`），`core.js` 里 `syncSelectionActions` 统一维护可用态（未勾/多选禁用并给原因），`withDuplicatesPanel` 增加静默关闭；`duplicates.js` 的 `open({cid})` 透传 cid 并显示真实路径；`index.css` 补 `html.theme-day` 全套配色。**查重后端与订阅任务本轮零改动、零新增依赖**。仓库根无探针残骸。
 
 
 
 ## 最近一次验证
 
+- **查重入口改「先勾选」+ 日间模式（2026-11-22，0.15.28）**：新增 `tests/test_scraper_duplicates_frontend.py` **13 条**（用 node vm 实跑 JS：`open({cid:'777'})` 确实把 777 发给扫描接口、不传 cid 才退回当前目录、meta 带服务端返回路径、按钮在勾选栏且默认 `disabled`、工具栏无该按钮、未勾选与多选均被拦下）；`scripts/check.sh --changed` **777 条零失败**；`node --check` 两个改动文件通过。**未做真机验证，未在容器内跑全量**。
 - **文件管理查重（2026-11-22，0.15.27）**：新增 `app/services/duplicate_scan.py` + `app/routes/scraper.py` 三个接口（`/scraper/duplicates/{scan,plan,delete}`）+ `static/js/modules/scraper/duplicates.js`（懒加载，core.js 里动态 import）+ 页面工具栏按钮与结果面板。`scripts/check.sh --changed` **496 条零失败**（18 个模块，含新增 `test_duplicate_scan` 26 条）；`scripts/check.sh --all` **2284 条零失败**；`scripts/check_js_syntax.py` 34 个前端文件通过；桩 DOM 跑过面板渲染（默认只勾 SHA1 相同的多余副本、勾满整组按钮禁用）。**未做真机网盘验证**。
 
 - **跨盘补源去重 + 失败可见（2026-11-18，0.15.26）**：`scripts/check.sh --all` **2255 条零失败**（113.4s，handoff 22598/32768，`git diff --check` 通过）；`tests.test_subscription_cross_copy` **101 条**（新增 `TestCandidateSelection` 3 条、`TestCrossCopyActiveCount` 2 条、`TestCandidatePregate` 4 条（进行中不扫描 / 单条失败冷却 / 成片失败长冷却 / 冷却过期放行）、`TestCrossCopyFailureCount` 4 条（含「同集重试多次只算 1 集」））、`tests.test_cross_copy_progress` **30 条**（新增 4 条：失败打标记 / 手动失败不打 / 失败组成组 warn 且不改成功字段 / 成功失败混组分开收尾）、`tests.test_subscription_ui_frontend` **28 条**（新增 4 条徽章）。**未在容器内跑全量**。
