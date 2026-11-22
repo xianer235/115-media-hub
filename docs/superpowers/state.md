@@ -8,18 +8,20 @@
 
 ## 基线
 
-- **更新日期**: 2026-11-17（0.15.25：订阅任务季徽章 + Seerr 任务名按剧带季号；README 重构 606→211 行，部署运维补齐）
-- **分支**: `main`，0.15.18 ~ 0.15.24 已推送；**0.15.25 本地已提交、待用户手动推送**（用户要求：AI 只做本地提交，push/tag/release 由他触发）；tag 打到 `v0.15.22`，**0.15.23~0.15.25 均未打 tag / 未发 release**，Docker 镜像同版本由 GitHub Actions 自动构建（测试不绿就不构建）
-- **版本**: `0.15.25`（2026-11-17：订阅卡片季徽章 `S03` / 「全季」+ 简介「第N季」（`static/js/modules/subscription/ui.js`）；`servarr._servarr_series_has_multiple_seasons` 按该剧 TMDB 季数决定任务名是否带 `S%02d`，`_build_servarr_series_task` 去掉 `multi_season` 形参；`_series_tasks_to_sonarr` 的 `folderName` / `sortTitle` 固定用 `剧名 (年份)`；README 606→211 行 + `docs/{cross-copy,cli,webhook,configuration,browser-script}.md` 新增。`tests.test_servarr_api` 60 条、`test_subscription_ui_frontend`、`test_quick_import_frontend` 全绿）
+- **更新日期**: 2026-11-22（0.15.27：文件管理新增「查重」——SHA1 相同的多余副本一键清理，订阅任务零改动）
+- **分支**: `main`，0.15.26 已推送（`7e2503d`）；**0.15.27 本地待提交**（用户要求：AI 只做本地提交，push/tag/release 由他触发）；tag 打到 `v0.15.22`，**0.15.23~0.15.27 均未打 tag / 未发 release**，Docker 镜像同版本由 GitHub Actions 自动构建（测试不绿就不构建）
+- **版本**: `0.15.27`（2026-11-22：新增 `app/services/duplicate_scan.py`——目录遍历（深度上限 4）、季集/片名归一化分组、三档分流（SHA1 相同 / 同集不同版本 / 同剧两目录）、保留建议；`app/routes/scraper.py` 新增 `/scraper/duplicates/{scan,plan,delete}`，删除复用原有 `delete_scraper_entries`（115 进回收站、`request_id` 幂等、单次上限 200）；前端 `static/js/modules/scraper/duplicates.js` 由 `core.js` 动态 import 懒加载，工具栏「查重」按钮 + 结果面板；`tests/test_duplicate_scan.py` 26 条）
 - **CI**: 单一工作流 `.github/workflows/ci.yml`（`docker-release.yml` 已并入并移除），**限定 `paths: version.json`，只在发版推送时触发**：`test` job 跑 `compileall` + `scripts/check_js_syntax.py`（复制成 `.mjs` 再 `node --check`；裸 `node --check` 对 ESM 文件静默放过，`--experimental-default-type=module` 在 Node 23+ 又被移除，两条路都走过弯路）+ `scripts/run_tests.py`，`build-and-push` 用 `needs: test` 挂在后面（`workflow_dispatch` 有 `publish` 开关，关掉只跑测试）。日常开发验证只用本机 `scripts/check.sh`，不要等 CI
 - **本地不入库文件**: `AGENTS.md` / `CLAUDE.md` / `.workbuddy/` / `.claude/` / `.worktrees/` 是本机开发用，**按约定不入库**。任何测试/代码读它们前必须判存在（`test_modules_doc` 已这么做），否则干净 clone 跑测试必挂。
 - **运行环境**: `docker compose` 服务名 `115-media-hub-test`（应用本体），端口 18080；`/app/storage` 已映射到宿主机 `/Users/xianer/Documents/docker/115strmxianer/storage`（virtiofs，空间读数正常）。挂载路径与端口已改为从根目录 `.env` 读取（模板 `.env.example`），本机 `.env` 写的是原来的绝对路径
-- **最近提交**: `f9f7d8e` 桥翻页游标改按实际返回条数推进；`ba9701c` 桥代 Seerr 翻页；`0cb5446` 发版 0.15.23（剧集列表补 tvdbId）
-- **工作区**: 干净（0.15.26 发版四件套已改：`version.json` / `CHANGELOG.md` / `README.md` / `state.md`）。本轮内容：① 订阅卡片季徽章 + servarr 任务名按剧带季号（`app/routes/servarr.py` / `static/js/modules/subscription/ui.js` + 两套测试）；② README 重构（606→211 行）与 `docs/{cross-copy,cli,webhook,configuration,browser-script}.md` 新增；③ 设置路径旧名修正（README / Seerr 教程 / `templates/partials/modals/monitor.html` / `static/js/index.js` 帮助文案）。仓库根无探针残骸；④ **未发版**：跨盘补源改为「转存前只读评估候选 → 按能补缺集数择优」（`subscription_cross_copy._evaluate_share_candidate` / `_choose_share_plan`），补源命中日志转 `success`，订阅卡片新增「跨盘补源中 · N 个任务」徽章（`subscription_state.cross_copy_active_counts`）；CHANGELOG 已计入 `[0.15.26]`，**真机复核对应用户待办第 14 项**；⑤ 补源失败可见（`_fail_job` 对订阅补源也打 `progress_state='pending'`→定时器成组写一条 warn 日志，卡片红色「补源失败 · N 集」由 `subscription_state.cross_copy_failure_counts()` 实时查表，24h 窗口 + 失败后无成功才显示）、候选预筛（`candidate_wait_reason`：进行中/冷却中的分享**在只读扫描之前**整跳，补源排队期间不再重扫夸克目录）、失效分享冷却（`share_candidate_cooldown_minutes`：单条 60 分钟 / ≥3 条 360 分钟，到期自动放行）；⑥ **emby-bridge 顶替「最近添加扫描」**：Seerr 的 `Items/Latest?Limit=12` 只判重最近 12 条、其余新片等 24h 全量扫描才轮到（用户现象：手动存的电影有的绿有的不绿），桥改写为按 `DateCreated` 降序拉最近 `_LATEST_ITEMS_LIMIT`(500) 条（`emby_bridge.py` T7，缺 ParentId 透传）。
+- **最近提交**: `7e2503d` 发版 0.15.26；`5ede0c4` 发版 0.15.25（订阅任务季徽章 + README 重构）
+- **工作区**: 干净（0.15.27 已本地提交：功能 + 发版两条，待用户推送）。本轮内容：文件管理「查重」——`duplicate_scan.py` 遍历当前目录（深度 4）→ 按 `(剧集目录, 季, 集)` / 片名分组 → 三档：SHA1 相同（默认勾多余副本）、同集不同版本（默认全不勾，只给「每组保留最高画质」）、同剧两目录（仅提示）；`routes/scraper.py` 三个接口，`/delete` 走 `delete_scraper_entries`（115 进回收站、`request_id` 幂等、单次 ≤200）；前端 `duplicates.js` 懒加载 + 工具栏按钮 + 结果面板；`index.css` 新增样式。**订阅任务零改动、零新增依赖**。另有一个未跟踪文件 `docs/superpowers/specs/2026-11-21-seerr-scan-status-investigation.md`（上一轮排查记录，未提交）。仓库根无探针残骸。
 
 
 
 ## 最近一次验证
+
+- **文件管理查重（2026-11-22，0.15.27）**：新增 `app/services/duplicate_scan.py` + `app/routes/scraper.py` 三个接口（`/scraper/duplicates/{scan,plan,delete}`）+ `static/js/modules/scraper/duplicates.js`（懒加载，core.js 里动态 import）+ 页面工具栏按钮与结果面板。`scripts/check.sh --changed` **496 条零失败**（18 个模块，含新增 `test_duplicate_scan` 26 条）；`scripts/check.sh --all` **2284 条零失败**；`scripts/check_js_syntax.py` 34 个前端文件通过；桩 DOM 跑过面板渲染（默认只勾 SHA1 相同的多余副本、勾满整组按钮禁用）。**未做真机网盘验证**。
 
 - **跨盘补源去重 + 失败可见（2026-11-18，0.15.26）**：`scripts/check.sh --all` **2255 条零失败**（113.4s，handoff 22598/32768，`git diff --check` 通过）；`tests.test_subscription_cross_copy` **101 条**（新增 `TestCandidateSelection` 3 条、`TestCrossCopyActiveCount` 2 条、`TestCandidatePregate` 4 条（进行中不扫描 / 单条失败冷却 / 成片失败长冷却 / 冷却过期放行）、`TestCrossCopyFailureCount` 4 条（含「同集重试多次只算 1 集」））、`tests.test_cross_copy_progress` **30 条**（新增 4 条：失败打标记 / 手动失败不打 / 失败组成组 warn 且不改成功字段 / 成功失败混组分开收尾）、`tests.test_subscription_ui_frontend` **28 条**（新增 4 条徽章）。**未在容器内跑全量**。
 - **0.15.13 发版前**（2026-11-15）：本机 `scripts/run_tests.py` **全量 2161 条零失败**（124.3s）；`scripts/check.sh --changed` 全通过（compileall + `node --check` + `git diff --check` + handoff 体积 5606/32768）。issue #18 两个复现用例修复后输出与预期一致（`raw_text_only_match` / 文件数 0），正例（精确片名、频道前缀+画质标签）仍匹配。**过程中发现并修掉一个连带回归**：视频白名单若只收视频，刮削改名链路会丢外挂字幕（`test_scraper_batch_organize` 2 条挂），已改为「视频 ∪ 外挂字幕」。**未在容器内跑全量**。
@@ -61,6 +63,8 @@
 
 13. **重跑 Seerr 的 Sonarr 扫描（0.15.23 新增）**：升级并重启面板后，在 Seerr「设置 → 作业和缓存」手动跑一次「Sonarr Scan」，日志里不该再出现 `Failed to process Sonarr media ... 404`；随后搜索已成库的剧（如《阴光之外》）应显示「可获得」而不是「提交请求」。仍失败的个别剧，多半是 TMDB 上没有对应 tvdbId（部分国漫），属数据源缺失。
 14. **验证 0.15.26 的补源去重与可见性（新增，仅单测 + 本机全量）**：升级重启后挑一个新剧任务（115 里一集都没有）跑一次补源，看四点——① 夸克 `/云下载/跨盘中转/<任务名>` 只落 **1 份** E01~EN，不再出现 3 份；② 115 里只复制 1 遍，且不再多出「某剧 4K 全季」这一层；③ 补源进行期间卡片显示绿色「跨盘补源中 · N 个任务」，不是「尚未命中」；④ 故意让一集复制失败，卡片应出现红色「补源失败 · N 集」并在订阅日志留一条 warn。**注意**：历史脏数据不自动清，夸克那几份中转副本按 `cross_copy_staging_retention_days`(7 天) 进回收站，115 里多出来的目录要手动删。
+
+15. **验证文件管理「查重」（0.15.27 新增，仅单测 + 桩 DOM）**：进「文件管理」→ 停在一个明确的目录（先挑单部剧，再试「电视剧」库根）→ 点工具栏「查重」。看四点——① 面板显示扫描目录数 / 重复组数 / 可释放空间；② 同一份文件（SHA1 相同）那类默认已勾好，只保留一份；③ 同集不同版本那类**一个都没勾**，点「每组保留最高画质」才勾；④ 故意把一组全勾上，「清理选中 N 项」应置灰、该组标红。真删一个测试目录里的副本，确认 115 回收站里能找回。**注意**：115 列目录有 0.35s 节流，扫描大库时面板会一直显示读取中，扫「电视剧」库根约 1~2 分钟属正常。
 
 ### B. 已真机验证通过（勿重复）
 - 阿里 ↔ 115 双向、秒传、文件夹复制、多分片+分片重试、双任务并行。
