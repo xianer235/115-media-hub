@@ -870,6 +870,22 @@ function renderSelection() {
             ? '对勾选的文件夹（或文件所在目录）执行监控扫描并刷新 STRM（只同步 STRM，不整理文件）'
             : (hasPlan ? '退出预览后再扫描监控' : '请先勾选要扫描的文件夹或文件');
     }
+    const dupScanButton = document.querySelector('[data-scraper-action="open-duplicates"]');
+    if (dupScanButton) {
+        // 查重只对「勾中的那一处」生效：一次一个文件夹（勾文件则扫它所在目录）。
+        // 刻意不跟随当前浏览目录——在库根点一下会把整个大目录扫一遍，几十秒起步。
+        const canDupScan = !hasPlan && selectedEntries.length === 1;
+        dupScanButton.classList.toggle('hidden', hasPlan);
+        dupScanButton.disabled = state.loading || !canDupScan;
+        dupScanButton.classList.toggle('btn-disabled', state.loading || !canDupScan);
+        dupScanButton.title = canDupScan
+            ? (selectedEntries[0].is_dir
+                ? '对勾选的这个文件夹查重（含子目录）'
+                : '对勾选文件所在的目录查重')
+            : (hasPlan
+                ? '退出预览后再查重'
+                : (selectedEntries.length > 1 ? '一次只能对一个文件夹查重，请只勾一个' : '请先勾选要查重的文件夹'));
+    }
     const batchButton = document.querySelector('[data-scraper-action="open-batch"]');
     if (batchButton) {
         const canBatch = supportsProviderOperation('scrape') && isProviderConfigured() && !hasPlan && selectedEntries.length > 0;
@@ -1891,6 +1907,7 @@ async function switchProvider(provider) {
     clearPlan();
     resetIdentifyContext({ resetInputs: true });
     closeIdentifyPanel();
+    closeDuplicatesPanelIfLoaded();
     renderProviderTabs();
     renderIdentify();
     await loadBatchPreferences();
@@ -1922,6 +1939,8 @@ async function enterFolder(entryId) {
         clearPlan();
         resetIdentifyContext({ resetInputs: true });
         closeIdentifyPanel();
+        // 换目录/换盘后旧结果里的路径已经不对了，面板跟着关掉，避免在别的目录上误点清理。
+        closeDuplicatesPanelIfLoaded();
         await loadEntries({ keepSearch: false });
     } finally {
         state.navigationBusy = false;
@@ -1972,6 +1991,8 @@ async function goTrail(index) {
         clearPlan();
         resetIdentifyContext({ resetInputs: true });
         closeIdentifyPanel();
+        // 换目录/换盘后旧结果里的路径已经不对了，面板跟着关掉，避免在别的目录上误点清理。
+        closeDuplicatesPanelIfLoaded();
         await loadEntries({ keepSearch: false });
     } finally {
         state.navigationBusy = false;
@@ -3726,6 +3747,28 @@ async function withDuplicatesPanel(handler) {
     if (controller && typeof handler === 'function') handler(controller);
 }
 
+function closeDuplicatesPanelIfLoaded() {
+    // 没打开过查重的人不该为了「关一下」多加载一个模块。
+    if (!duplicatesControllerPromise) return;
+    void withDuplicatesPanel(controller => controller.close());
+}
+
+async function openDuplicatesForSelection() {
+    // 入口只在「勾选了条目」后可用：扫的是勾中的那一处，不跟随当前浏览目录。
+    const selected = getEffectiveSelectedEntries();
+    if (selected.length !== 1) {
+        showToast(
+            selected.length > 1 ? '一次只能对一个文件夹查重，请只勾一个' : '请先勾选要查重的文件夹',
+            { tone: 'warn', duration: 2600, placement: 'top-center' },
+        );
+        return;
+    }
+    const target = selected[0];
+    // 勾文件夹 → 扫这个文件夹（含子目录）；勾文件 → 扫它所在目录。
+    const scanCid = target.is_dir ? String(target.id || '0') : String(state.cid || '0');
+    await withDuplicatesPanel(controller => controller.open({ cid: scanCid }));
+}
+
 function handleClick(event) {
     if (event.target?.id === 'scraper-identify-panel') {
         closeIdentifyPanel();
@@ -3814,7 +3857,11 @@ function handleClick(event) {
     const actionButton = event.target.closest('[data-scraper-action]');
     if (!actionButton) return;
     const action = String(actionButton.dataset.scraperAction || '').trim();
-    if (action === 'open-duplicates' || action === 'close-duplicates' || action.startsWith('dup-')) {
+    if (action === 'open-duplicates') {
+        void openDuplicatesForSelection();
+        return;
+    }
+    if (action === 'close-duplicates' || action.startsWith('dup-')) {
         void withDuplicatesPanel(controller => controller.handleAction(action));
         return;
     }

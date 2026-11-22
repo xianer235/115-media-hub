@@ -14178,6 +14178,10 @@
             background: rgba(30, 41, 59, 0.7);
         }
 
+        .scraper-dup-file.is-keep {
+            background: rgba(16, 185, 129, 0.08);
+        }
+
         .scraper-dup-file-main {
             min-width: 0;
             flex: 1 1 auto;
@@ -14252,6 +14256,78 @@
             padding-left: 1.05rem;
             color: #94a3b8;
             font-size: 0.76rem;
+        }
+
+        /* 日间模式：面板/分组/文字全部换成浅底深字，绿色、橙色徽章同步调深以保对比。 */
+        html.theme-day .scraper-duplicates-panel {
+            border-color: #cbd5e1;
+            background: #ffffff;
+            box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+        }
+
+        html.theme-day .scraper-duplicates-title,
+        html.theme-day .scraper-dup-group-label,
+        html.theme-day .scraper-dup-file-name,
+        html.theme-day .scraper-duplicates-summary b {
+            color: #0f172a;
+        }
+
+        html.theme-day .scraper-duplicates-meta,
+        html.theme-day .scraper-duplicates-summary,
+        html.theme-day .scraper-dup-group-hint,
+        html.theme-day .scraper-dup-file-meta,
+        html.theme-day .scraper-dup-empty,
+        html.theme-day .scraper-dup-hints ul {
+            color: #475569;
+        }
+
+        html.theme-day .scraper-dup-file-path,
+        html.theme-day .scraper-dup-sha,
+        html.theme-day .scraper-dup-hints-title {
+            color: #64748b;
+        }
+
+        html.theme-day .scraper-dup-group {
+            border-color: #dbe3ef;
+            background: #f8fafc;
+        }
+
+        html.theme-day .scraper-dup-group.is-invalid {
+            border-color: #f87171;
+            background: #fef2f2;
+        }
+
+        html.theme-day .scraper-dup-file:hover {
+            background: #eef2f7;
+        }
+
+        html.theme-day .scraper-dup-file.is-keep {
+            background: #f0fdf4;
+        }
+
+        html.theme-day .scraper-dup-badge.is-exact {
+            background: #d1fae5;
+            color: #065f46;
+            border-color: #34d399;
+        }
+
+        html.theme-day .scraper-dup-badge.is-version {
+            background: #fef3c7;
+            color: #92400e;
+            border-color: #f59e0b;
+        }
+
+        html.theme-day .scraper-dup-keep {
+            color: #047857;
+        }
+
+        html.theme-day .scraper-dup-warn,
+        html.theme-day .scraper-dup-empty.is-error {
+            color: #b91c1c;
+        }
+
+        html.theme-day .scraper-dup-hints {
+            border-top-color: #dbe3ef;
         }
 
         .scraper-selection-bar,

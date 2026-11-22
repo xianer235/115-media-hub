@@ -23,6 +23,8 @@
 
 ## 交接记录
 
+- 2026-11-22 | main 工作区未提交 | 未改版本号（CHANGELOG 记在 `[Unreleased]`） | 查重入口从工具栏搬到勾选操作栏：必须勾选**一个**文件夹才可用（勾文件则扫其所在目录），未勾/多选置灰并给原因；面板顶部显示实际扫描路径，换目录/换盘自动关闭面板；补齐 `html.theme-day` 配色 | 根因：工具栏按钮默认扫「当前浏览目录」，在 115 根目录或库根点一下就是几十秒到几分钟的空转，用户明确要求「必须先选中再查」 | 新增 `tests/test_scraper_duplicates_frontend.py` 13 条（cid 透传、无 cid 退回当前目录、meta 带路径、按钮位置/默认禁用、未勾选与多选被拦）；`check.sh --changed` 777 条零失败 | 真机验收见 `state.md` 待办第 15 项（已按新入口改写）
+
 - 2026-11-22 | main 本地提交（未推送） | 0.15.27 | 文件管理新增「查重」：扫当前所在目录（深度 4），按 `(剧集目录, 季, 集)` / 片名分组，三档分流——SHA1 相同（默认勾多余副本，一键清理）、同集不同版本（默认全不勾，只给「每组保留最高画质」）、同剧存两目录（仅提示不给批量删）；新增 `app/services/duplicate_scan.py` + `/scraper/duplicates/{scan,plan,delete}` + `static/js/modules/scraper/duplicates.js`（懒加载） | 根因：同一集存两份换了文件名（`片名.S01E01.mkv` vs `片名 (2024) - S01E01.mp4`）无法靠肉眼比对；115/阿里列目录自带 SHA1，不用下载就能判重。放文件管理而不是订阅任务，因为重复是库里的既成事实、跨来源（手动/订阅/补源/改名残留），订阅任务只看自己的落点目录 | `scripts/check.sh --changed` 496 条零失败（含新增 `test_duplicate_scan` 26 条）、`check.sh --all` 2284 条零失败、`check_js_syntax.py` 34 个文件通过；桩 DOM 验过默认勾选与「勾满整组禁用」 | 用户真机点一次（NAS 上扫「电视剧」库约 1~2 分钟，115 列目录 0.35s 节流）；他自行 push + `git tag -a v0.15.27` + `gh release create`
 
 - 2026-11-19 | main 工作区未提交 | 0.15.26 | emby-bridge 顶替 Seerr「最近添加扫描」的 `Items/Latest?Limit=12`：改写成按 `DateCreated` 降序拉最近 500 条（`_LATEST_ITEMS_LIMIT`），覆盖手动新存的电影 | 根因：Jellyseerr 的 Recently Added Scan 在 Emby 模式固定请求 `Items/Latest?Limit=12`，只判重最近 12 条，其余新片要等每 24 小时全量扫描才轮到 → 用户手动存片后「有的电影绿、有的不绿」；桥之前直接透传这个限额 | `tests.test_emby_bridge` 43 条零失败（新增 2 条：改写路径+query、缺 ParentId 透传）；`compileall` 通过 | 用户推送后真机验：存一部新电影 → Seerr 点「最近添加扫描」→ 变绿；`_LATEST_ITEMS_LIMIT` 若不够（一次存超 500 部）再调

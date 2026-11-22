@@ -30,12 +30,6 @@
                                         <path d="M20 4.7V9.3H15.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
                                     </svg>
                                 </button>
-                                <button id="scraper-duplicates-btn" type="button" class="scraper-icon-btn" data-scraper-action="open-duplicates" title="查重：找出同一集/同一部电影存了两份的情况（扫描当前目录）" aria-label="查重">
-                                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                        <rect x="4" y="3.5" width="11" height="14" rx="2" stroke="currentColor" stroke-width="1.8"/>
-                                        <path d="M8.5 20.5h9a2 2 0 0 0 2-2v-9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-                                    </svg>
-                                </button>
                             </div>
                         </div>
 
@@ -70,6 +64,7 @@
                                 <button type="button" class="scraper-compact-btn scraper-primary-soft" data-scraper-action="monitor-scan" title="扫描监控/刷新 STRM（只同步 STRM，不整理文件）">
                                     <span class="scraper-action-label-full">扫描监控</span><span class="scraper-action-label-short">扫描</span>
                                 </button>
+                                <button id="scraper-duplicates-btn" type="button" class="scraper-compact-btn" data-scraper-action="open-duplicates" disabled title="对勾选的文件夹查重（勾选文件则查它所在目录）——只扫勾中的这一处，不会扫整个根目录">查重</button>
                                 <button type="button" class="scraper-compact-btn scraper-primary-soft" data-scraper-action="open-batch" title="自动识别勾选的文件夹或文件；识别不准的条目可手动选词搜索并绑定">
                                     <span class="scraper-action-label-full">批量整理</span><span class="scraper-action-label-short">整理</span>
                                 </button>
@@ -87,7 +82,7 @@
                                 <div class="scraper-duplicates-heading">
                                     <div class="scraper-panel-kicker">Duplicates</div>
                                     <h4 class="scraper-duplicates-title">查重</h4>
-                                    <div id="scraper-duplicates-meta" class="scraper-duplicates-meta">正在扫描当前目录…</div>
+                                    <div id="scraper-duplicates-meta" class="scraper-duplicates-meta">正在扫描…</div>
                                 </div>
                                 <div class="scraper-duplicates-actions">
                                     <button type="button" class="scraper-compact-btn" data-scraper-action="dup-keep-best" title="每组只保留画质最高的那一份，其余勾选待删">每组保留最高画质</button>

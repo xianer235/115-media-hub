@@ -34,6 +34,8 @@ export function createDuplicatesController(deps = {}) {
         error: '',
         picks: new Set(),
         requestId: '',
+        // 扫描目标：勾中的文件夹（或勾中文件所在目录）。空 = 退回当前浏览目录。
+        targetCid: '',
     };
 
     function sizeText(bytes) {
@@ -144,7 +146,7 @@ export function createDuplicatesController(deps = {}) {
         const deleteBtn = el(DELETE_BTN_ID);
 
         if (ui.loading) {
-            if (metaEl) metaEl.textContent = '正在扫描当前目录… 目录很大时要等一会儿';
+            if (metaEl) metaEl.textContent = '正在扫描勾选的目录… 目录很大时要等一会儿';
             if (summaryEl) summaryEl.innerHTML = '';
             if (listEl) listEl.innerHTML = '<div class="scraper-dup-empty">读取目录中，请稍候。</div>';
             if (deleteBtn) {
@@ -184,8 +186,10 @@ export function createDuplicatesController(deps = {}) {
         const pickedSize = picked.reduce((total, file) => total + Math.max(0, Number(file.size || 0)), 0);
 
         if (metaEl) {
+            const rootPath = String(result.root_path || '').trim();
             metaEl.textContent = [
-                `扫描 ${Number(scanned.dirs || 0)} 个文件夹`,
+                rootPath ? `扫描 ${rootPath}` : '已扫描',
+                `${Number(scanned.dirs || 0)} 个文件夹`,
                 `${Number(scanned.media_files || 0)} 个视频文件`,
                 Number(scanned.failed_dirs || 0) > 0 ? `${Number(scanned.failed_dirs)} 个目录读取失败` : '',
                 scanned.truncated ? '已到扫描上限，结果可能不完整' : '',
@@ -234,7 +238,7 @@ export function createDuplicatesController(deps = {}) {
         try {
             const data = await window.MediaHubApi.postJson('/scraper/duplicates/scan', {
                 provider: getProvider(),
-                cid: getCid(),
+                cid: ui.targetCid || String(getCid() || '0'),
             });
             ui.result = data && typeof data === 'object' ? data : null;
             if (ui.result) applyDefaultPicks(ui.result);
@@ -246,9 +250,11 @@ export function createDuplicatesController(deps = {}) {
         }
     }
 
-    async function open() {
+    async function open(target = {}) {
         const panel = el(PANEL_ID);
         if (!panel) return;
+        // cid 由调用方指定（勾中的文件夹）；不传就扫当前浏览目录。
+        ui.targetCid = String(target?.cid || '').trim();
         panel.classList.remove('hidden');
         ui.open = true;
         await scan();
@@ -262,6 +268,7 @@ export function createDuplicatesController(deps = {}) {
         ui.error = '';
         ui.result = null;
         ui.picks = new Set();
+        ui.targetCid = '';
     }
 
     function keepBest() {
