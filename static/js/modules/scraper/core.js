@@ -3831,6 +3831,9 @@ async function openDuplicatesForSelection() {
 }
 
 function handleClick(event) {
+    // 点「更多」之外任何地方都先收起下拉（点开合按钮时按钮在 data-scraper-more 里，不受影响），
+    // 这样换网盘、点面包屑、点文件行进目录时菜单不会一直悬在列表上面。
+    if (!event.target?.closest?.('[data-scraper-more]')) closeSelectionMore();
     if (event.target?.id === 'scraper-identify-panel') {
         closeIdentifyPanel();
         return;

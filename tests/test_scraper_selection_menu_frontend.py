@@ -90,8 +90,12 @@ class SelectionMoreScriptTest(unittest.TestCase):
         self.assertIn("closeSelectionMore();", block[:400])
 
     def test_click_outside_page_closes_menu(self):
-        # 点页面里任何非动作元素都收起菜单，避免它一直盖在文件列表上。
-        self.assertIn("if (!actionButton) {\n        closeSelectionMore();\n        return;\n    }", self.source)
+        # 点页面里任何非「更多」区域的元素都收起菜单（换网盘、面包屑、点文件行进目录都算），
+        # 避免它一直盖在文件列表上。
+        body = self.source[self.source.index("function handleClick(event) {"):]
+        top = body[:400]
+        self.assertIn("closest?.('[data-scraper-more]')", top)
+        self.assertIn("closeSelectionMore();", top)
 
     def test_escape_closes_menu_first(self):
         body = self.source[self.source.index("function handleGlobalKeydown(event) {"):]
