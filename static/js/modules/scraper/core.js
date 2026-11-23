@@ -613,13 +613,64 @@ function syncScraperBrowserHeight() {
     const rect = panel.getBoundingClientRect();
     const reservedBottom = window.matchMedia('(max-width: 1023px)').matches ? 96 : 28;
     const available = Math.max(380, Math.floor(window.innerHeight - Math.max(rect.top, 0) - reservedBottom));
-    panel.style.setProperty('--scraper-browser-height', `${available}px`);
+    // 列表地板：搜索框、勾选栏、移动提示条、查重面板这些横条一多，列表就会被挤成两三行。
+    // 这里量一遍除列表以外的实际占用，不够地板高度就让整块面板长高（页面滚动），
+    // 而不是把文件列表压扁——手机上尤其明显。
+    const table = panel.querySelector('.scraper-entry-table');
+    let height = available;
+    if (table) {
+        const panelStyle = window.getComputedStyle(panel);
+        const paddingY = (parseFloat(panelStyle.paddingTop) || 0) + (parseFloat(panelStyle.paddingBottom) || 0);
+        const minListHeight = table.dataset.minHeight
+            ? Number(table.dataset.minHeight)
+            : (window.matchMedia('(max-width: 760px)').matches ? 288 : 320);
+        let chrome = 0;
+        Array.from(panel.children).forEach(child => {
+            if (child === table || child.classList.contains('hidden')) return;
+            const childRect = child.getBoundingClientRect();
+            if (childRect.height <= 0) return;
+            const childStyle = window.getComputedStyle(child);
+            chrome += childRect.height + (parseFloat(childStyle.marginTop) || 0) + (parseFloat(childStyle.marginBottom) || 0);
+        });
+        height = Math.max(available, Math.ceil(chrome + minListHeight + paddingY));
+    }
+    panel.style.setProperty('--scraper-browser-height', `${height}px`);
+}
+
+function scheduleBrowserHeightSync() {
+    requestAnimationFrame(syncScraperBrowserHeight);
 }
 
 function closeToolPopovers() {
     state.activeTool = '';
     $('scraper-search-popover')?.classList.add('hidden');
     $('scraper-create-popover')?.classList.add('hidden');
+}
+
+function closeSelectionMore() {
+    const menu = $('scraper-selection-more-menu');
+    const button = $('scraper-more-btn');
+    if (menu) menu.classList.add('hidden');
+    if (button) {
+        button.setAttribute('aria-expanded', 'false');
+        button.classList.remove('is-open');
+    }
+}
+
+function toggleSelectionMore({ force } = {}) {
+    const menu = $('scraper-selection-more-menu');
+    const button = $('scraper-more-btn');
+    if (!menu || !button) return;
+    const nextOpen = typeof force === 'boolean' ? force : menu.classList.contains('hidden');
+    if (!nextOpen) {
+        closeSelectionMore();
+        return;
+    }
+    closeToolPopovers();
+    menu.classList.remove('hidden');
+    button.setAttribute('aria-expanded', 'true');
+    button.classList.add('is-open');
+    scheduleBrowserHeightSync();
 }
 
 function toggleToolPopover(tool) {
@@ -919,8 +970,18 @@ function renderSelection() {
         inlineExecuteBtn.classList.toggle('btn-disabled', executeDisabled);
         inlineExecuteBtn.textContent = state.executeBusy ? '提交中...' : `执行重命名 ${selectedReadyCount} 项`;
     }
+    const moreButton = $('scraper-more-btn');
+    const moreMenu = $('scraper-selection-more-menu');
+    if (moreButton && moreMenu) {
+        // 预览模式下菜单项全被收起时，「更多」本身也不该占位。
+        const menuItems = Array.from(moreMenu.querySelectorAll('[data-scraper-action]'));
+        const anyVisible = menuItems.some(item => !item.classList.contains('hidden'));
+        moreButton.classList.toggle('hidden', !anyVisible);
+        if (!anyVisible) closeSelectionMore();
+    }
     syncFolderScopedControls();
     syncBuildPlanControls();
+    scheduleBrowserHeightSync();
 }
 
 function syncBuildPlanControls() {
@@ -3855,8 +3916,19 @@ function handleClick(event) {
         return;
     }
     const actionButton = event.target.closest('[data-scraper-action]');
-    if (!actionButton) return;
+    if (!actionButton) {
+        closeSelectionMore();
+        return;
+    }
     const action = String(actionButton.dataset.scraperAction || '').trim();
+    if (action === 'toggle-more') {
+        toggleSelectionMore();
+        return;
+    }
+    if (actionButton.closest('#scraper-selection-more-menu')) {
+        // 菜单里的操作点完就收起，避免挡住了下面的文件列表还不知道已经点过。
+        closeSelectionMore();
+    }
     if (action === 'open-duplicates') {
         void openDuplicatesForSelection();
         return;
@@ -4009,6 +4081,11 @@ function handleChange(event) {
 
 function handleGlobalKeydown(event) {
     if (event.key !== 'Escape') return;
+    const moreMenu = $('scraper-selection-more-menu');
+    if (moreMenu && !moreMenu.classList.contains('hidden')) {
+        closeSelectionMore();
+        return;
+    }
     const batchPanel = $('scraper-batch-panel');
     if (batchPanel && !batchPanel.classList.contains('hidden')) {
         closeBatchPanel();

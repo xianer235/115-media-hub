@@ -146,31 +146,33 @@ class ScraperPathSelectionIntegrationTest(unittest.TestCase):
         self.assertIn("html.theme-day .scraper-path-token", source)
         self.assertIn("overflow-wrap: anywhere", source)
 
-    def test_scraper_selection_actions_keep_seven_main_buttons_on_one_row(self):
+    def test_scraper_selection_actions_use_auto_fit_grid_on_mobile(self):
         stylesheet = STYLESHEET_PATH.read_text(encoding="utf-8")
         start = stylesheet.index("@media (max-width: 760px) {")
         end = stylesheet.index("html.theme-day .scraper-page", start)
         mobile_block = stylesheet[start:end]
 
-        self.assertIn("repeat(7, minmax(0, 1fr))", mobile_block)
-        self.assertNotIn("repeat(6, minmax(0, 1fr))", mobile_block)
-        self.assertNotIn("repeat(5", mobile_block)
-        self.assertNotIn("repeat(4", mobile_block)
+        # 常驻按钮从 7 个收到 5 个（重命名/复制/删除/整理/更多），用 auto-fit 折行，
+        # 预览模式换上的四个按钮也不会挤成一条。
+        self.assertIn("repeat(auto-fit, minmax(3.6rem, 1fr))", mobile_block)
+        self.assertIn(".scraper-selection-more", mobile_block)
         # 360px 下每列约 39px：0.66rem 字号 + 0.12rem 内边距才能让 3 字“重命名”不折行。
         self.assertIn("padding: 0.36rem 0.12rem;", mobile_block)
         self.assertIn("font-size: 0.66rem;", mobile_block)
 
     def test_scraper_selection_actions_swap_to_short_labels_on_mobile(self):
         template = SCRAPER_TEMPLATE_PATH.read_text(encoding="utf-8")
-        for full_label, short_label in (
-            ("区间选择", "区间"),
-            ("扫描监控", "扫描"),
-            ("批量整理", "整理"),
-        ):
-            self.assertIn(
-                f'<span class="scraper-action-label-full">{full_label}</span><span class="scraper-action-label-short">{short_label}</span>',
-                template,
-            )
+        self.assertIn(
+            '<span class="scraper-action-label-full">批量整理</span><span class="scraper-action-label-short">整理</span>',
+            template,
+        )
+        # 收进「更多」菜单的低频操作直接写全称，不再有长短标签两套。
+        more_menu = template[
+            template.index('id="scraper-selection-more-menu"'):template.index('id="scraper-reopen-batch-btn"')
+        ]
+        for label in ("移动到…", "区间选择", "扫描监控", "查重"):
+            self.assertIn(label, more_menu)
+        self.assertNotIn("scraper-action-label-full", more_menu)
 
         stylesheet = STYLESHEET_PATH.read_text(encoding="utf-8")
         mobile_block_start = stylesheet.index("@media (max-width: 760px) {")

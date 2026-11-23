@@ -225,6 +225,9 @@ export function createDuplicatesController(deps = {}) {
             if (invalidCount > 0) deleteBtn.title = '有分组被全部勾选，每组至少要保留一份';
             else deleteBtn.removeAttribute('title');
         }
+        // 查重面板本身也占垂直空间：开合、结果多少都会改变面板高度，
+        // 让文件列表始终留出可读的行数（core.js 里的 syncScraperBrowserHeight 负责算）。
+        window.syncScraperBrowserHeight?.();
     }
 
     async function scan() {
@@ -269,6 +272,7 @@ export function createDuplicatesController(deps = {}) {
         ui.result = null;
         ui.picks = new Set();
         ui.targetCid = '';
+        window.syncScraperBrowserHeight?.();
     }
 
     function keepBest() {

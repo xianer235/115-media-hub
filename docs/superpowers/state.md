@@ -15,11 +15,13 @@
 - **本地不入库文件**: `AGENTS.md` / `CLAUDE.md` / `.workbuddy/` / `.claude/` / `.worktrees/` 是本机开发用，**按约定不入库**。任何测试/代码读它们前必须判存在（`test_modules_doc` 已这么做），否则干净 clone 跑测试必挂。
 - **运行环境**: `docker compose` 服务名 `115-media-hub-test`（应用本体），端口 18080；`/app/storage` 已映射到宿主机 `/Users/xianer/Documents/docker/115strmxianer/storage`（virtiofs，空间读数正常）。挂载路径与端口已改为从根目录 `.env` 读取（模板 `.env.example`），本机 `.env` 写的是原来的绝对路径
 - **最近提交**: `2ed77e4` 查重入口改为先勾选文件夹 + 日间模式；`6ea7d07` 删掉 Seerr 扫描排查记录（已推送）
-- **工作区**: 干净（0.15.28 已本地提交，待用户推送）。本轮内容：查重入口从工具栏图标按钮**搬到勾选操作栏**（`templates/partials/pages/scraper.html`），`core.js` 里 `syncSelectionActions` 统一维护可用态（未勾/多选禁用并给原因），`withDuplicatesPanel` 增加静默关闭；`duplicates.js` 的 `open({cid})` 透传 cid 并显示真实路径；`index.css` 补 `html.theme-day` 全套配色。**查重后端与订阅任务本轮零改动、零新增依赖**。仓库根无探针残骸。
+- **工作区**: 有未提交改动（0.15.28 已发布推送；本轮 UI 整理未改版本号，记在 `CHANGELOG` 的 `[Unreleased]`）。本轮内容：① 勾选栏常驻按钮收到 4 个（重命名/复制/删除/批量整理），移动、区间选择、扫描监控、查重收进「更多」下拉（点菜单项/点别处/Esc 收起；预览模式菜单空时按钮隐藏），手机端网格改 `auto-fit`；② `syncScraperBrowserHeight` 改为「量出列表外横条高度 + 列表地板（桌面 320 / 手机 288）」，超出视口就让面板长高而不是压扁列表，`duplicates.js` 的 render/close 也触发重算；③ 手机端查重面板 `max-height` 从 `52vh` 收到 `40vh`。仓库根无探针残骸。
 
 
 
 ## 最近一次验证
+
+- **勾选栏「更多」菜单 + 文件列表高度地板（2026-11-22，未发版）**：新增 `tests/test_scraper_selection_menu_frontend.py` **16 条**（常驻只留 4 个动作 + 更多、低频动作在菜单里、菜单默认收起、点菜单项/点别处/Esc 收起、预览模式空菜单隐藏按钮、高度公式含 chrome 与列表地板、手机 288 地板、查重面板触发重算）；改写的 `test_scraper_path_selection_frontend` 两条断言（7 列网格 → `auto-fit`；短标签只剩批量整理），`test_scraper_batch_organize` 的守卫字符串随之更新为 `if (!actionButton) {`。`scripts/check.sh --changed` **716 条零失败**；`node --check` 两个 JS 通过。**未做真机/浏览器验证，未在容器内跑全量**。
 
 - **查重入口改「先勾选」+ 日间模式（2026-11-22，0.15.28）**：新增 `tests/test_scraper_duplicates_frontend.py` **13 条**（用 node vm 实跑 JS：`open({cid:'777'})` 确实把 777 发给扫描接口、不传 cid 才退回当前目录、meta 带服务端返回路径、按钮在勾选栏且默认 `disabled`、工具栏无该按钮、未勾选与多选均被拦下）；`scripts/check.sh --changed` **777 条零失败**；`node --check` 两个改动文件通过。**未做真机验证，未在容器内跑全量**。
 - **文件管理查重（2026-11-22，0.15.27）**：新增 `app/services/duplicate_scan.py` + `app/routes/scraper.py` 三个接口（`/scraper/duplicates/{scan,plan,delete}`）+ `static/js/modules/scraper/duplicates.js`（懒加载，core.js 里动态 import）+ 页面工具栏按钮与结果面板。`scripts/check.sh --changed` **496 条零失败**（18 个模块，含新增 `test_duplicate_scan` 26 条）；`scripts/check.sh --all` **2284 条零失败**；`scripts/check_js_syntax.py` 34 个前端文件通过；桩 DOM 跑过面板渲染（默认只勾 SHA1 相同的多余副本、勾满整组按钮禁用）。**未做真机网盘验证**。

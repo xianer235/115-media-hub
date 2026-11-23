@@ -577,7 +577,7 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         source = SCRAPER_CORE_PATH.read_text(encoding="utf-8")
         handle_source = source[source.index("function handleClick("):]
         batch_index = handle_source.index("data-batch-accept")
-        guard_index = handle_source.index("if (!actionButton) return;")
+        guard_index = handle_source.index("if (!actionButton) {")
         self.assertLess(
             batch_index,
             guard_index,
