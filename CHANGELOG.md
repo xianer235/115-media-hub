@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.15.29] - 2026-11-23
 
 ### 文件管理勾选栏只留常用操作，其余收进「更多」
 

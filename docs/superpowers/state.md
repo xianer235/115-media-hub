@@ -8,20 +8,20 @@
 
 ## 基线
 
-- **更新日期**: 2026-11-22（0.15.28：查重入口改为「先勾选文件夹」+ 面板补日间模式配色）
-- **分支**: `main`，0.15.27 已推送（`6ea7d07`）；**0.15.28 本地已提交、待用户推送**（用户要求：AI 只做本地提交，push/tag/release 由他触发）；tag 打到 `v0.15.22`，**0.15.23~0.15.28 均未打 tag / 未发 release**，Docker 镜像同版本由 GitHub Actions 自动构建（测试不绿就不构建）
-- **版本**: `0.15.28`（2026-11-22：查重入口从工具栏图标搬到**勾选操作栏**——必须只勾**一个**文件夹才可用（勾文件则扫其所在目录），未勾/多选置灰并提示原因；面板 meta 显示服务端返回的真实扫描路径，`enterFolder` / `goTrail` / `switchProvider` 自动关面板；`index.css` 补 `html.theme-day .scraper-dup*` 全套；新增 `tests/test_scraper_duplicates_frontend.py` 13 条。功能本体仍是 0.15.27 的 `app/services/duplicate_scan.py` + `/scraper/duplicates/{scan,plan,delete}` + `static/js/modules/scraper/duplicates.js` 懒加载）
+- **更新日期**: 2026-11-23（0.15.29：文件管理勾选栏收「更多」+ 修手机端列表被横条挤短）
+- **分支**: `main`，0.15.28 已推送（`7093a64`）；**0.15.29 已提交并推送**（用户 2026-11-23 明确要求「更新版本推送」）；tag 打到 `v0.15.22`，**0.15.23~0.15.29 均未打 tag / 未发 release**，Docker 镜像同版本由 GitHub Actions 自动构建（测试不绿就不构建）
+- **版本**: `0.15.29`（2026-11-23：文件管理勾选栏常驻只留 重命名/复制/删除/批量整理，移动、区间选择、扫描监控、查重收进 `#scraper-selection-more-menu`（点菜单项/点别处/Esc/换盘/面包屑/进目录都收起，预览模式空菜单时按钮隐藏）；`syncScraperBrowserHeight` 改为「量列表外横条实际高度 + 列表地板（桌面 320 / 手机 288）」，超视口让面板长高而不是压扁列表，`duplicates.js` 的 render/close 触发重算；手机端勾选栏 `repeat(7)` → `auto-fit`，查重面板 `max-height` 52vh → 40vh；新增 `tests/test_scraper_selection_menu_frontend.py` 16 条）
 - **CI**: 单一工作流 `.github/workflows/ci.yml`（`docker-release.yml` 已并入并移除），**限定 `paths: version.json`，只在发版推送时触发**：`test` job 跑 `compileall` + `scripts/check_js_syntax.py`（复制成 `.mjs` 再 `node --check`；裸 `node --check` 对 ESM 文件静默放过，`--experimental-default-type=module` 在 Node 23+ 又被移除，两条路都走过弯路）+ `scripts/run_tests.py`，`build-and-push` 用 `needs: test` 挂在后面（`workflow_dispatch` 有 `publish` 开关，关掉只跑测试）。日常开发验证只用本机 `scripts/check.sh`，不要等 CI
 - **本地不入库文件**: `AGENTS.md` / `CLAUDE.md` / `.workbuddy/` / `.claude/` / `.worktrees/` 是本机开发用，**按约定不入库**。任何测试/代码读它们前必须判存在（`test_modules_doc` 已这么做），否则干净 clone 跑测试必挂。
 - **运行环境**: `docker compose` 服务名 `115-media-hub-test`（应用本体），端口 18080；`/app/storage` 已映射到宿主机 `/Users/xianer/Documents/docker/115strmxianer/storage`（virtiofs，空间读数正常）。挂载路径与端口已改为从根目录 `.env` 读取（模板 `.env.example`），本机 `.env` 写的是原来的绝对路径
-- **最近提交**: `2ed77e4` 查重入口改为先勾选文件夹 + 日间模式；`6ea7d07` 删掉 Seerr 扫描排查记录（已推送）
-- **工作区**: 有未提交改动（0.15.28 已发布推送；本轮 UI 整理未改版本号，记在 `CHANGELOG` 的 `[Unreleased]`）。本轮内容：① 勾选栏常驻按钮收到 4 个（重命名/复制/删除/批量整理），移动、区间选择、扫描监控、查重收进「更多」下拉（点菜单项/点别处/Esc 收起；预览模式菜单空时按钮隐藏），手机端网格改 `auto-fit`；② `syncScraperBrowserHeight` 改为「量出列表外横条高度 + 列表地板（桌面 320 / 手机 288）」，超出视口就让面板长高而不是压扁列表，`duplicates.js` 的 render/close 也触发重算；③ 手机端查重面板 `max-height` 从 `52vh` 收到 `40vh`。仓库根无探针残骸。
+- **最近提交**: `432cf99` 「更多」菜单在换网盘/面包屑/进目录时也收起；`3ddb0a6` 勾选栏收「更多」+ 列表高度地板；`7093a64` 发版 0.15.28（已推送）
+- **工作区**: 干净（0.15.29 已提交并推送）。本轮内容：① 勾选栏常驻按钮收到 4 个（重命名/复制/删除/批量整理），移动、区间选择、扫描监控、查重收进「更多」下拉（点菜单项/点别处/Esc/换盘/面包屑/进目录收起；预览模式菜单空时按钮隐藏），手机端网格改 `auto-fit`；② `syncScraperBrowserHeight` 改为「量出列表外横条高度 + 列表地板（桌面 320 / 手机 288）」，超出视口就让面板长高而不是压扁列表，`duplicates.js` 的 render/close 也触发重算；③ 手机端查重面板 `max-height` 从 `52vh` 收到 `40vh`。仓库根无探针残骸。
 
 
 
 ## 最近一次验证
 
-- **勾选栏「更多」菜单 + 文件列表高度地板（2026-11-22，未发版）**：新增 `tests/test_scraper_selection_menu_frontend.py` **16 条**（常驻只留 4 个动作 + 更多、低频动作在菜单里、菜单默认收起、点菜单项/点别处/Esc 收起、预览模式空菜单隐藏按钮、高度公式含 chrome 与列表地板、手机 288 地板、查重面板触发重算）；改写的 `test_scraper_path_selection_frontend` 两条断言（7 列网格 → `auto-fit`；短标签只剩批量整理），`test_scraper_batch_organize` 的守卫字符串随之更新为 `if (!actionButton) {`。`scripts/check.sh --changed` **716 条零失败**；`node --check` 两个 JS 通过。**未做真机/浏览器验证，未在容器内跑全量**。
+- **勾选栏「更多」菜单 + 文件列表高度地板（2026-11-22~23，0.15.29）**：新增 `tests/test_scraper_selection_menu_frontend.py` **16 条**（常驻只留 4 个动作 + 更多、低频动作在菜单里、菜单默认收起、点菜单项/点别处/Esc/换盘/面包屑/进目录收起、预览模式空菜单隐藏按钮、高度公式含 chrome 与列表地板、手机 288 地板、查重面板触发重算）；改写的 `test_scraper_path_selection_frontend` 两条断言（7 列网格 → `auto-fit`；短标签只剩批量整理），`test_scraper_batch_organize` 的守卫字符串随之更新为 `if (!actionButton) {`。`scripts/check.sh --changed` 功能提交 **716 / 709 条零失败**，发版提交 **22 条零失败**；`node --check` 两个 JS 通过；handoff 26997/32768 字节。**未做真机/浏览器验证，未在容器内跑全量**。
 
 - **查重入口改「先勾选」+ 日间模式（2026-11-22，0.15.28）**：新增 `tests/test_scraper_duplicates_frontend.py` **13 条**（用 node vm 实跑 JS：`open({cid:'777'})` 确实把 777 发给扫描接口、不传 cid 才退回当前目录、meta 带服务端返回路径、按钮在勾选栏且默认 `disabled`、工具栏无该按钮、未勾选与多选均被拦下）；`scripts/check.sh --changed` **777 条零失败**；`node --check` 两个改动文件通过。**未做真机验证，未在容器内跑全量**。
 - **文件管理查重（2026-11-22，0.15.27）**：新增 `app/services/duplicate_scan.py` + `app/routes/scraper.py` 三个接口（`/scraper/duplicates/{scan,plan,delete}`）+ `static/js/modules/scraper/duplicates.js`（懒加载，core.js 里动态 import）+ 页面工具栏按钮与结果面板。`scripts/check.sh --changed` **496 条零失败**（18 个模块，含新增 `test_duplicate_scan` 26 条）；`scripts/check.sh --all` **2284 条零失败**；`scripts/check_js_syntax.py` 34 个前端文件通过；桩 DOM 跑过面板渲染（默认只勾 SHA1 相同的多余副本、勾满整组按钮禁用）。**未做真机网盘验证**。
@@ -68,6 +68,8 @@
 14. **验证 0.15.26 的补源去重与可见性（新增，仅单测 + 本机全量）**：升级重启后挑一个新剧任务（115 里一集都没有）跑一次补源，看四点——① 夸克 `/云下载/跨盘中转/<任务名>` 只落 **1 份** E01~EN，不再出现 3 份；② 115 里只复制 1 遍，且不再多出「某剧 4K 全季」这一层；③ 补源进行期间卡片显示绿色「跨盘补源中 · N 个任务」，不是「尚未命中」；④ 故意让一集复制失败，卡片应出现红色「补源失败 · N 集」并在订阅日志留一条 warn。**注意**：历史脏数据不自动清，夸克那几份中转副本按 `cross_copy_staging_retention_days`(7 天) 进回收站，115 里多出来的目录要手动删。
 
 15. **验证文件管理「查重」（0.15.27 新增，仅单测 + 桩 DOM）**：进「文件管理」→ 勾选**一个**文件夹（先挑单部剧，再试「电视剧」库里的某部剧）→ 点勾选操作栏的「查重」。看五点——① 没勾选 / 勾了两个时按钮置灰且提示原因；② 面板顶部写明扫的是哪个目录，扫的确实只是勾中的这一处（不是当前浏览目录）；③ 同一份文件（SHA1 相同）那类默认已勾好，只保留一份；④ 同集不同版本那类**一个都没勾**，点「每组保留最高画质」才勾；⑤ 故意把一组全勾上，「清理选中 N 项」应置灰、该组标红。真删一个测试目录里的副本，确认 115 回收站里能找回；再切一次日间模式，面板文字与徽章都要看得清。**注意**：115 列目录有 0.35s 节流，扫一部剧约 1~3 秒，扫「电视剧」库根仍是分钟级——所以入口只扫勾中的目录。
+
+16. **验证文件管理按钮整理与手机端列表高度（0.15.29 新增，仅单测，未真机/浏览器验证）**：① 桌面上勾一个文件夹，看勾选栏是否只剩 重命名/复制/删除/批量整理，「更多」里是否有 移动到…/区间选择/扫描监控/查重；点菜单项、点页面别处、按 Esc、点网盘标签、点面包屑、进目录是否都能收起。② 手机上开搜索框 + 勾一个文件夹（勾选栏出现），确认文件列表仍能显示 4~5 行、页面可上下滚动而不是列表被压扁；再打开查重面板，列表也不该被挤没。③ 有命名计划（预览态）时「更多」按钮应隐藏。
 
 ### B. 已真机验证通过（勿重复）
 - 阿里 ↔ 115 双向、秒传、文件夹复制、多分片+分片重试、双任务并行。
