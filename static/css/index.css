@@ -14359,8 +14359,12 @@
         }
 
         .scraper-selection-actions {
-            overflow-x: auto;
-            flex-wrap: nowrap;
+            /* 这里不能出现 overflow 裁剪：「更多」下拉是绝对定位在按钮下面的，
+               容器一旦 overflow-x: auto / hidden，下拉会被整个裁掉（点了像没反应）。
+               overflow 只要有一个方向不是 visible，另一个方向也会被算成 auto。
+               横向放不下就让按钮折行，不要做成横向滚动条。 */
+            overflow: visible;
+            flex-wrap: wrap;
             max-width: 100%;
             padding-bottom: 0.08rem;
         }
@@ -15772,10 +15776,12 @@
                    预览模式下换成的四个按钮也能各占一格，不会挤成一长条。 */
                 grid-template-columns: repeat(auto-fit, minmax(3.6rem, 1fr));
                 gap: 0.4rem;
-                overflow-x: visible;
+                /* 同桌面：绝不能裁 overflow，「更多」下拉要能溢出到列表上方。 */
+                overflow: visible;
                 padding-bottom: 0;
             }
 
+            /* 手机上「更多」是整列宽，下拉贴着右边缘展开，别顶出屏幕。 */
             .scraper-selection-more {
                 width: 100%;
                 display: flex;
@@ -15785,6 +15791,7 @@
                 left: auto;
                 right: 0;
                 min-width: 8.5rem;
+                max-width: calc(100vw - 1.6rem);
             }
 
             .scraper-action-label-full {

@@ -159,6 +159,27 @@ class SelectionMoreStyleTest(unittest.TestCase):
         mobile_block = self.stylesheet[start:end]
         self.assertIn("max-height: min(40vh, 360px);", mobile_block)
 
+    def test_actions_container_never_clips_the_dropdown(self):
+        # 「更多」下拉绝对定位在按钮下方，一旦被容器裁掉，点按钮就毫无反应。
+        # overflow 只要有一个方向不是 visible，另一个方向也会被算成 auto —— 所以
+        # 这个容器上不能出现 overflow-x: auto / hidden / scroll。
+        block = self.stylesheet[self.stylesheet.index(".scraper-selection-actions {"):]
+        block = block[: block.index("}")]
+        # 注释里会提到这些取值（解释为什么不能用），先剥掉注释再断言。
+        block = re.sub(r"/\*.*?\*/", "", block, flags=re.S)
+        self.assertIn("overflow: visible;", block)
+        for clipped in ("overflow-x: auto", "overflow-x: hidden", "overflow: hidden", "flex-wrap: nowrap"):
+            self.assertNotIn(clipped, block)
+
+        mobile_start = self.stylesheet.index("@media (max-width: 760px) {")
+        mobile_end = self.stylesheet.index("html.theme-day .scraper-page", mobile_start)
+        mobile_block = self.stylesheet[mobile_start:mobile_end]
+        rule_start = mobile_block.index("grid-template-columns: repeat(auto-fit")
+        rule = mobile_block[rule_start:]
+        rule = re.sub(r"/\*.*?\*/", "", rule[: rule.index("}")], flags=re.S)
+        self.assertIn("overflow: visible;", rule)
+        self.assertNotIn("overflow-x: auto", rule)
+
 
 if __name__ == "__main__":
     unittest.main()
