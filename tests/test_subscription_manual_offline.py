@@ -951,3 +951,38 @@ class SubscriptionStartWithLinkRouteTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([item["link_url"] for item in queued[0][2]], [MAGNET_LINK])
         self.assertEqual(len(response["skipped"]), 1)
         self.assertEqual(response["skipped"][0]["msg"], "请填写 115 分享链接")
+
+
+class CrossCopyGateTest(unittest.TestCase):
+    """手动扫描链接不触发跨盘补源。
+
+    用户贴了链接（磁力离线或异网盘分享）会自己把文件落到本盘；若同时注册跨盘复制，
+    同一集会存两份，现象是「离线已经保存好，跨盘任务还在跑」。
+    """
+
+    def test_manual_link_never_triggers_cross_copy(self):
+        task = build_task(cross_copy_mode="fallback", cross_copy_sources=["quark"])
+        self.assertFalse(runner._subscription_cross_copy_allowed(task, True))
+
+    def test_manual_link_blocks_cross_copy_even_when_mode_missing(self):
+        self.assertFalse(runner._subscription_cross_copy_allowed(build_task(), True))
+
+    def test_auto_run_allows_cross_copy_when_mode_on(self):
+        task = build_task(cross_copy_mode="fallback", cross_copy_sources=["quark"])
+        self.assertTrue(runner._subscription_cross_copy_allowed(task, False))
+
+    def test_auto_run_with_mode_off_does_not_trigger_cross_copy(self):
+        self.assertFalse(runner._subscription_cross_copy_allowed(build_task(cross_copy_mode="off"), False))
+        self.assertFalse(runner._subscription_cross_copy_allowed(build_task(), False))
+
+    def test_both_dispatch_sites_are_gated(self):
+        # 两处派发（无候选早退 / 校准后）都得过这道门，漏一处就还会重复入库。
+        source = (ROOT / "app/services/subscription_task_runner.py").read_text(encoding="utf-8")
+        self.assertIn(
+            "if not ranked_candidates and _subscription_cross_copy_allowed(task, manual_link_enabled):",
+            source,
+        )
+        self.assertIn(
+            "if ranked_candidates and _subscription_cross_copy_allowed(task, manual_link_enabled):",
+            source,
+        )

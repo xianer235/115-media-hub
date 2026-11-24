@@ -324,6 +324,25 @@ def _build_subscription_episode_batch_decision(
     }
 
 
+def _subscription_cross_copy_allowed(task: Dict[str, Any], manual_link_enabled: bool) -> bool:
+    """本轮是否允许触发跨盘补源。
+
+    两个否决条件：
+
+    - 补源开关是 ``off``；
+    - **用户手动扫描链接**：贴了链接就是指定了来源。链接可能是磁力/电驴离线，也可能是
+      异网盘分享，无论哪种都会自己把文件落到本盘；此时再并行注册跨盘复制，同一集就会
+      存两份——常见现象是「离线任务已经把文件保存好了，跨盘任务还在跑」。用户想自动
+      补源就直接用「运行」（不填链接）。
+
+    这是判定「要不要补源」的前置门，``_subscription_cross_copy_dispatch`` 内部还会再
+    检查一次开关与缺集，两处不重复也不冲突。
+    """
+    if manual_link_enabled:
+        return False
+    return str(task.get("cross_copy_mode", "off") or "off").strip().lower() != "off"
+
+
 def _subscription_cross_copy_needed(
     task: Dict[str, Any],
     ranked_candidates: List[Dict[str, Any]],
@@ -3776,6 +3795,13 @@ async def run_subscription_task(
                 "扫描链接模式已启用：跳过资源搜索，直接作为高优先级候选进入订阅扫描",
                 "info",
             )
+            if str(task.get("cross_copy_mode", "off") or "off").strip().lower() != "off":
+                # 用户贴了链接就是指定了来源：这轮不再自动跨盘补源，否则跨盘任务会和
+                # 链接本身的保存并行，同一集存两份（离线已落地、跨盘还在跑）。
+                await write_subscription_log(
+                    "手动扫描链接模式：本次不触发跨盘补源，避免链接入库与跨盘复制重复保存同一集；要自动补源请用「运行」（不填链接）",
+                    "info",
+                )
         elif fixed_link_fallback_enabled:
             await write_subscription_log(
                 f"固定链接兜底已启用：将先执行资源搜索，再把固定 {provider_label} 分享链接追加为备选候选",
@@ -4098,7 +4124,8 @@ async def run_subscription_task(
         # 无候选 = 本盘必然缺，先补源再走「等待资源」收口。
         # 有候选的场景不在这里判定：fallback 要比对「目标目录实际已落盘的最高集」，
         # 而那个值要到下面 calibrate 阶段扫完目录才有，此处用进度旧值会恒判「不缺」。
-        if not ranked_candidates:
+        # 手动扫描链接（用户贴了链接）本轮不补源：跨盘任务会和链接保存并行、重复入库。
+        if not ranked_candidates and _subscription_cross_copy_allowed(task, manual_link_enabled):
             cross_copy_registered = await _subscription_cross_copy_dispatch(
                 task,
                 cfg,
@@ -4419,7 +4446,8 @@ async def run_subscription_task(
 
         # 到这里 last_episode 才是「目标目录实际已落盘的最高集」，fallback 的缺集判定
         # 必须用这个值：用校准前的进度值会得出「本盘不缺」而永不补源（实测踩过）。
-        if ranked_candidates:
+        # 手动扫描链接不补源（同上）：用户贴的链接就是本轮的来源，跨盘并行会重复入库。
+        if ranked_candidates and _subscription_cross_copy_allowed(task, manual_link_enabled):
             cross_copy_registered = await _subscription_cross_copy_dispatch(
                 task,
                 cfg,

@@ -14,12 +14,14 @@
 - **CI**: 单一工作流 `.github/workflows/ci.yml`（`docker-release.yml` 已并入并移除），**限定 `paths: version.json`，只在发版推送时触发**：`test` job 跑 `compileall` + `scripts/check_js_syntax.py`（复制成 `.mjs` 再 `node --check`；裸 `node --check` 对 ESM 文件静默放过，`--experimental-default-type=module` 在 Node 23+ 又被移除，两条路都走过弯路）+ `scripts/run_tests.py`，`build-and-push` 用 `needs: test` 挂在后面（`workflow_dispatch` 有 `publish` 开关，关掉只跑测试）。日常开发验证只用本机 `scripts/check.sh`，不要等 CI
 - **本地不入库文件**: `AGENTS.md` / `CLAUDE.md` / `.workbuddy/` / `.claude/` / `.worktrees/` 是本机开发用，**按约定不入库**。任何测试/代码读它们前必须判存在（`test_modules_doc` 已这么做），否则干净 clone 跑测试必挂。
 - **运行环境**: `docker compose` 服务名 `115-media-hub-test`（应用本体），端口 18080；`/app/storage` 已映射到宿主机 `/Users/xianer/Documents/docker/115strmxianer/storage`（virtiofs，空间读数正常）。挂载路径与端口已改为从根目录 `.env` 读取（模板 `.env.example`），本机 `.env` 写的是原来的绝对路径
-- **最近提交**: `432cf99` 「更多」菜单在换网盘/面包屑/进目录时也收起；`3ddb0a6` 勾选栏收「更多」+ 列表高度地板；`7093a64` 发版 0.15.28（已推送）
-- **工作区**: 干净（0.15.29 已提交并推送）。本轮内容：① 勾选栏常驻按钮收到 4 个（重命名/复制/删除/批量整理），移动、区间选择、扫描监控、查重收进「更多」下拉（点菜单项/点别处/Esc/换盘/面包屑/进目录收起；预览模式菜单空时按钮隐藏），手机端网格改 `auto-fit`；② `syncScraperBrowserHeight` 改为「量出列表外横条高度 + 列表地板（桌面 320 / 手机 288）」，超出视口就让面板长高而不是压扁列表，`duplicates.js` 的 render/close 也触发重算；③ 手机端查重面板 `max-height` 从 `52vh` 收到 `40vh`。仓库根无探针残骸。
+- **最近提交**: `45a7706` 发版 0.15.29（已推送）；`432cf99` 「更多」菜单收起补丁；`3ddb0a6` 勾选栏收「更多」+ 列表高度地板
+- **工作区**: 有未提交改动（0.15.29 已推送；本轮修「手动扫描链接误触跨盘补源」未发版，CHANGELOG 记在 `[Unreleased]`）。本轮内容：新增 `_subscription_cross_copy_allowed(task, manual_link_enabled)` 作为补源派发前的门——**手动扫描链接（用户贴了链接）本轮一律不补源**，两处调用点（无候选早退 / 校准后）都过这道门；日志写明原因并提示「要自动补源请用『运行』（不填链接）」。根因：手动候选常认不出集数（磁力整包）→ 必然判「本盘缺」→ 跨盘任务与离线保存并行，同一集存两份。`tests/test_subscription_manual_offline.py` 新增 `CrossCopyGateTest` 5 条。仓库根无探针残骸。
 
 
 
 ## 最近一次验证
+
+- **手动扫描链接不再触发跨盘补源（2026-11-24，未发版）**：`tests/test_subscription_manual_offline.py` 新增 `CrossCopyGateTest` **5 条**（手动链接即便 `cross_copy_mode=fallback` 也不补 / 无 mode 也不补 / 自动运行 mode 开时补 / mode 关不补 / 两处派发都过门）；`scripts/check.sh --changed` **315 条零失败**；`compileall` 通过。**未做真机验证**（需在 NAS 上贴一条磁力或夸克链接，确认日志出现「本次不触发跨盘补源」且没有跨盘任务入队）。
 
 - **勾选栏「更多」菜单 + 文件列表高度地板（2026-11-22~23，0.15.29）**：新增 `tests/test_scraper_selection_menu_frontend.py` **16 条**（常驻只留 4 个动作 + 更多、低频动作在菜单里、菜单默认收起、点菜单项/点别处/Esc/换盘/面包屑/进目录收起、预览模式空菜单隐藏按钮、高度公式含 chrome 与列表地板、手机 288 地板、查重面板触发重算）；改写的 `test_scraper_path_selection_frontend` 两条断言（7 列网格 → `auto-fit`；短标签只剩批量整理），`test_scraper_batch_organize` 的守卫字符串随之更新为 `if (!actionButton) {`。`scripts/check.sh --changed` 功能提交 **716 / 709 条零失败**，发版提交 **22 条零失败**；`node --check` 两个 JS 通过；handoff 26997/32768 字节。**未做真机/浏览器验证，未在容器内跑全量**。
 
