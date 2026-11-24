@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.15.30] - 2026-11-24
 
 ### 手动扫描链接不再触发跨盘补源
 
