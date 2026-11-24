@@ -1741,6 +1741,11 @@ def _split_scraper_mixed_language_title(title: str, preserve_colon: bool = False
     text = str(title or "").strip()
     if not text:
         return []
+    # 纯中文标题不存在“中英混排”，不要拆：拆分用“非汉字换空格”重建标题，会把
+    # 冒号等标点变成空格（“工作细胞：细胞大作战”→“工作细胞 细胞大作战”），
+    # 这种分裂查询在 TMDB 搜不到原条目，还会按关键字去重挤掉带标点的正确候选。
+    if not re.search(r"[A-Za-z]", text):
+        return []
     latin = re.sub(r"[\u4e00-\u9fff]+", " ", text)
     latin = re.sub(r"^[\d\s._-]+", "", latin)
     latin = re.sub(r"^[\s:：,，;；|/\\·•]+|[\s:：,，;；|/\\·•]+$", "", latin)
@@ -5991,9 +5996,72 @@ def _batch_item_query_payload(
         seen_queries.add(key)
         unique_candidates.append(candidate)
     query = unique_candidates[0] if unique_candidates else ""
+    # 主查询保留原标题标点（如“工作细胞：细胞大作战”）；再补一条标点转空格的旧式变体兜底，
+    # 因为两条的关键字 key 相同会被上面的去重跳过，这里单独追加。降级命中会按 query_index 扣分，
+    # 只会被当作“建议”，不会被自动采纳。
+    if query:
+        punctuation_variant = re.sub(r"[^\u4e00-\u9fff0-9A-Za-z]+", " ", query)
+        punctuation_variant = re.sub(r"\s+", " ", punctuation_variant).strip(" -_.")
+        if punctuation_variant and punctuation_variant != query:
+            unique_candidates.append(punctuation_variant)
     media_type = "tv" if _looks_like_tv(names) else "movie"
     year = _extract_year_from_names(names)
     return query, media_type, year, unique_candidates
+
+
+# 资源名里的 TMDB 标记写法五花八门：`[tmdbid-721686]`、`[TMDB 721686]`、`tmdb_id=721686`、
+# `【tmdb-id：721686】`、`tmdb.721686` 等。统一按「tmdb + 可选 id/number + 分隔符 + 数字」识别。
+_SCRAPER_TMDB_ID_RE = re.compile(
+    r"tmdb[\s._\-]*(?:id|number)?[\s._:=：#\-]*([0-9]{3,8})",
+    re.IGNORECASE,
+)
+
+
+def _extract_scraper_tmdb_id(text: str) -> int:
+    """从名称里取 TMDB ID，取不到返回 0。"""
+    matched = _SCRAPER_TMDB_ID_RE.search(unicodedata.normalize("NFKC", str(text or "")))
+    if not matched:
+        return 0
+    return max(0, parse_int(matched.group(1), 0))
+
+
+def _batch_item_tmdb_id_hint(entry: Dict[str, Any], files: List[Dict[str, Any]]) -> int:
+    """条目名 / 路径优先，其次文件名的 TMDB ID；用于跳过模糊搜索。"""
+    for raw in (entry.get("name"), entry.get("path")):
+        tmdb_id = _extract_scraper_tmdb_id(str(raw or ""))
+        if tmdb_id:
+            return tmdb_id
+    for item in (files or [])[:40]:
+        tmdb_id = _extract_scraper_tmdb_id(str(item.get("name", "") or ""))
+        if tmdb_id:
+            return tmdb_id
+    return 0
+
+
+def _resolve_batch_tmdb_id_hint(
+    tmdb_id: int,
+    media_type: str,
+    query: str,
+    cfg: Dict[str, Any],
+) -> Dict[str, Any]:
+    """按名字里带的 TMDB ID 直接取详情；类型不可靠时 movie / tv 都试一次。
+
+    ID 是强证据但名字可能被改过（英文名、译名），所以仍用标题打分决定「自动」还是「建议」：
+    标题对得上才自动采纳，对不上只给建议，避免把写错的 ID 直接绑上去。
+    """
+    preferred = media_type if media_type in ("movie", "tv") else ""
+    order = ([preferred] if preferred else []) + [item for item in ("movie", "tv") if item != preferred]
+    for current_type in order:
+        try:
+            detail = get_tmdb_media_detail(tmdb_id, current_type, cfg)
+        except Exception:  # noqa: BLE001 - 取不到详情就退回模糊搜索
+            continue
+        if not isinstance(detail, dict) or not detail:
+            continue
+        aliases = detail.get("aliases") if isinstance(detail.get("aliases"), list) else []
+        matched = _score_tmdb_candidate(query, "", detail, aliases=aliases) if query else 0
+        return {**detail, "score": 100 if matched >= 55 else 60, "tmdb_id_hint": tmdb_id}
+    return {}
 
 
 def _search_batch_tmdb_candidates(
@@ -6077,6 +6145,27 @@ def _identify_scraper_batch_item(
         return {"item_index": item_index, "ok": False, "name": name, "msg": "缺少网盘条目信息"}
     files = item.get("files") if isinstance(item.get("files"), list) else []
     query, media_type, year, query_variants = _batch_item_query_payload(entry, files)
+    # 名字里已经带 TMDB ID 的条目直接按 ID 取详情，不再靠标题模糊搜索（标题里常有冒号、
+    # 副标题、译名差异，搜索容易落空或配错片）。
+    tmdb_hint = _batch_item_tmdb_id_hint(entry, files)
+    if tmdb_hint:
+        hinted = _resolve_batch_tmdb_id_hint(tmdb_hint, media_type, query, cfg)
+        if hinted:
+            hinted_score = max(0, int(hinted.get("score", 0) or 0))
+            adopted = hinted_score >= 80
+            return {
+                "item_index": item_index,
+                "ok": True,
+                "name": name,
+                "query": query,
+                "media_type": str(hinted.get("media_type") or media_type),
+                "year": str(hinted.get("year") or year),
+                "candidates": [hinted],
+                "auto_pick": hinted if adopted else None,
+                "status": "auto" if adopted else "suggest",
+                "confidence": hinted_score,
+                "tmdb_id": tmdb_hint,
+            }
     candidates: List[Dict[str, Any]] = []
     auto_pick: Optional[Dict[str, Any]] = None
     status = "manual"

@@ -3481,6 +3481,96 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         self.assertEqual(scraper._extract_scraper_title_candidates("【XX字幕组】剧名.S01E01.mkv"), ["剧名"])
         self.assertEqual(scraper._extract_scraper_title_candidates("男子心如钻[中英字幕].S01E01.mkv"), ["男子心如钻"])
 
+    def test_extract_title_candidates_keeps_colon_in_pure_cjk_title(self):
+        """纯中文片名里的冒号不能被替换成空格，否则 TMDB 搜不到原条目。"""
+        name = "工作细胞：细胞大作战 (2020) [tmdbid-721686]"
+        self.assertEqual(scraper._extract_scraper_title_candidates(name), ["工作细胞:细胞大作战"])
+        query, media_type, year, variants = scraper._batch_item_query_payload({"name": name}, [])
+        self.assertEqual(query, "工作细胞:细胞大作战")
+        self.assertEqual((media_type, year), ("movie", "2020"))
+        # 主查询保留标点，去掉标点的旧式变体只作降级兜底、排在后面。
+        self.assertEqual(variants, ["工作细胞:细胞大作战", "工作细胞 细胞大作战"])
+        # 中英混排仍要拆出中文部分，不能因为这次修改把混排拆分一起关掉。
+        self.assertIn(
+            "疾速追杀",
+            scraper._extract_scraper_title_candidates(
+                "疾速追杀4 John.Wick.Chapter.4.2023.1080p.WEB-DL.DDP5.1.H.264-ADDICTION"
+            ),
+        )
+
+    def test_extract_tmdb_id_from_common_folder_spellings(self):
+        """资源名里的 TMDB 标记写法不统一，常见几种都要认出来。"""
+        cases = {
+            "工作细胞：细胞大作战 (2020) [tmdbid-721686]": 721686,
+            "工作细胞 (2020) [TMDB 721686]": 721686,
+            "工作细胞 (2020) tmdb_id=721686": 721686,
+            "工作细胞 (2020) 【tmdb-id：721686】": 721686,
+            "工作细胞 (2020) [tmdb.721686]": 721686,
+            "工作细胞 (2020) [TmdbId_721686]": 721686,
+            "工作细胞 (2020) [1080p][WEB-DL]": 0,
+            "TMDB 评分 8.5 的工作细胞 (2020)": 0,
+        }
+        for text, expected in cases.items():
+            self.assertEqual(scraper._extract_scraper_tmdb_id(text), expected, text)
+
+    def test_batch_identify_uses_tmdb_id_instead_of_fuzzy_search(self):
+        """文件夹名带 TMDB ID 时直接取详情，不再拿标题去搜索。"""
+        detail = {
+            "id": 721686,
+            "media_type": "movie",
+            "title": "工作细胞：细胞大作战",
+            "original_title": "はたらく細胞",
+            "year": "2020",
+            "poster_url": "http://example.com/p.jpg",
+            "popularity": 12.0,
+            "vote_average": 7.0,
+            "aliases": [],
+        }
+        name = "工作细胞：细胞大作战 (2020) [tmdbid-721686]"
+        item = {"item_index": 2, "name": name, "entry": {"name": name}, "files": []}
+        with patch.object(scraper, "get_tmdb_media_detail", return_value=detail), patch.object(
+            scraper, "search_tmdb_media", side_effect=AssertionError("带 TMDB ID 时不该走模糊搜索")
+        ):
+            result = scraper._identify_scraper_batch_item(item, {"tmdb_api_key": "test"})
+        self.assertEqual(result["status"], "auto")
+        self.assertEqual(result["confidence"], 100)
+        self.assertEqual(result["tmdb_id"], 721686)
+        self.assertEqual(result["auto_pick"]["id"], 721686)
+        self.assertEqual(result["media_type"], "movie")
+        self.assertEqual(result["year"], "2020")
+
+    def test_batch_identify_downgrades_tmdb_id_when_title_mismatches(self):
+        """ID 在但名字对不上（写错 ID / 名字被改乱）只给建议，不自动绑定。"""
+        detail = {
+            "id": 721686,
+            "media_type": "movie",
+            "title": "完全不相干的作品",
+            "original_title": "Something Else",
+            "year": "1999",
+            "poster_url": "",
+            "popularity": 1.0,
+            "vote_average": 1.0,
+            "aliases": [],
+        }
+        name = "工作细胞：细胞大作战 (2020) [tmdbid-721686]"
+        item = {"item_index": 3, "name": name, "entry": {"name": name}, "files": []}
+        with patch.object(scraper, "get_tmdb_media_detail", return_value=detail):
+            result = scraper._identify_scraper_batch_item(item, {"tmdb_api_key": "test"})
+        self.assertEqual(result["status"], "suggest")
+        self.assertIsNone(result["auto_pick"])
+        self.assertEqual(result["candidates"][0]["id"], 721686)
+
+    def test_batch_identify_falls_back_when_tmdb_id_lookup_fails(self):
+        """详情取不到（ID 失效 / 类型不匹配）要静默回落到原来的模糊搜索。"""
+        name = "工作细胞：细胞大作战 (2020) [tmdbid-721686]"
+        item = {"item_index": 4, "name": name, "entry": {"name": name}, "files": []}
+        with patch.object(scraper, "get_tmdb_media_detail", side_effect=RuntimeError("404")), patch.object(
+            scraper, "search_tmdb_media", return_value={"items": []}
+        ):
+            result = scraper._identify_scraper_batch_item(item, {"tmdb_api_key": "test"})
+        self.assertEqual(result["status"], "manual")
+        self.assertEqual(result["candidates"], [])
+
 
 class ScraperBatchJobTitleTest(unittest.TestCase):
     """批量任务任务名按实际执行的条目展示 TMDB 标题。"""
