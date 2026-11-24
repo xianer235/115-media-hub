@@ -779,6 +779,7 @@
             }
             if (tab === 'settings') {
                 moduleVisitState.settings = true;
+                void loadJysInventoryStatus();
                 return;
             }
             if (tab === 'about') {
@@ -3606,6 +3607,78 @@
                 if (btn) {
                     btn.disabled = false;
                     btn.textContent = '测试连通性';
+                }
+            }
+        }
+
+        // 极影视库存索引：加载当前状态（条数 / 上次刷新时间 / 错误）。
+        async function loadJysInventoryStatus() {
+            const statusEl = document.getElementById('jys-inventory-status');
+            if (!statusEl) return;
+            try {
+                const data = await window.MediaHubApi.getJson('/recommendation/inventory/status');
+                renderJysInventoryStatus(data);
+            } catch (e) {
+                renderJysInventoryStatus({ error: e instanceof Error ? e.message : String(e || '') });
+            }
+        }
+
+        function renderJysInventoryStatus(data = {}) {
+            const statusEl = document.getElementById('jys-inventory-status');
+            if (!statusEl) return;
+            statusEl.classList.remove('hidden');
+            const indexed = Number(data.indexed_count ?? data.last_indexed ?? 0);
+            const lastRun = String(data.last_run_at || '').trim();
+            const lastError = String(data.last_error || data.error || '').trim();
+            if (lastError) {
+                statusEl.className = 'mt-2 tg-proxy-status tg-proxy-status--error';
+                statusEl.innerHTML = '<div class="tg-proxy-status-title">库存索引异常</div>' +
+                    '<div class="tg-proxy-status-meta">' + escapeHtml(lastError) + '</div>';
+                return;
+            }
+            statusEl.className = 'mt-2 tg-proxy-status tg-proxy-status--success';
+            const parts = [];
+            parts.push('已索引 ' + indexed + ' 条');
+            if (lastRun) parts.push('上次刷新 ' + escapeHtml(lastRun));
+            statusEl.innerHTML = '<div class="tg-proxy-status-title">库存索引</div>' +
+                '<div class="tg-proxy-status-meta">' + escapeHtml(parts.join(' · ')) + '</div>';
+        }
+
+        // 极影视库存索引：手动刷新（拉全库重建本地索引，用于推荐页「已有」判重）。
+        async function refreshJysInventory() {
+            const btn = document.getElementById('jys-inventory-refresh-btn');
+            const statusEl = document.getElementById('jys-inventory-status');
+            if (!statusEl) return;
+            if (btn && btn.disabled) return;
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = '刷新中…';
+            }
+            statusEl.classList.remove('hidden');
+            statusEl.className = 'mt-2 tg-proxy-status';
+            statusEl.innerHTML = '<div class="tg-proxy-status-title">正在拉取极影视全库…</div>';
+            try {
+                const data = await window.MediaHubApi.postJson('/recommendation/inventory/refresh', {});
+                if (data && data.ok) {
+                    statusEl.className = 'mt-2 tg-proxy-status tg-proxy-status--success';
+                    statusEl.innerHTML = '<div class="tg-proxy-status-title">刷新完成</div>' +
+                        '<div class="tg-proxy-status-meta">' + escapeHtml(data.msg || '') + '</div>';
+                    if (typeof window.showToast === 'function') {
+                        window.showToast('库存索引已刷新', { tone: 'success', duration: 2200, placement: 'top-center' });
+                    }
+                } else {
+                    statusEl.className = 'mt-2 tg-proxy-status tg-proxy-status--error';
+                    statusEl.innerHTML = '<div class="tg-proxy-status-title">刷新失败</div>' +
+                        '<div class="tg-proxy-status-meta">' + escapeHtml(String(data?.msg || data?.error || '未知错误')) + '</div>';
+                }
+            } catch (e) {
+                statusEl.className = 'mt-2 tg-proxy-status tg-proxy-status--error';
+                statusEl.innerHTML = '<div class="tg-proxy-status-title">刷新失败</div>' +
+                    '<div class="tg-proxy-status-meta">' + escapeHtml(e instanceof Error ? e.message : String(e || '未知错误')) + '</div>';
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = '立即刷新库存索引';
                 }
             }
         }

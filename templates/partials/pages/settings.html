@@ -444,12 +444,15 @@
                                 <br>家人在 Seerr 提交点播后，本面板「影视订阅」页会出现对应任务并自动搜索资源，找到后自动转存、入库、生成 STRM，与手动订阅完全同链路；只有在 Seerr 里勾选「从 Sonarr / Radarr 中删除」时才会同时删掉这里的订阅任务，只删点播请求不会删。
                             </div>
                         </div>
-                        <div id="settings-emby-bridge" class="settings-subgroup space-y-4" data-settings-subgroup="emby-bridge" data-settings-anchor="Emby 兼容桥">
-                            <div class="settings-subgroup-title">Emby 兼容桥（让 Seerr 直接读极影视的媒体库索引判重）</div>
+                        <div id="settings-emby-bridge" class="settings-subgroup space-y-4" data-settings-subgroup="emby-bridge" data-settings-anchor="极影视接入">
+                            <div class="settings-subgroup-title">极影视接入</div>
+                            <div class="text-xs text-slate-500 leading-6">
+                                填好下面的地址和媒体库账号后，本面板会复用极影视已建好的媒体库索引，做两件事：<b>① 识别已有库存</b>——「资源推荐」页标出哪部片你库里已经有了，避免重复订阅；<b>② 兼容 Seerr 的 Emby 桥</b>——让 Seerr 把极影视当成一台 Emby 服务器读索引判重。全程只读不写、不代理播放。
+                            </div>
                             <label class="flex items-center gap-3 cursor-pointer">
                                 <input id="emby_bridge_enabled" type="checkbox" class="toggle-checkbox">
-                                <span class="text-sm text-slate-300">启用 Emby 兼容桥</span>
-                                <button type="button" class="info-dot" onclick="showHelp('用途：让 Seerr 把极影视（极空间的媒体库服务）当成一台 Emby 服务器，直接读它已建好的媒体库索引来判重（库里已有什么片），避免重复点播。无需再额外部署一套 Jellyfin 去重复扫描。只读不写、不代理播放。')">i</button>
+                                <span class="text-sm text-slate-300">启用极影视接入</span>
+                                <button type="button" class="info-dot" onclick="showHelp('总开关。开启后：① 推荐页会用极影视库存做「已有」判重；② Seerr 可把极影视当 Emby 服务器读索引判重。两者都只读极影视，不写回任何数据。')">i</button>
                             </label>
                             <div class="block">
                                 <span class="text-xs text-slate-500">极影视地址（Emby 兼容层，通常是极空间内网 8021 端口）</span>
@@ -472,14 +475,21 @@
                                 </div>
                                 <div id="emby-bridge-test-status" class="mt-2 hidden"></div>
                             </div>
+                            <div class="block">
+                                <div class="flex flex-col sm:flex-row sm:items-center gap-2">
+                                    <button id="jys-inventory-refresh-btn" type="button" onclick="refreshJysInventory()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 disabled:opacity-60 text-white text-sm font-bold whitespace-nowrap">立即刷新库存索引</button>
+                                    <span class="text-[11px] text-slate-500">把极影视全库拉下来重建本地索引（用于推荐页「已有」判重）。配置改完、或极影视里新存了片，点这里立即生效；平时每天自动刷一次。首次启用必须点一次才有数据。</span>
+                                </div>
+                                <div id="jys-inventory-status" class="mt-2 hidden"></div>
+                            </div>
                             <label class="flex items-center gap-3 cursor-pointer">
                                 <input id="emby_bridge_allow_public" type="checkbox" class="toggle-checkbox">
-                                <span class="text-sm text-slate-300">允许非内网来源访问</span>
-                                <button type="button" class="info-dot" onclick="showHelp('安全开关。桥等于把极影视的媒体库能力暴露给 Seerr，默认只放行内网来源（同一局域网）。除非你的 Seerr 从公网访问，否则不要打开。')">i</button>
+                                <span class="text-sm text-slate-300">允许非内网来源访问（仅影响 Seerr 的 Emby 桥）</span>
+                                <button type="button" class="info-dot" onclick="showHelp('安全开关。Emby 桥等于把极影视的媒体库能力暴露给 Seerr，默认只放行内网来源（同一局域网）。除非你的 Seerr 从公网访问，否则不要打开。推荐页的库存判重不受此开关影响。')">i</button>
                             </label>
                             <div class="text-xs text-slate-500 leading-6">
-                                对接方法：在 Seerr（Jellyseerr）的「设置 → 媒体服务器」里添加一台 <code>Emby</code> 服务器，地址填本面板地址、URL Base 填 <code>emby-bridge</code>，账号密码填上面极影视的媒体库账号。同步完成后，库里已有的影片会显示「可获得」而不是「可请求」。
-                                <br>桥只负责「判重」，下载/补源仍走上面的 Radarr / Sonarr 点播对接，两者互不干扰；关掉上面的总开关后桥立即失效，不影响其它功能。
+                                Seerr 对接方法：在 Seerr（Jellyseerr）的「设置 → 媒体服务器」里添加一台 <code>Emby</code> 服务器，地址填本面板地址、URL Base 填 <code>emby-bridge</code>，账号密码填上面极影视的媒体库账号。同步完成后，库里已有的影片会显示「可获得」而不是「可请求」。
+                                <br>桥只负责「判重」，下载/补源仍走上面的 Radarr / Sonarr 点播对接，两者互不干扰；关掉上面的总开关后桥与推荐页判重立即失效，不影响其它功能。
                             </div>
                         </div>
                     </div>
