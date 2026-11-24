@@ -1,9 +1,9 @@
 {
-  "version": "0.16.2",
-  "buildDate": "2026-11-25T02:25:00+08:00",
+  "version": "0.16.3",
+  "buildDate": "2026-11-25T02:35:00+08:00",
   "notes": [
-    "修复推荐页「已有」角标在日间模式下白字看不清的问题（浅绿底 + 深绿字）",
-    "修复「立即刷新库存索引」偶发失败：极影视 nginx 反代大响应断连（IncompleteRead）现自动重试 3 次"
+    "「已有」角标改成实色绿底 + 白字，日间模式压在白色封面上也能看清",
+    "推荐卡片「想看」等按钮日间补足底色与描边，三个按钮文字垂直居中、盒高一致"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"
