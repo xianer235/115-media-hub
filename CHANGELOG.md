@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.16.2] - 2026-11-25
+
+### 修复推荐页「已有」角标日间模式配色
+
+「已有」角标原来复用了通用徽章的白底样式，但文字颜色没跟着切，日间模式下是白字配浅色底，几乎看不清。
+
+- 为 `.rec-card-status-owned` 增加日间覆盖：浅绿底 `rgba(5,150,105,0.12)` + 深绿字 `#047857`，与深色模式观感一致、日间清晰可读
+
+### 修复「立即刷新库存索引」偶发失败（IncompleteRead）
+
+极影视的 Emby 兼容接口走 nginx 反代，拉全库这种大响应偶尔会被反代中途断连，抛 `IncompleteRead(0 bytes read)`，导致手动刷新报错、索引不完整。
+
+- `_forward_raw` 对连接中断类异常（`IncompleteRead` / `RemoteDisconnected` / `ConnectionResetError`）自动重试，最多 3 次、线性退避（0.5s / 1s）
+- HTTP 业务错误（4xx/5xx）不重试，避免把真正的权限或配置错误掩盖成慢重试
+
 ## [0.16.1] - 2026-11-25
 
 ### 设置页「极影视接入」重组 + 库存索引刷新按钮
