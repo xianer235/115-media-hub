@@ -417,8 +417,13 @@
         .rec-card-btn {
             flex: 1 1 0;
             min-width: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
             padding: 0.4rem 0.375rem;
+            border: 1px solid transparent;
             border-radius: 0.5rem;
+            box-sizing: border-box;
             font-size: 0.6875rem;
             font-weight: 700;
             text-align: center;
@@ -1303,12 +1308,18 @@
         .rec-detail-btn {
             flex: 1 1 0;
             min-width: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
             padding: 0.625rem 0.75rem;
+            border: 1px solid transparent;
             border-radius: 0.625rem;
+            box-sizing: border-box;
             font-size: 0.8125rem;
             font-weight: 700;
             text-align: center;
             white-space: nowrap;
+            line-height: 1.3;
             min-height: 2.5rem;
             transition: background-color 0.18s ease, color 0.18s ease;
         }
@@ -1390,13 +1401,15 @@
         }
         html.theme-day .rec-card-meta-text { color: #64748b !important; }
         html.theme-day .rec-card-original-title { color: #64748b !important; }
-        html.theme-day .rec-card-status-badge {
+        /* 白底胶囊只用于「想看清单」里的状态标签（字体本身是深色）；
+           「已有」是压在封面上的徽标，必须自带实色底色，不能被这条白底规则冲掉 */
+        html.theme-day .rec-card-status-badge:not(.rec-card-status-owned) {
             background: rgba(255,255,255,0.9) !important;
         }
-        html.theme-day .rec-card-status-owned {
-            background: rgba(5, 150, 105, 0.12) !important;
-            color: #047857 !important;
-            border-color: rgba(5, 150, 105, 0.35) !important;
+        html.theme-day .rec-card-status-badge.rec-card-status-owned {
+            background: #059669 !important;
+            color: #ffffff !important;
+            border-color: rgba(4, 120, 87, 0.7) !important;
         }
         html.theme-day .rec-tab-bar {
             background: rgba(226, 232, 240, 0.5) !important;
@@ -1472,36 +1485,42 @@
         html.theme-day .rec-detail-alias-chip { background: rgba(226, 232, 240, 0.9) !important; color: #334155 !important; }
         html.theme-day .rec-detail-footer { border-color: rgba(182, 198, 219, 0.3) !important; }
         html.theme-day .rec-btn-watchlist {
-            background: rgba(249, 252, 255, 0.96) !important;
-            color: #24364b !important;
-            border-color: rgba(182, 198, 219, 0.24) !important;
+            background: rgba(226, 232, 240, 0.92) !important;
+            color: #334155 !important;
+            border-color: rgba(148, 163, 184, 0.45) !important;
         }
-        html.theme-day .rec-btn-watchlist:hover { background: rgba(226, 232, 240, 0.9) !important; }
+        html.theme-day .rec-btn-watchlist:hover {
+            background: rgba(203, 213, 225, 0.95) !important;
+            color: #1e293b !important;
+        }
         html.theme-day .rec-btn-watchlist-active {
-            background: rgba(252, 243, 212, 0.96) !important;
+            background: rgba(253, 230, 190, 0.96) !important;
             color: #8a4b05 !important;
-            border-color: rgba(217, 119, 6, 0.3) !important;
+            border-color: rgba(217, 119, 6, 0.45) !important;
         }
         html.theme-day .rec-btn-search-resource { background: #15803d !important; }
         html.theme-day .rec-btn-search-resource:hover { background: #16a34a !important; }
         html.theme-day .rec-btn-subscribe { background: #1d63e6 !important; }
         html.theme-day .rec-btn-subscribe:hover { background: #2563eb !important; }
         html.theme-day .rec-btn-remove {
-            background: rgba(249, 252, 255, 0.96) !important;
-            color: #24364b !important;
-            border-color: rgba(182, 198, 219, 0.24) !important;
+            background: rgba(226, 232, 240, 0.92) !important;
+            color: #334155 !important;
+            border-color: rgba(148, 163, 184, 0.45) !important;
         }
         html.theme-day .rec-btn-remove:hover { background: #fee2e2 !important; color: #991b1b !important; }
         html.theme-day .rec-detail-btn-watchlist {
-            background: rgba(249, 252, 255, 0.96) !important;
-            color: #24364b !important;
-            border-color: rgba(182, 198, 219, 0.24) !important;
+            background: rgba(226, 232, 240, 0.92) !important;
+            color: #334155 !important;
+            border-color: rgba(148, 163, 184, 0.45) !important;
         }
-        html.theme-day .rec-detail-btn-watchlist:hover { background: rgba(226, 232, 240, 0.9) !important; }
+        html.theme-day .rec-detail-btn-watchlist:hover {
+            background: rgba(203, 213, 225, 0.95) !important;
+            color: #1e293b !important;
+        }
         html.theme-day .rec-detail-btn-watchlist-active {
-            background: rgba(252, 243, 212, 0.96) !important;
+            background: rgba(253, 230, 190, 0.96) !important;
             color: #8a4b05 !important;
-            border-color: rgba(217, 119, 6, 0.3) !important;
+            border-color: rgba(217, 119, 6, 0.45) !important;
         }
         html.theme-day .rec-detail-btn-search { background: #15803d !important; }
         html.theme-day .rec-detail-btn-search:hover { background: #16a34a !important; }
