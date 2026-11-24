@@ -1,9 +1,9 @@
 {
-  "version": "0.15.34",
-  "buildDate": "2026-11-25T01:00:00+08:00",
+  "version": "0.16.1",
+  "buildDate": "2026-11-25T02:00:00+08:00",
   "notes": [
-    "资源推荐页接入极影视库存「已有」角标：复用 emby-bridge 拉极影视全库建本地索引，卡片与详情标出已在库的片，避免重复订阅",
-    "保存目录合并：Seerr 点播与推荐页订阅共用同一套电影/电视剧保存目录，点「订阅」自动按类型填好保存路径，不用再手选"
+    "设置页「极影视接入」重组：明确承载「识别已有库存」与「兼容 Seerr 的 Emby 桥」两件事",
+    "新增「立即刷新库存索引」按钮，首次启用后点一次即可在推荐页看到「已有」角标，不用等每天一次的定时任务"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"
