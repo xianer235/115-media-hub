@@ -17,8 +17,15 @@ SCRAPER_CORE = ROOT / "static/js/modules/scraper/core.js"
 DUPLICATES_JS = ROOT / "static/js/modules/scraper/duplicates.js"
 STYLESHEET = ROOT / "static/css/index.css"
 
-PRIMARY_ACTIONS = ("rename-selected", "prepare-copy", "delete-selected", "open-batch")
-MENU_ACTIONS = ("prepare-move", "select-range", "monitor-scan", "open-duplicates")
+PRIMARY_ACTIONS = (
+    "select-range",
+    "rename-selected",
+    "prepare-copy",
+    "prepare-move",
+    "delete-selected",
+    "open-batch",
+)
+MENU_ACTIONS = ("monitor-scan", "open-duplicates")
 
 
 def selection_actions_block(template: str) -> str:

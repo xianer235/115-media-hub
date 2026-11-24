@@ -170,9 +170,17 @@ class ScraperPathSelectionIntegrationTest(unittest.TestCase):
         more_menu = template[
             template.index('id="scraper-selection-more-menu"'):template.index('id="scraper-reopen-batch-btn"')
         ]
-        for label in ("移动到…", "区间选择", "扫描监控", "查重"):
+        for label in ("扫描监控", "查重"):
             self.assertIn(label, more_menu)
         self.assertNotIn("scraper-action-label-full", more_menu)
+
+        # 移动与区间选择已经放回常驻行，不再藏在菜单里（0.15.32）。
+        primary = template[
+            template.index('class="scraper-selection-actions"'):template.index('data-scraper-more')
+        ]
+        for label in ("移动到…", "区间选择"):
+            self.assertIn(label, primary)
+            self.assertNotIn(label, more_menu)
 
         stylesheet = STYLESHEET_PATH.read_text(encoding="utf-8")
         mobile_block_start = stylesheet.index("@media (max-width: 760px) {")
