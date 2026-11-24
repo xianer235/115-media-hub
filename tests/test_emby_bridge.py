@@ -535,5 +535,85 @@ class TestConnectionRouteTest(unittest.TestCase):
         self.assertEqual(resp.json()["msg"], "登录被拒绝")
 
 
+class ForwardRetryTest(unittest.TestCase):
+    """_forward_raw 对「读响应体时连接中断」应做有限重试，对业务错误不重试。"""
+
+    @staticmethod
+    def _resp(fn):
+        class _Resp:
+            headers = {}
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return fn()
+
+        return _Resp()
+
+    def test_incomplete_read_retries_then_succeeds(self):
+        import http.client
+
+        payload = b'{"ok": true}'
+        calls = []
+
+        def read():
+            calls.append(1)
+            if len(calls) == 1:
+                raise http.client.IncompleteRead(b"", 0)
+            return payload
+
+        def fake(req, timeout=None):
+            return self._resp(read)
+
+        with mock.patch.object(bridge.urllib.request, "urlopen", side_effect=fake), \
+                mock.patch.object(bridge.time, "sleep"):
+            status, headers, body = bridge._forward_raw(
+                "http://up", "GET", "/Items", "", b"", {}, read_timeout=10
+            )
+        self.assertEqual(status, 200)
+        self.assertEqual(body, payload)
+        self.assertEqual(len(calls), 2)  # 断连后重试了一次才成功
+
+    def test_incomplete_read_exhausted_returns_502(self):
+        import http.client
+
+        def read():
+            raise http.client.IncompleteRead(b"", 0)
+
+        def fake(req, timeout=None):
+            return self._resp(read)
+
+        with mock.patch.object(bridge.urllib.request, "urlopen", side_effect=fake), \
+                mock.patch.object(bridge.time, "sleep"):
+            status, headers, body = bridge._forward_raw(
+                "http://up", "GET", "/Items", "", b"", {}, read_timeout=10
+            )
+        self.assertEqual(status, 502)
+        self.assertEqual(body, b"")
+
+    def test_http_error_not_retried(self):
+        import io
+        import urllib.error
+
+        calls = []
+
+        def fake_raise(req, timeout=None):
+            calls.append(1)
+            err = urllib.error.HTTPError("http://up", 500, "err", {}, io.BytesIO(b"boom"))
+            raise err
+
+        with mock.patch.object(bridge.urllib.request, "urlopen", side_effect=fake_raise):
+            status, headers, body = bridge._forward_raw(
+                "http://up", "GET", "/Items", "", b"", {}, read_timeout=10
+            )
+        self.assertEqual(status, 500)
+        self.assertEqual(len(calls), 1)  # 业务错误不重试
+
+
 if __name__ == "__main__":
     unittest.main()

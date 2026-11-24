@@ -21,6 +21,7 @@
 
 import asyncio
 import hashlib
+import http.client
 import ipaddress
 import json
 import logging
@@ -37,6 +38,11 @@ logger = logging.getLogger("emby_bridge")
 
 # 上游请求统一打的客户端标识（补 DeviceId 用，极影视要求非空）
 _BRIDGE_DEVICE_ID = "115-media-hub-bridge"
+
+# 上游连接中断（IncompleteRead / RemoteDisconnected 等瞬时错误）的重试次数与退避。
+# 拉全库时极影视走 nginx 反代，大响应体偶发断连，重试 2~3 次通常能成功。
+_FORWARD_RETRIES = 3
+_FORWARD_RETRY_DELAY = 0.5  # 秒，随重试次数线性放大
 
 # T6 全库扫描分页：Seerr 拉库内容只发一次 /Items（StartIndex=0，从不翻页，也不看
 # TotalRecordCount），极影视单次返回有条数上限 → 每个库只能扫到前一批，其余条目不进
@@ -373,21 +379,58 @@ def _forward_raw(
     headers: Dict[str, str],
     read_timeout: int,
 ) -> Tuple[int, Dict[str, str], bytes]:
-    """用标准库 urllib 转发一个请求，返回 (status, headers, body)。"""
+    """用标准库 urllib 转发一个请求，返回 (status, headers, body)。
+
+    极影视走反向代理（nginx）时，对较大的响应体（拉全库单页上千条）会偶发中途
+    断连，表现为 ``http.client.IncompleteRead(0 bytes read)`` / ``RemoteDisconnected``。
+    这类错误是瞬时网络抖动，重试同一请求通常能成功，故对「读响应体时连接中断」做
+    有限重试；HTTP 4xx/5xx 业务错误不重试（重试无意义）。
+    """
     url = f"{upstream}{path}"
     if query:
         url += f"?{query}"
     url = normalize_http_url(url)
-    req = urllib.request.Request(url, data=body if method in ("POST", "PUT", "PATCH") else None, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=read_timeout) as resp:
-            resp_headers = dict(resp.headers.items())
-            data = resp.read()
-            return int(resp.status or 200), resp_headers, data
-    except urllib.error.HTTPError as exc:
-        resp_headers = dict(exc.headers.items()) if exc.headers else {}
-        data = exc.read() if hasattr(exc, "read") else b""
-        return int(exc.code or 500), resp_headers, data
+    # 只重试「读响应体时连接被掐断」这类瞬时错误；用同一份请求原样重发（GET 幂等）。
+    _TRANSIENT = (
+        http.client.IncompleteRead,
+        http.client.RemoteDisconnected,
+        ConnectionResetError,
+        ConnectionAbortedError,
+    )
+    last_exc: Optional[BaseException] = None
+    for attempt in range(_FORWARD_RETRIES):
+        req = urllib.request.Request(
+            url,
+            data=body if method in ("POST", "PUT", "PATCH") else None,
+            headers=headers,
+            method=method,
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=read_timeout) as resp:
+                resp_headers = dict(resp.headers.items())
+                data = resp.read()
+                return int(resp.status or 200), resp_headers, data
+        except urllib.error.HTTPError as exc:
+            # 业务错误（4xx/5xx）直接返回，不重试
+            resp_headers = dict(exc.headers.items()) if exc.headers else {}
+            data = exc.read() if hasattr(exc, "read") else b""
+            return int(exc.code or 500), resp_headers, data
+        except _TRANSIENT as exc:
+            last_exc = exc
+            logger.warning(
+                "emby-bridge 上游连接中断（%s），第 %s/%s 次重试：%s %s",
+                type(exc).__name__,
+                attempt + 1,
+                _FORWARD_RETRIES,
+                method,
+                path,
+            )
+            if attempt + 1 < _FORWARD_RETRIES:
+                time.sleep(_FORWARD_RETRY_DELAY * (attempt + 1))
+            continue
+    # 重试耗尽仍失败：按连接错误返回 502，让调用方按「失败」处理
+    logger.warning("emby-bridge 上游连接反复中断，放弃：%s %s（%s）", method, path, last_exc)
+    return 502, {}, b""
 
 
 def _forward_json(

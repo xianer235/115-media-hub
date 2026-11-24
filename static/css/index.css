@@ -1393,6 +1393,11 @@
         html.theme-day .rec-card-status-badge {
             background: rgba(255,255,255,0.9) !important;
         }
+        html.theme-day .rec-card-status-owned {
+            background: rgba(5, 150, 105, 0.12) !important;
+            color: #047857 !important;
+            border-color: rgba(5, 150, 105, 0.35) !important;
+        }
         html.theme-day .rec-tab-bar {
             background: rgba(226, 232, 240, 0.5) !important;
             border-color: rgba(182, 198, 219, 0.3) !important;
