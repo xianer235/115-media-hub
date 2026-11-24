@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.15.31] - 2026-11-24
+
+### 修复「更多」按钮点不开
+
+勾选栏的「更多」下拉是绝对定位在按钮下方的，而它的父容器 `.scraper-selection-actions` 还留着横排 7 个按钮时代的 `overflow-x: auto`。规范里 overflow 只要有一个方向不是 `visible`，另一个方向就会被算成 `auto` —— 于是下拉被整个裁在容器外面，点「更多」看起来毫无反应（菜单其实已经加上了 `is-open`）。
+
+改成 `overflow: visible` + 允许折行：横向放不下就让按钮换行，不再做成横向滚动条。手机端同步收口，并给下拉加了 `max-width: calc(100vw - 1.6rem)`，避免贴右边展开时顶出屏幕。
+
+新增回归断言：`.scraper-selection-actions` 上不允许出现 `overflow-x: auto/hidden`、`overflow: hidden`、`flex-wrap: nowrap`（桌面与手机两处规则都查）。
+
 ## [0.15.30] - 2026-11-24
 
 ### 手动扫描链接不再触发跨盘补源
