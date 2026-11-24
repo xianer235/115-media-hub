@@ -1,9 +1,9 @@
 {
-  "version": "0.15.33",
+  "version": "0.15.34",
   "buildDate": "2026-11-25T01:00:00+08:00",
   "notes": [
-    "修复纯中文片名在批量识别里「未匹配」：冒号曾被换成空格，等于拿 TMDB 里不存在的写法去搜索，现在主查询保留原标题标点",
-    "资源目录名带 TMDB ID 时直接按 ID 取详情（兼容 [tmdbid-721686]、[TMDB 721686]、tmdb_id=721686、【tmdb-id：721686】等写法），不再依赖标题模糊搜索；标题对不上只给建议，不自动绑定"
+    "资源推荐页接入极影视库存「已有」角标：复用 emby-bridge 拉极影视全库建本地索引，卡片与详情标出已在库的片，避免重复订阅",
+    "保存目录合并：Seerr 点播与推荐页订阅共用同一套电影/电视剧保存目录，点「订阅」自动按类型填好保存路径，不用再手选"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

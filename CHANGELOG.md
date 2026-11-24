@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.15.34] - 2026-11-25
+
+### 资源推荐页接入极影视库存「已有」角标
+
+Seerr 一直认不全极影视的库存（根因在极影视侧：部分旧库单体没刮出 TMDB ID，外加 BoxSet/Folder 聚合节点本就没有单一 ID，Seerr 只认 TMDB ID 所以拿不到）。与其在 Seerr 侧补，不如把判断做进推荐页：推荐页由本面板自己的标题匹配驱动，能覆盖 Seerr 认不到的那批。
+
+- 新增 `jys_inventory` 索引服务，复用 emby-bridge 的登录 + 分页，把极影视全库拉下来建本地索引（每天一次定时 + 设置页/接口手动刷新）
+- 只收带 TMDB ID 的单体（电影/剧集），BoxSet/Folder 一律不索引——它们是合集不是单片，标「已有」会误导
+- 精确层按 TMDB ID 比对，零误判；电影/剧集均「有 / 无」两态
+- 推荐页卡片叠「已有」角标，详情弹窗加一行「极影视库：已有」
+- 只读极影视，不写回、不补 ID、不改极影视任何数据
+
+### 保存目录合并：Seerr 点播与推荐页订阅共用一套目录
+
+Seerr 点播本身就是一个订阅任务，落点本不该有两套口径。现在设置页统一叫「保存目录」，两条链路共用。
+
+- 设置页 `servarr_movie_savepath` / `servarr_tv_savepath` 称呼改为「电影/电视剧保存目录」，文案注明 Seerr 点播与推荐页订阅共用
+- 推荐页点「订阅」自动按媒体类型填好保存路径（电影→电影目录、剧集→剧集目录，留空回退旧版默认目录，都空才手选）
+- 底层字段名保留 `servarr_*` 不动，避免数据迁移
+
 ## [0.15.33] - 2026-11-25
 
 ### 修复纯中文片名的冒号被换成空格、导致识别搜不到

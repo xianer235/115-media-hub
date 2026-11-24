@@ -8,14 +8,14 @@
 
 ## 基线
 
-- **更新日期**: 2026-11-25（0.15.33：纯中文片名冒号修复 + 名字带 TMDB ID 时按 ID 识别）
-- **分支**: `main`，0.15.32 已推送（`7a2ba98`）；**0.15.33 为本地提交**（用户 2026-11-25 说「更新一个版本后提交，我手动推送」）；tag 打到 `v0.15.22`，**0.15.23~0.15.33 均未打 tag / 未发 release**，Docker 镜像同版本由 GitHub Actions 自动构建（测试不绿就不构建）
-- **版本**: `0.15.33`（2026-11-25：① `_split_scraper_mixed_language_title` 只对含拉丁字母的标题拆分，纯中文片名保留冒号——原来冒号被换成空格、空格版按 key 去重挤掉正确候选，等于拿 TMDB 不存在的写法去搜；② 批量识别新增「名字里带 TMDB ID 就直接取详情」（`_extract_scraper_tmdb_id` / `_batch_item_tmdb_id_hint` / `_resolve_batch_tmdb_id_hint`），标题对得上才 auto，否则只给建议，详情失败静默回落模糊搜索）
+- **更新日期**: 2026-11-25（0.15.34：推荐页接极影视库存「已有」角标 + 保存目录合并）
+- **分支**: `main`，0.15.33 已推送（`cbad4bd`）；**0.15.34 为本地提交**（用户 2026-11-25 说「更新一个版本后提交，我手动推送」）；tag 打到 `v0.15.22`，**0.15.23~0.15.34 均未打 tag / 未发 release**，Docker 镜像同版本由 GitHub Actions 自动构建（测试不绿就不构建）
+- **版本**: `0.15.34`（2026-11-25：① 新增 `app/services/jys_inventory.py`，复用 emby-bridge 登录+分页拉极影视全库建本地索引 `jys_inventory`，只收带 TMDB ID 的单体、过滤 BoxSet/Folder，每天一次定时 + 手动刷新；推荐页 `/recommendation/inventory` 批量判重，卡片叠「已有」角标、详情加「极影视库：已有」，电影/剧集均两态；② 保存目录合并——设置页 `servarr_movie/tv_savepath` 改称「保存目录」并注明 Seerr 点播与推荐页订阅共用，推荐页点「订阅」自动按类型填 savepath）
 - **CI**: 单一工作流 `.github/workflows/ci.yml`（`docker-release.yml` 已并入并移除），**限定 `paths: version.json`，只在发版推送时触发**：`test` job 跑 `compileall` + `scripts/check_js_syntax.py`（复制成 `.mjs` 再 `node --check`；裸 `node --check` 对 ESM 文件静默放过，`--experimental-default-type=module` 在 Node 23+ 又被移除，两条路都走过弯路）+ `scripts/run_tests.py`，`build-and-push` 用 `needs: test` 挂在后面（`workflow_dispatch` 有 `publish` 开关，关掉只跑测试）。日常开发验证只用本机 `scripts/check.sh`，不要等 CI
 - **本地不入库文件**: `AGENTS.md` / `CLAUDE.md` / `.workbuddy/` / `.claude/` / `.worktrees/` 是本机开发用，**按约定不入库**。任何测试/代码读它们前必须判存在（`test_modules_doc` 已这么做），否则干净 clone 跑测试必挂。
 - **运行环境**: `docker compose` 服务名 `115-media-hub-test`（应用本体），端口 18080；`/app/storage` 已映射到宿主机 `/Users/xianer/Documents/docker/115strmxianer/storage`（virtiofs，空间读数正常）。挂载路径与端口已改为从根目录 `.env` 读取（模板 `.env.example`），本机 `.env` 写的是原来的绝对路径
-- **最近提交**: 待提交（0.15.33 识别修复）；`7a2ba98` 发版 0.15.32；`f467107` 移动 / 区间选择放回常驻；`2e5aa52` 发版 0.15.31
-- **工作区**: 0.15.33 本地已提交、待用户推送。本轮内容：① 修纯中文片名的冒号在识别前被换成空格（`_split_scraper_mixed_language_title` 加了「必须有拉丁字母才拆」的前置判断），批量识别主查询保留标点、另补标点转空格的旧式变体做降级兜底；② 名字里带 TMDB ID 时直接按 ID 取详情，兼容 `[tmdbid-]` / `[TMDB ]` / `tmdb_id=` / `【tmdb-id：】` / `[tmdb.]` 等写法，标题对得上才自动、否则建议，详情失败回落原搜索。仓库根无探针残骸。
+- **最近提交**: 待提交（0.15.34 推荐页接极影视库存 + 保存目录合并）；`cbad4bd` 发版 0.15.33；`7a2ba98` 发版 0.15.32；`f467107` 移动 / 区间选择放回常驻
+- **工作区**: 0.15.34 本地已提交、待用户推送。本轮内容：① 推荐页接极影视库存「已有」角标（`jys_inventory` 索引服务 + `/recommendation/inventory` 批量判重 + 卡片/详情角标，精确层两态，过滤 BoxSet/Folder）；② 保存目录合并（设置页 `servarr_*_savepath` 改称「保存目录」共用文案，推荐页订阅自动填路径）。遗留待判断：极影视「电影」旧库重扫后评估是否加标题兜底层（覆盖约 760 部无 ID 单体）、剧集「全有/部分有」三态（需索引时拉集数+对比 TMDB 总集数，留第二版）。仓库根无探针残骸。
 
 
 
