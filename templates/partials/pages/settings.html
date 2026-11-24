@@ -424,20 +424,20 @@
                                 </div>
                             </label>
                             <div class="block">
-                                <span class="text-xs text-slate-500">电影点播保存目录（115 网盘相对路径）</span>
+                                <span class="text-xs text-slate-500">电影保存目录（115 网盘相对路径）</span>
                                 <div class="mt-1 flex flex-col sm:flex-row gap-2">
                                     <input id="servarr_movie_savepath" class="w-full sm:flex-1 bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" placeholder="例如：媒体库/网盘电影">
                                     <button type="button" onclick="pickServarrSavepath('movie')" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold whitespace-nowrap">选择目录</button>
                                 </div>
-                                <div class="mt-1 text-[11px] text-slate-500">Seerr 电影点播自动建「片名 (年份)」子目录并落盘于此。留空则回退到旧版默认保存目录。</div>
+                                <div class="mt-1 text-[11px] text-slate-500">Seerr 点播与推荐页订阅的电影共用此目录，自动建「片名 (年份)」子目录落盘。留空则回退到旧版默认保存目录。</div>
                             </div>
                             <div class="block">
-                                <span class="text-xs text-slate-500">电视剧点播保存目录（115 网盘相对路径）</span>
+                                <span class="text-xs text-slate-500">电视剧保存目录（115 网盘相对路径）</span>
                                 <div class="mt-1 flex flex-col sm:flex-row gap-2">
                                     <input id="servarr_tv_savepath" class="w-full sm:flex-1 bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" placeholder="例如：媒体库/网盘电视剧">
                                     <button type="button" onclick="pickServarrSavepath('tv')" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold whitespace-nowrap">选择目录</button>
                                 </div>
-                                <div class="mt-1 text-[11px] text-slate-500">Seerr 剧集点播自动建「剧名 (年份)/Season NN」子目录并落盘于此。留空则回退到旧版默认保存目录。</div>
+                                <div class="mt-1 text-[11px] text-slate-500">Seerr 点播与推荐页订阅的剧集共用此目录，自动建「剧名 (年份)/Season NN」子目录落盘。留空则回退到旧版默认保存目录。</div>
                             </div>
                             <div class="text-xs text-slate-500 leading-6">
                                 对接方法：在 Seerr（Jellyseerr / Overseerr）的「设置 → Radarr / Sonarr」里各添加一条服务器，地址填 <code>http://面板地址</code>，API Key 填上面生成的同一个密钥；Radarr 对应电影点播，Sonarr 对应剧集点播，保存后 Seerr 会显示连接成功。

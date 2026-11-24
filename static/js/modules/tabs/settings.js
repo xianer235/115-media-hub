@@ -449,7 +449,7 @@ export function pickServarrSavepath(kind = 'movie') {
     openSettingsFolderPicker({
         provider: '115',
         initialPath: String(input?.value || ''),
-        title: isTv ? '选择电视剧点播保存目录' : '选择电影点播保存目录',
+        title: isTv ? '选择电视剧保存目录' : '选择电影保存目录',
         summary: '选择后会写成 115 网盘根目录下的相对路径（不带 /115 前缀）。',
         onPick: (picked) => applyPickedRelativePath(input, picked),
     });

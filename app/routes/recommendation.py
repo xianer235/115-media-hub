@@ -5,8 +5,37 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from ..core import *  # noqa: F401,F403
+from ..services.jys_inventory import inventory_status, query_inventory, refresh_jys_inventory
 
 router = APIRouter()
+
+
+@router.post("/recommendation/inventory")
+async def check_recommendation_inventory(request: Request) -> Dict[str, Any]:
+    """批量判断「这些片是否已在极影视库里」。
+
+    入参：{"items": [{"id": <tmdb_id>, "title": ..., "year": ..., "media_type": ...}, ...]}
+    返回：{"ok": true, "owned": {<tmdb_id>: true}}，只回「已有」的集合（精确匹配，两态）。
+    极影视桥未启用 / 未配置 / 索引为空时，返回空 owned，前端表现为「都不标已有」。
+    """
+    body = await request.json()
+    items = body.get("items") or []
+    if not isinstance(items, list):
+        return {"ok": True, "owned": {}}
+    owned = query_inventory(items)
+    return {"ok": True, "owned": owned}
+
+
+@router.post("/recommendation/inventory/refresh")
+async def refresh_recommendation_inventory(request: Request) -> Dict[str, Any]:
+    """手动刷新极影视库存索引（放线程里跑，避免阻塞事件循环）。"""
+    result = await asyncio.to_thread(refresh_jys_inventory)
+    return result
+
+
+@router.get("/recommendation/inventory/status")
+async def get_recommendation_inventory_status(request: Request) -> Dict[str, Any]:
+    return inventory_status()
 
 
 @router.get("/recommendation/state")

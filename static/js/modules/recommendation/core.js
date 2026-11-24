@@ -8,6 +8,7 @@ let recommendationWatchlist = [];
 let recommendationActiveTab = 'trending-week';
 let recommendationPreviousTab = 'trending-week';
 let recommendationBusy = false;
+let recommendationOwned = {};
 
 let recommendationPagination = {
     currentPage: 1,
@@ -464,9 +465,13 @@ function buildRecCardHtml(item, index) {
     const inWatchlist = isInWatchlist(item.id, item.media_type);
     const watchlistBtnClass = inWatchlist ? 'rec-btn-watchlist-active' : 'rec-btn-watchlist';
     const watchlistLabel = inWatchlist ? '已想看' : '想看';
+    const itemId = item.id || item.tmdb_id;
+    const ownedBadge = recommendationOwned[itemId]
+        ? '<div class="rec-card-status-badge rec-card-status-owned">已有</div>'
+        : '';
 
     return '<div class="rec-card">' +
-        '<div class="rec-card-poster-wrap" onclick="openRecDetail(' + index + ')">' + poster + voteBadge + '</div>' +
+        '<div class="rec-card-poster-wrap" onclick="openRecDetail(' + index + ')">' + poster + voteBadge + ownedBadge + '</div>' +
         '<div class="rec-card-info">' +
             '<div class="rec-card-title" onclick="openRecDetail(' + index + ')">' + escapeRecHtml(item.title || '--') + '</div>' +
             meta +
@@ -560,7 +565,7 @@ function showRecommendationEmpty(isError, message) {
     emptyEl.classList.remove('hidden');
 }
 
-function renderRecommendationGrid(items) {
+async function renderRecommendationGrid(items) {
     const gridEl = document.getElementById('recommendation-grid');
     const emptyEl = document.getElementById('recommendation-empty');
     if (!gridEl) return;
@@ -575,6 +580,16 @@ function renderRecommendationGrid(items) {
 
     if (emptyEl) emptyEl.classList.add('hidden');
     gridEl.classList.remove('hidden');
+
+    // 批量查「已有」（极影视库存），拿回命中集合再渲染角标。查询失败静默降级为「都不标」。
+    try {
+        const payload = items.map((item) => ({ id: item.id || item.tmdb_id, media_type: item.media_type }));
+        const data = await window.MediaHubApi.postJson('/recommendation/inventory', { items: payload });
+        recommendationOwned = (data?.owned && typeof data.owned === 'object') ? data.owned : {};
+    } catch (e) {
+        recommendationOwned = {};
+    }
+
     gridEl.innerHTML = items.map((item, idx) => buildRecCardHtml(item, idx)).join('');
     updatePagination();
 }
@@ -829,6 +844,8 @@ async function doSubscribe(item) {
         if (titleEl) titleEl.value = String(item.title || data.task_binding?.tmdb_title || '').trim();
         const yearEl = document.getElementById('subscription_year');
         if (yearEl) yearEl.value = String(item.year || data.task_binding?.tmdb_year || '').trim();
+        // 自动带出保存目录：与 Seerr 点播共用同一套「保存目录」配置，用户不用再手选。
+        applyRecommendationDefaultSavepath(mediaType);
         setTimeout(() => {
             if (typeof setSubscriptionTmdbBinding === 'function') {
                 setSubscriptionTmdbBinding(data.task_binding);
@@ -845,6 +862,23 @@ function closeRecDetail() {
     } else {
         document.getElementById('rec-detail-modal')?.classList.add('hidden');
     }
+}
+
+async function applyRecommendationDefaultSavepath(mediaType) {
+    // 与 Seerr 点播共用「保存目录」：电影 / 电视剧各一个，留空回退旧版默认，再空则保持手选。
+    if (typeof setSubscriptionSavepath !== 'function') return;
+    let cfg = null;
+    try {
+        cfg = await window.MediaHubApi.getJson('/get_settings');
+    } catch (e) {
+        cfg = null;
+    }
+    if (!cfg || typeof cfg !== 'object') return;
+    const specific = mediaType === 'tv' ? cfg.servarr_tv_savepath : cfg.servarr_movie_savepath;
+    const fallback = cfg.servarr_default_savepath;
+    const path = String(specific || fallback || '').trim();
+    if (!path) return;
+    setSubscriptionSavepath('0', path);
 }
 
 function renderRecDetailContent(item, detail) {
@@ -912,6 +946,7 @@ function renderRecDetailContent(item, detail) {
                         (item.year ? '<span class="rec-detail-tag-year">' + escapeRecHtml(String(item.year)) + '</span>' : '') +
                         (statusLabel ? '<span class="rec-detail-tag-status">' + escapeRecHtml(statusLabel) + '</span>' : '') +
                     '</div>' +
+                    (recommendationOwned[item.id] ? '<div class="rec-detail-owned">极影视库：已有</div>' : '') +
                     (voteHtml || '') +
                     (item.overview ? '<div class="rec-detail-overview">' + escapeRecHtml(item.overview) + '</div>' : '') +
                     episodeHtml +

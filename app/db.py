@@ -425,6 +425,20 @@ def ensure_db() -> None:
             )
             cursor.execute(
                 """
+                CREATE TABLE IF NOT EXISTS jys_inventory (
+                    tmdb_id INTEGER NOT NULL,
+                    name TEXT NOT NULL DEFAULT '',
+                    year INTEGER,
+                    media_type TEXT NOT NULL DEFAULT 'movie',
+                    PRIMARY KEY (tmdb_id)
+                )
+                """
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_jys_inventory_name_year ON jys_inventory(name, year)"
+            )
+            cursor.execute(
+                """
                 CREATE TABLE IF NOT EXISTS tree_export_jobs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     task_id TEXT NOT NULL DEFAULT '',

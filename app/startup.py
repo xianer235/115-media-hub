@@ -49,6 +49,7 @@ from .services.subscription_cross_copy_organize import (
 from .services.subscription_cross_copy_progress import (
     cross_copy_progress_watcher,
 )
+from .services.jys_inventory import jys_inventory_watcher
 
 
 MEMORY_HOUSEKEEPING_INTERVAL_SECONDS = max(
@@ -397,6 +398,7 @@ async def startup() -> None:
     asyncio.create_task(cross_copy_organize_watcher())
     asyncio.create_task(cross_copy_progress_watcher())
     asyncio.create_task(cross_copy_temp_cleanup_watcher())
+    asyncio.create_task(jys_inventory_watcher())
     asyncio.create_task(subscription_scheduler())
     asyncio.create_task(sign115_scheduler())
     asyncio.create_task(memory_housekeeper())

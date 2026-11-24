@@ -351,6 +351,11 @@
             font-weight: 700;
             backdrop-filter: blur(8px);
         }
+        .rec-card-status-owned {
+            background: rgba(5, 150, 105, 0.85);
+            color: #f0fdf4;
+            border: 1px solid rgba(16, 185, 129, 0.5);
+        }
         .rec-card-info {
             padding: 0.625rem 0.75rem 0;
             flex: 0 0 auto;
@@ -1222,6 +1227,15 @@
             background: rgba(30, 41, 59, 0.8);
             color: #cbd5e1;
         }
+        .rec-detail-owned {
+            margin-bottom: 0.75rem;
+            padding: 0.375rem 0.625rem;
+            border-radius: 0.375rem;
+            background: rgba(5, 150, 105, 0.15);
+            color: #6ee7b7;
+            font-size: 0.75rem;
+            font-weight: 700;
+        }
         .rec-detail-vote {
             display: flex;
             align-items: center;
@@ -1442,6 +1456,7 @@
         html.theme-day .rec-detail-tag-type { background: rgba(14, 165, 233, 0.12) !important; color: #0369a1 !important; }
         html.theme-day .rec-detail-tag-year { color: #475569 !important; }
         html.theme-day .rec-detail-tag-status { background: rgba(226, 232, 240, 0.9) !important; color: #334155 !important; }
+        html.theme-day .rec-detail-owned { background: rgba(5, 150, 105, 0.12) !important; color: #047857 !important; }
         html.theme-day .rec-detail-vote-score { color: #b45309 !important; }
         html.theme-day .rec-detail-vote-max { color: #94a3b8 !important; }
         html.theme-day .rec-detail-overview { color: #334155 !important; }

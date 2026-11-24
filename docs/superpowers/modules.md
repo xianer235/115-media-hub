@@ -25,10 +25,10 @@
 
 ### 资源推荐（recommendation）
 - **用途**：按 TMDB 排行榜 / 类型等条件发现影视，维护「想看」清单，再决定交给资源中心还是订阅。
-- **入口**：页面「资源推荐」；`/recommendation/state`、`/recommendation/watchlist/*`。
-- **会做**：拉取 trending / popular / discover 列表、增删改想看清单状态。
-- **不会做**：不下载、不转存、不生成 STRM，也不会自动替你建订阅（要手动发起）。
-- **相关代码**：`app/routes/recommendation.py`；页面 `templates/partials/pages/recommendation.html`
+- **入口**：页面「资源推荐」；`/recommendation/state`、`/recommendation/watchlist/*`、`/recommendation/inventory`、`/recommendation/inventory/{refresh,status}`。
+- **会做**：拉取 trending / popular / discover 列表、增删改想看清单状态；**卡片标「已有」**（极影视库存判重，电影 / 剧集均两态、只精确匹配 TMDB ID，角标 + 详情弹窗各一处）；**点「订阅」自动带出保存目录**（与 Seerr 点播共用 `servarr_movie_savepath` / `servarr_tv_savepath`，留空回退 `servarr_default_savepath`，再空才手选）。
+- **不会做**：不下载、不转存、不生成 STRM，也不会自动替你建订阅（要手动发起）；不写回极影视、不识别无 ID 条目（BoxSet / Folder 与刮削未出 ID 的单体一律跳过，宁可漏标不误标）。
+- **相关代码**：`app/routes/recommendation.py`、`app/services/jys_inventory.py`；页面 `templates/partials/pages/recommendation.html`、`static/js/modules/recommendation/core.js`
 
 ### 影视订阅（subscription）
 - **用途**：按片名/剧名周期找资源并入库，持续追更。
@@ -159,6 +159,7 @@
 | `app/services/tree.py` | 目录树 TXT → STRM 生成与增量对比 |
 | `app/services/scraper.py` | 刮削核心：识别、命名计划、批量作业执行与回滚 |
 | `app/services/ai_match.py` | OpenAI 兼容大模型辅助识别（关键词生成 + 候选选择，带缓存 / 重试 / 用量统计） |
+| `app/services/jys_inventory.py` | 极影视库存索引：复用 emby_bridge 登录+分页拉全库，抽取带 TMDB ID 的单体（过滤 BoxSet/Folder），全量重建 `jys_inventory` 表；每天一次后台刷新 + 手动刷新端点；供资源推荐页「已有」判重（两态，只精确匹配） |
 | `app/services/resource.py` | 资源导入任务执行（磁力离线、网盘转存 / 接收 / 保存） |
 | `app/services/subscription.py` | 订阅编排入口，聚合下列订阅子模块 |
 | `app/services/subscription_runner.py` | 订阅队列调度与并发控制（支持一次追加多条手动候选、只触发一次调度） |
