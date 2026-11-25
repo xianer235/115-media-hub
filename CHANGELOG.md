@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.16.5] - 2026-11-26
+
+### 修探索筛选面板在电脑端的排布空洞
+
+0.16.4 把面板改成折叠菜单后，桌面端三列网格里四个区块（年份与语言 / 评分与热度 / 分类 / 关键词）按自动放置排成 3+1：第一行三块，第二行只落「关键词」一个，另外两格空着，看上去像关键词卡片孤零零浮在左侧。手机端是单列，所以不受影响。
+
+改成按内容高度分区：
+
+- 分类块钉在右列并跨两行（它 chip 最多、本来就最高）
+- 关键词块跨左两列，补满第二行
+- 剧集属性（仅剧集）整行排在末行
+- 给四个区块补了 id，不再靠 `nth-of-type` 数位置（header 与底部按钮也是 div，容易数错）
+
+规则只在 `min-width: 900px` 生效，窄屏单列布局不变。
+
 ## [0.16.4] - 2026-11-26
 
 ### 探索筛选补齐 TMDB 官方常用条件
