@@ -14,7 +14,7 @@
 - **CI**: 单一工作流 `.github/workflows/ci.yml`（`docker-release.yml` 已并入并移除），**限定 `paths: version.json`，只在发版推送时触发**：`test` job 跑 `compileall` + `scripts/check_js_syntax.py`（复制成 `.mjs` 再 `node --check`；裸 `node --check` 对 ESM 文件静默放过，`--experimental-default-type=module` 在 Node 23+ 又被移除，两条路都走过弯路）+ `scripts/run_tests.py`，`build-and-push` 用 `needs: test` 挂在后面（`workflow_dispatch` 有 `publish` 开关，关掉只跑测试）。日常开发验证只用本机 `scripts/check.sh`，不要等 CI
 - **本地不入库文件**: `AGENTS.md` / `CLAUDE.md` / `.workbuddy/` / `.claude/` / `.worktrees/` 是本机开发用，**按约定不入库**。任何测试/代码读它们前必须判存在（`test_modules_doc` 已这么做），否则干净 clone 跑测试必挂。
 - **运行环境**: `docker compose` 服务名 `115-media-hub-test`（应用本体），端口 18080；`/app/storage` 已映射到宿主机 `/Users/xianer/Documents/docker/115strmxianer/storage`（virtiofs，空间读数正常）。挂载路径与端口已改为从根目录 `.env` 读取（模板 `.env.example`），本机 `.env` 写的是原来的绝对路径
-- **最近提交**: `99b2142` 文档同步 state.md（未推送）；`f6b2900` 订阅完结改由 TMDB 判定 + 媒体文件夹带年份括号与 TMDB ID（未推送）；`a967961` 发版 0.16.3（已推送）；`35ef4db` 发版 0.16.2
+- **最近提交**: `29ad03e` 发版 0.16.4（本地提交，未推送）；`668c848` 探索筛选 + 老任务布局保持；`99b2142` 文档同步；`f6b2900` 订阅完结改由 TMDB 判定 + 媒体文件夹带年份括号与 TMDB ID；`a967961` 发版 0.16.3（已推送）
 - **工作区**: 0.16.4 发版提交含四块：① 探索筛选扩展（`app/providers/tmdb.py` 的 `discover_tmdb_media` 新增上下限/匹配模式/排除分类/关键词/剧集属性，新增 `search_tmdb_keywords` + `GET /tmdb/keywords`；前端面板 6 块并新增「隐藏已有」）；② 筛选面板折叠化（`explorePanelOpen` 取代 `exploreDrawerOpen`，删掉 backdrop / 移动抽屉）；③ 老任务布局保持（`core.subscription_uses_media_folder_layout`，三个落点函数按 `media_folder_layout` 分支，前端 `resetSubscriptionForm` 默认 `folder`、编辑沿用任务原值）；④ 顺带修 `jumpToRecommendationPage` 未导出导致的分页跳转报错。新增 `tests/test_tmdb_discover_filters.py`（16 条）与 `LegacyLayoutTest`（5 条）
 
 
