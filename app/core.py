@@ -1995,15 +1995,18 @@ def resolve_subscription_tv_total_episodes(task: Dict[str, Any], state_total: in
             state_total_value = 0
 
     if (not multi_season_mode) and season_total > 0:
-        if configured_total <= 0:
-            return season_total
-        # 单季模式下，若任务总集数被历史流程写成“全剧总集数”，应回落到当前季集数。
-        if tmdb_total > 0:
-            if configured_total == tmdb_total and season_total != tmdb_total:
-                return season_total
-            if configured_total > season_total and configured_total <= tmdb_total:
-                return season_total
-        return configured_total
+        # 单季任务以 TMDB 的季集数为基准，配置值 / 历史记录只能把上限抬高、不能压低。
+        # 资源包常写着「更新到第 13 集」，早期版本把它当总集数写死，之后 TMDB 即使
+        # 记着 14 集也压不过 13 → 判定已完结、目录扫描还把真实存在的 E14 当异常丢掉。
+        candidates = [season_total]
+        for value in (configured_total, state_total_value):
+            if value <= 0:
+                continue
+            if tmdb_total > 0 and value == tmdb_total:
+                # 「全剧总集数」被写进单季任务，属历史脏值，不参与取大。
+                continue
+            candidates.append(value)
+        return max(candidates)
 
     if configured_total > 0:
         return configured_total
@@ -2077,25 +2080,92 @@ def convert_subscription_absolute_to_season_episode(task: Dict[str, Any], absolu
         remaining -= season_total
 
 
+# 媒体文件夹名里的 TMDB 标记：`[tmdbid-123]`（整理链路已经在用的写法，Jellyfin / Emby 认）。
+SUBSCRIPTION_MEDIA_FOLDER_TMDB_SUFFIX_RE = re.compile(r"\[\s*tmdb(?:id)?[-\s]*\d+\s*\]", re.IGNORECASE)
+
+
+def subscription_media_folder_match_key(value: Any) -> str:
+    """媒体文件夹名比对键：去掉 ``[tmdbid-…]``、括号、空白与结尾年份后小写。
+
+    用来判断「所选目录是不是这部影视自己的文件夹」——``仙逆`` / ``仙逆 (2023)`` /
+    ``仙逆(2023) [tmdbid-1]`` 三种写法视为同一部，避免再套一层同名目录。
+    """
+    text = SUBSCRIPTION_MEDIA_FOLDER_TMDB_SUFFIX_RE.sub(" ", str(value or ""))
+    text = re.sub(r"[\s\(\)（）\[\]【】]+", "", text).lower()
+    # 结尾年份剥掉后再比；片名本身是「1917」这种纯年份时前缀为空，保留原值。
+    without_year = re.sub(r"^(.*?)(?:19|20)\d{2}$", r"\1", text)
+    return without_year or text
+
+
+def build_subscription_media_folder_name(task: Dict[str, Any], fallback: str = "未命名影视") -> str:
+    """影视文件夹名：``片名 (年份) [tmdbid-123]``（没绑 TMDB 就只有 ``片名 (年份)``）。"""
+    payload = task if isinstance(task, dict) else {}
+    title = str(payload.get("title", "") or "").strip()
+    year = normalize_tmdb_year(payload.get("year", "")) or normalize_tmdb_year(payload.get("tmdb_year", ""))
+    name = f"{title} ({year})" if (title and year) else title
+    try:
+        tmdb_id = max(0, int(payload.get("tmdb_id", 0) or 0))
+    except (TypeError, ValueError):
+        tmdb_id = 0
+    if tmdb_id > 0:
+        name = f"{name} [tmdbid-{tmdb_id}]"
+    return sanitize_115_folder_name(name, fallback=fallback)
+
+
+def subscription_savepath_is_media_folder(task: Dict[str, Any], savepath: str) -> bool:
+    """所选目录的最后一段是不是这部影视自己的文件夹（是就别再嵌套一层）。"""
+    normalized = normalize_relative_path(savepath)
+    if not normalized:
+        return False
+    parts = [part for part in normalized.split("/") if part]
+    if not parts:
+        return False
+    payload = task if isinstance(task, dict) else {}
+    title_key = subscription_media_folder_match_key(payload.get("title", ""))
+    if not title_key:
+        return False
+    return subscription_media_folder_match_key(parts[-1]) == title_key
+
+
 def build_subscription_movie_savepath(task: Dict[str, Any], base_savepath: str) -> str:
-    """电影订阅在目标网盘里的落点：``<savepath>/片名 年份``。
+    """电影订阅在目标网盘里的落点：``<savepath>/片名 (年份) [tmdbid-x]``。
 
     导入（转存后移动文件）和跨盘补源都必须用这一个函数，别各写一遍——两处
     各拼一次字符串，格式迟早会分叉，用户就会看到同一部电影躺在两个目录里。
+    所选目录本身就是这部片的文件夹时不再嵌套（旧版本会套出两层同名目录）。
     """
     normalized_base = normalize_relative_path(base_savepath)
     payload = task if isinstance(task, dict) else {}
-    title = str(payload.get("title", "") or "").strip()
-    year = str(payload.get("year", "") or "").strip()
-    folder_name = sanitize_115_folder_name(
-        f"{title} {year}".strip() or "未命名电影",
-        fallback="未命名电影",
-    )
+    if subscription_savepath_is_media_folder(payload, normalized_base):
+        return normalized_base
+    folder_name = build_subscription_media_folder_name(payload, fallback="未命名电影")
     return join_relative_path(normalized_base, folder_name)
 
 
-def build_subscription_tv_savepath(task: Dict[str, Any], base_savepath: str, season: int = 0, episode: int = 0) -> str:
+def resolve_subscription_tv_media_savepath(task: Dict[str, Any], base_savepath: str) -> str:
+    """剧集落点的「剧目录」：所选目录不是这部剧自己的文件夹时，新建 ``剧名 (年份) [tmdbid-x]``。
+
+    媒体库按「一部剧一个文件夹」识别，Season NN 必须落在剧目录下。旧版本直接把
+    ``Season NN`` 建在所选目录里，从推荐页 / 默认保存位置建的任务会把多部剧混进
+    同一个 ``Season 01``；所选目录已经是剧目录（``仙逆`` / ``仙逆 (2023)`` /
+    带 ``[tmdbid-…]``）时不再嵌套。
+    """
     normalized_base = resolve_subscription_tv_base_savepath(task, base_savepath)
+    if not normalized_base:
+        return ""
+    payload = task if isinstance(task, dict) else {}
+    if str(payload.get("media_type", "movie") or "movie").strip().lower() != "tv":
+        return normalized_base
+    if subscription_savepath_is_media_folder(payload, normalized_base):
+        return normalized_base
+    return join_relative_path(
+        normalized_base,
+        build_subscription_media_folder_name(payload, fallback="未命名剧集"),
+    )
+
+
+def build_subscription_tv_savepath(task: Dict[str, Any], base_savepath: str, season: int = 0, episode: int = 0) -> str:
+    normalized_base = resolve_subscription_tv_media_savepath(task, base_savepath)
     if not normalized_base:
         return ""
     if str((task or {}).get("media_type", "movie") or "movie").strip().lower() != "tv":
@@ -2145,15 +2215,14 @@ def resolve_subscription_tv_base_savepath(task: Dict[str, Any], base_savepath: s
 
 
 def resolve_subscription_tv_scan_savepath(task: Dict[str, Any], base_savepath: str) -> str:
+    """扫描 / 建目录用的剧集根目录（剧目录，不含 Season 层）。"""
     normalized_base = normalize_relative_path(base_savepath)
     if not normalized_base:
         return ""
     payload = task if isinstance(task, dict) else {}
     if str(payload.get("media_type", "movie") or "movie").strip().lower() != "tv":
         return normalized_base
-    if is_subscription_multi_season_mode(payload):
-        return resolve_subscription_tv_base_savepath(payload, normalized_base) or normalized_base
-    return normalized_base
+    return resolve_subscription_tv_media_savepath(payload, normalized_base) or normalized_base
 
 
 def is_subscription_anime_compatible_task(task: Dict[str, Any]) -> bool:

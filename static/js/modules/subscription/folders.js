@@ -261,8 +261,11 @@
             const tmdbYear = normalizeTmdbYear(document.getElementById('subscription_tmdb_year')?.value || '');
             const title = tmdbTitle || String(document.getElementById('subscription_title')?.value || '').trim();
             const year = tmdbYear || normalizeTmdbYear(document.getElementById('subscription_year')?.value || '');
+            const tmdbId = Math.max(0, parseInt(String(document.getElementById('subscription_tmdb_id')?.value || '').trim(), 10) || 0);
             if (!title) return '';
-            return window.MediaHubTitleUtils?.recommendFolderName(title, year) || '';
+            // 带 TMDB 标记（[tmdbid-123]）：和订阅自动建的媒体文件夹保持一致，
+            // 也便于媒体库 / 整理链路识别同一部影视。
+            return window.MediaHubTitleUtils?.recommendFolderName(title, year, tmdbId) || '';
         }
 
         function applySubscriptionRecommendedFolderName() {

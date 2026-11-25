@@ -2406,11 +2406,14 @@ async def _run_subscription_task_quark(
     if single_season_episode_upper_bound > 0 and last_episode > single_season_episode_upper_bound:
         last_episode = single_season_episode_upper_bound
 
-    completed_locked = task["media_type"] == "tv" and known_total > 0 and last_episode >= known_total
-    if completed_locked:
+    progress_caught_up = task["media_type"] == "tv" and known_total > 0 and last_episode >= known_total
+    if progress_caught_up:
+        # 「追平」只代表本盘进度到了 TMDB 记录的集数上限，不等于完结：连载剧的
+        # TMDB 集数常常落后于实际更新（14 集只记到 13 集），资源包也只到当前更新集。
+        # 完结只认 TMDB 的 status（见 is_subscription_task_finished），这里不写「已完结」。
         await write_subscription_log(
-            f"当前记录为已完结（{last_episode}/{known_total}），本次仍会检查启用频道是否有重发/更优资源",
-            "warn",
+            f"已到 E{last_episode} / 共 E{known_total} 集（TMDB 记录），本次仍会检查是否有新集",
+            "info",
         )
 
     manual_link_enabled = isinstance(manual_candidate, dict) and bool(str(manual_candidate.get("link_url", "") or "").strip())
@@ -2556,9 +2559,13 @@ async def _run_subscription_task_quark(
 
     if not ranked_candidates:
         _subscription_stage_timer_enter(stage_timer, "finalize")
-        if completed_locked:
-            detail = f"已完结（{last_episode}/{known_total}），未发现可更新资源"
-            status = "completed"
+        if progress_caught_up:
+            if is_subscription_task_finished(task):
+                detail = f"已完结（{last_episode}/{known_total}），未发现可更新资源"
+                status = "completed"
+            else:
+                detail = f"已到 E{last_episode} / 共 E{known_total} 集（TMDB 记录），未发现可更新资源，等下一集"
+                status = "waiting"
         elif int(search_stats.get("exclude_keyword_filtered", 0) or 0) > 0 and int(search_stats.get("scored_items", 0) or 0) <= 0:
             detail = f"自定义排除词已过滤候选 {int(search_stats.get('exclude_keyword_filtered', 0) or 0)} 条，当前暂无可导入资源"
             status = "waiting"
@@ -2682,7 +2689,7 @@ async def _run_subscription_task_quark(
             if corrected_last_episode != last_episode:
                 previous_last_episode = last_episode
                 last_episode = corrected_last_episode
-                completed_locked = task["media_type"] == "tv" and known_total > 0 and last_episode >= known_total
+                progress_caught_up = task["media_type"] == "tv" and known_total > 0 and last_episode >= known_total
                 upsert_subscription_task_state(
                     task_name,
                     media_type=task.get("media_type", "movie"),
@@ -2903,7 +2910,7 @@ async def _run_subscription_task_quark(
                 and last_episode > 0
                 and max(candidate_episode_values) <= last_episode
                 and (not existing_episode_scan_ready)
-                and (not completed_locked)
+                and (not progress_caught_up)
             ):
                 skipped_existing_candidates += 1
                 await write_subscription_log(
@@ -3841,12 +3848,13 @@ async def run_subscription_task(
         if single_season_episode_upper_bound > 0 and last_episode > single_season_episode_upper_bound:
             last_episode = single_season_episode_upper_bound
 
-        completed_locked = task["media_type"] == "tv" and known_total > 0 and last_episode >= known_total
+        progress_caught_up = task["media_type"] == "tv" and known_total > 0 and last_episode >= known_total
 
-        if completed_locked:
+        if progress_caught_up:
+            # 同上：追平 TMDB 记录的集数 ≠ 完结，完结只认 TMDB status。
             await write_subscription_log(
-                f"当前记录为已完结（{last_episode}/{known_total}），本次仍会检查启用频道是否有重发/更优资源",
-                "warn",
+                f"已到 E{last_episode} / 共 E{known_total} 集（TMDB 记录），本次仍会检查是否有新集",
+                "info",
             )
 
         upsert_subscription_task_state(
@@ -4263,9 +4271,13 @@ async def run_subscription_task(
                 return
         if not ranked_candidates:
             _subscription_stage_timer_enter(stage_timer, "finalize")
-            if completed_locked:
-                detail = f"已完结（{last_episode}/{known_total}），未发现可更新资源"
-                status = "completed"
+            if progress_caught_up:
+                if is_subscription_task_finished(task):
+                    detail = f"已完结（{last_episode}/{known_total}），未发现可更新资源"
+                    status = "completed"
+                else:
+                    detail = f"已到 E{last_episode} / 共 E{known_total} 集（TMDB 记录），未发现可更新资源，等下一集"
+                    status = "waiting"
             elif fixed_link_fallback_enabled:
                 detail = "资源搜索与固定分享链接兜底均未命中可导入资源，请检查固定链接/提取码或资源搜索配置后重试"
                 status = "waiting"
@@ -4432,7 +4444,7 @@ async def run_subscription_task(
                 if corrected_last_episode != last_episode:
                     previous_last_episode = last_episode
                     last_episode = corrected_last_episode
-                    completed_locked = task["media_type"] == "tv" and known_total > 0 and last_episode >= known_total
+                    progress_caught_up = task["media_type"] == "tv" and known_total > 0 and last_episode >= known_total
                     upsert_subscription_task_state(
                         task_name,
                         media_type=task.get("media_type", "movie"),
@@ -4927,7 +4939,7 @@ async def run_subscription_task(
                     )
                     continue
                 is_old_episode = episode < baseline_last_episode
-                is_same_episode_blocked = episode == baseline_last_episode and not completed_locked
+                is_same_episode_blocked = episode == baseline_last_episode and not progress_caught_up
                 range_backfill_candidate = range_start > 0 and range_end > 0 and range_start < baseline_last_episode
                 if (not existing_episode_scan_ready) and (is_old_episode or is_same_episode_blocked) and not range_backfill_candidate:
                     skipped_episode_candidates += 1
@@ -5529,7 +5541,7 @@ async def run_subscription_task(
                             for episode_no in manifest_missing_episode_values
                             if episode_no not in existing_folder_episodes
                         }
-                    elif last_episode > 0 and not completed_locked:
+                    elif last_episode > 0 and not progress_caught_up:
                         manifest_missing_episode_values = {
                             episode_no
                             for episode_no in manifest_missing_episode_values

@@ -339,14 +339,18 @@ def _servarr_title_slug(title: str, tmdb_id: int) -> str:
     return raw or f"tmdb-{int(tmdb_id or 0)}"
 
 
-def _servarr_series_savepath(cfg: Dict[str, Any], title: str, year: str) -> str:
-    """剧集落点 = <电视剧保存目录>/剧名 (年份)。
+def _servarr_series_savepath(cfg: Dict[str, Any], title: str, year: str, tmdb_id: int = 0) -> str:
+    """剧集落点 = <电视剧保存目录>/剧名 (年份) [tmdbid-x]。
 
     媒体库（Jellyfin/Plex）按「一部剧一个文件夹」识别，Season NN 必须落在剧名目录下；
-    目录名统一过 sanitize_115_folder_name，和手动建订阅时的写法保持一致。
+    目录名统一过 sanitize_115_folder_name，和手动建订阅时的写法保持一致（带 TMDB 标记，
+    整理链路与媒体库都能靠它认出同一部剧）。
     """
     tv_root = _servarr_tv_savepath(cfg)
-    series_folder = sanitize_115_folder_name(_servarr_title_year(title, year), fallback="未命名剧集")
+    series_folder = build_subscription_media_folder_name(
+        {"title": title, "year": year, "tmdb_id": tmdb_id},
+        fallback="未命名剧集",
+    )
     if not tv_root:
         return series_folder
     return join_relative_path(tv_root, series_folder)
@@ -581,7 +585,7 @@ def _build_servarr_series_task(
             "year": year,
             "season": season,
             "total_episodes": total_episodes,
-            "savepath": _servarr_series_savepath(cfg, title, year),
+            "savepath": _servarr_series_savepath(cfg, title, year, tmdb_id),
             "enabled": True,
             "organize_on_import": True,
             **_servarr_cross_copy_defaults(),

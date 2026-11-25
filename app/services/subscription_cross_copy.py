@@ -155,10 +155,11 @@ def _cross_copy_target_savepath(task: Dict[str, Any], candidate: Dict[str, Any])
     """补源文件在目标网盘的落点 = 订阅任务本来会保存到的那个目录。
 
     和订阅导入共用同一套函数，不在这里另拼字符串：
-    - 电影：``build_subscription_movie_savepath`` → ``<savepath>/片名 年份``；
-    - 剧集：``build_subscription_tv_savepath`` → ``<savepath>/Season NN``，季号
-      取候选自己的季（和导入时逐文件判定一致）；候选没识别出季或季号不符被
-      延后判定时，回落到任务配置的季。
+    - 电影：``build_subscription_movie_savepath`` → ``<savepath>/片名 (年份) [tmdbid-x]``；
+    - 剧集：``build_subscription_tv_savepath`` → ``<savepath>/剧名 (年份) [tmdbid-x]/Season NN``，
+      季号取候选自己的季（和导入时逐文件判定一致）；候选没识别出季或季号不符被
+      延后判定时，回落到任务配置的季。所选目录已经是这部影视的文件夹时，两层都由
+      `subscription_savepath_is_media_folder` 拦掉，不会重复嵌套。
 
     补源复制的是「分享里的一个条目」，落点必须是作品目录，否则电影会散在
     savepath 根上、剧集会缺 Season 层，和正常订阅导入的结果对不上。

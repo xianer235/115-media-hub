@@ -47,11 +47,15 @@
             .trim();
     }
 
-    function recommendFolderName(title, year) {
+    function recommendFolderName(title, year, tmdbId) {
         const base = sanitizeFolderName(cleanShowTitle(title));
         const normalizedYear = String(year || '').trim();
         const suffix = /^(19|20)\d{2}$/.test(normalizedYear) ? ` (${normalizedYear})` : '';
-        const result = `${base}${suffix}`.trim();
+        const normalizedTmdbId = Math.max(0, parseInt(String(tmdbId ?? '').trim(), 10) || 0);
+        // 带 TMDB 标记的目录名：整理链路和 Jellyfin/Emby 都靠它认出同一部影视，
+        // 和订阅落点自动建的文件夹保持同一写法（`片名 (年份) [tmdbid-123]`）。
+        const idSuffix = normalizedTmdbId > 0 ? ` [tmdbid-${normalizedTmdbId}]` : '';
+        const result = `${base}${suffix}${idSuffix}`.trim();
         return result || '未命名影视';
     }
 

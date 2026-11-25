@@ -440,7 +440,7 @@ class ServarrSeriesApiTest(ServarrApiTestBase):
         self.assertEqual(tasks[0]["season"], 1)
         self.assertEqual(tasks[0]["total_episodes"], 22)
         # 剧集落点 = 电视剧目录 / 剧名 (年份)，Season NN 由导入侧再拼
-        self.assertEqual(tasks[0]["savepath"], "媒体库/网盘电视剧/绝命毒师 (2008)")
+        self.assertEqual(tasks[0]["savepath"], "媒体库/网盘电视剧/绝命毒师 (2008) [tmdbid-1396]")
         ctx.queue.assert_called_once_with("绝命毒师 (2008) S01", "servarr")
 
     def test_add_series_multi_season_creates_one_task_per_season(self):

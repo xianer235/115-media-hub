@@ -133,12 +133,12 @@
                         </div>
                         <input id="subscription_folder_id" class="hidden" value="0">
                         <input id="subscription_savepath" class="hidden" value="">
-                        <div id="subscription-savepath-hint" class="text-[11px] text-slate-500 leading-5 px-1">电影会自动保存到“目标目录/影片名”子文件夹；电视剧保存到所选目录。</div>
+                        <div id="subscription-savepath-hint" class="text-[11px] text-slate-500 leading-5 px-1">电影会自动建「片名 (年份) [tmdbid-编号]」子文件夹；电视剧会自动建「剧名 (年份) [tmdbid-编号]/Season NN」。所选目录已经是这部影视的文件夹时不再嵌套。</div>
                     </div>
                     <div id="subscription-cross-copy-block" class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 space-y-3">
                         <div>
                             <div class="text-sm font-bold">跨盘补源</div>
-                            <div class="text-[11px] text-slate-500 leading-5 mt-1">自家网盘搜到新资源时走网盘转存（最快，不耗本地带宽）；只有自家网盘没有新资源时，才从夸克网盘搜索并复制到本盘（需要先下载再上传，比转存慢）。<strong class="text-slate-300">补源文件与订阅导入落在同一目录</strong>：电影进“保存目录/影片名”子文件夹，电视剧进“保存目录/Season NN”子目录。复制完成后照常走监控刷新与刮削。</div>
+                            <div class="text-[11px] text-slate-500 leading-5 mt-1">自家网盘搜到新资源时走网盘转存（最快，不耗本地带宽）；只有自家网盘没有新资源时，才从夸克网盘搜索并复制到本盘（需要先下载再上传，比转存慢）。<strong class="text-slate-300">补源文件与订阅导入落在同一目录</strong>：电影进「保存目录/片名 (年份) [tmdbid-编号]」，电视剧进「保存目录/剧名 (年份) [tmdbid-编号]/Season NN」。复制完成后照常走监控刷新与刮削。</div>
                         </div>
                         <label class="flex items-center gap-3 cursor-pointer text-sm">
                             <input type="checkbox" id="subscription-cross-copy-enabled" class="ui-checkbox" onchange="syncSubscriptionCrossCopyUI()">

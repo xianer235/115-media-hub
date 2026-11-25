@@ -433,7 +433,7 @@ class TestMultiEntryShare(SubscriptionCrossCopyTestBase):
         self.assertEqual({job["source_share_url"] for job in jobs}, {self.URL})
         self.assertEqual(
             {job["target_savepath"] for job in jobs},
-            {"影视库/测试剧集/测试剧集 2024"},
+            {"影视库/测试剧集"},
         )
         self.assertEqual(len({job["source_file_id"] for job in jobs}), 3)
 
@@ -691,7 +691,7 @@ class TestConfigNormalization(unittest.TestCase):
 
 
 class TestTargetSavepath(unittest.TestCase):
-    """补源落点必须和订阅导入一致：电影进「片名 年份」，剧集进 Season 目录。"""
+    """补源落点必须和订阅导入一致：电影/剧集都进「片名 (年份) [tmdbid-x]」，剧集再进 Season。"""
 
     @staticmethod
     def _resolve(task, candidate=None):
@@ -699,7 +699,18 @@ class TestTargetSavepath(unittest.TestCase):
 
     def test_movie_goes_into_title_year_folder(self):
         task = {"savepath": "/影视库/电影", "media_type": "movie", "title": "让子弹飞", "year": "2010"}
-        self.assertEqual(self._resolve(task), "影视库/电影/让子弹飞 2010")
+        self.assertEqual(self._resolve(task), "影视库/电影/让子弹飞 (2010)")
+
+    def test_movie_folder_carries_tmdb_id(self):
+        # 新建的媒体文件夹要带 TMDB 标记，媒体库与整理链路靠它认出同一部片
+        task = {
+            "savepath": "/影视库/电影",
+            "media_type": "movie",
+            "title": "让子弹飞",
+            "year": "2010",
+            "tmdb_id": 27578,
+        }
+        self.assertEqual(self._resolve(task), "影视库/电影/让子弹飞 (2010) [tmdbid-27578]")
 
     def test_movie_without_year(self):
         task = {"savepath": "/影视库/电影", "media_type": "movie", "title": "让子弹飞"}
@@ -711,29 +722,56 @@ class TestTargetSavepath(unittest.TestCase):
 
     def test_movie_with_illegal_chars_sanitized(self):
         task = {"savepath": "/影视库/电影", "media_type": "movie", "title": "A/B:C", "year": "2024"}
-        self.assertEqual(self._resolve(task), "影视库/电影/A B C 2024")
+        self.assertEqual(self._resolve(task), "影视库/电影/A B C (2024)")
+
+    def test_movie_savepath_already_the_movie_folder_is_not_nested(self):
+        # 所选目录本身就是这部片的文件夹（旧命名「片名 年份」也算）时不再套一层
+        for savepath in ("/影视库/电影/让子弹飞 (2010)", "/影视库/电影/让子弹飞 2010"):
+            with self.subTest(savepath=savepath):
+                task = {"savepath": savepath, "media_type": "movie", "title": "让子弹飞", "year": "2010"}
+                self.assertEqual(self._resolve(task), "影视库/电影/让子弹飞 2010"
+                                 if savepath.endswith("让子弹飞 2010")
+                                 else "影视库/电影/让子弹飞 (2010)")
 
     def test_tv_uses_task_season(self):
         task = {"savepath": "/影视库/剧集", "media_type": "tv", "title": "某剧", "season": 2}
-        self.assertEqual(self._resolve(task), "影视库/剧集/Season 02")
+        self.assertEqual(self._resolve(task), "影视库/剧集/某剧/Season 02")
+
+    def test_tv_folder_carries_year_and_tmdb_id(self):
+        task = {
+            "savepath": "/影视库/剧集",
+            "media_type": "tv",
+            "title": "某剧",
+            "year": "2024",
+            "tmdb_id": 123,
+            "season": 1,
+        }
+        self.assertEqual(self._resolve(task), "影视库/剧集/某剧 (2024) [tmdbid-123]/Season 01")
+
+    def test_tv_savepath_already_the_show_folder_is_not_nested(self):
+        for savepath in ("/影视库/剧集/某剧 (2024)", "/影视库/剧集/某剧 2024", "/影视库/剧集/某剧"):
+            with self.subTest(savepath=savepath):
+                task = {"savepath": savepath, "media_type": "tv", "title": "某剧", "season": 1}
+                self.assertTrue(self._resolve(task).endswith("/Season 01"))
+                self.assertEqual(self._resolve(task).count("某剧"), 1)
 
     def test_tv_prefers_candidate_season(self):
         task = {"savepath": "/影视库/剧集", "media_type": "tv", "title": "某剧", "season": 1}
-        self.assertEqual(self._resolve(task, {"season": 3}), "影视库/剧集/Season 03")
+        self.assertEqual(self._resolve(task, {"season": 3}), "影视库/剧集/某剧/Season 03")
 
     def test_tv_season_mismatch_deferred_uses_task_season(self):
         task = {"savepath": "/影视库/剧集", "media_type": "tv", "title": "某剧", "season": 3}
         candidate = {"season": 2, "season_mismatch_deferred": True}
-        self.assertEqual(self._resolve(task, candidate), "影视库/剧集/Season 03")
+        self.assertEqual(self._resolve(task, candidate), "影视库/剧集/某剧/Season 03")
 
     def test_tv_does_not_double_season_folder(self):
-        # savepath 本身已经指到 Season 目录时不能再套一层
-        task = {"savepath": "/影视库/剧集/Season 01", "media_type": "tv", "title": "某剧", "season": 1}
-        self.assertEqual(self._resolve(task), "影视库/剧集/Season 01")
+        # savepath 本身已经指到 Season 目录时不能再套一层 Season
+        task = {"savepath": "/影视库/剧集/某剧/Season 01", "media_type": "tv", "title": "某剧", "season": 1}
+        self.assertEqual(self._resolve(task), "影视库/剧集/某剧/Season 01")
 
     def test_empty_savepath_keeps_title_folder(self):
         task = {"savepath": "", "media_type": "movie", "title": "让子弹飞", "year": "2010"}
-        self.assertEqual(self._resolve(task), "让子弹飞 2010")
+        self.assertEqual(self._resolve(task), "让子弹飞 (2010)")
 
     def test_registered_job_target_matches_import_for_tv(self):
         """端到端：剧集补源任务的目标目录带 Season 层。"""
@@ -748,7 +786,7 @@ class TestTargetSavepath(unittest.TestCase):
             )
             self.assertEqual(len(result["registered"]), 1, result)
             job = ccj.get_cross_copy_job(result["registered"][0])
-            self.assertEqual(job["target_savepath"], "影视库/剧集/Season 01")
+            self.assertEqual(job["target_savepath"], "影视库/剧集/测试剧集 (2024)/Season 01")
         finally:
             base.tearDown()
 

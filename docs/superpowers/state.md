@@ -8,19 +8,20 @@
 
 ## 基线
 
-- **更新日期**: 2026-11-25（0.16.3：修正「已有」角标日间配色 + 推荐卡片按钮底色与居中）
-- **分支**: `main`，0.16.2 已推送（`35ef4db`）；**0.16.3 为本地提交**（用户 2026-11-25 说「更新版本号提交」，推送由用户手动）；tag 打到 `v0.15.22`，**0.15.23~0.16.3 均未打 tag / 未发 release**，Docker 镜像同版本由 GitHub Actions 自动构建（测试不绿就不构建）
+- **更新日期**: 2026-11-25（未发版：订阅完结判定改由 TMDB 定 + 媒体文件夹带年份括号/TMDB ID）
+- **分支**: `main`，0.16.2 已推送（`35ef4db`）；**0.16.3 为本地提交**（用户 2026-11-25 说「更新版本号提交」，推送由用户手动）；本轮改动尚未提交、未改版本号；tag 打到 `v0.15.22`，**0.15.23~0.16.3 均未打 tag / 未发 release**，Docker 镜像同版本由 GitHub Actions 自动构建（测试不绿就不构建）
 - **版本**: `0.16.3`（2026-11-25：「已有」角标 0.16.2 的浅绿底 `rgba(5,150,105,0.12)` 压在白色封面上仍看不清，改实色 `#059669` + 白字，并用 `.rec-card-status-badge.rec-card-status-owned` 提高优先级、给通用白底规则加 `:not()` 限定；「想看 / 移除 / 详情页想看」日间改浅灰蓝实底 + 可见描边；`.rec-card-btn` / `.rec-detail-btn` 改 `inline-flex` 居中 + 统一 1px 透明边框。0.16.2 已含库存索引刷新 `_forward_raw` 断连重试；0.16.1 已含「极影视接入」设置页重组 + 刷新按钮；0.15.34 已含推荐页「已有」角标 + 保存目录合并）
 - **CI**: 单一工作流 `.github/workflows/ci.yml`（`docker-release.yml` 已并入并移除），**限定 `paths: version.json`，只在发版推送时触发**：`test` job 跑 `compileall` + `scripts/check_js_syntax.py`（复制成 `.mjs` 再 `node --check`；裸 `node --check` 对 ESM 文件静默放过，`--experimental-default-type=module` 在 Node 23+ 又被移除，两条路都走过弯路）+ `scripts/run_tests.py`，`build-and-push` 用 `needs: test` 挂在后面（`workflow_dispatch` 有 `publish` 开关，关掉只跑测试）。日常开发验证只用本机 `scripts/check.sh`，不要等 CI
 - **本地不入库文件**: `AGENTS.md` / `CLAUDE.md` / `.workbuddy/` / `.claude/` / `.worktrees/` 是本机开发用，**按约定不入库**。任何测试/代码读它们前必须判存在（`test_modules_doc` 已这么做），否则干净 clone 跑测试必挂。
 - **运行环境**: `docker compose` 服务名 `115-media-hub-test`（应用本体），端口 18080；`/app/storage` 已映射到宿主机 `/Users/xianer/Documents/docker/115strmxianer/storage`（virtiofs，空间读数正常）。挂载路径与端口已改为从根目录 `.env` 读取（模板 `.env.example`），本机 `.env` 写的是原来的绝对路径
-- **最近提交**: 待提交（0.16.3 修正「已有」角标日间配色 + 推荐卡片按钮配色/居中）；`35ef4db` 发版 0.16.2；`42c23e2` 发版 0.15.34；`cbad4bd` 发版 0.15.33
-- **工作区**: 0.16.3 本地已提交、待用户推送。本轮内容：纯 CSS（`static/css/index.css`）——「已有」角标改实色绿底白字、「想看」等次要按钮日间补底色与描边、卡片/详情页三个按钮文字垂直居中且盒高一致。遗留待判断：极影视「电影」旧库重扫后评估是否加标题兜底层（覆盖约 760 部无 ID 单体）、剧集「全有/部分有」三态（需索引时拉集数+对比 TMDB 总集数，留第二版）；浏览器需强刷才能看到新配色（CSS 有缓存）。仓库根无探针残骸。
+- **最近提交**: 待提交（订阅完结判定 + 订阅媒体文件夹命名）；`35ef4db` 发版 0.16.2；`42c23e2` 发版 0.15.34；`cbad4bd` 发版 0.15.33
+- **工作区**: 0.16.3 已提交待推送，本轮两项改动**未提交**：① 订阅完结判定改由 TMDB 定（`core.resolve_subscription_tv_total_episodes` 取上限、`progress_caught_up` 只做去重、`startup._subscription_finished_should_stop` 允许「TMDB 说完结但还差集」继续查、卡片加连载中/差 N 集徽章）；② 订阅媒体文件夹命名统一 `片名 (年份) [tmdbid-编号]`，剧集自动建剧目录（`core.resolve_subscription_tv_media_savepath`），已是该影视目录时不嵌套；Seerr 点播落点与订阅弹窗「推荐名称」同步带 ID。新增 `tests/test_subscription_completion.py`（14 条）。**历史文件不自动搬家**：已按旧方式落盘的任务需手动归位。
 
 
 
 ## 最近一次验证
 
+- **订阅完结判定与媒体文件夹命名（2026-11-25，未发版）**：新增 `tests/test_subscription_completion.py` **14 条**（总集数取上限、全剧总集数脏值回落、完结只认 TMDB、TMDB 说完结但还差集时不停、文件夹名带 `[tmdbid-…]`、已存在剧目录 / Season 目录不嵌套）；`test_subscription_cross_copy` **105 条**、`test_servarr_api` **60 条**、`test_subscription_ui_frontend` **31 条**（新增 3 条：推荐名称带 ID、连载中/差 N 集徽章）、`test_subscription_hit_cooldown` 24 条、`test_quick_import` 101 条、`test_modules_doc` 5 条均零失败；`compileall` 与 `check_js_syntax.py`（34 文件）通过。**未做真机验证**：需在 NAS 上确认 ① 剧集保存 E13 后不再显示已完结、下一轮仍自动查询；② 新任务落到 `剧名 (年份) [tmdbid-编号]/Season NN`；③ 已存在的旧目录不会被再套一层。
 - **纯中文片名冒号 + 按 TMDB ID 识别（2026-11-25，0.15.33）**：`tests/test_scraper_batch_organize.py` 新增 5 条（冒号保留与降级变体顺序、混排仍拆中文、TMDB 标记写法兼容表、带 ID 时断言不调用 `search_tmdb_media`、ID 与标题不符降级 suggest、详情异常回落 manual）；该模块 **146 条零失败**，`test_scraper_ai_match` / `test_scraper_noise_settings` 合计 225 条零失败；发版前 `scripts/check.sh --all` **2318 条零失败**（130.2s）。**未做真机验证**（需要在 NAS 上跑一次带 `[tmdbid-xxx]` 的目录，看是否直接「自动匹配」且不再走搜索）。
 - **移动 / 区间选择放回常驻（2026-11-24，0.15.32）**：`tests/test_scraper_selection_menu_frontend.py` 的常驻 / 菜单清单改为新分布（常驻 6 个动作 + 更多，菜单 2 项），`test_scraper_path_selection_frontend` 的短标签用例补断言「移动到… / 区间选择在常驻行、不在菜单里」；`scripts/check.sh --changed` 功能提交 **717 条零失败**（含 modules_doc）。**未做真机/浏览器验证**（模板改动，按钮可用态逻辑未动）。
 

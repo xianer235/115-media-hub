@@ -76,6 +76,30 @@ async def _run_inbox_cron_import(task_name: str = "") -> None:
         logging.exception("接收夹定时整理失败")
 
 
+def _subscription_finished_should_stop(task: dict, task_name: str) -> bool:
+    """TMDB 说完结时，是否真的可以停掉自动查询。
+
+    TMDB 的 status 偶尔会提前标成 Ended（或季集数记着 14、资源只出到 13），
+    直接停掉会让最后一集永远补不上。这里只在「本盘确实还差集」时放行继续查：
+    读一次状态库，已知集数 > 0 且小于 TMDB 记录的总集数 → 不停。
+    读不到状态（新任务）或已经追平 → 按 TMDB 的结论停。
+    """
+    try:
+        if str((task or {}).get("media_type", "movie") or "movie").strip().lower() != "tv":
+            return True
+        state = load_subscription_task_state(task_name, "tv")
+        known_total = resolve_subscription_tv_total_episodes(
+            task,
+            state_total=max(0, int(state.get("total_episodes", 0) or 0)),
+        )
+        last_episode = max(0, int(state.get("last_episode", 0) or 0))
+    except Exception:
+        return True
+    if known_total <= 0 or last_episode <= 0:
+        return True
+    return last_episode >= known_total
+
+
 def prune_runtime_memory_caches() -> Dict[str, Any]:
     cfg = get_config()
     detail: Dict[str, Any] = {
@@ -263,7 +287,9 @@ async def startup() -> None:
                     continue
 
                 # 已完结只认 TMDB 的明确标记（集数追平不算）：停止自动查询，手动运行仍可用。
-                if is_subscription_task_finished(task):
+                # 例外：TMDB 标记完结但本盘还差集（TMDB 集数落后 / 资源晚出），继续按间隔
+                # 查询，否则最后一集会永远补不上（2026-11-25 用户实测 14 集只到 13 集）。
+                if is_subscription_task_finished(task) and _subscription_finished_should_stop(task, name):
                     subscription_next_run.pop(name, None)
                     subscription_cooldown_until.pop(name, None)
                     continue

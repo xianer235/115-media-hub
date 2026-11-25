@@ -384,6 +384,46 @@ class SubscriptionUiFrontendTest(unittest.TestCase):
             source.index("${seasonBadgeHtml}"),
         )
 
+    def test_recommend_folder_name_appends_tmdb_id(self):
+        result = run_title_utils("""
+        ({
+            withId: api.recommendFolderName('沙丘 2', '2024', 693134),
+            withoutId: api.recommendFolderName('沙丘 2', '2024', 0),
+            badId: api.recommendFolderName('沙丘 2', '2024', 'abc'),
+        })
+        """)
+        self.assertEqual(result["withId"], "沙丘 2 (2024) [tmdbid-693134]")
+        self.assertEqual(result["withoutId"], "沙丘 2 (2024)")
+        self.assertEqual(result["badId"], "沙丘 2 (2024)")
+
+    def test_subscription_folder_recommend_name_uses_tmdb_id(self):
+        folders_source = (ROOT / "static/js/modules/subscription/folders.js").read_text(encoding="utf-8")
+        body = folders_source[
+            folders_source.index("function getSubscriptionRecommendedFolderName("):folders_source.index("function applySubscriptionRecommendedFolderName(")
+        ]
+        self.assertIn("subscription_tmdb_id", body)
+        self.assertIn("recommendFolderName(title, year, tmdbId)", body)
+
+    def test_air_status_badge_distinguishes_ongoing_and_remaining_episodes(self):
+        # TMDB 说连载中 → 「连载中」；说已完结但还差集 → 「已完结 · 差 N 集」。
+        result = run_subscription_ui(
+            """
+            ({
+                ongoing: buildSubscriptionFinishedBadge({media_type: 'tv', tmdb_status: 'Returning Series'}),
+                ended: buildSubscriptionFinishedBadge({media_type: 'tv', tmdb_status: 'Ended', total_episodes: 14, last_episode: 14}),
+                endedMissing: buildSubscriptionFinishedBadge({media_type: 'tv', tmdb_status: 'Ended', total_episodes: 14, last_episode: 13}),
+                movie: buildSubscriptionFinishedBadge({media_type: 'movie', tmdb_status: 'Released'}),
+                noStatus: buildSubscriptionFinishedBadge({media_type: 'tv'}),
+            })
+            """
+        )
+        self.assertIn("连载中", result["ongoing"])
+        self.assertIn("subscription-air-status-badge-ongoing", result["ongoing"])
+        self.assertIn(">已完结<", result["ended"])
+        self.assertIn("差 1 集", result["endedMissing"])
+        self.assertEqual(result["movie"], "")
+        self.assertEqual(result["noStatus"], "")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -189,9 +189,14 @@
             const hitCooldownMode = normalizeSubscriptionHitCooldownMode(task?.hit_cooldown_mode || SUBSCRIPTION_HIT_COOLDOWN_DEFAULT_MODE);
             const hitCooldownHours = normalizeSubscriptionHitCooldownHours(task?.hit_cooldown_hours || 0);
             const taskFinished = isSubscriptionTaskFinished(task);
+            const taskRemainingEpisodes = taskFinished
+                ? resolveSubscriptionTaskRemainingEpisodes(task, task?.name)
+                : 0;
             let scheduleText = '';
             if (taskFinished) {
-                scheduleText = '已完结，自动查询已停止，可手动运行';
+                scheduleText = taskRemainingEpisodes > 0
+                    ? `已完结但还差 ${taskRemainingEpisodes} 集，自动查询会继续（可手动运行）`
+                    : '已完结，自动查询已停止，可手动运行';
             } else if (task?.enabled === false) {
                 scheduleText = '自动查询已停用，仅支持手动运行';
             } else if (!scheduleWeekdays.length) {
@@ -734,9 +739,31 @@
             return status === 'Ended' || status === 'Canceled';
         }
 
-        function buildSubscriptionFinishedBadge(task) {
-            if (!isSubscriptionTaskFinished(task)) return '';
-            return '<span class="rounded-md border border-slate-500/50 px-2 py-0.5 text-[11px] text-slate-300">已完结</span>';
+        // TMDB 标记完结但本盘还差集时（季集数记着 14、资源只出到 13），调度仍会继续查，
+        // 卡片上不能只写「已完结」——把还差几集一起说清楚。
+        function resolveSubscriptionTaskRemainingEpisodes(task, taskName) {
+            const payload = task && typeof task === 'object' ? task : {};
+            const total = Math.max(0, parseInt(payload.total_episodes || '0', 10) || 0);
+            if (!total) return 0;
+            const progress = resolveSubscriptionTaskEpisodeProgress(payload, taskName || payload.name);
+            return Math.max(0, total - Math.max(0, Number(progress?.episode || 0) || 0));
+        }
+
+        function buildSubscriptionFinishedBadge(task, taskName) {
+            const payload = task && typeof task === 'object' ? task : {};
+            const isTv = normalizeSubscriptionMediaType(payload.media_type || 'movie') === 'tv';
+            if (!isTv) return '';
+            const tmdbStatus = String(payload.tmdb_status || '').trim();
+            if (!tmdbStatus) return '';
+            if (isSubscriptionTaskFinished(payload)) {
+                const remaining = resolveSubscriptionTaskRemainingEpisodes(payload, taskName);
+                const label = remaining > 0 ? `已完结 · 差 ${remaining} 集` : '已完结';
+                const title = remaining > 0
+                    ? `TMDB 标记已完结，但本盘还差 ${remaining} 集，自动查询会继续`
+                    : 'TMDB 标记已完结，自动查询已停止，可手动运行';
+                return `<span class="subscription-air-status-badge subscription-air-status-badge-ended" title="${escapeHtml(title)}">${label}</span>`;
+            }
+            return '<span class="subscription-air-status-badge subscription-air-status-badge-ongoing" title="TMDB 显示仍在更新，会继续自动查询">连载中</span>';
         }
 
         function getCurrentSubscriptionProvider() {
@@ -2579,7 +2606,7 @@
                     ? '<span class="subscription-strict-match-badge">精准</span>'
                     : '';
                 const lastHitBadgeHtml = buildSubscriptionLastHitBadge(task, taskName);
-                const finishedBadgeHtml = buildSubscriptionFinishedBadge(task);
+                const finishedBadgeHtml = buildSubscriptionFinishedBadge(task, taskName);
                 const crossCopyMode = String(task?.cross_copy_mode || 'off').trim().toLowerCase();
                 const crossCopySourceNames = Array.isArray(task?.cross_copy_sources)
                     ? task.cross_copy_sources.map(name => String(name || '').trim())

@@ -10623,6 +10623,31 @@
             background: rgba(127, 29, 29, 0.55);
             color: #fca5a5;
         }
+        /* 连载中 / 已完结：TMDB 状态徽章。完结但还差集时也会显示「差 N 集」，
+           和「集数追平」区分开——追平不等于完结。 */
+        #page-subscription .subscription-air-status-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            height: 1.25rem;
+            padding: 0 0.5rem;
+            border-radius: 9999px;
+            border: 1px solid transparent;
+            font-size: 10px;
+            font-weight: 700;
+            line-height: 1;
+            white-space: nowrap;
+        }
+        #page-subscription .subscription-air-status-badge-ongoing {
+            border-color: rgba(56, 189, 248, 0.45);
+            background: rgba(8, 47, 73, 0.55);
+            color: #7dd3fc;
+        }
+        #page-subscription .subscription-air-status-badge-ended {
+            border-color: rgba(148, 163, 184, 0.45);
+            background: rgba(51, 65, 85, 0.6);
+            color: #e2e8f0;
+        }
         html.theme-day #page-subscription .subscription-task-search-btn {
             background: #0e7490 !important;
             color: #ffffff !important;
@@ -10660,6 +10685,18 @@
             background: #fee2e2;
             border-color: rgba(185, 28, 28, 0.5);
             color: #7f1d1d;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.76), 0 1px 2px rgba(15, 23, 42, 0.08);
+        }
+        html.theme-day #page-subscription .subscription-air-status-badge-ongoing {
+            background: #e0f2fe;
+            border-color: rgba(14, 116, 144, 0.5);
+            color: #0c4a6e;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.76), 0 1px 2px rgba(15, 23, 42, 0.08);
+        }
+        html.theme-day #page-subscription .subscription-air-status-badge-ended {
+            background: #f1f5f9;
+            border-color: rgba(100, 116, 139, 0.5);
+            color: #334155;
             box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.76), 0 1px 2px rgba(15, 23, 42, 0.08);
         }
         html.theme-day #page-subscription .subscription-task-icon-btn,
