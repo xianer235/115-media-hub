@@ -2083,6 +2083,37 @@ def convert_subscription_absolute_to_season_episode(task: Dict[str, Any], absolu
 # 媒体文件夹名里的 TMDB 标记：`[tmdbid-123]`（整理链路已经在用的写法，Jellyfin / Emby 认）。
 SUBSCRIPTION_MEDIA_FOLDER_TMDB_SUFFIX_RE = re.compile(r"\[\s*tmdb(?:id)?[-\s]*\d+\s*\]", re.IGNORECASE)
 
+# 落点布局（任务上的 media_folder_layout 字段）：
+#   ""（缺省）= legacy：电影 ``<savepath>/片名 年份``；剧集把 ``Season NN`` 直接建在 savepath 下
+#   "folder" = 新版：电影 ``<savepath>/片名 (年份) [tmdbid-x]``；剧集先建剧目录再放 Season
+# 老任务没有这个字段，一律按 legacy 走 —— 升级不改变已在用的目录结构，新布局只给新建任务。
+SUBSCRIPTION_MEDIA_LAYOUT_LEGACY = ""
+SUBSCRIPTION_MEDIA_LAYOUT_FOLDER = "folder"
+
+
+def normalize_subscription_media_layout(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if token in ("folder", "media_folder", "v2"):
+        return SUBSCRIPTION_MEDIA_LAYOUT_FOLDER
+    return SUBSCRIPTION_MEDIA_LAYOUT_LEGACY
+
+
+def subscription_uses_media_folder_layout(task: Dict[str, Any]) -> bool:
+    """这个订阅任务是否用「每部影视一个文件夹 + 带年份括号与 TMDB ID」的新落点。"""
+    payload = task if isinstance(task, dict) else {}
+    return normalize_subscription_media_layout(payload.get("media_folder_layout")) == SUBSCRIPTION_MEDIA_LAYOUT_FOLDER
+
+
+def build_legacy_subscription_movie_folder_name(task: Dict[str, Any]) -> str:
+    """旧版电影目录名 ``片名 年份``（老任务专用，别给新任务用）。"""
+    payload = task if isinstance(task, dict) else {}
+    title = str(payload.get("title", "") or "").strip()
+    year = str(payload.get("year", "") or "").strip()
+    return sanitize_115_folder_name(
+        f"{title} {year}".strip() or "未命名电影",
+        fallback="未命名电影",
+    )
+
 
 def subscription_media_folder_match_key(value: Any) -> str:
     """媒体文件夹名比对键：去掉 ``[tmdbid-…]``、括号、空白与结尾年份后小写。
@@ -2128,7 +2159,10 @@ def subscription_savepath_is_media_folder(task: Dict[str, Any], savepath: str) -
 
 
 def build_subscription_movie_savepath(task: Dict[str, Any], base_savepath: str) -> str:
-    """电影订阅在目标网盘里的落点：``<savepath>/片名 (年份) [tmdbid-x]``。
+    """电影订阅在目标网盘里的落点。
+
+    新任务（``media_folder_layout = folder``）：``<savepath>/片名 (年份) [tmdbid-x]``；
+    老任务沿用旧写法 ``<savepath>/片名 年份``，避免升级后跟已经建好的目录分叉。
 
     导入（转存后移动文件）和跨盘补源都必须用这一个函数，别各写一遍——两处
     各拼一次字符串，格式迟早会分叉，用户就会看到同一部电影躺在两个目录里。
@@ -2136,6 +2170,8 @@ def build_subscription_movie_savepath(task: Dict[str, Any], base_savepath: str) 
     """
     normalized_base = normalize_relative_path(base_savepath)
     payload = task if isinstance(task, dict) else {}
+    if not subscription_uses_media_folder_layout(payload):
+        return join_relative_path(normalized_base, build_legacy_subscription_movie_folder_name(payload))
     if subscription_savepath_is_media_folder(payload, normalized_base):
         return normalized_base
     folder_name = build_subscription_media_folder_name(payload, fallback="未命名电影")
@@ -2149,12 +2185,17 @@ def resolve_subscription_tv_media_savepath(task: Dict[str, Any], base_savepath: 
     ``Season NN`` 建在所选目录里，从推荐页 / 默认保存位置建的任务会把多部剧混进
     同一个 ``Season 01``；所选目录已经是剧目录（``仙逆`` / ``仙逆 (2023)`` /
     带 ``[tmdbid-…]``）时不再嵌套。
+
+    老任务（``media_folder_layout`` 缺省）不做这层推断，直接返回原 savepath ——
+    它们的文件已经躺在 ``<savepath>/Season NN``，改落点会让扫描找不到已下载的集。
     """
     normalized_base = resolve_subscription_tv_base_savepath(task, base_savepath)
     if not normalized_base:
         return ""
     payload = task if isinstance(task, dict) else {}
     if str(payload.get("media_type", "movie") or "movie").strip().lower() != "tv":
+        return normalized_base
+    if not subscription_uses_media_folder_layout(payload):
         return normalized_base
     if subscription_savepath_is_media_folder(payload, normalized_base):
         return normalized_base
@@ -2215,12 +2256,20 @@ def resolve_subscription_tv_base_savepath(task: Dict[str, Any], base_savepath: s
 
 
 def resolve_subscription_tv_scan_savepath(task: Dict[str, Any], base_savepath: str) -> str:
-    """扫描 / 建目录用的剧集根目录（剧目录，不含 Season 层）。"""
+    """扫描 / 建目录用的剧集根目录（剧目录，不含 Season 层）。
+
+    老任务保持旧行为：多季模式剥掉 ``Season NN`` 一层，单季模式直接用 savepath
+    （它们的 Season 目录就建在 savepath 下）。新任务指向新建的剧目录。
+    """
     normalized_base = normalize_relative_path(base_savepath)
     if not normalized_base:
         return ""
     payload = task if isinstance(task, dict) else {}
     if str(payload.get("media_type", "movie") or "movie").strip().lower() != "tv":
+        return normalized_base
+    if not subscription_uses_media_folder_layout(payload):
+        if is_subscription_multi_season_mode(payload):
+            return resolve_subscription_tv_base_savepath(payload, normalized_base) or normalized_base
         return normalized_base
     return resolve_subscription_tv_media_savepath(payload, normalized_base) or normalized_base
 
@@ -2662,6 +2711,7 @@ def normalize_subscription_task(task: Dict[str, Any]) -> Dict[str, Any]:
         "name": name,
         "provider": provider,
         "media_type": media_type,
+        "media_folder_layout": normalize_subscription_media_layout(task.get("media_folder_layout")),
         "organize_on_import": organize_on_import,
         "organize_options": organize_options,
         "title": title,
@@ -7780,6 +7830,7 @@ from .providers.tmdb import (
     parse_tmdb_http_error,
     prune_tmdb_cache,
     search_tmdb_media,
+    search_tmdb_keywords,
     tmdb_request_json,
 )
 from .providers.pan115 import (

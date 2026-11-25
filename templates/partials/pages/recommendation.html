@@ -47,107 +47,160 @@
                     </div>
                 </div>
 
-                <div id="rec-explore-mobile-quickbar" class="rec-explore-quickbar hidden">
+                <div id="rec-explore-quickbar" class="rec-explore-quickbar">
                     <div class="rec-quick-type" role="group" aria-label="媒体类型">
                         <button id="rec-explore-media-movie" type="button" class="rec-quick-type-btn is-active" onclick="setExploreMediaType('movie', true)" aria-pressed="true">电影</button>
                         <button id="rec-explore-media-tv" type="button" class="rec-quick-type-btn" onclick="setExploreMediaType('tv', true)" aria-pressed="false">剧集</button>
                     </div>
-                    <select id="rec-explore-sort-mobile" class="rec-search-select rec-quick-sort" onchange="setExploreSort(this.value, true)">
+                    <select id="rec-explore-sort" class="rec-search-select rec-quick-sort" onchange="setExploreSort(this.value, true)">
                         <option value="popularity.desc">最热门</option>
                         <option value="vote_average.desc">最高评分</option>
                         <option value="primary_release_date.desc">最新上映</option>
                     </select>
-                    <button id="rec-explore-drawer-toggle" type="button" class="rec-filter-drawer-btn" onclick="openExploreFiltersDrawer()" aria-expanded="false" aria-controls="rec-explore-filters">
-                        筛选<span id="rec-explore-mobile-count" class="rec-filter-count hidden">0</span>
+                    <button id="rec-explore-filter-toggle" type="button" class="rec-filter-toggle-btn" onclick="toggleExploreFiltersPanel()" aria-expanded="false" aria-controls="rec-explore-filters">
+                        筛选<span id="rec-explore-filter-count" class="rec-filter-count hidden">0</span>
+                        <svg class="rec-filter-caret" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd"/></svg>
                     </button>
                 </div>
 
-                <div id="rec-explore-backdrop" class="rec-explore-backdrop hidden" onclick="closeExploreFiltersDrawer()"></div>
-                <div id="recommendation-explore-layout" class="rec-explore-layout">
-                    <aside id="rec-explore-filters" class="rec-explore-filters hidden" aria-label="探索筛选">
-                        <div class="rec-explore-panel-header">
-                            <div class="rec-explore-panel-heading">
-                                <div class="rec-explore-panel-title">筛选条件</div>
-                                <div id="rec-explore-summary-text" class="rec-explore-panel-subtitle">按类型、年代和分类收窄片单</div>
-                            </div>
-                            <button type="button" class="rec-explore-panel-close" onclick="closeExploreFiltersDrawer()" aria-label="关闭筛选">关闭</button>
+                <div id="rec-explore-filters" class="rec-explore-filters" aria-label="探索筛选">
+                    <div class="rec-explore-panel-header">
+                        <div class="rec-explore-panel-heading">
+                            <div class="rec-explore-panel-title">筛选条件</div>
+                            <div id="rec-explore-summary-text" class="rec-explore-panel-subtitle">按语言、年代和分类收窄片单</div>
                         </div>
+                        <button type="button" class="rec-explore-panel-close" onclick="toggleExploreFiltersPanel(false)" aria-label="收起筛选">收起</button>
+                    </div>
 
-                        <div class="rec-filter-section rec-filter-section-quick">
-                            <div class="rec-filter-section-title">快速条件</div>
-                            <div class="rec-filter-fields">
-                                <label class="rec-filter-field rec-filter-desktop-only">
-                                    <span class="rec-filter-label">媒体类型</span>
-                                    <select id="rec-explore-media-type" class="rec-search-select" onchange="onExploreMediaTypeChange()">
-                                        <option value="movie">电影</option>
-                                        <option value="tv">剧集</option>
-                                    </select>
-                                </label>
-                                <label class="rec-filter-field rec-filter-desktop-only">
-                                    <span class="rec-filter-label">排序</span>
-                                    <select id="rec-explore-sort" class="rec-search-select" onchange="setExploreSort(this.value, false)">
-                                        <option value="popularity.desc">最热门</option>
-                                        <option value="vote_average.desc">最高评分</option>
-                                        <option value="primary_release_date.desc">最新上映</option>
-                                    </select>
-                                </label>
-                                <label class="rec-filter-field">
-                                    <span class="rec-filter-label">语言</span>
-                                    <select id="rec-explore-language" class="rec-search-select">
-                                        <option value="">全部语言</option>
-                                        <option value="zh">中文</option>
-                                        <option value="en">英语</option>
-                                        <option value="ja">日语</option>
-                                        <option value="ko">韩语</option>
-                                        <option value="th">泰语</option>
-                                        <option value="fr">法语</option>
-                                        <option value="de">德语</option>
-                                        <option value="es">西班牙语</option>
-                                    </select>
-                                </label>
-                            </div>
-                        </div>
-
-                        <div class="rec-filter-section">
-                            <div class="rec-filter-section-title">精细条件</div>
-                            <div class="rec-filter-field">
-                                <span class="rec-filter-label">年代</span>
-                                <div id="rec-explore-decade-chips" class="rec-decade-chips"></div>
-                            </div>
-                            <div class="rec-filter-grid">
-                                <label class="rec-filter-field">
-                                    <span class="rec-filter-label">最低评分</span>
-                                    <input id="rec-explore-rating" class="rec-search-input rec-input-sm" placeholder="如 7.5" type="number" min="0" max="10" step="0.5">
-                                </label>
-                                <label class="rec-filter-field">
-                                    <span class="rec-filter-label">最低投票数</span>
-                                    <input id="rec-explore-vote-count" class="rec-search-input rec-input-sm" placeholder="如 500" type="number" min="0" step="100">
-                                </label>
-                            </div>
+                    <div class="rec-filter-section">
+                        <div class="rec-filter-section-title">年份与语言</div>
+                        <div class="rec-filter-grid">
                             <label class="rec-filter-field">
-                                <span class="rec-filter-label">片长范围（分钟）</span>
-                                <div class="rec-range-inputs">
-                                    <input id="rec-explore-runtime-gte" class="rec-search-input rec-input-sm" placeholder="最短" type="number" min="0" step="10">
-                                    <span class="rec-range-sep">-</span>
-                                    <input id="rec-explore-runtime-lte" class="rec-search-input rec-input-sm" placeholder="最长" type="number" min="0" step="10">
-                                </div>
+                                <span class="rec-filter-label">起始年份</span>
+                                <input id="rec-explore-year-from" class="rec-search-input rec-input-sm" placeholder="如 2015" type="number" min="1900" max="2100" step="1">
+                            </label>
+                            <label class="rec-filter-field">
+                                <span class="rec-filter-label">截止年份</span>
+                                <input id="rec-explore-year-to" class="rec-search-input rec-input-sm" placeholder="如 2024" type="number" min="1900" max="2100" step="1">
                             </label>
                         </div>
+                        <div class="rec-filter-field">
+                            <span class="rec-filter-label">快捷年代</span>
+                            <div id="rec-explore-decade-chips" class="rec-decade-chips"></div>
+                        </div>
+                        <label class="rec-filter-field">
+                            <span class="rec-filter-label">原始语言</span>
+                            <select id="rec-explore-language" class="rec-search-select">
+                                <option value="">全部语言</option>
+                                <option value="zh">中文</option>
+                                <option value="en">英语</option>
+                                <option value="ja">日语</option>
+                                <option value="ko">韩语</option>
+                                <option value="th">泰语</option>
+                                <option value="fr">法语</option>
+                                <option value="de">德语</option>
+                                <option value="es">西班牙语</option>
+                            </select>
+                        </label>
+                    </div>
 
-                        <div class="rec-filter-section">
-                            <div class="rec-filter-section-title">分类条件</div>
+                    <div class="rec-filter-section">
+                        <div class="rec-filter-section-title">评分与热度</div>
+                        <div class="rec-filter-grid">
+                            <label class="rec-filter-field">
+                                <span class="rec-filter-label">最低评分</span>
+                                <input id="rec-explore-rating" class="rec-search-input rec-input-sm" placeholder="如 7.5" type="number" min="0" max="10" step="0.5">
+                            </label>
+                            <label class="rec-filter-field">
+                                <span class="rec-filter-label">最高评分</span>
+                                <input id="rec-explore-rating-max" class="rec-search-input rec-input-sm" placeholder="如 9" type="number" min="0" max="10" step="0.5">
+                            </label>
+                            <label class="rec-filter-field">
+                                <span class="rec-filter-label">最低投票数</span>
+                                <input id="rec-explore-vote-count" class="rec-search-input rec-input-sm" placeholder="如 500" type="number" min="0" step="100">
+                            </label>
+                            <label class="rec-filter-field">
+                                <span class="rec-filter-label">最高投票数</span>
+                                <input id="rec-explore-vote-count-max" class="rec-search-input rec-input-sm" placeholder="如 20000" type="number" min="0" step="100">
+                            </label>
+                        </div>
+                        <label class="rec-filter-field">
+                            <span class="rec-filter-label">片长范围（分钟）</span>
+                            <div class="rec-range-inputs">
+                                <input id="rec-explore-runtime-gte" class="rec-search-input rec-input-sm" placeholder="最短" type="number" min="0" step="10">
+                                <span class="rec-range-sep">-</span>
+                                <input id="rec-explore-runtime-lte" class="rec-search-input rec-input-sm" placeholder="最长" type="number" min="0" step="10">
+                            </div>
+                        </label>
+                        <label class="rec-filter-checkbox">
+                            <input id="rec-explore-hide-owned" type="checkbox">
+                            <span>隐藏极影视库里已有的条目</span>
+                        </label>
+                    </div>
+
+                    <div class="rec-filter-section">
+                        <div class="rec-filter-section-title">分类</div>
+                        <div class="rec-filter-field">
+                            <span class="rec-filter-label">多选时</span>
+                            <div class="rec-segmented" role="group" aria-label="分类匹配方式">
+                                <button id="rec-explore-genres-mode-or" type="button" class="rec-segmented-btn is-active" onclick="setExploreGenresMode('or')">任一命中</button>
+                                <button id="rec-explore-genres-mode-and" type="button" class="rec-segmented-btn" onclick="setExploreGenresMode('and')">全部命中</button>
+                            </div>
+                        </div>
+                        <div class="rec-filter-field">
+                            <span class="rec-filter-label">包含</span>
                             <div id="rec-explore-genres" class="rec-explore-genres"></div>
                         </div>
-
-                        <div class="rec-explore-panel-actions">
-                            <button type="button" class="rec-explore-panel-reset" onclick="resetExploreFilters()">清空筛选</button>
-                            <button type="button" class="rec-search-btn rec-explore-panel-apply" onclick="applyExploreFilters()">
-                                <span class="rec-apply-label-desktop">更新结果</span>
-                                <span class="rec-apply-label-mobile">查看结果</span>
-                            </button>
+                        <div class="rec-filter-field">
+                            <span class="rec-filter-label">排除</span>
+                            <div id="rec-explore-exclude-genres" class="rec-explore-genres"></div>
                         </div>
-                    </aside>
+                    </div>
 
+                    <div class="rec-filter-section">
+                        <div class="rec-filter-section-title">关键词</div>
+                        <label class="rec-filter-field">
+                            <span class="rec-filter-label">TMDB 关键词（最多 5 个）</span>
+                            <input id="rec-explore-keyword-input" class="rec-search-input rec-input-sm" placeholder="输入至少 2 个字符，如 time travel" autocomplete="off">
+                        </label>
+                        <div id="rec-explore-keyword-chips" class="rec-keyword-chips"></div>
+                        <div id="rec-explore-keyword-suggest" class="rec-keyword-suggest hidden"></div>
+                    </div>
+
+                    <div id="rec-explore-tv-section" class="rec-filter-section hidden">
+                        <div class="rec-filter-section-title">剧集属性</div>
+                        <label class="rec-filter-field">
+                            <span class="rec-filter-label">播出状态</span>
+                            <select id="rec-explore-tv-status" class="rec-search-select">
+                                <option value="">不限</option>
+                                <option value="0">连载中</option>
+                                <option value="3">已完结</option>
+                                <option value="2">制作中</option>
+                                <option value="1">已预定</option>
+                                <option value="4">已砍</option>
+                            </select>
+                        </label>
+                        <label class="rec-filter-field">
+                            <span class="rec-filter-label">剧集类型</span>
+                            <select id="rec-explore-tv-type" class="rec-search-select">
+                                <option value="">不限</option>
+                                <option value="4">剧本剧</option>
+                                <option value="2">迷你剧</option>
+                                <option value="0">纪录片</option>
+                                <option value="3">真人秀</option>
+                                <option value="5">脱口秀</option>
+                                <option value="1">新闻</option>
+                            </select>
+                        </label>
+                    </div>
+
+                    <div class="rec-explore-panel-actions">
+                        <button type="button" class="rec-explore-panel-reset" onclick="resetExploreFilters()">清空筛选</button>
+                        <button type="button" class="rec-search-btn rec-explore-panel-apply" onclick="applyExploreFilters()">查看结果</button>
+                    </div>
+                </div>
+
+                <div id="recommendation-explore-layout" class="rec-explore-layout">
                     <section class="rec-results-panel">
                         <div id="recommendation-content-header" class="rec-content-header">
                             <div class="rec-content-heading">

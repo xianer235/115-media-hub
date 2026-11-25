@@ -8,6 +8,21 @@ from ..core import *  # noqa: F401,F403
 router = APIRouter()
 
 
+def _query_float(request: Request, name: str, default: float = 0.0, low: float = 0.0, high: float = 10.0) -> float:
+    """读数值型 query 参数：非法输入退回默认值，避免抛 ValueError 变成 500。"""
+    try:
+        value = float(str(request.query_params.get(name, "") or "").strip() or default)
+    except (TypeError, ValueError):
+        return default
+    if value != value:  # NaN
+        return default
+    return min(high, max(low, value))
+
+
+def _query_int(request: Request, name: str, default: int = 0) -> int:
+    return max(0, parse_int(request.query_params.get(name, "") or default, default))
+
+
 @router.get("/tmdb/search")
 async def search_tmdb_endpoint(request: Request) -> Dict[str, Any]:
     cfg = get_config()
@@ -145,7 +160,7 @@ async def discover_tmdb_endpoint(request: Request) -> Dict[str, Any]:
         media_type = "movie"
     genres = str(request.query_params.get("genres", "") or "").strip()
     sort_by = str(request.query_params.get("sort_by", "popularity.desc") or "popularity.desc").strip()
-    vote_average_gte = max(0, min(10, float(request.query_params.get("vote_average_gte", "0") or "0")))
+    vote_average_gte = _query_float(request, "vote_average_gte")
     year = normalize_tmdb_year(request.query_params.get("year", "") or "")
     page = max(1, parse_int(request.query_params.get("page", "1") or "1", 1))
 
@@ -153,9 +168,18 @@ async def discover_tmdb_endpoint(request: Request) -> Dict[str, Any]:
     with_original_language = str(request.query_params.get("with_original_language", "") or "").strip()
     year_from = normalize_tmdb_year(request.query_params.get("year_from", "") or "")
     year_to = normalize_tmdb_year(request.query_params.get("year_to", "") or "")
-    vote_count_gte = max(0, int(request.query_params.get("vote_count_gte", "0") or "0"))
-    runtime_gte = max(0, int(request.query_params.get("runtime_gte", "0") or "0"))
-    runtime_lte = max(0, int(request.query_params.get("runtime_lte", "0") or "0"))
+    vote_count_gte = _query_int(request, "vote_count_gte")
+    runtime_gte = _query_int(request, "runtime_gte")
+    runtime_lte = _query_int(request, "runtime_lte")
+
+    # 区间上限 / 分类匹配模式 / 排除分类 / 关键词 / 剧集属性
+    vote_average_lte = _query_float(request, "vote_average_lte")
+    vote_count_lte = _query_int(request, "vote_count_lte")
+    genres_mode = "and" if str(request.query_params.get("genres_mode", "") or "").strip().lower() == "and" else "or"
+    without_genres = str(request.query_params.get("without_genres", "") or "").strip()
+    keywords = str(request.query_params.get("keywords", "") or "").strip()
+    tv_status = str(request.query_params.get("tv_status", "") or "").strip()
+    tv_type = str(request.query_params.get("tv_type", "") or "").strip()
 
     # 如果有日期范围，清空单一年份
     if year_from or year_to:
@@ -164,7 +188,8 @@ async def discover_tmdb_endpoint(request: Request) -> Dict[str, Any]:
     try:
         data = await asyncio.to_thread(
             discover_tmdb_media, media_type, genres, sort_by, vote_average_gte, year, page, cfg,
-            with_original_language, year_from, year_to, vote_count_gte, runtime_gte, runtime_lte
+            with_original_language, year_from, year_to, vote_count_gte, runtime_gte, runtime_lte,
+            vote_average_lte, vote_count_lte, genres_mode, without_genres, keywords, tv_status, tv_type,
         )
     except Exception as exc:
         return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
@@ -177,3 +202,21 @@ async def discover_tmdb_endpoint(request: Request) -> Dict[str, Any]:
         "page": data["page"],
         "total_pages": data["total_pages"],
     }
+
+
+@router.get("/tmdb/keywords")
+async def search_tmdb_keywords_endpoint(request: Request) -> Dict[str, Any]:
+    """关键词联想，供探索页「关键词」筛选使用。"""
+    cfg = get_config()
+    config_error = validate_tmdb_runtime_config(cfg)
+    if config_error:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": config_error})
+
+    query = str(request.query_params.get("query", "") or "").strip()
+    if len(query) < 2:
+        return {"ok": True, "query": query, "keywords": []}
+    try:
+        keywords = await asyncio.to_thread(search_tmdb_keywords, query, cfg)
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "msg": str(exc)})
+    return {"ok": True, "query": query, "keywords": keywords}

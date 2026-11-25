@@ -499,13 +499,6 @@
             .rec-explore-more-panel.is-collapsed {
                 display: none;
             }
-            .rec-explore-backdrop {
-                position: fixed;
-                inset: 0;
-                background: rgba(15, 23, 42, 0.38);
-                backdrop-filter: blur(8px);
-                z-index: 48;
-            }
             .rec-explore-more-panel {
                 position: fixed;
                 left: 0.75rem;
@@ -1032,9 +1025,6 @@
             border-color: rgba(51, 65, 85, 0.72);
             color: #cbd5e1;
         }
-        .rec-explore-backdrop {
-            display: none;
-        }
         .rec-explore-genres {
             display: flex;
             flex-wrap: wrap;
@@ -1527,10 +1517,8 @@
         html.theme-day .rec-detail-btn-subscribe { background: #1d63e6 !important; }
         html.theme-day .rec-detail-btn-subscribe:hover { background: #2563eb !important; }
         /* ── theme-day: explore filters ── */
-        html.theme-day .rec-explore-filters {
-            background: rgba(241, 245, 249, 0.6) !important;
-            border-color: rgba(182, 198, 219, 0.3) !important;
-        }
+        /* 面板本体的日间配色统一在 #page-recommendation 段落里定义，
+           这里不再用 !important 覆盖，否则会压掉新版折叠面板的底色。 */
         html.theme-day .rec-explore-summary-label { color: #334155 !important; }
         html.theme-day .rec-explore-summary-count { color: #0284c7 !important; }
         html.theme-day .rec-explore-more-toggle {
@@ -16578,12 +16566,6 @@
         #page-recommendation .rec-explore-layout {
             display: block;
         }
-        #page-recommendation .rec-workspace-card.is-explore .rec-explore-layout {
-            display: grid;
-            grid-template-columns: minmax(280px, 300px) minmax(0, 1fr);
-            gap: 1.1rem;
-            align-items: start;
-        }
         #page-recommendation .rec-results-panel {
             min-width: 0;
         }
@@ -16613,37 +16595,30 @@
             grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
         }
         #page-recommendation .rec-explore-filters {
-            display: flex;
-            flex-direction: column;
-            gap: 0;
-            margin: 0;
+            display: none;
+            grid-template-columns: minmax(0, 1fr);
+            margin: 0 0 1rem;
             padding: 0;
             border-radius: 1rem;
             border: 1px solid rgba(51, 65, 85, 0.54);
             background: rgba(2, 6, 23, 0.24);
             box-shadow: inset 0 1px 0 rgba(148, 163, 184, 0.06);
             overflow: hidden;
-            overflow-y: auto;
-            scrollbar-width: thin;
+            animation: rec-filter-panel-in 0.18s ease;
         }
-        #page-recommendation .rec-explore-filters::-webkit-scrollbar {
-            width: 6px;
+        @keyframes rec-filter-panel-in {
+            from { opacity: 0; transform: translateY(-0.35rem); }
+            to { opacity: 1; transform: translateY(0); }
         }
-        #page-recommendation .rec-explore-filters::-webkit-scrollbar-thumb {
-            background: rgba(71, 85, 105, 0.9);
-            border-radius: 9999px;
-        }
-        #page-recommendation .rec-workspace-card.is-explore .rec-explore-filters {
-            position: sticky;
-            top: 1rem;
-            max-height: calc(100vh - 2rem);
+        #page-recommendation .rec-workspace-card.is-explore .rec-explore-filters.is-open {
+            display: grid;
         }
         #page-recommendation .rec-explore-panel-header {
             display: flex;
             align-items: flex-start;
             justify-content: space-between;
             gap: 0.8rem;
-            padding: 0.95rem 1rem;
+            padding: 0.85rem 1rem;
             border-bottom: 1px solid rgba(51, 65, 85, 0.42);
         }
         #page-recommendation .rec-explore-panel-title {
@@ -16659,17 +16634,31 @@
             line-height: 1.45;
         }
         #page-recommendation .rec-explore-panel-close {
-            display: none;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            min-height: 2rem;
+            padding: 0 0.78rem;
+            border-radius: 9999px;
+            border: 1px solid rgba(56, 189, 248, 0.22);
+            background: rgba(14, 165, 233, 0.1);
+            color: #7dd3fc;
+            font-size: 0.74rem;
+            font-weight: 800;
         }
         #page-recommendation .rec-filter-section {
             display: flex;
             flex-direction: column;
             gap: 0.7rem;
-            padding: 0.95rem 1rem;
-            border-bottom: 1px solid rgba(51, 65, 85, 0.34);
+            margin: 0 0.85rem 0.85rem;
+            padding: 0.85rem;
+            border-radius: 0.85rem;
+            border: 1px solid rgba(51, 65, 85, 0.34);
+            background: rgba(15, 23, 42, 0.28);
         }
-        #page-recommendation .rec-filter-section:last-of-type {
-            border-bottom: 0;
+        #page-recommendation .rec-filter-section.hidden {
+            display: none;
         }
         #page-recommendation .rec-filter-section-title {
             color: #cbd5e1;
@@ -16681,7 +16670,7 @@
         #page-recommendation .rec-filter-fields,
         #page-recommendation .rec-filter-grid {
             display: grid;
-            grid-template-columns: 1fr;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 0.65rem;
         }
         #page-recommendation .rec-filter-field {
@@ -16739,17 +16728,121 @@
             background: rgba(14, 165, 233, 0.18);
             color: #7dd3fc;
         }
+        #page-recommendation .rec-filter-checkbox {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            min-height: 2.2rem;
+            padding: 0.35rem 0.6rem;
+            border-radius: 0.72rem;
+            border: 1px dashed rgba(51, 65, 85, 0.55);
+            color: #cbd5e1;
+            font-size: 0.76rem;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        #page-recommendation .rec-filter-checkbox input {
+            width: 0.95rem;
+            height: 0.95rem;
+            accent-color: #0ea5e9;
+            cursor: pointer;
+        }
+        #page-recommendation .rec-segmented {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.2rem;
+            padding: 0.18rem;
+            border-radius: 0.72rem;
+            border: 1px solid rgba(51, 65, 85, 0.5);
+            background: rgba(2, 6, 23, 0.24);
+        }
+        #page-recommendation .rec-segmented-btn {
+            min-height: 1.9rem;
+            border-radius: 0.58rem;
+            color: #94a3b8;
+            font-size: 0.74rem;
+            font-weight: 800;
+        }
+        #page-recommendation .rec-segmented-btn.is-active {
+            background: rgba(14, 165, 233, 0.18);
+            color: #7dd3fc;
+        }
+        #page-recommendation .rec-keyword-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.35rem;
+        }
+        #page-recommendation .rec-keyword-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.22rem 0.3rem 0.22rem 0.6rem;
+            border-radius: 9999px;
+            border: 1px solid rgba(56, 189, 248, 0.45);
+            background: rgba(14, 165, 233, 0.16);
+            color: #7dd3fc;
+            font-size: 0.72rem;
+            font-weight: 700;
+        }
+        #page-recommendation .rec-keyword-chip-remove {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 1.1rem;
+            height: 1.1rem;
+            border-radius: 9999px;
+            color: inherit;
+            font-size: 0.9rem;
+            line-height: 1;
+            opacity: 0.75;
+        }
+        #page-recommendation .rec-keyword-chip-remove:hover {
+            opacity: 1;
+            background: rgba(56, 189, 248, 0.22);
+        }
+        #page-recommendation .rec-keyword-suggest {
+            display: flex;
+            flex-direction: column;
+            gap: 0.15rem;
+            max-height: 11rem;
+            overflow-y: auto;
+            padding: 0.25rem;
+            border-radius: 0.72rem;
+            border: 1px solid rgba(51, 65, 85, 0.55);
+            background: rgba(2, 6, 23, 0.6);
+        }
+        #page-recommendation .rec-keyword-suggest.hidden {
+            display: none;
+        }
+        #page-recommendation .rec-keyword-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.5rem;
+            padding: 0.4rem 0.55rem;
+            border-radius: 0.55rem;
+            color: #cbd5e1;
+            font-size: 0.76rem;
+            text-align: left;
+        }
+        #page-recommendation .rec-keyword-item:hover {
+            background: rgba(14, 165, 233, 0.14);
+            color: #e0f2fe;
+        }
+        #page-recommendation .rec-keyword-item.is-added {
+            color: #64748b;
+            cursor: default;
+        }
+        #page-recommendation .rec-keyword-added {
+            font-size: 0.66rem;
+            color: #38bdf8;
+        }
         #page-recommendation .rec-explore-panel-actions {
             display: grid;
-            position: sticky;
-            bottom: 0;
-            z-index: 2;
             grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr);
             gap: 0.65rem;
-            padding: 0.95rem 1rem;
+            padding: 0.85rem 1rem;
             border-top: 1px solid rgba(51, 65, 85, 0.38);
-            background: rgba(2, 6, 23, 0.96);
-            backdrop-filter: blur(10px);
         }
         #page-recommendation .rec-explore-panel-reset,
         #page-recommendation .rec-explore-panel-apply {
@@ -16767,14 +16860,120 @@
             background: rgba(15, 23, 42, 0.52);
             color: #cbd5e1;
         }
-        #page-recommendation .rec-apply-label-mobile {
-            display: none;
-        }
         #page-recommendation .rec-explore-quickbar {
             display: none;
+            grid-template-columns: minmax(10rem, 0.9fr) minmax(9rem, 1fr) auto;
+            gap: 0.5rem;
+            align-items: center;
+            margin-bottom: 0.9rem;
+            padding: 0.5rem;
+            border-radius: 0.95rem;
+            border: 1px solid rgba(51, 65, 85, 0.38);
+            background: rgba(15, 23, 42, 0.28);
         }
-        #page-recommendation .rec-explore-backdrop {
+        #page-recommendation .rec-workspace-card.is-explore .rec-explore-quickbar {
+            display: grid;
+        }
+        #page-recommendation .rec-quick-type {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.25rem;
+            padding: 0.18rem;
+            border-radius: 0.8rem;
+            border: 1px solid rgba(51, 65, 85, 0.44);
+            background: rgba(2, 6, 23, 0.22);
+        }
+        #page-recommendation .rec-quick-type-btn {
+            min-width: 0;
+            min-height: 2.1rem;
+            padding: 0 0.45rem;
+            border-radius: 0.62rem;
+            color: #94a3b8;
+            font-size: 0.78rem;
+            font-weight: 800;
+            white-space: nowrap;
+        }
+        #page-recommendation .rec-quick-type-btn.is-active {
+            background: rgba(14, 165, 233, 0.16);
+            color: #7dd3fc;
+        }
+        #page-recommendation .rec-quick-sort {
+            width: 100%;
+            min-height: 2.35rem !important;
+            border-radius: 0.78rem;
+        }
+        #page-recommendation .rec-filter-toggle-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.35rem;
+            min-width: 5.4rem;
+            min-height: 2.35rem;
+            padding: 0 0.85rem;
+            border-radius: 0.78rem;
+            border: 1px solid rgba(56, 189, 248, 0.28);
+            background: rgba(14, 165, 233, 0.14);
+            color: #7dd3fc;
+            font-size: 0.82rem;
+            font-weight: 850;
+            white-space: nowrap;
+            transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+        }
+        #page-recommendation .rec-filter-toggle-btn:hover {
+            background: rgba(14, 165, 233, 0.2);
+            color: #bae6fd;
+        }
+        #page-recommendation .rec-filter-toggle-btn[aria-expanded="true"] {
+            border-color: rgba(56, 189, 248, 0.5);
+            background: rgba(14, 165, 233, 0.22);
+            color: #bae6fd;
+        }
+        #page-recommendation .rec-filter-count {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 1.15rem;
+            height: 1.15rem;
+            margin-left: 0.05rem;
+            padding: 0 0.28rem;
+            border-radius: 9999px;
+            background: rgba(56, 189, 248, 0.3);
+            color: #e0f2fe;
+            font-size: 0.68rem;
+            font-weight: 850;
+            line-height: 1;
+        }
+        #page-recommendation .rec-filter-count.hidden {
             display: none;
+        }
+        #page-recommendation .rec-filter-caret {
+            width: 0.85rem;
+            height: 0.85rem;
+            flex-shrink: 0;
+            transition: transform 0.18s ease;
+        }
+        #page-recommendation .rec-filter-toggle-btn[aria-expanded="true"] .rec-filter-caret {
+            transform: rotate(180deg);
+        }
+        @media (min-width: 900px) {
+            #page-recommendation .rec-workspace-card.is-explore .rec-explore-filters.is-open {
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+                align-items: start;
+            }
+            #page-recommendation .rec-explore-panel-header,
+            #page-recommendation .rec-explore-panel-actions {
+                grid-column: 1 / -1;
+            }
+            #page-recommendation .rec-explore-panel-actions {
+                display: flex;
+                justify-content: flex-end;
+                gap: 0.6rem;
+            }
+            #page-recommendation .rec-explore-panel-reset,
+            #page-recommendation .rec-explore-panel-apply {
+                width: auto;
+                min-width: 7.5rem;
+            }
         }
 
         html.theme-day #page-recommendation {
@@ -16813,6 +17012,46 @@
         html.theme-day #page-recommendation .rec-explore-panel-actions {
             border-color: rgba(203, 213, 225, 0.72);
         }
+        html.theme-day #page-recommendation .rec-filter-section {
+            background: rgba(255, 255, 255, 0.68);
+        }
+        html.theme-day #page-recommendation .rec-filter-checkbox {
+            border-color: rgba(182, 198, 219, 0.8);
+            color: #475569;
+        }
+        html.theme-day #page-recommendation .rec-segmented {
+            border-color: rgba(182, 198, 219, 0.7);
+            background: rgba(241, 245, 249, 0.9);
+        }
+        html.theme-day #page-recommendation .rec-segmented-btn {
+            color: #64748b;
+        }
+        html.theme-day #page-recommendation .rec-segmented-btn.is-active {
+            background: rgba(14, 165, 233, 0.14);
+            color: #0369a1;
+        }
+        html.theme-day #page-recommendation .rec-keyword-chip {
+            border-color: rgba(14, 165, 233, 0.34);
+            background: rgba(224, 242, 254, 0.85);
+            color: #0369a1;
+        }
+        html.theme-day #page-recommendation .rec-keyword-suggest {
+            border-color: rgba(182, 198, 219, 0.7);
+            background: rgba(255, 255, 255, 0.96);
+        }
+        html.theme-day #page-recommendation .rec-keyword-item {
+            color: #334155;
+        }
+        html.theme-day #page-recommendation .rec-keyword-item:hover {
+            background: rgba(14, 165, 233, 0.1);
+            color: #0f172a;
+        }
+        html.theme-day #page-recommendation .rec-keyword-item.is-added {
+            color: #94a3b8;
+        }
+        html.theme-day #page-recommendation .rec-keyword-added {
+            color: #0284c7;
+        }
         html.theme-day #page-recommendation .rec-filter-section-title {
             color: #334155;
         }
@@ -16834,8 +17073,39 @@
             background: rgba(14, 165, 233, 0.12);
             color: #0369a1;
         }
-        html.theme-day #page-recommendation .rec-explore-panel-actions {
-            background: rgba(255, 255, 255, 0.96);
+        html.theme-day #page-recommendation .rec-quick-type {
+            border-color: rgba(182, 198, 219, 0.65);
+            background: rgba(241, 245, 249, 0.92);
+        }
+        html.theme-day #page-recommendation .rec-quick-type-btn {
+            color: #64748b;
+        }
+        html.theme-day #page-recommendation .rec-quick-type-btn.is-active {
+            background: rgba(14, 165, 233, 0.12);
+            color: #0369a1;
+        }
+        html.theme-day #page-recommendation .rec-explore-quickbar {
+            border-color: rgba(182, 198, 219, 0.6);
+            background: rgba(248, 250, 252, 0.8);
+        }
+        html.theme-day #page-recommendation .rec-filter-toggle-btn {
+            border-color: rgba(14, 165, 233, 0.28);
+            background: rgba(224, 242, 254, 0.8);
+            color: #0369a1;
+        }
+        html.theme-day #page-recommendation .rec-filter-toggle-btn:hover,
+        html.theme-day #page-recommendation .rec-filter-toggle-btn[aria-expanded="true"] {
+            background: rgba(186, 230, 253, 0.9);
+            color: #075985;
+        }
+        html.theme-day #page-recommendation .rec-explore-panel-close {
+            border-color: rgba(14, 165, 233, 0.24);
+            background: rgba(224, 242, 254, 0.82);
+            color: #0369a1;
+        }
+        html.theme-day #page-recommendation .rec-filter-count {
+            background: rgba(14, 165, 233, 0.18);
+            color: #075985;
         }
         html.theme-day #page-recommendation .rec-explore-panel-reset {
             border-color: rgba(182, 198, 219, 0.72);
@@ -16844,11 +17114,7 @@
         }
 
         @media (max-width: 1180px) {
-            body.rec-explore-drawer-open {
-                overflow: hidden;
-            }
             #page-recommendation {
-                --rec-explore-drawer-clearance: calc(5.65rem + env(safe-area-inset-bottom, 0px));
                 gap: 0.7rem;
             }
             #page-recommendation .rec-mode-nav-card {
@@ -16873,67 +17139,23 @@
                 padding: 0.78rem;
                 border-radius: 1rem;
             }
-            #page-recommendation .rec-workspace-card.is-explore .rec-explore-layout {
-                display: block;
-            }
             #page-recommendation .rec-explore-quickbar {
-                display: grid;
-                grid-template-columns: minmax(10rem, 1.15fr) minmax(9rem, 1fr) auto;
+                grid-template-columns: minmax(8rem, 1fr) minmax(7.5rem, 1fr) auto;
                 gap: 0.45rem;
-                align-items: center;
                 margin-bottom: 0.85rem;
-                padding: 0.5rem;
-                border-radius: 0.95rem;
-                border: 1px solid rgba(51, 65, 85, 0.38);
-                background: rgba(15, 23, 42, 0.28);
             }
-            #page-recommendation .rec-quick-type {
-                display: grid;
-                grid-template-columns: repeat(2, minmax(0, 1fr));
-                gap: 0.25rem;
-                padding: 0.18rem;
-                border-radius: 0.8rem;
-                border: 1px solid rgba(51, 65, 85, 0.44);
-                background: rgba(2, 6, 23, 0.22);
-            }
-            #page-recommendation .rec-quick-type-btn {
-                min-width: 0;
-                min-height: 2.1rem;
-                padding: 0 0.45rem;
-                border-radius: 0.62rem;
-                color: #94a3b8;
-                font-size: 0.78rem;
-                font-weight: 800;
-                white-space: nowrap;
-            }
-            #page-recommendation .rec-quick-type-btn.is-active {
-                background: rgba(14, 165, 233, 0.16);
-                color: #7dd3fc;
-            }
-            #page-recommendation .rec-quick-sort,
-            #page-recommendation .rec-filter-drawer-btn {
-                width: 100%;
+            #page-recommendation .rec-quick-sort {
                 min-height: 2.46rem !important;
-                padding-top: 0 !important;
-                padding-bottom: 0 !important;
-                border-radius: 0.78rem;
                 font-size: 0.82rem !important;
             }
-            #page-recommendation .rec-filter-drawer-btn {
-                display: inline-flex;
-                align-items: center;
-                justify-content: center;
+            #page-recommendation .rec-filter-toggle-btn {
                 min-width: 4.85rem;
-                padding-left: 0.72rem;
-                padding-right: 0.72rem;
-                border: 1px solid rgba(56, 189, 248, 0.28);
-                background: rgba(14, 165, 233, 0.14);
-                color: #7dd3fc;
-                font-weight: 850;
-                white-space: nowrap;
+                min-height: 2.46rem;
+                padding: 0 0.72rem;
+                font-size: 0.8rem;
             }
             #page-recommendation .rec-filter-count {
-                color: inherit;
+                background: rgba(56, 189, 248, 0.26);
             }
             #page-recommendation .rec-content-header {
                 margin-bottom: 0.7rem;
@@ -16949,69 +17171,15 @@
                 grid-template-columns: repeat(auto-fill, minmax(152px, 1fr));
                 gap: 0.75rem;
             }
-            #page-recommendation .rec-explore-backdrop {
-                position: fixed;
-                inset: 0;
-                display: block;
-                z-index: 56;
-                background: rgba(2, 6, 23, 0.48);
-                backdrop-filter: blur(7px);
-            }
-            #page-recommendation .rec-explore-backdrop.hidden {
-                display: none;
-            }
-            #page-recommendation .rec-explore-filters {
-                position: fixed !important;
-                left: 0.72rem;
-                right: 0.72rem;
-                bottom: var(--rec-explore-drawer-clearance);
-                z-index: 57;
-                max-height: min(72svh, 35rem);
-                border-radius: 1.15rem;
-                transform: translateY(calc(100% + 6.2rem));
-                transition: transform 0.22s ease, opacity 0.22s ease;
-                opacity: 0;
-                pointer-events: none;
-                overflow-y: auto;
-                -webkit-overflow-scrolling: touch;
-            }
-            #page-recommendation .rec-explore-filters.is-mobile-open {
-                transform: translateY(0);
-                opacity: 1;
-                pointer-events: auto;
-            }
             #page-recommendation .rec-explore-panel-header {
-                position: sticky;
-                top: 0;
-                z-index: 2;
-                padding: 0.95rem 1rem 0.8rem;
-                background: rgba(15, 23, 42, 0.98);
-            }
-            #page-recommendation .rec-explore-panel-close {
-                display: inline-flex;
-                align-items: center;
-                justify-content: center;
-                min-height: 2rem;
-                padding: 0 0.78rem;
-                border-radius: 9999px;
-                border: 1px solid rgba(56, 189, 248, 0.22);
-                background: rgba(14, 165, 233, 0.1);
-                color: #7dd3fc;
-                font-size: 0.74rem;
-                font-weight: 800;
-            }
-            #page-recommendation .rec-filter-desktop-only {
-                display: none;
+                padding: 0.8rem 1rem 0.7rem;
             }
             #page-recommendation .rec-filter-section {
-                padding: 0.85rem 1rem;
+                margin: 0 0.7rem 0.7rem;
+                padding: 0.78rem;
             }
             #page-recommendation .rec-filter-section-title {
                 font-size: 0.68rem;
-            }
-            #page-recommendation .rec-filter-grid {
-                grid-template-columns: repeat(2, minmax(0, 1fr));
-                gap: 0.55rem;
             }
             #page-recommendation .rec-search-select,
             #page-recommendation .rec-input-sm {
@@ -17031,12 +17199,8 @@
                 font-size: 0.76rem;
             }
             #page-recommendation .rec-explore-panel-actions {
-                position: sticky;
-                bottom: 0;
-                z-index: 2;
                 grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
-                padding: 0.72rem 1rem calc(0.86rem + env(safe-area-inset-bottom, 0px));
-                background: rgba(15, 23, 42, 0.98);
+                padding: 0.72rem 1rem;
             }
             #page-recommendation .rec-explore-panel-reset,
             #page-recommendation .rec-explore-panel-apply {
@@ -17045,40 +17209,8 @@
                 padding-bottom: 0 !important;
                 font-size: 0.84rem !important;
             }
-            #page-recommendation .rec-apply-label-desktop {
-                display: none;
-            }
-            #page-recommendation .rec-apply-label-mobile {
-                display: inline;
-            }
-            html.theme-day #page-recommendation .rec-explore-quickbar {
-                border-color: rgba(182, 198, 219, 0.6);
-                background: rgba(248, 250, 252, 0.8);
-            }
-            html.theme-day #page-recommendation .rec-quick-type {
-                border-color: rgba(182, 198, 219, 0.65);
-                background: rgba(241, 245, 249, 0.92);
-            }
-            html.theme-day #page-recommendation .rec-quick-type-btn {
-                color: #64748b;
-            }
-            html.theme-day #page-recommendation .rec-quick-type-btn.is-active {
-                background: rgba(14, 165, 233, 0.12);
-                color: #0369a1;
-            }
-            html.theme-day #page-recommendation .rec-filter-drawer-btn {
-                border-color: rgba(14, 165, 233, 0.28);
-                background: rgba(224, 242, 254, 0.8);
-                color: #0369a1;
-            }
-            html.theme-day #page-recommendation .rec-explore-panel-header,
-            html.theme-day #page-recommendation .rec-explore-panel-actions {
-                background: rgba(255, 255, 255, 0.98);
-            }
-            html.theme-day #page-recommendation .rec-explore-panel-close {
-                border-color: rgba(14, 165, 233, 0.24);
-                background: rgba(224, 242, 254, 0.82);
-                color: #0369a1;
+            html.theme-day #page-recommendation .rec-explore-panel-header {
+                background: transparent;
             }
         }
 
@@ -17098,17 +17230,21 @@
                 padding: 0.78rem;
             }
             #page-recommendation .rec-explore-quickbar {
-                grid-template-columns: minmax(6.5rem, 0.95fr) minmax(6.7rem, 1fr) auto;
+                grid-template-columns: minmax(5.6rem, 1fr) minmax(6.4rem, 1fr) auto;
             }
             #page-recommendation .rec-quick-type-btn {
                 min-height: 2.1rem;
                 padding: 0 0.45rem;
                 font-size: 0.78rem;
             }
-            #page-recommendation .rec-quick-sort,
-            #page-recommendation .rec-filter-drawer-btn {
+            #page-recommendation .rec-quick-sort {
                 min-height: 2.46rem !important;
                 font-size: 0.82rem !important;
+            }
+            #page-recommendation .rec-filter-toggle-btn {
+                min-width: 4.4rem;
+                padding: 0 0.6rem;
+                font-size: 0.78rem;
             }
             #page-recommendation .rec-content-header {
                 margin-bottom: 0.7rem;
@@ -17124,7 +17260,8 @@
                 gap: 0.65rem;
             }
             #page-recommendation .rec-filter-section {
-                padding: 0.85rem 1rem;
+                margin: 0 0.7rem 0.7rem;
+                padding: 0.78rem;
             }
             #page-recommendation .rec-filter-section-title {
                 font-size: 0.68rem;

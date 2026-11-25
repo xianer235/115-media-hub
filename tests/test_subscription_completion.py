@@ -32,6 +32,7 @@ def build_tv_task(**overrides):
         "provider": "115",
         "season": 1,
         "savepath": "电视剧",
+        "media_folder_layout": "folder",
         **TMDB_BINDING,
     }
     task.update(overrides)
@@ -102,7 +103,7 @@ class FinishedStatusTest(unittest.TestCase):
 
 class MediaFolderNameTest(unittest.TestCase):
     def test_movie_folder_uses_bracketed_year_and_tmdb_id(self):
-        task = {"title": "让子弹飞", "year": "2010", "media_type": "movie", "tmdb_id": 27578}
+        task = {"title": "让子弹飞", "year": "2010", "media_type": "movie", "tmdb_id": 27578, "media_folder_layout": "folder"}
         self.assertEqual(
             core.build_subscription_movie_savepath(task, "电影"),
             "电影/让子弹飞 (2010) [tmdbid-27578]",
@@ -125,7 +126,7 @@ class MediaFolderNameTest(unittest.TestCase):
 
     def test_numeric_movie_title_is_not_mistaken_for_a_year(self):
         # 片名本身就是年份数字（1917）：目录名「1917 (2019)」要能认出来，不再套一层
-        task = {"title": "1917", "year": "2019", "media_type": "movie", "tmdb_id": 530915}
+        task = {"title": "1917", "year": "2019", "media_type": "movie", "tmdb_id": 530915, "media_folder_layout": "folder"}
         self.assertEqual(
             core.build_subscription_movie_savepath(task, "电影/1917 (2019)"),
             "电影/1917 (2019)",
@@ -143,6 +144,55 @@ class MediaFolderNameTest(unittest.TestCase):
         self.assertEqual(
             core.resolve_subscription_tv_scan_savepath(task, "电视剧"),
             "电视剧/某剧 (2024) [tmdbid-1234]",
+        )
+
+
+class LegacyLayoutTest(unittest.TestCase):
+    """老任务（没有 media_folder_layout 字段）必须保持原有目录结构不变。"""
+
+    def test_legacy_movie_keeps_space_separated_year(self):
+        task = {"title": "让子弹飞", "year": "2010", "media_type": "movie", "tmdb_id": 27578}
+        self.assertEqual(
+            core.build_subscription_movie_savepath(task, "电影"),
+            "电影/让子弹飞 2010",
+        )
+
+    def test_legacy_tv_builds_season_directly_under_savepath(self):
+        task = build_tv_task(media_folder_layout="")
+        self.assertEqual(
+            core.build_subscription_tv_savepath(task, "电视剧", season=1),
+            "电视剧/Season 01",
+        )
+
+    def test_legacy_scan_savepath_is_savepath_itself(self):
+        task = build_tv_task(media_folder_layout="")
+        self.assertEqual(core.resolve_subscription_tv_scan_savepath(task, "电视剧"), "电视剧")
+
+    def test_legacy_scan_savepath_strips_season_for_multi_season(self):
+        task = build_tv_task(media_folder_layout="", multi_season_mode=True, anime_mode=True)
+        self.assertEqual(
+            core.resolve_subscription_tv_scan_savepath(task, "电视剧/某剧/Season 02"),
+            "电视剧/某剧",
+        )
+
+    def test_layout_field_roundtrips_through_normalize(self):
+        self.assertEqual(
+            core.normalize_subscription_task({"title": "某剧", "savepath": "电视剧", "media_folder_layout": "folder"})[
+                "media_folder_layout"
+            ],
+            "folder",
+        )
+        # 老任务缺字段 → 空字符串（旧布局）
+        self.assertEqual(
+            core.normalize_subscription_task({"title": "某剧", "savepath": "电视剧"})["media_folder_layout"],
+            "",
+        )
+        # 未知值不当作新布局，避免手改配置把老任务升级
+        self.assertEqual(
+            core.normalize_subscription_task({"title": "某剧", "savepath": "电视剧", "media_folder_layout": "???"})[
+                "media_folder_layout"
+            ],
+            "",
         )
 
 

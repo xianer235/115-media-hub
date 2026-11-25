@@ -18,33 +18,71 @@ let recommendationPagination = {
 
 let exploreGenres = { movie: [], tv: [] };
 let exploreGenresLoaded = { movie: false, tv: false };
-const EXPLORE_COMPACT_BREAKPOINT = 1180;
 const EXPLORE_DEFAULT_FILTERS = Object.freeze({
     mediaType: 'movie',
     sortBy: 'popularity.desc',
     language: '',
-    decade: '',
+    yearFrom: '',
+    yearTo: '',
     rating: '',
+    ratingMax: '',
     voteCount: '',
+    voteCountMax: '',
     runtimeGte: '',
     runtimeLte: '',
     genres: [],
+    genresMode: 'or',
+    excludeGenres: [],
+    keywords: [],
+    tvStatus: '',
+    tvType: '',
+    hideOwned: false,
 });
 
 let exploreFilterState = getDefaultExploreFilters();
-let exploreDrawerOpen = false;
+let explorePanelOpen = false;
+let exploreKeywordResults = [];
+let exploreKeywordTimer = null;
+let exploreHiddenOwnedCount = 0;
+
+// TMDB 剧集专属枚举（with_status / with_type）
+const EXPLORE_TV_STATUS_LABELS = Object.freeze({
+    '0': '连载中',
+    '1': '已预定',
+    '2': '制作中',
+    '3': '已完结',
+    '4': '已砍',
+    '5': '试播集',
+});
+const EXPLORE_TV_TYPE_LABELS = Object.freeze({
+    '0': '纪录片',
+    '1': '新闻',
+    '2': '迷你剧',
+    '3': '真人秀',
+    '4': '剧本剧',
+    '5': '脱口秀',
+});
 
 function getDefaultExploreFilters() {
     return {
         mediaType: EXPLORE_DEFAULT_FILTERS.mediaType,
         sortBy: EXPLORE_DEFAULT_FILTERS.sortBy,
         language: EXPLORE_DEFAULT_FILTERS.language,
-        decade: EXPLORE_DEFAULT_FILTERS.decade,
+        yearFrom: EXPLORE_DEFAULT_FILTERS.yearFrom,
+        yearTo: EXPLORE_DEFAULT_FILTERS.yearTo,
         rating: EXPLORE_DEFAULT_FILTERS.rating,
+        ratingMax: EXPLORE_DEFAULT_FILTERS.ratingMax,
         voteCount: EXPLORE_DEFAULT_FILTERS.voteCount,
+        voteCountMax: EXPLORE_DEFAULT_FILTERS.voteCountMax,
         runtimeGte: EXPLORE_DEFAULT_FILTERS.runtimeGte,
         runtimeLte: EXPLORE_DEFAULT_FILTERS.runtimeLte,
         genres: [],
+        genresMode: EXPLORE_DEFAULT_FILTERS.genresMode,
+        excludeGenres: [],
+        keywords: [],
+        tvStatus: EXPLORE_DEFAULT_FILTERS.tvStatus,
+        tvType: EXPLORE_DEFAULT_FILTERS.tvType,
+        hideOwned: false,
     };
 }
 
@@ -76,41 +114,35 @@ function setActiveRecTab(tabKey) {
     const pageEl = document.getElementById('page-recommendation');
     const workspaceEl = document.getElementById('recommendation-workspace');
     const searchToolbar = document.getElementById('recommendation-standard-toolbar');
-    const quickbar = document.getElementById('rec-explore-mobile-quickbar');
-    const exploreFilters = document.getElementById('rec-explore-filters');
     const isExplore = tabKey === 'explore';
 
     pageEl?.classList.toggle('is-explore', isExplore);
     workspaceEl?.classList.toggle('is-explore', isExplore);
     if (isExplore) {
         if (searchToolbar) searchToolbar.classList.add('hidden');
-        if (quickbar) quickbar.classList.remove('hidden');
-        if (exploreFilters) exploreFilters.classList.remove('hidden');
     } else {
-        closeExploreFiltersDrawer();
-        if (exploreFilters) exploreFilters.classList.add('hidden');
-        if (quickbar) quickbar.classList.add('hidden');
+        explorePanelOpen = false;
         if (searchToolbar) searchToolbar.classList.remove('hidden');
     }
     syncExploreFilterUi();
 }
 
-function isCompactExploreFilters() {
-    return window.matchMedia
-        ? window.matchMedia('(max-width: ' + EXPLORE_COMPACT_BREAKPOINT + 'px)').matches
-        : window.innerWidth <= EXPLORE_COMPACT_BREAKPOINT;
-}
-
 function getExploreSelectedCount() {
     let count = 0;
-    if (exploreFilterState.mediaType === 'tv') count += 1;
     if (exploreFilterState.language) count += 1;
-    if (exploreFilterState.decade) count += 1;
+    if (exploreFilterState.yearFrom || exploreFilterState.yearTo) count += 1;
     if (exploreFilterState.rating) count += 1;
+    if (exploreFilterState.ratingMax) count += 1;
     if (exploreFilterState.voteCount) count += 1;
+    if (exploreFilterState.voteCountMax) count += 1;
     if (exploreFilterState.runtimeGte) count += 1;
     if (exploreFilterState.runtimeLte) count += 1;
+    if (exploreFilterState.tvStatus) count += 1;
+    if (exploreFilterState.tvType) count += 1;
+    if (exploreFilterState.hideOwned) count += 1;
     count += exploreFilterState.genres.length;
+    count += exploreFilterState.excludeGenres.length;
+    count += exploreFilterState.keywords.length;
     return count;
 }
 
@@ -119,6 +151,7 @@ function getExploreSortOptions(mediaType) {
     return [
         { value: 'popularity.desc', label: '最热门' },
         { value: 'vote_average.desc', label: '最高评分' },
+        { value: 'vote_count.desc', label: '评分人数最多' },
         { value: isTv ? 'first_air_date.desc' : 'primary_release_date.desc', label: '最新上映' },
         { value: isTv ? 'first_air_date.asc' : 'primary_release_date.asc', label: '最早上映' },
         { value: 'popularity.asc', label: '最冷门' },
@@ -144,20 +177,59 @@ function getExploreLanguageLabel() {
     return exploreFilterState.language ? (labels[exploreFilterState.language] || exploreFilterState.language) : '全部语言';
 }
 
+function getExploreYearLabel() {
+    const from = exploreFilterState.yearFrom;
+    const to = exploreFilterState.yearTo;
+    if (!from && !to) return '';
+    if (from && to) {
+        const start = Number(from);
+        const end = Number(to);
+        if (Number.isFinite(start) && Number.isFinite(end) && start % 10 === 0 && end === start + 9) {
+            return from + 's';
+        }
+        return from + '-' + to;
+    }
+    return from ? from + ' 年起' : '至 ' + to;
+}
+
 function getExploreSummaryText() {
     const parts = [
         exploreFilterState.mediaType === 'tv' ? '剧集' : '电影',
         getExploreSortLabel(),
         getExploreLanguageLabel(),
     ];
-    if (exploreFilterState.decade) parts.push(exploreFilterState.decade + 's');
-    if (exploreFilterState.rating) parts.push('评分≥' + exploreFilterState.rating);
-    if (exploreFilterState.voteCount) parts.push('投票≥' + exploreFilterState.voteCount);
+    const yearLabel = getExploreYearLabel();
+    if (yearLabel) parts.push(yearLabel);
+    if (exploreFilterState.rating && exploreFilterState.ratingMax) {
+        parts.push('评分 ' + exploreFilterState.rating + '-' + exploreFilterState.ratingMax);
+    } else if (exploreFilterState.rating) {
+        parts.push('评分≥' + exploreFilterState.rating);
+    } else if (exploreFilterState.ratingMax) {
+        parts.push('评分≤' + exploreFilterState.ratingMax);
+    }
+    if (exploreFilterState.voteCount && exploreFilterState.voteCountMax) {
+        parts.push('投票 ' + exploreFilterState.voteCount + '-' + exploreFilterState.voteCountMax);
+    } else if (exploreFilterState.voteCount) {
+        parts.push('投票≥' + exploreFilterState.voteCount);
+    } else if (exploreFilterState.voteCountMax) {
+        parts.push('投票≤' + exploreFilterState.voteCountMax);
+    }
     if (exploreFilterState.runtimeGte || exploreFilterState.runtimeLte) {
         parts.push('片长 ' + (exploreFilterState.runtimeGte || '不限') + '-' + (exploreFilterState.runtimeLte || '不限'));
     }
-    if (exploreFilterState.genres.length) parts.push(exploreFilterState.genres.length + ' 个分类');
-    return parts.join(' · ');
+    if (exploreFilterState.genres.length) {
+        parts.push(exploreFilterState.genres.length + ' 个分类' + (exploreFilterState.genresMode === 'and' ? '（同时）' : ''));
+    }
+    if (exploreFilterState.excludeGenres.length) parts.push('排除 ' + exploreFilterState.excludeGenres.length + ' 个分类');
+    if (exploreFilterState.keywords.length) {
+        parts.push('关键词：' + exploreFilterState.keywords.map((k) => k.name).join('、'));
+    }
+    if (exploreFilterState.mediaType === 'tv') {
+        if (exploreFilterState.tvStatus) parts.push(EXPLORE_TV_STATUS_LABELS[exploreFilterState.tvStatus] || '');
+        if (exploreFilterState.tvType) parts.push(EXPLORE_TV_TYPE_LABELS[exploreFilterState.tvType] || '');
+    }
+    if (exploreFilterState.hideOwned) parts.push('隐藏已有');
+    return parts.filter(Boolean).join(' · ');
 }
 
 function updateSortOptions(mediaType) {
@@ -177,94 +249,127 @@ function updateSortOptions(mediaType) {
     const html = options.map(function(o) {
         return '<option value="' + o.value + '">' + o.label + '</option>';
     }).join('');
-    ['rec-explore-sort', 'rec-explore-sort-mobile'].forEach(function(id) {
-        const select = document.getElementById(id);
-        if (!select) return;
+    const select = document.getElementById('rec-explore-sort');
+    if (select) {
         select.innerHTML = html;
         select.value = exploreFilterState.sortBy;
-    });
+    }
 }
 
 function syncExploreFilterUi() {
-    const compact = isCompactExploreFilters();
-    const drawerVisible = recommendationActiveTab === 'explore' && compact && exploreDrawerOpen;
+    const isExplore = recommendationActiveTab === 'explore';
+    const panelVisible = isExplore && explorePanelOpen;
     const filters = document.getElementById('rec-explore-filters');
-    const backdrop = document.getElementById('rec-explore-backdrop');
-    const count = getExploreSelectedCount();
-    const mobileCount = document.getElementById('rec-explore-mobile-count');
-    const drawerToggle = document.getElementById('rec-explore-drawer-toggle');
+    const toggleBtn = document.getElementById('rec-explore-filter-toggle');
+    const countEl = document.getElementById('rec-explore-filter-count');
     const summaryText = document.getElementById('rec-explore-summary-text');
+    const count = getExploreSelectedCount();
 
     updateSortOptions(exploreFilterState.mediaType);
 
     const valueMap = {
-        'rec-explore-media-type': exploreFilterState.mediaType,
         'rec-explore-language': exploreFilterState.language,
+        'rec-explore-year-from': exploreFilterState.yearFrom,
+        'rec-explore-year-to': exploreFilterState.yearTo,
         'rec-explore-rating': exploreFilterState.rating,
+        'rec-explore-rating-max': exploreFilterState.ratingMax,
         'rec-explore-vote-count': exploreFilterState.voteCount,
+        'rec-explore-vote-count-max': exploreFilterState.voteCountMax,
         'rec-explore-runtime-gte': exploreFilterState.runtimeGte,
         'rec-explore-runtime-lte': exploreFilterState.runtimeLte,
+        'rec-explore-tv-status': exploreFilterState.tvStatus,
+        'rec-explore-tv-type': exploreFilterState.tvType,
     };
     Object.keys(valueMap).forEach(function(id) {
         const el = document.getElementById(id);
         if (el && el.value !== valueMap[id]) el.value = valueMap[id];
     });
 
+    const hideOwnedEl = document.getElementById('rec-explore-hide-owned');
+    if (hideOwnedEl) hideOwnedEl.checked = !!exploreFilterState.hideOwned;
+
     document.getElementById('rec-explore-media-movie')?.classList.toggle('is-active', exploreFilterState.mediaType === 'movie');
     document.getElementById('rec-explore-media-tv')?.classList.toggle('is-active', exploreFilterState.mediaType === 'tv');
     document.getElementById('rec-explore-media-movie')?.setAttribute('aria-pressed', exploreFilterState.mediaType === 'movie' ? 'true' : 'false');
     document.getElementById('rec-explore-media-tv')?.setAttribute('aria-pressed', exploreFilterState.mediaType === 'tv' ? 'true' : 'false');
 
+    // 剧集专属条件只在剧集下出现在面板里
+    document.getElementById('rec-explore-tv-section')?.classList.toggle('hidden', exploreFilterState.mediaType !== 'tv');
+
+    document.getElementById('rec-explore-genres-mode-or')?.classList.toggle('is-active', exploreFilterState.genresMode !== 'and');
+    document.getElementById('rec-explore-genres-mode-and')?.classList.toggle('is-active', exploreFilterState.genresMode === 'and');
+
+    const decadeActive = getActiveDecade();
     document.querySelectorAll('#rec-explore-decade-chips .rec-genre-chip').forEach(function(chip) {
-        chip.classList.toggle('is-selected', chip.dataset.decade === exploreFilterState.decade);
+        chip.classList.toggle('is-selected', !!decadeActive && chip.dataset.decade === decadeActive);
     });
     document.querySelectorAll('#rec-explore-genres .rec-genre-chip').forEach(function(chip) {
         chip.classList.toggle('is-selected', exploreFilterState.genres.includes(String(chip.dataset.genreId)));
     });
+    document.querySelectorAll('#rec-explore-exclude-genres .rec-genre-chip').forEach(function(chip) {
+        chip.classList.toggle('is-selected', exploreFilterState.excludeGenres.includes(String(chip.dataset.genreId)));
+    });
 
-    if (mobileCount) {
-        mobileCount.textContent = ' · ' + count;
-        mobileCount.classList.toggle('hidden', count <= 0);
+    renderExploreKeywordChips();
+
+    if (countEl) {
+        countEl.textContent = String(count);
+        countEl.classList.toggle('hidden', count <= 0);
     }
     if (summaryText) summaryText.textContent = getExploreSummaryText();
-    if (recommendationActiveTab === 'explore') {
-        const subtitle = '当前条件：' + getExploreSummaryText();
+    if (isExplore) {
         const subtitleEl = document.getElementById('recommendation-content-subtitle');
-        if (subtitleEl) subtitleEl.innerText = subtitle;
+        if (subtitleEl) {
+            const hiddenNote = (exploreFilterState.hideOwned && exploreHiddenOwnedCount > 0)
+                ? '（本页隐藏 ' + exploreHiddenOwnedCount + ' 部已有）'
+                : '';
+            subtitleEl.innerText = '当前条件：' + getExploreSummaryText() + hiddenNote;
+        }
     }
 
-    if (filters) filters.classList.toggle('is-mobile-open', drawerVisible);
-    if (drawerToggle) drawerToggle.setAttribute('aria-expanded', drawerVisible ? 'true' : 'false');
-    if (backdrop) {
-        backdrop.classList.toggle('hidden', !drawerVisible);
+    if (filters) filters.classList.toggle('is-open', panelVisible);
+    if (toggleBtn) {
+        toggleBtn.setAttribute('aria-expanded', panelVisible ? 'true' : 'false');
+        toggleBtn.classList.toggle('is-open', panelVisible);
     }
-    document.body?.classList.toggle('rec-explore-drawer-open', drawerVisible);
 }
 
-function setExploreDrawerOpen(open) {
-    exploreDrawerOpen = !!open && recommendationActiveTab === 'explore';
+function getActiveDecade() {
+    const from = exploreFilterState.yearFrom;
+    const to = exploreFilterState.yearTo;
+    if (!from || !to) return '';
+    const start = Number(from);
+    const end = Number(to);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return '';
+    return (start % 10 === 0 && end === start + 9) ? String(start) : '';
+}
+
+function setExplorePanelOpen(open) {
+    explorePanelOpen = !!open && recommendationActiveTab === 'explore';
     syncExploreFilterUi();
 }
 
-function openExploreFiltersDrawer() {
-    setExploreDrawerOpen(true);
+function toggleExploreFiltersPanel(forceOpen) {
+    setExplorePanelOpen(typeof forceOpen === 'boolean' ? forceOpen : !explorePanelOpen);
 }
 
 function closeExploreFiltersDrawer() {
-    setExploreDrawerOpen(false);
-}
-
-function toggleExploreMoreFilters(forceExpanded) {
-    setExploreDrawerOpen(typeof forceExpanded === 'boolean' ? forceExpanded : !exploreDrawerOpen);
+    setExplorePanelOpen(false);
 }
 
 function bindExploreFilterInputs() {
     const bindings = [
         { id: 'rec-explore-language', key: 'language', event: 'change' },
+        { id: 'rec-explore-year-from', key: 'yearFrom', event: 'input' },
+        { id: 'rec-explore-year-to', key: 'yearTo', event: 'input' },
         { id: 'rec-explore-rating', key: 'rating', event: 'input' },
+        { id: 'rec-explore-rating-max', key: 'ratingMax', event: 'input' },
         { id: 'rec-explore-vote-count', key: 'voteCount', event: 'input' },
+        { id: 'rec-explore-vote-count-max', key: 'voteCountMax', event: 'input' },
         { id: 'rec-explore-runtime-gte', key: 'runtimeGte', event: 'input' },
         { id: 'rec-explore-runtime-lte', key: 'runtimeLte', event: 'input' },
+        { id: 'rec-explore-tv-status', key: 'tvStatus', event: 'change' },
+        { id: 'rec-explore-tv-type', key: 'tvType', event: 'change' },
     ];
     bindings.forEach(function(binding) {
         const el = document.getElementById(binding.id);
@@ -275,21 +380,50 @@ function bindExploreFilterInputs() {
         });
         el.dataset.recExploreBound = '1';
     });
+
+    const hideOwnedEl = document.getElementById('rec-explore-hide-owned');
+    if (hideOwnedEl && hideOwnedEl.dataset.recExploreBound !== '1') {
+        hideOwnedEl.addEventListener('change', function() {
+            exploreFilterState.hideOwned = !!hideOwnedEl.checked;
+            syncExploreFilterUi();
+        });
+        hideOwnedEl.dataset.recExploreBound = '1';
+    }
+
+    const keywordInput = document.getElementById('rec-explore-keyword-input');
+    if (keywordInput && keywordInput.dataset.recExploreBound !== '1') {
+        keywordInput.addEventListener('input', function() {
+            onExploreKeywordInput();
+        });
+        keywordInput.addEventListener('keydown', function(event) {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                if (exploreKeywordResults.length) addExploreKeyword(exploreKeywordResults[0].id, exploreKeywordResults[0].name);
+            }
+        });
+        keywordInput.dataset.recExploreBound = '1';
+    }
+}
+
+function bindExplorePanelDismiss() {
+    if (document.body.dataset.recExploreDismissBound === '1') return;
+    document.body.dataset.recExploreDismissBound = '1';
+    document.addEventListener('click', function(event) {
+        if (!explorePanelOpen) return;
+        const panel = document.getElementById('rec-explore-filters');
+        const toggle = document.getElementById('rec-explore-filter-toggle');
+        if (!panel || !toggle) return;
+        if (panel.contains(event.target) || toggle.contains(event.target)) return;
+        setExplorePanelOpen(false);
+    });
+    document.addEventListener('keydown', function(event) {
+        if (event.key === 'Escape' && explorePanelOpen) setExplorePanelOpen(false);
+    });
 }
 
 async function applyExploreFilters() {
-    if (isCompactExploreFilters()) {
-        closeExploreFiltersDrawer();
-    }
+    setExplorePanelOpen(false);
     await searchRecommendationDiscover();
-}
-
-async function applyExploreMoreFilters() {
-    await applyExploreFilters();
-}
-
-function syncExploreMoreToggle() {
-    syncExploreFilterUi();
 }
 
 function buildPaginationHtml(page, totalPages) {
@@ -529,7 +663,7 @@ function buildLoadingSkeletonHtml(count) {
     return html;
 }
 
-function showRecommendationEmpty(isError, message) {
+function showRecommendationEmpty(isError, message, hint) {
     const emptyEl = document.getElementById('recommendation-empty');
     const iconEl = document.getElementById('recommendation-empty-icon');
     const textEl = document.getElementById('recommendation-empty-text');
@@ -556,19 +690,26 @@ function showRecommendationEmpty(isError, message) {
         }
         if (textEl) {
             textEl.className = 'text-sm text-slate-500';
-            textEl.textContent = '暂无内容';
+            textEl.textContent = message || '暂无内容';
         }
         if (hintEl) {
-            hintEl.classList.add('hidden');
+            if (hint) {
+                hintEl.className = 'rec-empty-hint text-xs mt-1';
+                hintEl.textContent = hint;
+                hintEl.classList.remove('hidden');
+            } else {
+                hintEl.classList.add('hidden');
+            }
         }
     }
     emptyEl.classList.remove('hidden');
 }
 
-async function renderRecommendationGrid(items) {
+async function renderRecommendationGrid(items, options) {
     const gridEl = document.getElementById('recommendation-grid');
     const emptyEl = document.getElementById('recommendation-empty');
     if (!gridEl) return;
+    const opts = options || {};
 
     if (!Array.isArray(items) || !items.length) {
         gridEl.innerHTML = '';
@@ -590,7 +731,25 @@ async function renderRecommendationGrid(items) {
         recommendationOwned = {};
     }
 
-    gridEl.innerHTML = items.map((item, idx) => buildRecCardHtml(item, idx)).join('');
+    // 「隐藏已有」只在探索页生效：过滤后同步回 recommendationItems，避免卡片下标与数组错位
+    let visibleItems = items;
+    exploreHiddenOwnedCount = 0;
+    if (opts.hideOwned) {
+        visibleItems = items.filter((item) => !recommendationOwned[item.id || item.tmdb_id]);
+        exploreHiddenOwnedCount = items.length - visibleItems.length;
+        recommendationItems = visibleItems;
+    }
+
+    if (!visibleItems.length) {
+        gridEl.innerHTML = '';
+        gridEl.classList.add('hidden');
+        // 这是「筛选后没有剩余」，不是请求失败，别用报错样式
+        showRecommendationEmpty(false, '本页条目都已在极影视库', '换一页，或关掉「隐藏已有」再看看');
+        updatePagination();
+        return;
+    }
+
+    gridEl.innerHTML = visibleItems.map((item, idx) => buildRecCardHtml(item, idx)).join('');
     updatePagination();
 }
 
@@ -1025,20 +1184,28 @@ async function loadExploreGenres(mediaType) {
 
 function renderExploreGenreChips(mediaType) {
     const container = document.getElementById('rec-explore-genres');
-    if (!container) return;
+    const excludeContainer = document.getElementById('rec-explore-exclude-genres');
     const genres = exploreGenres[mediaType] || [];
-    container.innerHTML = genres.map(function(g) {
-        const genreId = String(g.id);
-        const selectedClass = exploreFilterState.genres.includes(genreId) ? ' is-selected' : '';
-        return '<button type="button" class="rec-genre-chip' + selectedClass + '" data-genre-id="' + genreId + '" onclick="toggleExploreGenre(\'' + genreId + '\')">' +
-            escapeRecHtml(g.name) +
-        '</button>';
-    }).join('');
+    const build = function(list, selected, handler) {
+        return list.map(function(g) {
+            const genreId = String(g.id);
+            const selectedClass = selected.includes(genreId) ? ' is-selected' : '';
+            return '<button type="button" class="rec-genre-chip' + selectedClass + '" data-genre-id="' + genreId + '" onclick="' + handler + '(\'' + genreId + '\')">' +
+                escapeRecHtml(g.name) +
+            '</button>';
+        }).join('');
+    };
+    if (container) container.innerHTML = build(genres, exploreFilterState.genres, 'toggleExploreGenre');
+    if (excludeContainer) excludeContainer.innerHTML = build(genres, exploreFilterState.excludeGenres, 'toggleExploreExcludeGenre');
     syncExploreFilterUi();
 }
 
 function getSelectedExploreGenres() {
     return exploreFilterState.genres.join(',');
+}
+
+function getExcludedExploreGenres() {
+    return exploreFilterState.excludeGenres.join(',');
 }
 
 function renderDecadeChips() {
@@ -1054,18 +1221,114 @@ function renderDecadeChips() {
 }
 
 function selectDecade(input) {
-    const decade = typeof input === 'string' ? input : (input?.dataset?.decade || '');
-    exploreFilterState.decade = exploreFilterState.decade === decade ? '' : decade;
+    const decade = String(typeof input === 'string' ? input : (input?.dataset?.decade || ''));
+    if (!decade) return;
+    if (getActiveDecade() === decade) {
+        exploreFilterState.yearFrom = '';
+        exploreFilterState.yearTo = '';
+    } else {
+        exploreFilterState.yearFrom = decade;
+        exploreFilterState.yearTo = String(Number(decade) + 9);
+    }
     syncExploreFilterUi();
 }
 
 function getSelectedDecade() {
-    return exploreFilterState.decade;
+    return getActiveDecade();
 }
 
-async function onExploreMediaTypeChange() {
-    const mediaType = document.getElementById('rec-explore-media-type')?.value || 'movie';
-    await setExploreMediaType(mediaType, false);
+function setExploreGenresMode(mode) {
+    exploreFilterState.genresMode = mode === 'and' ? 'and' : 'or';
+    syncExploreFilterUi();
+}
+
+function toggleExploreExcludeGenre(genreId) {
+    const id = String(genreId);
+    if (exploreFilterState.excludeGenres.includes(id)) {
+        exploreFilterState.excludeGenres = exploreFilterState.excludeGenres.filter((item) => item !== id);
+    } else {
+        exploreFilterState.excludeGenres = exploreFilterState.excludeGenres.concat(id);
+    }
+    syncExploreFilterUi();
+}
+
+function onExploreKeywordInput() {
+    const inputEl = document.getElementById('rec-explore-keyword-input');
+    if (!inputEl) return;
+    const query = (inputEl.value || '').trim();
+    if (exploreKeywordTimer) clearTimeout(exploreKeywordTimer);
+    if (query.length < 2) {
+        exploreKeywordResults = [];
+        renderExploreKeywordSuggest();
+        return;
+    }
+    exploreKeywordTimer = setTimeout(function() {
+        loadExploreKeywordSuggest(query);
+    }, 300);
+}
+
+async function loadExploreKeywordSuggest(query) {
+    try {
+        const data = await window.MediaHubApi.getJson('/tmdb/keywords?query=' + encodeURIComponent(query));
+        const currentQuery = (document.getElementById('rec-explore-keyword-input')?.value || '').trim();
+        if (currentQuery !== query) return;
+        exploreKeywordResults = Array.isArray(data?.keywords) ? data.keywords : [];
+    } catch (e) {
+        exploreKeywordResults = [];
+    }
+    renderExploreKeywordSuggest();
+}
+
+function renderExploreKeywordSuggest() {
+    const container = document.getElementById('rec-explore-keyword-suggest');
+    if (!container) return;
+    if (!exploreKeywordResults.length) {
+        container.innerHTML = '';
+        container.classList.add('hidden');
+        return;
+    }
+    const selectedIds = exploreFilterState.keywords.map((k) => String(k.id));
+    container.innerHTML = exploreKeywordResults.map(function(item) {
+        const keywordId = String(item.id);
+        const added = selectedIds.includes(keywordId);
+        return '<button type="button" class="rec-keyword-item' + (added ? ' is-added' : '') + '"' + (added ? ' disabled' : '') +
+            ' onclick="addExploreKeyword(\'' + keywordId + '\')">' +
+            escapeRecHtml(item.name) + (added ? '<span class="rec-keyword-added">已加入</span>' : '') +
+        '</button>';
+    }).join('');
+    container.classList.remove('hidden');
+}
+
+function renderExploreKeywordChips() {
+    const container = document.getElementById('rec-explore-keyword-chips');
+    if (!container) return;
+    container.innerHTML = exploreFilterState.keywords.map(function(item) {
+        return '<span class="rec-keyword-chip">' + escapeRecHtml(item.name) +
+            '<button type="button" class="rec-keyword-chip-remove" aria-label="移除关键词" onclick="removeExploreKeyword(\'' + String(item.id) + '\')">&times;</button>' +
+        '</span>';
+    }).join('');
+}
+
+function addExploreKeyword(keywordId, name) {
+    const id = String(keywordId || '');
+    if (!id) return;
+    const fallback = exploreKeywordResults.find((item) => String(item.id) === id);
+    const label = String(name || fallback?.name || '').trim();
+    if (!label) return;
+    if (exploreFilterState.keywords.some((k) => String(k.id) === id)) return;
+    if (exploreFilterState.keywords.length >= 5) return;
+    exploreFilterState.keywords = exploreFilterState.keywords.concat({ id: id, name: label });
+    const inputEl = document.getElementById('rec-explore-keyword-input');
+    if (inputEl) inputEl.value = '';
+    exploreKeywordResults = [];
+    renderExploreKeywordSuggest();
+    syncExploreFilterUi();
+}
+
+function removeExploreKeyword(keywordId) {
+    const id = String(keywordId || '');
+    exploreFilterState.keywords = exploreFilterState.keywords.filter((k) => String(k.id) !== id);
+    syncExploreFilterUi();
 }
 
 async function setExploreMediaType(mediaType, applyNow) {
@@ -1073,13 +1336,18 @@ async function setExploreMediaType(mediaType, applyNow) {
     const changed = exploreFilterState.mediaType !== normalized;
     exploreFilterState.mediaType = normalized;
     if (changed) {
+        // 分类 ID 与媒体类型绑定，切换后旧选择全部失效
         exploreFilterState.genres = [];
+        exploreFilterState.excludeGenres = [];
+        // 剧集状态/类型是 TV 专属枚举，留着会污染「筛选」计数（面板里又看不到）
+        exploreFilterState.tvStatus = '';
+        exploreFilterState.tvType = '';
     }
     updateSortOptions(normalized);
     await loadExploreGenres(normalized);
     renderExploreGenreChips(normalized);
     syncExploreFilterUi();
-    if (applyNow && recommendationActiveTab === 'explore' && isCompactExploreFilters()) {
+    if (applyNow && recommendationActiveTab === 'explore') {
         await searchRecommendationDiscover();
     }
 }
@@ -1087,7 +1355,7 @@ async function setExploreMediaType(mediaType, applyNow) {
 async function setExploreSort(sortBy, applyNow) {
     exploreFilterState.sortBy = sortBy || EXPLORE_DEFAULT_FILTERS.sortBy;
     syncExploreFilterUi();
-    if (applyNow && recommendationActiveTab === 'explore' && isCompactExploreFilters()) {
+    if (applyNow && recommendationActiveTab === 'explore') {
         await searchRecommendationDiscover();
     }
 }
@@ -1104,6 +1372,10 @@ function toggleExploreGenre(genreId) {
 
 async function resetExploreFilters() {
     exploreFilterState = getDefaultExploreFilters();
+    exploreKeywordResults = [];
+    const keywordInput = document.getElementById('rec-explore-keyword-input');
+    if (keywordInput) keywordInput.value = '';
+    renderExploreKeywordSuggest();
     updateSortOptions(exploreFilterState.mediaType);
     await loadExploreGenres(exploreFilterState.mediaType);
     renderExploreGenreChips(exploreFilterState.mediaType);
@@ -1116,7 +1388,8 @@ async function showRecommendationExplore() {
     resetPagination();
     recommendationItems = [];
     bindExploreFilterInputs();
-    closeExploreFiltersDrawer();
+    bindExplorePanelDismiss();
+    setExplorePanelOpen(false);
     updateSortOptions(exploreFilterState.mediaType);
     await loadExploreGenres(exploreFilterState.mediaType);
     renderExploreGenreChips(exploreFilterState.mediaType);
@@ -1128,15 +1401,18 @@ async function searchRecommendationDiscover(page) {
     const mediaType = exploreFilterState.mediaType;
     const sortBy = exploreFilterState.sortBy;
     const language = exploreFilterState.language;
-    const decade = exploreFilterState.decade;
-    const yearFrom = decade || '';
-    const yearTo = decade ? String(Number(decade) + 9) : '';
+    const yearFrom = exploreFilterState.yearFrom;
+    const yearTo = exploreFilterState.yearTo;
     const rating = exploreFilterState.rating;
+    const ratingMax = exploreFilterState.ratingMax;
     const voteCount = exploreFilterState.voteCount;
+    const voteCountMax = exploreFilterState.voteCountMax;
     const runtimeGte = exploreFilterState.runtimeGte;
     const runtimeLte = exploreFilterState.runtimeLte;
     const genres = getSelectedExploreGenres();
+    const excludeGenres = getExcludedExploreGenres();
     recommendationItems = [];
+    exploreHiddenOwnedCount = 0;
     setRecommendationContentHeader('探索发现', '当前条件：' + getExploreSummaryText());
     setRecommendationBusy(true);
     renderLoadingGrid();
@@ -1145,20 +1421,35 @@ async function searchRecommendationDiscover(page) {
         let url = '/tmdb/discover?media_type=' + encodeURIComponent(mediaType) +
             '&sort_by=' + encodeURIComponent(sortBy) +
             '&page=' + p;
-        if (genres) url += '&genres=' + encodeURIComponent(genres);
+        if (genres) {
+            url += '&genres=' + encodeURIComponent(genres);
+            url += '&genres_mode=' + (exploreFilterState.genresMode === 'and' ? 'and' : 'or');
+        }
+        if (excludeGenres) url += '&without_genres=' + encodeURIComponent(excludeGenres);
+        if (exploreFilterState.keywords.length) {
+            url += '&keywords=' + encodeURIComponent(exploreFilterState.keywords.map((k) => k.id).join(','));
+        }
         if (language) url += '&with_original_language=' + encodeURIComponent(language);
         if (yearFrom) url += '&year_from=' + encodeURIComponent(yearFrom);
         if (yearTo) url += '&year_to=' + encodeURIComponent(yearTo);
         if (rating) url += '&vote_average_gte=' + encodeURIComponent(rating);
+        if (ratingMax) url += '&vote_average_lte=' + encodeURIComponent(ratingMax);
         if (voteCount) url += '&vote_count_gte=' + encodeURIComponent(voteCount);
+        if (voteCountMax) url += '&vote_count_lte=' + encodeURIComponent(voteCountMax);
         if (runtimeGte) url += '&runtime_gte=' + encodeURIComponent(runtimeGte);
         if (runtimeLte) url += '&runtime_lte=' + encodeURIComponent(runtimeLte);
+        if (mediaType === 'tv') {
+            if (exploreFilterState.tvStatus) url += '&tv_status=' + encodeURIComponent(exploreFilterState.tvStatus);
+            if (exploreFilterState.tvType) url += '&tv_type=' + encodeURIComponent(exploreFilterState.tvType);
+        }
         const data = await window.MediaHubApi.getJson(url);
         recommendationItems = Array.isArray(data?.items) ? data.items : [];
         recommendationPagination.currentPage = data?.page || p;
         recommendationPagination.totalPages = data?.total_pages || 1;
         recommendationPagination.currentContext = { type: 'discover' };
-        renderRecommendationGrid(recommendationItems);
+        // 必须 await：renderRecommendationGrid 内部要查库存并回填 exploreHiddenOwnedCount，
+        // 不 await 的话下面的 finally 先跑，副标题里的「本页隐藏 N 部已有」永远拿不到值。
+        await renderRecommendationGrid(recommendationItems, { hideOwned: exploreFilterState.hideOwned });
     } catch (e) {
         recommendationItems = [];
         const gridEl = document.getElementById('recommendation-grid');
@@ -1175,9 +1466,9 @@ async function searchRecommendationDiscover(page) {
 async function initRecommendationPage() {
     renderDecadeChips();
     bindExploreFilterInputs();
+    bindExplorePanelDismiss();
     updateSortOptions(exploreFilterState.mediaType);
     syncExploreFilterUi();
-    window.addEventListener('resize', syncExploreFilterUi);
     await loadRecommendationWatchlist();
     if (!recommendationItems.length) {
         await loadRecommendationTrending('week');
@@ -1205,19 +1496,21 @@ Object.assign(window, {
     onRecommendationSearchInput,
     clearRecommendationSearch,
     goToRecommendationPage,
+    jumpToRecommendationPage,
     showRecommendationExplore,
     searchRecommendationDiscover,
     applyExploreFilters,
-    applyExploreMoreFilters,
-    onExploreMediaTypeChange,
     setExploreMediaType,
     setExploreSort,
     toggleExploreGenre,
-    openExploreFiltersDrawer,
+    toggleExploreExcludeGenre,
+    setExploreGenresMode,
+    addExploreKeyword,
+    removeExploreKeyword,
+    onExploreKeywordInput,
+    toggleExploreFiltersPanel,
     closeExploreFiltersDrawer,
     resetExploreFilters,
-    toggleExploreMoreFilters,
-    syncExploreMoreToggle,
     syncExploreFilterUi,
     updateSortOptions,
     selectDecade,

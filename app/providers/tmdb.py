@@ -282,6 +282,28 @@ def search_tmdb_media(
     return {"items": items[: TMDB_SEARCH_LIMIT], "page": normalized_page, "total_pages": total_pages}
 
 
+def search_tmdb_keywords(query: str, cfg: Optional[Dict[str, Any]] = None, limit: int = 8) -> List[Dict[str, Any]]:
+    """按名字搜 TMDB 关键词，返回 [{id, name}]，用于探索页「关键词」筛选。"""
+    keyword = re.sub(r"\s+", " ", str(query or "").strip())
+    if len(keyword) < 2:
+        return []
+    payload = tmdb_request_json("/search/keyword", params={"query": keyword, "page": "1"}, cfg=cfg)
+    raw_results = payload.get("results", []) if isinstance(payload.get("results"), list) else []
+    max_items = max(1, min(20, int(limit or 8)))
+    items: List[Dict[str, Any]] = []
+    for raw_item in raw_results:
+        if not isinstance(raw_item, dict):
+            continue
+        keyword_id = max(0, parse_int(raw_item.get("id", 0), 0))
+        name = str(raw_item.get("name", "") or "").strip()
+        if keyword_id <= 0 or not name:
+            continue
+        items.append({"id": keyword_id, "name": name})
+        if len(items) >= max_items:
+            break
+    return items
+
+
 def get_tmdb_trending(
     media_type: str = "all",
     time_window: str = "week",
@@ -383,6 +405,22 @@ def get_tmdb_genre_list(
     return genres
 
 
+def _tmdb_digit_csv(value: Any) -> str:
+    """把 "12, 35、16" 这类输入清洗成 "12,35,16"，非数字项直接丢弃。"""
+    raw = str(value or "").replace("，", ",").replace("、", ",").replace(" ", "")
+    parts = [part.strip() for part in raw.split(",") if part.strip()]
+    digits = [part for part in parts if part.isdigit()]
+    # 去重但保留顺序
+    seen: Set[str] = set()
+    ordered: List[str] = []
+    for item in digits:
+        if item in seen:
+            continue
+        seen.add(item)
+        ordered.append(item)
+    return ",".join(ordered)
+
+
 def discover_tmdb_media(
     media_type: str = "movie",
     genres: str = "",
@@ -397,6 +435,13 @@ def discover_tmdb_media(
     vote_count_gte: int = 0,
     with_runtime_gte: int = 0,
     with_runtime_lte: int = 0,
+    vote_average_lte: float = 0,
+    vote_count_lte: int = 0,
+    genres_mode: str = "or",
+    without_genres: str = "",
+    keywords: str = "",
+    tv_status: str = "",
+    tv_type: str = "",
 ) -> Dict[str, Any]:
     normalized_media_type = normalize_tmdb_media_type(media_type, fallback="movie")
     if normalized_media_type not in ("movie", "tv"):
@@ -404,6 +449,7 @@ def discover_tmdb_media(
     normalized_page = max(1, min(500, int(page or 1)))
 
     valid_sort_options = ("popularity.desc", "popularity.asc", "vote_average.desc", "vote_average.asc",
+                          "vote_count.desc", "vote_count.asc",
                           "primary_release_date.desc", "primary_release_date.asc",
                           "first_air_date.desc", "first_air_date.asc")
     normalized_sort = sort_by if sort_by in valid_sort_options else "popularity.desc"
@@ -415,12 +461,26 @@ def discover_tmdb_media(
     }
 
     if genres:
-        genre_ids = ",".join(g.strip() for g in str(genres).split(",") if g.strip().isdigit())
+        genre_ids = _tmdb_digit_csv(genres)
         if genre_ids:
-            params["with_genres"] = genre_ids
+            # TMDB 语义：逗号=全部命中（AND），竖线=任一命中（OR）
+            separator = "," if str(genres_mode or "").lower() == "and" else "|"
+            params["with_genres"] = separator.join(genre_ids.split(","))
+
+    without_genre_ids = _tmdb_digit_csv(without_genres)
+    if without_genre_ids:
+        params["without_genres"] = without_genre_ids
+
+    keyword_ids = _tmdb_digit_csv(keywords)
+    if keyword_ids:
+        # 关键词默认取「任一命中」：多个关键词用逗号是 AND 语义，
+        # 用户选 2-5 个时几乎必然空结果，跟面板上的选择直觉相反。
+        params["with_keywords"] = keyword_ids.replace(",", "|")
 
     if vote_average_gte and float(vote_average_gte) > 0:
         params["vote_average.gte"] = str(min(10, max(0, float(vote_average_gte))))
+    if vote_average_lte and float(vote_average_lte) > 0:
+        params["vote_average.lte"] = str(min(10, max(0, float(vote_average_lte))))
 
     # 日期范围优先于单一年份
     has_date_range = bool(primary_release_date_gte or primary_release_date_lte)
@@ -450,11 +510,23 @@ def discover_tmdb_media(
 
     if vote_count_gte and int(vote_count_gte) > 0:
         params["vote_count.gte"] = str(int(vote_count_gte))
+    if vote_count_lte and int(vote_count_lte) > 0:
+        params["vote_count.lte"] = str(int(vote_count_lte))
 
     if with_runtime_gte and int(with_runtime_gte) > 0:
         params["with_runtime.gte"] = str(int(with_runtime_gte))
     if with_runtime_lte and int(with_runtime_lte) > 0:
         params["with_runtime.lte"] = str(int(with_runtime_lte))
+
+    # 剧集专属：状态 / 剧集类型，只在 tv 生效（TMDB 的 movie 接口不接受这两个参数）
+    if normalized_media_type == "tv":
+        status_value = str(tv_status or "").strip()
+        if status_value.isdigit() and int(status_value) in (0, 1, 2, 3, 4, 5):
+            params["with_status"] = status_value
+        type_value = str(tv_type or "").strip()
+        # with_type 有效值是 0-6（6 = Video），比状态多一档
+        if type_value.isdigit() and int(type_value) in (0, 1, 2, 3, 4, 5, 6):
+            params["with_type"] = type_value
 
     payload = tmdb_request_json(
         f"/discover/{normalized_media_type}",

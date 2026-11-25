@@ -1811,6 +1811,7 @@
                 name: title,
                 provider,
                 media_type: normalizeSubscriptionMediaType(document.getElementById('subscription_media_type').value),
+                media_folder_layout: subscriptionFormMediaLayout === 'folder' ? 'folder' : '',
                 title,
                 aliases: document.getElementById('subscription_aliases').value.trim(),
                 exclude_keywords: excludeKeywords,
@@ -1864,6 +1865,8 @@
 
         function resetSubscriptionForm() {
             editingSubscriptionName = null;
+            // 新增任务一律用新落点（带年份括号 + TMDB ID、剧集自建剧目录）
+            subscriptionFormMediaLayout = 'folder';
             const titleEl = document.getElementById('subscription-modal-title');
             if (titleEl) titleEl.innerText = '新增订阅任务';
             document.getElementById('subscription_media_type').value = 'tv';
@@ -2106,6 +2109,8 @@
             const task = (subscriptionState.tasks || []).find(item => item.name === name);
             if (!task) return;
             editingSubscriptionName = task.name;
+            // 老任务没有这个字段（空）→ 继续用旧落点，编辑保存不会悄悄升级目录结构
+            subscriptionFormMediaLayout = String(task.media_folder_layout || '') === 'folder' ? 'folder' : '';
             const titleEl = document.getElementById('subscription-modal-title');
             if (titleEl) titleEl.innerText = `编辑订阅任务：${task.name}`;
             const providerInput = document.getElementById('subscription_provider');

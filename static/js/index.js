@@ -25,6 +25,9 @@
         // 任务类型不再由弹窗里的下拉决定：从「接收夹整理」列表进来就是 inbox，从「文件夹监控」列表进来就是 scan。
         let monitorFormType = 'scan';
         let editingSubscriptionName = null;
+        // 新建订阅默认用「每部影视一个文件夹」的新落点；编辑老任务时沿用任务自己的值（空 = 旧布局），
+        // 这样升级不会把已有任务的目录结构改掉。
+        let subscriptionFormMediaLayout = 'folder';
         let editingResourceSourceIndex = null;
         let selectedResourceId = null;
         let selectedResourceItem = null;
