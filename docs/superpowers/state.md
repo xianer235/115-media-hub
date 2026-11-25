@@ -8,14 +8,14 @@
 
 ## 基线
 
-- **更新日期**: 2026-11-25（未发版：订阅完结判定改由 TMDB 定 + 媒体文件夹带年份括号/TMDB ID）
-- **分支**: `main`，0.16.2 已推送（`35ef4db`）；**0.16.3 为本地提交**（用户 2026-11-25 说「更新版本号提交」，推送由用户手动）；本轮改动已提交（`f6b2900`）待推送、未改版本号；tag 打到 `v0.15.22`，**0.15.23~0.16.3 均未打 tag / 未发 release**，Docker 镜像同版本由 GitHub Actions 自动构建（测试不绿就不构建）
-- **版本**: `0.16.3`（2026-11-25：「已有」角标 0.16.2 的浅绿底 `rgba(5,150,105,0.12)` 压在白色封面上仍看不清，改实色 `#059669` + 白字，并用 `.rec-card-status-badge.rec-card-status-owned` 提高优先级、给通用白底规则加 `:not()` 限定；「想看 / 移除 / 详情页想看」日间改浅灰蓝实底 + 可见描边；`.rec-card-btn` / `.rec-detail-btn` 改 `inline-flex` 居中 + 统一 1px 透明边框。0.16.2 已含库存索引刷新 `_forward_raw` 断连重试；0.16.1 已含「极影视接入」设置页重组 + 刷新按钮；0.15.34 已含推荐页「已有」角标 + 保存目录合并）
+- **更新日期**: 2026-11-26（0.16.4：探索筛选补齐 TMDB 条件 + 面板折叠 + 老任务布局保持）
+- **分支**: `main`，0.16.3 已推送（`a967961`）；**0.16.4 为本地发版提交**（用户 2026-11-26 说「更新版本后提交」，推送由用户手动）；tag 打到 `v0.15.22`，**0.15.23~0.16.4 均未打 tag / 未发 release**，Docker 镜像同版本由 GitHub Actions 自动构建（测试不绿就不构建）
+- **版本**: `0.16.4`（2026-11-26：探索筛选补 TMDB 官方条件——分类任一/全部 + 排除、年份区间、评分与投票上下限、关键词联想、剧集状态/类型、隐藏已有；筛选面板由常驻左侧栏改为工具条下方折叠菜单，`isCompactExploreFilters` 双布局删除；订阅媒体文件夹命名 `片名 (年份) [tmdbid-编号]` **只对新建任务生效**，靠任务字段 `media_folder_layout` 区分，老任务目录与扫描路径不变；剧集完结改由 TMDB 判定）
 - **CI**: 单一工作流 `.github/workflows/ci.yml`（`docker-release.yml` 已并入并移除），**限定 `paths: version.json`，只在发版推送时触发**：`test` job 跑 `compileall` + `scripts/check_js_syntax.py`（复制成 `.mjs` 再 `node --check`；裸 `node --check` 对 ESM 文件静默放过，`--experimental-default-type=module` 在 Node 23+ 又被移除，两条路都走过弯路）+ `scripts/run_tests.py`，`build-and-push` 用 `needs: test` 挂在后面（`workflow_dispatch` 有 `publish` 开关，关掉只跑测试）。日常开发验证只用本机 `scripts/check.sh`，不要等 CI
 - **本地不入库文件**: `AGENTS.md` / `CLAUDE.md` / `.workbuddy/` / `.claude/` / `.worktrees/` 是本机开发用，**按约定不入库**。任何测试/代码读它们前必须判存在（`test_modules_doc` 已这么做），否则干净 clone 跑测试必挂。
 - **运行环境**: `docker compose` 服务名 `115-media-hub-test`（应用本体），端口 18080；`/app/storage` 已映射到宿主机 `/Users/xianer/Documents/docker/115strmxianer/storage`（virtiofs，空间读数正常）。挂载路径与端口已改为从根目录 `.env` 读取（模板 `.env.example`），本机 `.env` 写的是原来的绝对路径
-- **最近提交**: `f6b2900` 订阅完结改由 TMDB 判定 + 媒体文件夹带年份括号与 TMDB ID（本地提交，未推送）；`35ef4db` 发版 0.16.2；`42c23e2` 发版 0.15.34；`cbad4bd` 发版 0.15.33
-- **工作区**: 干净（`f6b2900` 已提交待推送）。该提交含两项改动：① 订阅完结判定改由 TMDB 定（`core.resolve_subscription_tv_total_episodes` 取上限、`progress_caught_up` 只做去重、`startup._subscription_finished_should_stop` 允许「TMDB 说完结但还差集」继续查、卡片加连载中/差 N 集徽章）；② 订阅媒体文件夹命名统一 `片名 (年份) [tmdbid-编号]`，剧集自动建剧目录（`core.resolve_subscription_tv_media_savepath`），已是该影视目录时不嵌套；Seerr 点播落点与订阅弹窗「推荐名称」同步带 ID。新增 `tests/test_subscription_completion.py`（14 条）。**历史文件不自动搬家**：已按旧方式落盘的任务需手动归位。
+- **最近提交**: `99b2142` 文档同步 state.md（未推送）；`f6b2900` 订阅完结改由 TMDB 判定 + 媒体文件夹带年份括号与 TMDB ID（未推送）；`a967961` 发版 0.16.3（已推送）；`35ef4db` 发版 0.16.2
+- **工作区**: 0.16.4 发版提交含四块：① 探索筛选扩展（`app/providers/tmdb.py` 的 `discover_tmdb_media` 新增上下限/匹配模式/排除分类/关键词/剧集属性，新增 `search_tmdb_keywords` + `GET /tmdb/keywords`；前端面板 6 块并新增「隐藏已有」）；② 筛选面板折叠化（`explorePanelOpen` 取代 `exploreDrawerOpen`，删掉 backdrop / 移动抽屉）；③ 老任务布局保持（`core.subscription_uses_media_folder_layout`，三个落点函数按 `media_folder_layout` 分支，前端 `resetSubscriptionForm` 默认 `folder`、编辑沿用任务原值）；④ 顺带修 `jumpToRecommendationPage` 未导出导致的分页跳转报错。新增 `tests/test_tmdb_discover_filters.py`（16 条）与 `LegacyLayoutTest`（5 条）
 
 
 
