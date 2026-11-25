@@ -10,7 +10,7 @@
 
 - **更新日期**: 2026-11-26（0.16.5：修探索筛选面板电脑端排布空洞）
 - **分支**: `main`，0.16.4 已推送（`9064ee8`，CI run `45660010387` success，镜像已构建）；**0.16.5 为本地发版提交**，推送由用户手动；tag 打到 `v0.15.22`，**0.15.23~0.16.5 均未打 tag / 未发 release**，Docker 镜像同版本由 GitHub Actions 自动构建（测试不绿就不构建）
-- **版本**: `0.16.5`（2026-11-26：探索筛选面板桌面端排布修正——分类块 `grid-column: 3; grid-row: span 2`、关键词块 `1 / span 2`、剧集属性 `1 / -1`，并在模板补 `rec-explore-section-{year,score,genres,keywords}` 四个 id；0.16.4 含探索筛选 TMDB 条件扩展 + 面板折叠化 + 订阅媒体文件夹命名只对新任务生效 + 剧集完结由 TMDB 判定）
+- **版本**: `0.16.5`（2026-11-26：① 探索筛选面板桌面端排布修正——分类块 `grid-column: 3; grid-row: span 2`、关键词块 `1 / span 2`、剧集属性 `1 / -1`，并在模板补 `rec-explore-section-{year,score,genres,keywords}` 四个 id；② 年份筛选补「具体年份」下拉（今年→1950 逐年）与「近 2/3/5/10 年」chips，三条入口共用 `yearFrom` / `yearTo`，单年摘要显示「2024 年」；0.16.4 含探索筛选 TMDB 条件扩展 + 面板折叠化 + 订阅媒体文件夹命名只对新任务生效 + 剧集完结由 TMDB 判定）
 - **CI**: 单一工作流 `.github/workflows/ci.yml`（`docker-release.yml` 已并入并移除），**限定 `paths: version.json`，只在发版推送时触发**：`test` job 跑 `compileall` + `scripts/check_js_syntax.py`（复制成 `.mjs` 再 `node --check`；裸 `node --check` 对 ESM 文件静默放过，`--experimental-default-type=module` 在 Node 23+ 又被移除，两条路都走过弯路）+ `scripts/run_tests.py`，`build-and-push` 用 `needs: test` 挂在后面（`workflow_dispatch` 有 `publish` 开关，关掉只跑测试）。日常开发验证只用本机 `scripts/check.sh`，不要等 CI
 - **本地不入库文件**: `AGENTS.md` / `CLAUDE.md` / `.workbuddy/` / `.claude/` / `.worktrees/` 是本机开发用，**按约定不入库**。任何测试/代码读它们前必须判存在（`test_modules_doc` 已这么做），否则干净 clone 跑测试必挂。
 - **运行环境**: `docker compose` 服务名 `115-media-hub-test`（应用本体），端口 18080；`/app/storage` 已映射到宿主机 `/Users/xianer/Documents/docker/115strmxianer/storage`（virtiofs，空间读数正常）。挂载路径与端口已改为从根目录 `.env` 读取（模板 `.env.example`），本机 `.env` 写的是原来的绝对路径
@@ -21,7 +21,7 @@
 
 ## 最近一次验证
 
-- **探索筛选面板桌面端排布（2026-11-26，0.16.5）**：CSS 括号平衡 3368/3368、模板标签闭合（无未闭合/错配）、`tests.test_recommendation_frontend` 2 条通过、`compileall` 与相关 7 模块 238 条零失败（0.16.4 发版时跑的，本次未改逻辑）。**未起服务截图**：需浏览器强刷确认电影模式为「年份 \| 评分 \| 分类（跨两行）」+「关键词（跨两列）」，剧集模式剧集属性整行在末行。
+- **探索筛选面板排布 + 年份筛选（2026-11-26，0.16.5）**：CSS 括号平衡 3368/3368、模板标签闭合（无未闭合/错配）、`tests.test_recommendation_frontend` **5 条**通过（新增 3 条：`setExploreYearExact('2024')` 起止同时为 2024 且摘要「2024 年」、`selectRecentYears(2)` 得「今年-1 ~ 今年」且再点清空、年份下拉含当年与 1950 及「不限」）、`compileall` 与 0.16.4 发版时相关 7 模块 238 条零失败。**未起服务截图**：需浏览器强刷确认电影模式为「年份 \| 评分 \| 分类（跨两行）」+「关键词（跨两列）」，剧集模式剧集属性整行在末行，年份区三处入口互相同步。
 
 - **订阅完结判定与媒体文件夹命名（2026-11-25，未发版）**：新增 `tests/test_subscription_completion.py` **14 条**（总集数取上限、全剧总集数脏值回落、完结只认 TMDB、TMDB 说完结但还差集时不停、文件夹名带 `[tmdbid-…]`、已存在剧目录 / Season 目录不嵌套）；`test_subscription_cross_copy` **105 条**、`test_servarr_api` **60 条**、`test_subscription_ui_frontend` **31 条**（新增 3 条：推荐名称带 ID、连载中/差 N 集徽章）、`test_subscription_hit_cooldown` 24 条、`test_quick_import` 101 条、`test_modules_doc` 5 条均零失败；`compileall` 与 `check_js_syntax.py`（34 文件）通过。**未做真机验证**：需在 NAS 上确认 ① 剧集保存 E13 后不再显示已完结、下一轮仍自动查询；② 新任务落到 `剧名 (年份) [tmdbid-编号]/Season NN`；③ 已存在的旧目录不会被再套一层。
 - **纯中文片名冒号 + 按 TMDB ID 识别（2026-11-25，0.15.33）**：`tests/test_scraper_batch_organize.py` 新增 5 条（冒号保留与降级变体顺序、混排仍拆中文、TMDB 标记写法兼容表、带 ID 时断言不调用 `search_tmdb_media`、ID 与标题不符降级 suggest、详情异常回落 manual）；该模块 **146 条零失败**，`test_scraper_ai_match` / `test_scraper_noise_settings` 合计 225 条零失败；发版前 `scripts/check.sh --all` **2318 条零失败**（130.2s）。**未做真机验证**（需要在 NAS 上跑一次带 `[tmdbid-xxx]` 的目录，看是否直接「自动匹配」且不再走搜索）。

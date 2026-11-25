@@ -184,6 +184,7 @@ function getExploreYearLabel() {
     if (from && to) {
         const start = Number(from);
         const end = Number(to);
+        if (from === to) return from + ' 年';
         if (Number.isFinite(start) && Number.isFinite(end) && start % 10 === 0 && end === start + 9) {
             return from + 's';
         }
@@ -303,6 +304,17 @@ function syncExploreFilterUi() {
     document.querySelectorAll('#rec-explore-decade-chips .rec-genre-chip').forEach(function(chip) {
         chip.classList.toggle('is-selected', !!decadeActive && chip.dataset.decade === decadeActive);
     });
+    document.querySelectorAll('#rec-explore-recent-chips .rec-genre-chip').forEach(function(chip) {
+        const range = getExploreRecentRange(chip.dataset.recent);
+        chip.classList.toggle('is-selected',
+            exploreFilterState.yearFrom === range.from && exploreFilterState.yearTo === range.to);
+    });
+    const exactYearEl = document.getElementById('rec-explore-year-exact');
+    if (exactYearEl) {
+        const from = exploreFilterState.yearFrom;
+        const to = exploreFilterState.yearTo;
+        exactYearEl.value = (from && to && from === to) ? from : '';
+    }
     document.querySelectorAll('#rec-explore-genres .rec-genre-chip').forEach(function(chip) {
         chip.classList.toggle('is-selected', exploreFilterState.genres.includes(String(chip.dataset.genreId)));
     });
@@ -1208,6 +1220,52 @@ function getExcludedExploreGenres() {
     return exploreFilterState.excludeGenres.join(',');
 }
 
+const EXPLORE_RECENT_RANGES = Object.freeze([2, 3, 5, 10]);
+const EXPLORE_YEAR_MIN = 1950;
+
+function getExploreRecentRange(years) {
+    const span = Math.max(1, Number(years) || 1);
+    const current = new Date().getFullYear();
+    return { from: String(current - (span - 1)), to: String(current) };
+}
+
+function renderExploreYearOptions() {
+    const select = document.getElementById('rec-explore-year-exact');
+    if (!select) return;
+    const current = new Date().getFullYear();
+    let html = '<option value="">不限</option>';
+    for (let year = current + 1; year >= EXPLORE_YEAR_MIN; year -= 1) {
+        html += '<option value="' + year + '">' + year + ' 年</option>';
+    }
+    select.innerHTML = html;
+    select.value = '';
+}
+
+function renderExploreRecentChips() {
+    const container = document.getElementById('rec-explore-recent-chips');
+    if (!container) return;
+    container.innerHTML = EXPLORE_RECENT_RANGES.map(function(years) {
+        return '<button type="button" class="rec-genre-chip" data-recent="' + years + '" onclick="selectRecentYears(' + years + ')">近 ' + years + ' 年</button>';
+    }).join('');
+}
+
+function selectRecentYears(years) {
+    const span = Number(years) || 0;
+    if (!span) return;
+    const range = getExploreRecentRange(span);
+    const active = exploreFilterState.yearFrom === range.from && exploreFilterState.yearTo === range.to;
+    exploreFilterState.yearFrom = active ? '' : range.from;
+    exploreFilterState.yearTo = active ? '' : range.to;
+    syncExploreFilterUi();
+}
+
+function setExploreYearExact(value) {
+    const year = String(value || '').trim();
+    exploreFilterState.yearFrom = year;
+    exploreFilterState.yearTo = year;
+    syncExploreFilterUi();
+}
+
 function renderDecadeChips() {
     var container = document.getElementById('rec-explore-decade-chips');
     if (!container) return;
@@ -1464,6 +1522,8 @@ async function searchRecommendationDiscover(page) {
 }
 
 async function initRecommendationPage() {
+    renderExploreYearOptions();
+    renderExploreRecentChips();
     renderDecadeChips();
     bindExploreFilterInputs();
     bindExplorePanelDismiss();
@@ -1514,5 +1574,7 @@ Object.assign(window, {
     syncExploreFilterUi,
     updateSortOptions,
     selectDecade,
+    selectRecentYears,
+    setExploreYearExact,
     getSelectedDecade,
 });

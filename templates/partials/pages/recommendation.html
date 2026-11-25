@@ -74,6 +74,10 @@
 
                     <div id="rec-explore-section-year" class="rec-filter-section">
                         <div class="rec-filter-section-title">年份与语言</div>
+                        <label class="rec-filter-field">
+                            <span class="rec-filter-label">具体年份</span>
+                            <select id="rec-explore-year-exact" class="rec-search-select" onchange="setExploreYearExact(this.value)"></select>
+                        </label>
                         <div class="rec-filter-grid">
                             <label class="rec-filter-field">
                                 <span class="rec-filter-label">起始年份</span>
@@ -83,6 +87,10 @@
                                 <span class="rec-filter-label">截止年份</span>
                                 <input id="rec-explore-year-to" class="rec-search-input rec-input-sm" placeholder="如 2024" type="number" min="1900" max="2100" step="1">
                             </label>
+                        </div>
+                        <div class="rec-filter-field">
+                            <span class="rec-filter-label">快捷时间</span>
+                            <div id="rec-explore-recent-chips" class="rec-decade-chips"></div>
                         </div>
                         <div class="rec-filter-field">
                             <span class="rec-filter-label">快捷年代</span>
