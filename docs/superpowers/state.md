@@ -14,7 +14,7 @@
 - **CI**: 单一工作流 `.github/workflows/ci.yml`（`docker-release.yml` 已并入并移除），**限定 `paths: version.json`，只在发版推送时触发**：`test` job 跑 `compileall` + `scripts/check_js_syntax.py`（复制成 `.mjs` 再 `node --check`；裸 `node --check` 对 ESM 文件静默放过，`--experimental-default-type=module` 在 Node 23+ 又被移除，两条路都走过弯路）+ `scripts/run_tests.py`，`build-and-push` 用 `needs: test` 挂在后面（`workflow_dispatch` 有 `publish` 开关，关掉只跑测试）。日常开发验证只用本机 `scripts/check.sh`，不要等 CI
 - **本地不入库文件**: `AGENTS.md` / `CLAUDE.md` / `.workbuddy/` / `.claude/` / `.worktrees/` 是本机开发用，**按约定不入库**。任何测试/代码读它们前必须判存在（`test_modules_doc` 已这么做），否则干净 clone 跑测试必挂。
 - **运行环境**: `docker compose` 服务名 `115-media-hub-test`（应用本体），端口 18080；`/app/storage` 已映射到宿主机 `/Users/xianer/Documents/docker/115strmxianer/storage`（virtiofs，空间读数正常）。挂载路径与端口已改为从根目录 `.env` 读取（模板 `.env.example`），本机 `.env` 写的是原来的绝对路径
-- **最近提交**: `dea11a3` 修探索筛选面板桌面端排布空洞（未推送）；`9064ee8` 文档同步（已推送，0.16.4 全量上线）；`29ad03e` 发版 0.16.4；`668c848` 探索筛选 + 老任务布局保持；`a967961` 发版 0.16.3
+- **最近提交**: `f2fbb9e` 发版 0.16.5（未推送）；`dea11a3` 修探索筛选面板桌面端排布空洞（未推送）；`9064ee8` 文档同步（已推送，0.16.4 全量上线）；`29ad03e` 发版 0.16.4；`a967961` 发版 0.16.3
 - **工作区**: 干净。0.16.5 只改布局：`@media (min-width: 900px)` 内三列网格给分类块 `grid-column: 3; grid-row: span 2`、关键词 `grid-column: 1 / span 2`、剧集属性 `1 / -1`，模板补 `rec-explore-section-{year,score,genres,keywords}` 四个 id。触发原因：0.16.4 的三列纯自动放置让 4 个区块排成 3+1，第二行空两格。0.16.4 的功能内容见 `CHANGELOG.md` 该版本段
 
 
