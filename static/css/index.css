@@ -16964,6 +16964,18 @@
             #page-recommendation .rec-explore-panel-actions {
                 grid-column: 1 / -1;
             }
+            /* 分类块最高，钉在右列跨两行；关键词跨左两列补第二行，
+               否则 4 个区块按 3+1 自动排布会在第二行留两个空格。 */
+            #page-recommendation #rec-explore-section-genres {
+                grid-column: 3;
+                grid-row: span 2;
+            }
+            #page-recommendation #rec-explore-section-keywords {
+                grid-column: 1 / span 2;
+            }
+            #page-recommendation #rec-explore-tv-section {
+                grid-column: 1 / -1;
+            }
             #page-recommendation .rec-explore-panel-actions {
                 display: flex;
                 justify-content: flex-end;
