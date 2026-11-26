@@ -18,12 +18,16 @@ let recommendationPagination = {
 
 let exploreGenres = { movie: [], tv: [] };
 let exploreGenresLoaded = { movie: false, tv: false };
+// 探索页默认只看「今年」的片子：年份列表、近 N 年、默认筛选统一以页面加载时的系统年份为准，
+// 跨年那天刷新页面就自动跟上，不要写死年份。
+const EXPLORE_CURRENT_YEAR = new Date().getFullYear();
+
 const EXPLORE_DEFAULT_FILTERS = Object.freeze({
     mediaType: 'movie',
     sortBy: 'popularity.desc',
     language: '',
-    yearFrom: '',
-    yearTo: '',
+    yearFrom: String(EXPLORE_CURRENT_YEAR),
+    yearTo: String(EXPLORE_CURRENT_YEAR),
     rating: '',
     ratingMax: '',
     voteCount: '',
@@ -127,10 +131,16 @@ function setActiveRecTab(tabKey) {
     syncExploreFilterUi();
 }
 
+function isExploreDefaultYearRange() {
+    return String(exploreFilterState.yearFrom || '') === EXPLORE_DEFAULT_FILTERS.yearFrom
+        && String(exploreFilterState.yearTo || '') === EXPLORE_DEFAULT_FILTERS.yearTo;
+}
+
 function getExploreSelectedCount() {
     let count = 0;
     if (exploreFilterState.language) count += 1;
-    if (exploreFilterState.yearFrom || exploreFilterState.yearTo) count += 1;
+    // 默认就是「今年」，用户没动过不算一条筛选；清成「不限」也不算（那是放宽，不是收紧）
+    if ((exploreFilterState.yearFrom || exploreFilterState.yearTo) && !isExploreDefaultYearRange()) count += 1;
     if (exploreFilterState.rating) count += 1;
     if (exploreFilterState.ratingMax) count += 1;
     if (exploreFilterState.voteCount) count += 1;
@@ -1234,16 +1244,15 @@ const EXPLORE_YEAR_MIN = 1950;
 
 function getExploreRecentRange(years) {
     const span = Math.max(1, Number(years) || 1);
-    const current = new Date().getFullYear();
-    return { from: String(current - (span - 1)), to: String(current) };
+    return { from: String(EXPLORE_CURRENT_YEAR - (span - 1)), to: String(EXPLORE_CURRENT_YEAR) };
 }
 
 function renderExploreYearOptions() {
     const select = document.getElementById('rec-explore-year-exact');
     if (!select) return;
-    const current = new Date().getFullYear();
+    // 最新只到今年：未来年份在 TMDB 里没有内容，列出来只会选了才发现是空结果
     let html = '<option value="">不限</option>';
-    for (let year = current + 1; year >= EXPLORE_YEAR_MIN; year -= 1) {
+    for (let year = EXPLORE_CURRENT_YEAR; year >= EXPLORE_YEAR_MIN; year -= 1) {
         html += '<option value="' + year + '">' + year + ' 年</option>';
     }
     select.innerHTML = html;
@@ -1278,7 +1287,7 @@ function setExploreYearExact(value) {
 function renderDecadeChips() {
     var container = document.getElementById('rec-explore-decade-chips');
     if (!container) return;
-    var currentDecade = Math.floor(new Date().getFullYear() / 10) * 10;
+    var currentDecade = Math.floor(EXPLORE_CURRENT_YEAR / 10) * 10;
     var html = '';
     for (var d = currentDecade; d >= 1950; d -= 10) {
         html += '<button type="button" class="rec-genre-chip" data-decade="' + d + '" onclick="selectDecade(\'' + d + '\')">' + d + 's</button>';

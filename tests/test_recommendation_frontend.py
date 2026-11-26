@@ -186,6 +186,62 @@ process.stdout.write(JSON.stringify(result));
         self.assertEqual(int(payload["on"]["from"]), payload["now"] - 1)
         self.assertEqual(payload["off"], {"from": "", "to": ""})
 
+    def test_default_year_is_current_year(self):
+        """2026 年的今天：默认筛选就是今年，不再是不限。"""
+        payload = self._eval(
+            "(function () {"
+            "  renderExploreYearOptions();"
+            "  syncExploreFilterUi();"
+            "  const now = new Date().getFullYear();"
+            "  return {"
+            "    now,"
+            "    from: document.getElementById('rec-explore-year-from').value,"
+            "    to: document.getElementById('rec-explore-year-to').value,"
+            "    exact: document.getElementById('rec-explore-year-exact').value,"
+            "    count: String(document.getElementById('rec-explore-filter-count').textContent || ''),"
+            "    summary: String(document.getElementById('rec-explore-summary-text').textContent || ''),"
+            "  };"
+            "})()"
+        )
+        self.assertEqual(payload["from"], str(payload["now"]))
+        self.assertEqual(payload["to"], str(payload["now"]))
+        self.assertEqual(payload["exact"], str(payload["now"]))
+        # 默认值不算「已选筛选」，否则一进页面就挂着数字
+        self.assertEqual(payload["count"], "0")
+        self.assertIn(str(payload["now"]) + " 年", payload["summary"])
+
+    def test_year_options_stop_at_current_year(self):
+        payload = self._eval(
+            "(function () {"
+            "  renderExploreYearOptions();"
+            "  const html = document.getElementById('rec-explore-year-exact').innerHTML;"
+            "  return {"
+            "    now: new Date().getFullYear(),"
+            "    hasNext: html.includes('>' + (new Date().getFullYear() + 1) + ' 年<'),"
+            "    hasNow: html.includes('>' + new Date().getFullYear() + ' 年<'),"
+            "  };"
+            "})()"
+        )
+        self.assertTrue(payload["hasNow"])
+        self.assertFalse(payload["hasNext"])
+
+    def test_clearing_year_removes_default_and_counts_one(self):
+        payload = self._eval(
+            "(function () {"
+            "  setExploreYearExact('');"
+            "  const cleared = String(document.getElementById('rec-explore-filter-count').textContent || '');"
+            "  setExploreYearExact('2020');"
+            "  return {"
+            "    cleared,"
+            "    picked: String(document.getElementById('rec-explore-filter-count').textContent || ''),"
+            "    summary: String(document.getElementById('rec-explore-summary-text').textContent || ''),"
+            "  };"
+            "})()"
+        )
+        self.assertEqual(payload["cleared"], "0")
+        self.assertEqual(payload["picked"], "1")
+        self.assertIn("2020 年", payload["summary"])
+
     def test_year_options_cover_recent_and_old_years(self):
         payload = self._eval(
             "(function () {"
