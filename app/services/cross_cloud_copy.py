@@ -127,6 +127,19 @@ class CrossCloudCopyCancelled(CrossCloudCopyError):
         super().__init__(str(message or "复制已取消"))
 
 
+class CrossCloudCopyPaused(CrossCloudCopyError):
+    """复制被暂停（检查点命中）。
+
+    与「取消」同走检查点链路，但收口不同：暂停保留断点（临时文件 + resume 会话），
+    继续时从断点续传；取消同样保留断点，只是语义上用户选择终止。二者在引擎层都
+    通过 ``cancel_check`` 回调在命中时抛异常来中止当前 chunk/分片——本异常由
+    任务层传入的闭包在「暂停」时抛出，穿透引擎 / provider / 分片重试的检查点。
+    """
+
+    def __init__(self, message: str = "复制已暂停"):
+        super().__init__(str(message or "复制已暂停"))
+
+
 class _SourceHashMismatch(CrossCloudCopyError):
     """惰性下载校验失败：已知哈希与源文件实际内容对不上。
 

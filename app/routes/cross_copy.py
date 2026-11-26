@@ -189,6 +189,20 @@ async def cancel_cross_copy_job_endpoint(request: Request, job_id: int) -> Dict[
     return JSONResponse(status_code=status_code, content=result)
 
 
+@router.post("/cross_copy/jobs/{job_id}/pause")
+async def pause_cross_copy_job_endpoint(request: Request, job_id: int) -> Dict[str, Any]:
+    result = ccj.pause_cross_copy_job(job_id)
+    status_code = 200 if result.get("ok") else 400
+    return JSONResponse(status_code=status_code, content=result)
+
+
+@router.post("/cross_copy/jobs/{job_id}/resume")
+async def resume_cross_copy_job_endpoint(request: Request, job_id: int) -> Dict[str, Any]:
+    result = ccj.resume_cross_copy_job(job_id)
+    status_code = 200 if result.get("ok") else 400
+    return JSONResponse(status_code=status_code, content=result)
+
+
 @router.post("/cross_copy/jobs/{job_id}/retry")
 async def retry_cross_copy_job_endpoint(request: Request, job_id: int) -> Dict[str, Any]:
     result = ccj.retry_cross_copy_job(job_id)

@@ -89,6 +89,7 @@ class CrossCopyJobsTestBase(unittest.TestCase):
         ccj._job_progress.clear()
         ccj._last_db_progress.clear()
         ccj._cancel_requested.clear()
+        ccj._pause_requested.clear()
         # 排队状态同样是模块级的：不清会把上一条用例的名额带进来
         with ccj._sched_lock:
             ccj._queued.clear()
@@ -264,6 +265,49 @@ class TestJobExecution(CrossCopyJobsTestBase):
         result = ccj.cancel_cross_copy_job(job_id)
         self.assertFalse(result["ok"])
         self.assertIn("已结束", result["msg"])
+
+    def test_pause_running_at_checkpoint(self):
+        job_id = self._create_job()
+
+        def fake_copy(**kwargs):
+            raise xcc.CrossCloudCopyPaused("已暂停")
+
+        with patch.object(xcc, "copy_file_across_clouds", side_effect=fake_copy):
+            self._run(job_id)
+        job = ccj.get_cross_copy_job(job_id)
+        self.assertEqual(job["status"], "paused")
+
+    def test_pause_pending_marks_paused(self):
+        job_id = self._create_job()
+        result = ccj.pause_cross_copy_job(job_id)
+        self.assertTrue(result["ok"])
+        job = ccj.get_cross_copy_job(job_id)
+        self.assertEqual(job["status"], "paused")
+
+    def test_pause_finished_job_rejected(self):
+        job_id = self._create_job()
+        with patch.object(xcc, "copy_file_across_clouds", return_value=_uploaded_result()):
+            self._run(job_id)
+        result = ccj.pause_cross_copy_job(job_id)
+        self.assertFalse(result["ok"])
+
+    def test_resume_requeues_from_paused(self):
+        job_id = self._create_job()
+        ccj.update_cross_copy_job(job_id, status="paused")
+        result = ccj.resume_cross_copy_job(job_id)
+        self.assertTrue(result["ok"])
+        job = ccj.get_cross_copy_job(job_id)
+        self.assertEqual(job["status"], "pending")
+        ccj.submit_background.assert_called_once()
+
+    def test_resume_non_paused_rejected(self):
+        job_id = self._create_job()
+        result = ccj.resume_cross_copy_job(job_id)
+        self.assertFalse(result["ok"])
+
+    def test_normalize_status_keeps_paused(self):
+        # paused 必须在白名单里，否则读回时回落 pending 自动续跑
+        self.assertEqual(ccj._normalize_status("paused"), "paused")
 
     def test_retry_after_failure(self):
         job_id = self._create_job()
@@ -443,6 +487,15 @@ class TestStartupRequeue(CrossCopyJobsTestBase):
         self.assertEqual(result["requeued"], 2)
         ccj.submit_background.assert_called()
 
+    def test_requeue_skips_paused(self):
+        """暂停的任务重启后保持暂停，不自动续跑。"""
+        paused_id = self._create_job(title="已暂停")
+        ccj.update_cross_copy_job(paused_id, status="paused")
+        result = ccj.requeue_cross_copy_jobs_on_startup()
+        self.assertEqual(result["requeued"], 0)
+        job = ccj.get_cross_copy_job(paused_id)
+        self.assertEqual(job["status"], "paused")
+
 
 class TestRoutes(CrossCopyJobsTestBase):
     def test_capabilities(self):
@@ -513,6 +566,22 @@ class TestRoutes(CrossCopyJobsTestBase):
         result = asyncio.run(cross_copy_routes.list_cross_copy_jobs_endpoint(FakeQueryRequest({})))
         self.assertTrue(result["ok"])
         self.assertEqual(len(result["jobs"]), 1)
+
+    def test_pause_endpoint(self):
+        job_id = self._create_job()
+        result = asyncio.run(cross_copy_routes.pause_cross_copy_job_endpoint(FakeJsonRequest({}), job_id))
+        self.assertEqual(result.status_code, 200)
+        job = ccj.get_cross_copy_job(job_id)
+        self.assertEqual(job["status"], "paused")
+
+    def test_resume_endpoint(self):
+        job_id = self._create_job()
+        ccj.update_cross_copy_job(job_id, status="paused")
+        with patch.object(ccj, "submit_cross_copy_job"):
+            result = asyncio.run(cross_copy_routes.resume_cross_copy_job_endpoint(FakeJsonRequest({}), job_id))
+        self.assertEqual(result.status_code, 200)
+        job = ccj.get_cross_copy_job(job_id)
+        self.assertEqual(job["status"], "pending")
 
 
 class TestJobPaths(CrossCopyJobsTestBase):
@@ -1388,8 +1457,8 @@ class TestFolderMonitorTrigger(CrossCopyJobsTestBase):
             {"savepath": "115连载中/光阴之外 (2025)", "title": "跨盘补源：光阴之外"},
         )
 
-    def test_manual_folder_job_does_not_trigger_monitor(self):
-        """手动复制的文件夹不触发监控：没有「落地即入库」的意图依据。"""
+    def test_manual_folder_job_triggers_monitor(self):
+        """手动复制的文件夹落在 115 监控目录内时同样触发监控扫描。"""
         from app.services import cross_cloud_copy_folder as xccf
 
         self.cfg["mount_points"] = [{"provider": "115", "prefix": "/115"}]
@@ -1404,7 +1473,11 @@ class TestFolderMonitorTrigger(CrossCopyJobsTestBase):
              patch("app.services.monitor.queue_monitor_job", return_value="queued") as queue_mock:
             self._run(job_id)
 
-        queue_mock.assert_not_called()
+        queue_mock.assert_called_once_with(
+            "影视库监控",
+            "subscription",
+            {"savepath": "115连载中/某文件夹", "title": "跨盘补源：115连载中/某文件夹"},
+        )
 
 
 class TestCrossCopyNotifyConfig(unittest.TestCase):

@@ -9,6 +9,7 @@
         failed: '失败',
         cancelled: '已取消',
         skipped: '已跳过',
+        paused: '已暂停',
     };
 
     const PHASE_LABELS = {
@@ -230,6 +231,7 @@
         if (normalized === 'partial') return 'bg-amber-500/15 text-amber-200 border border-amber-500/25';
         if (normalized === 'failed') return 'bg-rose-500/15 text-rose-300 border border-rose-500/25';
         if (normalized === 'cancelled') return 'bg-slate-600/40 text-slate-300 border border-slate-500/30';
+        if (normalized === 'paused') return 'bg-violet-500/15 text-violet-200 border border-violet-500/25';
         if (normalized === 'skipped') return 'bg-sky-500/15 text-sky-200 border border-sky-500/25';
         if (normalized === 'running') return 'bg-sky-500/15 text-sky-200 border border-sky-500/25';
         return 'bg-amber-500/15 text-amber-200 border border-amber-500/25';
@@ -267,6 +269,8 @@
         const status = rawStatus === 'completed' && resultStatus === 'partial' ? 'partial' : rawStatus;
         const percent = getProgressPercent(job);
         const canCancel = ['pending', 'running'].includes(status);
+        const canPause = status === 'running';
+        const canResume = status === 'paused';
         const canRetry = ['failed', 'cancelled', 'skipped'].includes(status) || status === 'partial';
         // 已结束的任务才允许删记录（在跑的删了会让进度无处可写）
         const canDelete = !canCancel;
@@ -355,6 +359,8 @@
                 </div>
                 <div class="resource-job-card-actions">
                     <div class="flex flex-wrap gap-2 min-w-0 flex-1 justify-end">
+                        ${canResume ? `<button type="button" data-cross-copy-action="resume" data-cross-copy-job-id="${escapeHtml(String(jobId))}" class="px-4 py-2 rounded-xl text-sm font-bold bg-emerald-600 hover:bg-emerald-500 text-white">继续</button>` : ''}
+                        ${canPause ? `<button type="button" data-cross-copy-action="pause" data-cross-copy-job-id="${escapeHtml(String(jobId))}" class="px-4 py-2 rounded-xl text-sm font-bold bg-violet-600 hover:bg-violet-500 text-white">暂停</button>` : ''}
                         <button type="button" data-cross-copy-action="cancel" data-cross-copy-job-id="${escapeHtml(String(jobId))}" class="px-4 py-2 rounded-xl text-sm font-bold ${canCancel ? 'bg-amber-600 hover:bg-amber-500 text-white' : 'bg-slate-700 text-slate-400 btn-disabled'}" ${canCancel ? '' : 'disabled'}>${canCancel ? '取消' : '不可取消'}</button>
                         <button type="button" data-cross-copy-action="retry" data-cross-copy-job-id="${escapeHtml(String(jobId))}" class="px-4 py-2 rounded-xl text-sm font-bold ${canRetry ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-slate-700 text-slate-400 btn-disabled'}" ${canRetry ? '' : 'disabled'}>${canRetry ? '重试' : '不可重试'}</button>
                         ${canDelete ? `<button type="button" data-cross-copy-action="delete" data-cross-copy-job-id="${escapeHtml(String(jobId))}" class="px-4 py-2 rounded-xl text-sm font-bold bg-slate-700 hover:bg-rose-600 text-slate-100" title="只删除这条任务记录，不删除网盘上的文件">删除记录</button>` : ''}
@@ -457,6 +463,35 @@
         } catch (error) {
             if (typeof global.showToast === 'function') {
                 global.showToast(`取消失败：${error?.message || '请稍后重试'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
+            }
+        }
+    }
+
+    async function pauseJob(jobId) {
+        if (!(await global.showAppConfirm('暂停这个复制任务吗？会在当前分片结束后停下，已下载的部分会保留，继续时从断点续传。'))) return;
+        try {
+            await global.MediaHubApi.postJson(`/cross_copy/jobs/${encodeURIComponent(String(jobId))}/pause`, {});
+            if (typeof global.showToast === 'function') {
+                global.showToast('已请求暂停', { tone: 'info', duration: 2400, placement: 'top-center' });
+            }
+            await fetchJobs({ silent: true });
+        } catch (error) {
+            if (typeof global.showToast === 'function') {
+                global.showToast(`暂停失败：${error?.message || '请稍后重试'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
+            }
+        }
+    }
+
+    async function resumeJob(jobId) {
+        try {
+            await global.MediaHubApi.postJson(`/cross_copy/jobs/${encodeURIComponent(String(jobId))}/resume`, {});
+            if (typeof global.showToast === 'function') {
+                global.showToast('已重新排队，从断点续传', { tone: 'success', duration: 2600, placement: 'top-center' });
+            }
+            await fetchJobs({ silent: true });
+        } catch (error) {
+            if (typeof global.showToast === 'function') {
+                global.showToast(`继续失败：${error?.message || '请稍后重试'}`, { tone: 'error', duration: 3200, placement: 'top-center' });
             }
         }
     }
@@ -1119,6 +1154,8 @@
             const jobId = Number(actionBtn.dataset.crossCopyJobId || 0) || 0;
             if (!jobId) return;
             if (action === 'cancel') void cancelJob(jobId);
+            if (action === 'pause') void pauseJob(jobId);
+            if (action === 'resume') void resumeJob(jobId);
             if (action === 'retry') void retryJob(jobId);
             if (action === 'delete') void deleteJobRecord(jobId);
             return;
@@ -1189,6 +1226,8 @@
         selectAllCrossCopySources: selectAllSourceFiles,
         clearCrossCopySelection: clearSourceSelection,
         cancelCrossCopyJob: cancelJob,
+        pauseCrossCopyJob: pauseJob,
+        resumeCrossCopyJob: resumeJob,
         retryCrossCopyJob: retryJob,
         crossCopyFilters: FILTERS,
     });

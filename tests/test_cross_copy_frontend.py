@@ -56,6 +56,8 @@ class CrossCopyFrontendTest(unittest.TestCase):
         self.assertIn("'/cross_copy/capabilities'", ui)
         self.assertIn("'/cross_copy/jobs?limit=100'", ui)
         self.assertIn("`/cross_copy/jobs/${encodeURIComponent(String(jobId))}/cancel`", ui)
+        self.assertIn("`/cross_copy/jobs/${encodeURIComponent(String(jobId))}/pause`", ui)
+        self.assertIn("`/cross_copy/jobs/${encodeURIComponent(String(jobId))}/resume`", ui)
         self.assertIn("`/cross_copy/jobs/${encodeURIComponent(String(jobId))}/retry`", ui)
         self.assertIn("`/cross_copy/jobs/${encodeURIComponent(String(jobId))}/delete`", ui)
         self.assertIn("'/cross_copy/jobs/clear'", ui)
@@ -80,7 +82,7 @@ class CrossCopyFrontendTest(unittest.TestCase):
 
     def test_status_texts_are_plain_language(self):
         ui = UI_JS.read_text(encoding="utf-8")
-        for text in ("排队中", "复制中", "已完成", "失败", "已取消", "秒传命中，未消耗上传流量"):
+        for text in ("排队中", "复制中", "已完成", "失败", "已取消", "已暂停", "秒传命中，未消耗上传流量"):
             self.assertIn(text, ui)
 
     def test_source_pane_keeps_folders_clickable_and_target_only_shows_folders(self):

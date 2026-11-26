@@ -45,6 +45,12 @@ logger = logging.getLogger(__name__)
 _cancel_requested: set = set()
 _cancel_lock = threading.Lock()
 
+# 暂停请求集合（与取消同模式）。暂停与取消的差别只在收口：暂停显式保留断点、
+# 状态置为 paused，继续时从断点续传；取消是终态。检查点共用 cancel_check 闭包——
+# 闭包在命中暂停时抛 CrossCloudCopyPaused，命中取消时返回 True。
+_pause_requested: set = set()
+_pause_lock = threading.Lock()
+
 # 单个任务的文件级进度（内存，任务结束即弃）
 _job_progress: Dict[int, Dict[str, Any]] = {}
 _progress_lock = threading.Lock()
@@ -69,6 +75,7 @@ STATUS_COMPLETED = "completed"
 STATUS_FAILED = "failed"
 STATUS_CANCELLED = "cancelled"
 STATUS_SKIPPED = "skipped"
+STATUS_PAUSED = "paused"
 
 ACTIVE_STATUSES = {STATUS_PENDING, STATUS_RUNNING}
 
@@ -127,6 +134,7 @@ def _normalize_status(value: Any) -> str:
         STATUS_FAILED,
         STATUS_CANCELLED,
         STATUS_SKIPPED,
+        STATUS_PAUSED,
     } else STATUS_PENDING
 
 
@@ -273,6 +281,7 @@ def get_cross_copy_job_counts() -> Dict[str, int]:
         STATUS_FAILED: 0,
         STATUS_CANCELLED: 0,
         STATUS_SKIPPED: 0,
+        STATUS_PAUSED: 0,
     }
     with db_connection() as conn:
         cursor = conn.cursor()
@@ -471,6 +480,59 @@ def cancel_cross_copy_job(job_id: int) -> Dict[str, Any]:
         _discard_from_queue(job_id)
         _finalize_cancelled(job_id, "已取消（尚未开始）")
     return {"ok": True, "msg": "已请求取消"}
+
+
+def pause_cross_copy_job(job_id: int) -> Dict[str, Any]:
+    """请求暂停；运行中的任务在下个检查点停下并保留断点，排队中的直接置为 paused。"""
+    job_id = int(job_id)
+    job = get_cross_copy_job(job_id)
+    if not job:
+        return {"ok": False, "msg": "任务不存在"}
+    status = _normalize_status(job.get("status"))
+    if status == STATUS_RUNNING:
+        with _pause_lock:
+            _pause_requested.add(job_id)
+        return {"ok": True, "msg": "已请求暂停，将在当前分片结束后停下"}
+    if status == STATUS_PENDING:
+        # 还在排队：直接从队列摘掉，置为 paused（无断点可留）
+        _discard_from_queue(job_id)
+        _finalize_paused(job_id, "已暂停（尚未开始）")
+        return {"ok": True, "msg": "已暂停"}
+    return {"ok": False, "msg": f"任务当前状态（{status}）无法暂停"}
+
+
+def resume_cross_copy_job(job_id: int) -> Dict[str, Any]:
+    """继续：把 paused 任务放回队列，从断点续传（断点由 build_resume_state 自动继承）。"""
+    job_id = int(job_id)
+    job = get_cross_copy_job(job_id)
+    if not job:
+        return {"ok": False, "msg": "任务不存在"}
+    status = _normalize_status(job.get("status"))
+    if status != STATUS_PAUSED:
+        return {"ok": False, "msg": f"任务当前状态（{status}）无法继续"}
+    with _pause_lock:
+        _pause_requested.discard(job_id)
+    update_cross_copy_job(
+        job_id,
+        status=STATUS_PENDING,
+        status_detail="等待继续",
+        error_message="",
+        finished_at="",
+    )
+    submit_cross_copy_job(job_id)
+    return {"ok": True, "msg": "已重新排队，从断点续传"}
+
+
+def _finalize_paused(job_id: int, detail: str, resume_state: Optional[Dict[str, Any]] = None) -> None:
+    """暂停收口：保留断点、置为 paused，不删临时文件。"""
+    if resume_state_is_inheritable(resume_state):
+        _persist_final_resume(job_id, resume_state)
+    update_cross_copy_job(
+        job_id,
+        status=STATUS_PAUSED,
+        status_detail=detail,
+    )
+    _clear_job_progress(job_id)
 
 
 def _finalize_cancelled(job_id: int, detail: str, resume_state: Optional[Dict[str, Any]] = None) -> None:
@@ -764,6 +826,29 @@ def _is_cancel_requested(job_id: int) -> bool:
         return int(job_id) in _cancel_requested
 
 
+def _is_pause_requested(job_id: int) -> bool:
+    with _pause_lock:
+        return int(job_id) in _pause_requested
+
+
+def _make_stop_check(job_id: int):
+    """构造传给复制引擎的停止检查回调。
+
+    取消 → 返回 True（引擎层据此抛 CrossCloudCopyCancelled，原行为不变）；
+    暂停 → 抛 CrossCloudCopyPaused（穿透引擎 / provider / 分片重试的检查点，
+    一路冒泡到 run_cross_copy_job 的 except 分支）。
+    """
+
+    def check() -> bool:
+        if _is_cancel_requested(job_id):
+            return True
+        if _is_pause_requested(job_id):
+            raise xcc.CrossCloudCopyPaused()
+        return False
+
+    return check
+
+
 async def run_cross_copy_job(job_id: int) -> None:
     """执行单个跨盘复制任务（进度/取消/通知/状态收口）。"""
     job_id = int(job_id)
@@ -832,7 +917,7 @@ async def run_cross_copy_job(job_id: int) -> None:
                 target_folder_name=str(job.get("filename", "") or ""),
                 temp_dir=xcc.resolve_temp_dir(cfg, create=True),
                 progress_cb=lambda sent, total, phase: _report_progress(job_id, sent, total, phase),
-                cancel_check=lambda: _is_cancel_requested(job_id),
+                cancel_check=_make_stop_check(job_id),
                 check_existing=True,
                 cfg=cfg,
                 status_cb=lambda detail: _report_file_detail(job_id, detail),
@@ -861,7 +946,7 @@ async def run_cross_copy_job(job_id: int) -> None:
             size=int(job.get("file_size", 0) or 0),
             temp_dir=xcc.resolve_temp_dir(cfg, create=True),
             progress_cb=lambda sent, total, phase: _report_progress(job_id, sent, total, phase),
-            cancel_check=lambda: _is_cancel_requested(job_id),
+            cancel_check=_make_stop_check(job_id),
             check_existing=True,
             cfg=cfg,
             resume=resume_state,
@@ -931,7 +1016,13 @@ async def run_cross_copy_job(job_id: int) -> None:
             **finalize_fields,
         )
         _clear_job_progress(job_id)
+        # 手动复制成功后也要按落点触发监控扫描（生成/刷新 STRM）。
+        # 订阅补源走 organize 定时器先改名再扫；手动复制目标名即最终名，落地即扫。
+        if final_status == STATUS_COMPLETED:
+            _trigger_single_file_monitor_refresh(job, cfg)
         _push_cross_copy_notification(cfg, job, ok=True, message=str(getattr(result, "message", "") or ""))
+    except xcc.CrossCloudCopyPaused:
+        _finalize_paused(job_id, "已暂停（保留断点，可继续）", resume_state=resume_state)
     except xcc.CrossCloudCopyCancelled:
         _finalize_cancelled(job_id, "已取消", resume_state=resume_state)
     except xcc.CrossCloudCopyError as exc:
@@ -942,6 +1033,8 @@ async def run_cross_copy_job(job_id: int) -> None:
     finally:
         with _cancel_lock:
             _cancel_requested.discard(job_id)
+        with _pause_lock:
+            _pause_requested.discard(job_id)
         with _running_lock:
             _running.discard(job_id)
         # 无论成功/失败/取消/异常，都必须还名额并拉起下一个排队的任务
@@ -1061,15 +1154,13 @@ def _finish_folder_job(job_id: int, job: Dict[str, Any], cfg: Dict[str, Any], re
 
 
 def _trigger_folder_monitor_refresh(job: Dict[str, Any], cfg: Dict[str, Any]) -> None:
-    """订阅补源整包文件夹落地后触发监控扫描。
+    """文件夹整包复制落地后触发监控扫描。
 
     单文件补源走整理定时器（先改名再扫描，顺序不能反）；文件夹不逐文件改名，
-    没有顺序问题，落地即扫。与订阅导入收口同一口径：用落点目录匹配监控任务，
-    匹配上才入队。手动复制与非 115 目标不触发——前者没有「落地即入库」的
-    意图依据，后者没有监控目录。
+    没有顺序问题，落地即扫。手动复制与订阅补源统一口径：只要目标是 115 且落点
+    能匹配到监控目录就入队（非 115 目标 / 无监控目录由 trigger_cross_copy_monitor_refresh
+    内部返回 triggered:False，不影响收口）。
     """
-    if str(job.get("origin", "") or "").strip().lower() != "subscription":
-        return
     try:
         # 延迟 import：organize 不依赖本模块，但 startup 两边都会拉，函数内 import 最稳
         from .subscription_cross_copy_organize import trigger_cross_copy_monitor_refresh
@@ -1092,6 +1183,33 @@ def _trigger_folder_monitor_refresh(job: Dict[str, Any], cfg: Dict[str, Any]) ->
     elif result.get("reason") == "monitor_disabled":
         logger.info(
             "cross-copy folder monitor refresh skipped: task disabled (job=%s, monitor_task=%s)",
+            job.get("id"),
+            result.get("task_name"),
+        )
+
+
+def _trigger_single_file_monitor_refresh(job: Dict[str, Any], cfg: Dict[str, Any]) -> None:
+    """单文件复制成功后按落点触发监控扫描。
+
+    订阅补源单文件走 organize 定时器（先改名再扫）；手动复制的文件落地即是最终名，
+    这里直接触发。与文件夹收口同一套 trigger_cross_copy_monitor_refresh，非 115 目标 /
+    无监控目录时内部返回 triggered:False，无副作用。
+    """
+    try:
+        from .subscription_cross_copy_organize import trigger_cross_copy_monitor_refresh
+
+        result = trigger_cross_copy_monitor_refresh(
+            cfg,
+            str(job.get("target_provider", "") or ""),
+            str(job.get("target_savepath", "") or ""),
+            str(job.get("origin_ref", "") or ""),
+        )
+    except Exception as exc:  # noqa: BLE001 - 监控触发失败不影响复制收口
+        logger.info("cross-copy single-file monitor refresh skipped (job=%s): %s", job.get("id"), exc)
+        return
+    if result.get("triggered"):
+        logger.info(
+            "cross-copy single-file monitor refresh queued (job=%s, monitor_task=%s)",
             job.get("id"),
             result.get("task_name"),
         )
