@@ -180,6 +180,12 @@ class SettingsPlaybackSplitTest(unittest.TestCase):
             self.assertIn(helper, self.template)
             self.assertIn(f"function {helper[:-2]}", self.script)
 
+    def test_jys_help_explains_nfo_tmdb_id(self):
+        """极影视接入说明要提醒「影视文件夹别放没有 TMDB 编号的 NFO」，否则库存判重认不出来。"""
+        self.assertIn("NFO", self.script)
+        self.assertIn('uniqueid type="tmdb"', self.script)
+        self.assertIn("立即刷新库存索引", self.script)
+
     def test_section_summaries_cover_new_keys(self):
         self.assertIn("case 'strm'", self.module)
         self.assertIn("case 'seerr'", self.module)

@@ -1,8 +1,8 @@
 {
-  "version": "0.16.11",
-  "buildDate": "2026-11-26T18:35:00+08:00",
+  "version": "0.16.12",
+  "buildDate": "2026-11-26T18:40:00+08:00",
   "notes": [
-    "探索页年份默认改为「今年」（按系统时间算），年份下拉不再列未来年份；默认值不计入筛选数量"
+    "极影视接入说明补充 NFO 注意事项：影视文件夹建议不放 NFO，没有 TMDB 编号的 NFO 会让库存判重认不出来"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

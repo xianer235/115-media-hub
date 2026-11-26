@@ -109,7 +109,7 @@ docker compose pull && docker compose up -d
 git pull && docker compose up -d --build
 ```
 
-想回滚就把 `image:` 的 `:latest` 换成具体版本号（每个版本都推了 tag，例如 `xianer235/115-media-hub:0.16.11`）再 `docker compose up -d`。升级不会动 `config`，任务、订阅、Cookie 都保留。
+想回滚就把 `image:` 的 `:latest` 换成具体版本号（每个版本都推了 tag，例如 `xianer235/115-media-hub:0.16.12`）再 `docker compose up -d`。升级不会动 `config`，任务、订阅、Cookie 都保留。
 
 ### 备份与恢复
 
@@ -187,6 +187,7 @@ README 只讲到「能跑起来、能播」。下面这些细节单独成篇：
 
 当前版本见 [`version.json`](version.json)，完整历史见 [`CHANGELOG.md`](CHANGELOG.md)。
 
+- **0.16.12**：极影视接入说明补了一条——影视文件夹里**最好不要放 NFO**。判重只认条目上的 TMDB ID，而大量 NFO 只有片名和年份、没有 TMDB 编号，极影视以 NFO 为准就不再联网识别，结果推荐页不标「已有」。必须用 NFO 时至少要写 `<uniqueid type="tmdb">12345</uniqueid>`。
 - **0.16.11**：探索页的年份跟着系统时间走——默认筛选就是「今年」（现在 2026），第一屏不再是各年份混排的老片；年份下拉最新只到今年，不再出现明年这种选了必空的下拉项。「近 N 年」和年代按钮也用同一个年份基准。默认值不占「筛选」按钮的数字，重置回到今年，想看不限就选「不限」。
 - **0.16.10**：修 0.16.7 带来的启动即失败——设置页「测试连通性」和「立即刷新库存索引」都会报 `'_MultiAddressHTTPSHandler' object has no attribute '_check_hostname'`。原因是那段连接代码按本机 Python 3.9 写的，而镜像里的 3.12 已经删掉了这个私有属性；现在改为只传 `context`，并在 3.12 容器里实测极影视公网地址返回 200。
 - **0.16.9**：设置页把原来的「播放与点播」拆成两个分区——**STRM 设置**（对外访问地址、限频与缓存、扫描后缀名）和 **Seerr 与极影视**（Seerr 点播对接 + 极影视接入）。原来平铺在页面上的长段说明收进字段旁的 `i` 按钮，点开是分节说明；一级界面只留字段名和一行提示。分区总数变成 8 个，序号顺延。

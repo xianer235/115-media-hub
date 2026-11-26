@@ -161,7 +161,7 @@
 | `app/services/tree.py` | 目录树 TXT → STRM 生成与增量对比 |
 | `app/services/scraper.py` | 刮削核心：识别、命名计划、批量作业执行与回滚 |
 | `app/services/ai_match.py` | OpenAI 兼容大模型辅助识别（关键词生成 + 候选选择，带缓存 / 重试 / 用量统计） |
-| `app/services/jys_inventory.py` | 极影视库存索引：复用 emby_bridge 登录+分页拉全库（页大小 300，公网 HTTPS 反代下大响应体易被掐断），抽取带 TMDB ID 的单体（过滤 BoxSet/Folder），全量重建 `jys_inventory` 表；每天一次后台刷新 + 手动刷新端点；供资源推荐页「已有」判重（两态，只精确匹配）。**所有媒体库都拉失败时拒绝重建**（否则先删后插会把索引清空），并把 TLS/超时错误翻成可照做排查的中文提示 |
+| `app/services/jys_inventory.py` | 极影视库存索引：复用 emby_bridge 登录+分页拉全库（页大小 300，公网 HTTPS 反代下大响应体易被掐断），抽取带 TMDB ID 的单体（过滤 BoxSet/Folder），全量重建 `jys_inventory` 表；每天一次后台刷新 + 手动刷新端点；供资源推荐页「已有」判重（两态，只按 TMDB ID 精确匹配；**NFO 没有 tmdb 编号时极影视不会联网识别，条目上没有 ID 就等于认不出**，接入说明里已提醒）。**所有媒体库都拉失败时拒绝重建**（否则先删后插会把索引清空），并把 TLS/超时错误翻成可照做排查的中文提示 |
 | `app/services/resource.py` | 资源导入任务执行（磁力离线、网盘转存 / 接收 / 保存） |
 | `app/services/subscription.py` | 订阅编排入口，聚合下列订阅子模块 |
 | `app/services/subscription_runner.py` | 订阅队列调度与并发控制（支持一次追加多条手动候选、只触发一次调度） |

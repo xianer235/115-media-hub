@@ -2399,6 +2399,13 @@
                 <div class="help-rich-text">桥只负责判重，下载与补源仍走上面的 Radarr / Sonarr 点播对接；关掉总开关后桥与推荐页判重立即失效，不影响其它功能。</div>
             </div>
             <div class="help-rich-section">
+                <div class="help-rich-title">影视文件夹里要不要放 NFO</div>
+                <div class="help-rich-text"><b>最好不要放</b>。判重只认媒体库条目上的 TMDB ID，而极影视遇到本地 NFO 就以 NFO 为准、不再联网识别。大量 NFO 里只有片名和年份，没有 TMDB 编号，条目上就没有 TMDB ID，面板这边一律认不出来——推荐页不标「已有」，Seerr 也不认为已有。</div>
+                <div class="help-rich-text">想让极影视自己识别，就别在影视文件夹里塞 NFO，交给它按文件夹名 / 文件名去 TMDB 刮削。</div>
+                <div class="help-rich-text">确实要用 NFO 的话，至少补上 TMDB 编号：<code>&lt;uniqueid type="tmdb"&gt;12345&lt;/uniqueid&gt;</code>，或者 <code>&lt;tmdbid&gt;12345&lt;/tmdbid&gt;</code>。改完在极影视里打开该片详情，能看到 TMDB 链接 / 编号才算生效。</div>
+                <div class="help-rich-text">改完记得回这里重新点一次「立即刷新库存索引」，旧的索引不会自己更新。</div>
+            </div>
+            <div class="help-rich-section">
                 <div class="help-rich-title">安全开关</div>
                 <div class="help-rich-text">默认只放行内网来源。Seerr 从公网访问时才需要打开「允许非内网来源访问」；推荐页判重不受它影响。</div>
             </div>

@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.16.12] - 2026-11-26
+
+### 极影视接入说明里补一条：影视文件夹别放没有 TMDB 编号的 NFO
+
+库存判重与 Emby 桥只认媒体库条目上的 TMDB ID。极影视一旦在影视文件夹里读到本地 NFO 就以 NFO 为准、不再联网识别，而大量 NFO 只有片名和年份、没有 TMDB 编号，条目上就没有 TMDB ID——面板一律认不出来，推荐页不标「已有」、Seerr 也不认为已有。
+
+- 接入说明新增「影视文件夹里要不要放 NFO」一节：建议不放，交给极影视按文件夹名 / 文件名去 TMDB 刮削
+- 必须用 NFO 时给出写法：`<uniqueid type="tmdb">12345</uniqueid>` 或 `<tmdbid>12345</tmdbid>`，并提示在极影视里确认详情能看到 TMDB 编号才算生效
+- 顺带提醒：改完要重新点一次「立即刷新库存索引」，旧索引不会自己更新
+
 ## [0.16.11] - 2026-11-26
 
 ### 探索页的年份改为「跟着系统时间走」，默认就是今年
