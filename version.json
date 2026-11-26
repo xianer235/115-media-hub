@@ -1,9 +1,9 @@
 {
-  "version": "0.16.15",
-  "buildDate": "2026-11-26T20:25:00+08:00",
+  "version": "0.16.16",
+  "buildDate": "2026-11-27T04:05:00+08:00",
   "notes": [
-    "扫描链接粘贴长文本后能看到光标位置；任务中心切到跨盘复制后类型标签恢复高亮",
-    "手机端推荐页搜索框变长、分类下拉缩短，三个控件排在一行"
+    "订阅任务编辑弹窗重排：保存目录上移，26 个字段收进六个折叠分区",
+    "季数可按 TMDB 季表选、自动带出集数；电影订阅也能入库后整理"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"
