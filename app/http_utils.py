@@ -111,12 +111,9 @@ class _MultiAddressHTTPSHandler(urllib.request.HTTPSHandler):
     """把 MultiAddressHTTPSConnection 接进 urllib 的 opener。"""
 
     def https_open(self, req):
-        return self.do_open(
-            MultiAddressHTTPSConnection,
-            req,
-            context=self._context,
-            check_hostname=self._check_hostname,
-        )
+        # 只传 context：Python 3.12 起 HTTPSHandler 不再保存 `_check_hostname`
+        # （调用方给的值会直接写进 context），照着 3.9 的写法读私有属性会 AttributeError。
+        return self.do_open(MultiAddressHTTPSConnection, req, context=self._context)
 
 
 def build_resilient_https_opener():

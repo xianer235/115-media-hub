@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.16.10] - 2026-11-26
+
+### 修 0.16.7 引入的启动即崩：`'_MultiAddressHTTPSHandler' object has no attribute '_check_hostname'`
+
+现象：设置页点「测试连通性」与「立即刷新库存索引」全部失败，提示该 AttributeError（连局域网地址也一样）。0.16.7 是本地 Python 3.9 写的，3.9 的 `HTTPSHandler` 会把 `check_hostname` 存成 `self._check_hostname`，而**镜像里的 Python 3.12 已经删掉这个属性**，值直接写进 `context` 了；子类照 3.9 的写法读它，第一次发请求就 AttributeError。
+
+- `_MultiAddressHTTPSHandler.https_open` 改成只传 `context=self._context`，不再碰任何私有属性
+- 补回归测试：把 `_check_hostname` 从实例上删掉再调 `https_open`，断言只传 context、不传 check_hostname（这样以后在任何 Python 版本上都不会再靠私有属性活着）
+- 已在镜像同版本（Python 3.12.13）容器里实测 `build_resilient_https_opener` 访问 `https://jys.shuxian.fun/System/Info/Public` 返回 200
+
+**教训**：涉及标准库私有属性时，本机 Python 版本和镜像版本不一致就等于没测。
+
 ## [0.16.9] - 2026-11-26
 
 ### 设置页：「播放与点播」拆成两个分区，说明文案收进 i 按钮

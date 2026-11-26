@@ -1,9 +1,9 @@
 {
-  "version": "0.16.9",
-  "buildDate": "2026-11-26T18:40:00+08:00",
+  "version": "0.16.10",
+  "buildDate": "2026-11-26T18:20:00+08:00",
   "notes": [
-    "设置页「播放与点播」拆成「STRM 设置」与「Seerr 与极影视」两个分区，各自带摘要行",
-    "长段说明收进字段旁的 i 按钮（分节说明），一级界面只保留字段名与一行提示"
+    "修 0.16.7 引入的 `_MultiAddressHTTPSHandler object has no attribute _check_hostname`：Python 3.12 已无该私有属性，改为只传 context",
+    "容器同版本（3.12.13）实测极影视公网地址返回 200；测试连通性与刷新库存恢复正常"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

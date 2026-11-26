@@ -750,5 +750,39 @@ class MultiAddressConnectionTest(unittest.TestCase):
         self.assertEqual(conn.sock, "TLS-OK")
 
 
+class ResilientOpenerHandlerTest(unittest.TestCase):
+    """opener 里的 HTTPS handler 不能依赖 CPython 私有属性（3.12 起没有 _check_hostname）。"""
+
+    def test_https_open_only_passes_context(self):
+        import ssl as ssl_module
+
+        from app import http_utils
+
+        captured = {}
+
+        class RecordingHandler(http_utils._MultiAddressHTTPSHandler):
+            def do_open(self, http_class, req, **kwargs):
+                captured["http_class"] = http_class
+                captured["kwargs"] = kwargs
+                return "opened"
+
+        context = ssl_module.create_default_context()
+        handler = RecordingHandler(context=context)
+        # 模拟 Python 3.12+：实例上根本没有 _check_hostname
+        handler.__dict__.pop("_check_hostname", None)
+
+        self.assertEqual(handler.https_open(None), "opened")
+        self.assertIs(captured["http_class"], http_utils.MultiAddressHTTPSConnection)
+        self.assertIs(captured["kwargs"].get("context"), context)
+        self.assertNotIn("check_hostname", captured["kwargs"])
+
+    def test_build_opener_returns_usable_opener(self):
+        from app import http_utils
+
+        opener = http_utils.build_resilient_https_opener()
+        names = [type(h).__name__ for h in opener.handlers]
+        self.assertIn("_MultiAddressHTTPSHandler", names)
+
+
 if __name__ == "__main__":
     unittest.main()
