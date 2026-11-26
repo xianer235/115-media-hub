@@ -1,8 +1,8 @@
 {
-  "version": "0.16.12",
-  "buildDate": "2026-11-26T18:40:00+08:00",
+  "version": "0.16.13",
+  "buildDate": "2026-11-26T19:00:00+08:00",
   "notes": [
-    "极影视接入说明补充 NFO 注意事项：影视文件夹建议不放 NFO，没有 TMDB 编号的 NFO 会让库存判重认不出来"
+    "剧集详情标到「季」：极影视库存现在记录每一季的集数，逐季显示「已有 / 部分有 / 没有」"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

@@ -1062,6 +1062,23 @@ async function applyRecommendationDefaultSavepath(mediaType) {
     setSubscriptionSavepath('0', path);
 }
 
+function buildOwnedLabelHtml(item, ownedEntry, ownedSeasons, hitCount, seasonTotal) {
+    if (!ownedEntry) return '';
+    if (item.media_type !== 'tv') {
+        return '<div class="rec-detail-owned">极影视库：已有</div>';
+    }
+    if (hitCount > 0) {
+        const total = Number(seasonTotal) > 0 ? '/' + seasonTotal : '';
+        return '<div class="rec-detail-owned">极影视库：已有 ' + hitCount + total + ' 季</div>';
+    }
+    // 库里确实有这部剧，但一条季号都对不上 TMDB（极影视把集数当季号之类的刮削错乱）。
+    // 这时不能每行都写「缺」，会让人以为库里没有，只能说明季号没识别出来。
+    if (ownedSeasons) {
+        return '<div class="rec-detail-owned">极影视库：已有（没识别到季号）</div>';
+    }
+    return '<div class="rec-detail-owned">极影视库：已有</div>';
+}
+
 function renderRecDetailContent(item, detail) {
     const el = document.getElementById('rec-detail-content');
     if (!el) return;
@@ -1086,6 +1103,10 @@ function renderRecDetailContent(item, detail) {
         : '';
 
     let episodeHtml = '';
+    const ownedEntry = recommendationOwned[item.id] || null;
+    const ownedSeasons = (ownedEntry && typeof ownedEntry === 'object' && ownedEntry.seasons) || null;
+    let ownedSeasonHitCount = 0;
+    let ownedSeasonTotal = 0;
     if (item.media_type === 'tv' && detail) {
         const seasons = detail.total_seasons || 0;
         const episodes = detail.total_episodes || 0;
@@ -1098,19 +1119,39 @@ function renderRecDetailContent(item, detail) {
             const seasonNames = detail.season_names || {};
             const seasonKeys = Object.keys(seasonMap).sort((a, b) => Number(a) - Number(b));
             if (seasonKeys.length > 0) {
+                ownedSeasonTotal = seasonKeys.length;
                 episodeHtml += '<div class="rec-detail-seasons">';
                 seasonKeys.forEach((s) => {
                     const rawName = typeof seasonNames[s] === 'string' ? seasonNames[s].trim() : '';
                     const nameText = rawName || ('第 ' + s + ' 季');
                     const nameClass = rawName ? 'rec-detail-season-name' : 'rec-detail-season-name is-generic';
+                    const totalCount = Number(seasonMap[s]) || 0;
+                    // 季级库存：库里这一季的集数用「库中集数/总集数」表示；拿不到季级数据时保持原样。
+                    let countText = escapeRecHtml(String(seasonMap[s])) + ' 集';
+                    let countClass = 'rec-detail-season-count';
+                    const haveRaw = ownedSeasons ? ownedSeasons[s] : undefined;
+                    if (haveRaw !== undefined && haveRaw !== null) {
+                        const haveCount = Number(haveRaw) || 0;
+                        if (haveCount > 0) ownedSeasonHitCount += 1;
+                        if (totalCount > 0 && haveCount > 0 && haveCount < totalCount) {
+                            countText = '库中 ' + haveCount + '/' + totalCount + ' 集';
+                            countClass += ' is-partial';
+                        } else if (haveCount > 0) {
+                            countText = '✓ ' + totalCount + ' 集';
+                            countClass += ' is-owned';
+                        }
+                    }
                     episodeHtml +=
                         '<div class="rec-detail-season-row">' +
                             '<span class="rec-detail-season-no">S' + s + '</span>' +
                             '<span class="' + nameClass + '" title="' + escapeRecHtml(nameText) + '">' + escapeRecHtml(nameText) + '</span>' +
-                            '<span class="rec-detail-season-count">' + escapeRecHtml(String(seasonMap[s])) + ' 集</span>' +
+                            '<span class="' + countClass + '">' + countText + '</span>' +
                         '</div>';
                 });
                 episodeHtml += '</div>';
+                if (ownedSeasons) {
+                    episodeHtml += '<div class="rec-detail-season-hint">打勾 = 极影视库里已有这一季；没有打勾的季库里还没有</div>';
+                }
             }
         }
     }
@@ -1136,7 +1177,7 @@ function renderRecDetailContent(item, detail) {
                         (item.year ? '<span class="rec-detail-tag-year">' + escapeRecHtml(String(item.year)) + '</span>' : '') +
                         (statusLabel ? '<span class="rec-detail-tag-status">' + escapeRecHtml(statusLabel) + '</span>' : '') +
                     '</div>' +
-                    (recommendationOwned[item.id] ? '<div class="rec-detail-owned">极影视库：已有</div>' : '') +
+                    buildOwnedLabelHtml(item, ownedEntry, ownedSeasons, ownedSeasonHitCount, ownedSeasonTotal) +
                     (voteHtml || '') +
                     (item.overview ? '<div class="rec-detail-overview">' + escapeRecHtml(item.overview) + '</div>' : '') +
                     episodeHtml +

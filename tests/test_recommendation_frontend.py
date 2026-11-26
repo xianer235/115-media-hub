@@ -263,7 +263,10 @@ process.stdout.write(JSON.stringify(result));
 class SeasonListRenderTest(unittest.TestCase):
     """详情弹窗的季列表：有真实篇名就显示篇名，没有就回退「第 N 季」。"""
 
-    def _render(self):
+    def _render(self, owned=None, season_episode_map=None, season_names=None):
+        season_map = season_episode_map if season_episode_map is not None else {'1': 6, '2': 5}
+        season_name_map = season_names if season_names is not None else {'1': '黄河篇1&2'}
+        owned_literal = json.dumps(owned or {}, ensure_ascii=False)
         dom_stub = r"""
 const elements = {};
 const makeEl = () => ({
@@ -298,13 +301,14 @@ const context = {{
 vm.createContext(context);
 vm.runInContext(source, context, {{ filename: 'recommendation-core.js' }});
 const expression = `(function () {{
+  recommendationOwned = {owned_literal};
   const item = {{ id: 1, media_type: 'tv', title: '奔跑吧·特别篇', year: '2020', vote_average: 9 }};
   const detail = {{
     status: 'Returning Series',
     total_seasons: 2,
     total_episodes: 11,
-    season_episode_map: {{ '1': 6, '2': 5 }},
-    season_names: {{ '1': '黄河篇1&2' }},
+    season_episode_map: {json.dumps(season_map)},
+    season_names: {json.dumps(season_name_map, ensure_ascii=False)},
     aliases: [],
   }};
   renderRecDetailContent(item, detail);
@@ -327,6 +331,39 @@ process.stdout.write(JSON.stringify(vm.runInContext(expression, context)));
         self.assertIn("第 2 季", html)
         self.assertIn("is-generic", html)
         self.assertIn("6 集", html)
+
+    def test_season_fully_owned_shows_check_and_owned_class(self):
+        html = self._render(
+            owned={1: {"seasons": {"1": 6}}},
+            season_episode_map={'1': 6, '2': 5},
+        )
+        self.assertIn("is-owned", html)
+        self.assertIn("✓ 6 集", html)
+        # 第二季库里没有 → 保持原样，不能被打上 is-owned
+        self.assertIn("5 集", html)
+        self.assertIn("极影视库：已有 1/2 季", html)
+
+    def test_partial_season_shows_library_count(self):
+        html = self._render(
+            owned={1: {"seasons": {"1": 3, "2": 5}}},
+            season_episode_map={'1': 6, '2': 5},
+        )
+        self.assertIn("is-partial", html)
+        self.assertIn("库中 3/6 集", html)
+        self.assertIn("✓ 5 集", html)
+        self.assertIn("极影视库：已有 2/2 季", html)
+
+    def test_owned_without_usable_season_numbers_says_so(self):
+        # 极影视把集数当季号时（实测 6.6%），季行全对不上，顶部不能只说「已有」
+        html = self._render(owned={1: {"seasons": {"452": 12}}})
+        self.assertIn("已有（没识别到季号）", html)
+        self.assertNotIn("is-owned", html)
+
+    def test_no_owned_data_keeps_plain_season_list(self):
+        html = self._render()
+        self.assertNotIn("rec-detail-season-hint", html)
+        self.assertNotIn("is-owned", html)
+        self.assertNotIn("极影视库", html)
 
 
 if __name__ == "__main__":

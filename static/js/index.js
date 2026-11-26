@@ -3747,6 +3747,8 @@
             statusEl.className = 'mt-2 tg-proxy-status tg-proxy-status--success';
             const parts = [];
             parts.push('已索引 ' + indexed + ' 条');
+            const seasonCount = Number(data.season_count || 0);
+            if (seasonCount > 0) parts.push('其中剧集季 ' + seasonCount + ' 条');
             if (lastRun) parts.push('上次刷新 ' + escapeHtml(lastRun));
             statusEl.innerHTML = '<div class="tg-proxy-status-title">库存索引</div>' +
                 '<div class="tg-proxy-status-meta">' + escapeHtml(parts.join(' · ')) + '</div>';

@@ -1282,6 +1282,20 @@
             flex-shrink: 0;
             color: #94a3b8;
         }
+        .rec-detail-season-count.is-owned {
+            color: #34d399;
+            font-weight: 700;
+        }
+        .rec-detail-season-count.is-partial {
+            color: #fbbf24;
+            font-weight: 700;
+        }
+        .rec-detail-season-hint {
+            margin: -0.1rem 0 0.5rem;
+            color: #94a3b8;
+            font-size: 0.7rem;
+            line-height: 1.4;
+        }
         .rec-detail-aliases {
             margin-top: 0.75rem;
         }
@@ -1489,6 +1503,9 @@
         html.theme-day .rec-detail-season-name { color: #1e293b !important; }
         html.theme-day .rec-detail-season-name.is-generic { color: #64748b !important; }
         html.theme-day .rec-detail-season-count { color: #475569 !important; }
+        html.theme-day .rec-detail-season-count.is-owned { color: #047857 !important; }
+        html.theme-day .rec-detail-season-count.is-partial { color: #b45309 !important; }
+        html.theme-day .rec-detail-season-hint { color: #64748b !important; }
         html.theme-day .rec-detail-aliases-label { color: #94a3b8 !important; }
         html.theme-day .rec-detail-alias-chip { background: rgba(226, 232, 240, 0.9) !important; color: #334155 !important; }
         html.theme-day .rec-detail-footer { border-color: rgba(182, 198, 219, 0.3) !important; }

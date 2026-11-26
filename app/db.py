@@ -437,6 +437,18 @@ def ensure_db() -> None:
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_jys_inventory_name_year ON jys_inventory(name, year)"
             )
+            # 剧集季级库存：极影视把「一季」当成一个独立 Series 条目、多季共用剧级 TMDB ID，
+            # 所以同一条 tmdb_id 会有多条季记录。电影没有季，这张表里就不会有它的行。
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS jys_inventory_season (
+                    tmdb_id INTEGER NOT NULL,
+                    season_number INTEGER NOT NULL,
+                    episode_count INTEGER,
+                    PRIMARY KEY (tmdb_id, season_number)
+                )
+                """
+            )
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS tree_export_jobs (

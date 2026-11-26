@@ -4,10 +4,17 @@
 识别比本面板强，所以这里**只借它的库存与 TMDB ID**，不做任何识别、不写回极影视。
 
 范围（刻意收窄，见 docs/superpowers/modules.md）：
-- 电影 / 剧集都只记「有没有」（两态），不存集数、不做「全有 / 部分有」。
+- 电影只记「有没有」（两态）；剧集额外记「有哪几季、每季几集」到
+  ``jys_inventory_season``，**不记单集**（集的追更由订阅任务管）。
 - 精确匹配只靠极影视条目自带的 ``ProviderIds.Tmdb``；没有 ID 的条目（BoxSet /
   Folder 聚合节点、以及刮削未出 ID 的单体）**一律跳过**，宁可漏标也不误标。
 - 只读极影视：登录 + 拉库，不写任何东西。
+
+为什么季级能拿到：极影视把「一季」渲染成一个独立的 Series 条目，多季共用同一个
+剧级 TMDB ID（实测《美国恐怖故事》12 季 = 12 条 Series，tmdb 全是 1413）。它下面
+恰好挂一条 Season，``IndexNumber`` 是季号、``ChildCount`` 是该季集数。所以拉一遍
+``IncludeItemTypes=Season`` 再按 ``SeriesId → Series.Id`` 回连即可，不需要逐剧发
+N+1 请求（实测 7139 季 100% 都能回连）。
 
 实现复用 ``app/services/emby_bridge`` 的登录与分页聚合，不新增第三方依赖。
 """
@@ -15,7 +22,7 @@
 import asyncio
 import logging
 import urllib.parse
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..core import get_config
 from ..db import ensure_db, open_db
@@ -35,6 +42,11 @@ REFRESH_INTERVAL_SECONDS = 24 * 60 * 60
 # 明确不参与判重的条目类型（聚合节点，不是单体）。
 _SKIP_ITEM_TYPES = {"BoxSet", "Folder", "CollectionFolder", "Playlist", "MusicArtist", "MusicAlbum", "Audio", "Person"}
 
+# 季号合理上限。极影视的 Season.IndexNumber 100% 有值，但实测 6.6% 是乱码级
+# （番剧/综艺把集数写进季号，最大到 452）。超过这个值不写库，前端会退化成
+# 「已有（未识别到季）」，总比把 S452 当成一季显示强。
+MAX_TRUSTED_SEASON_NUMBER = 30
+
 # 刷新状态（供设置页 / 日志展示）。
 _refresh_state: Dict[str, Any] = {
     "running": False,
@@ -42,11 +54,15 @@ _refresh_state: Dict[str, Any] = {
     "last_error": "",
     "last_total": 0,
     "last_indexed": 0,
+    "last_season_indexed": 0,
 }
 
 
 def _extract_inventory_rows(items: List[Any]) -> List[Dict[str, Any]]:
-    """从极影视条目里抽取要入库的行，过滤掉无 TMDB ID 与聚合节点类型。"""
+    """从极影视条目里抽取要入库的行，过滤掉无 TMDB ID 与聚合节点类型。
+
+    返回的行保留 ``item_id``：季条目只带 ``SeriesId``，要靠它回到剧的 TMDB ID。
+    """
     rows: List[Dict[str, Any]] = []
     for item in items:
         if not isinstance(item, dict):
@@ -74,12 +90,76 @@ def _extract_inventory_rows(items: List[Any]) -> List[Dict[str, Any]]:
             year = int(year_raw) if year_raw not in (None, "", 0) else None
         except (TypeError, ValueError):
             year = None
-        rows.append({"tmdb_id": tmdb_id, "name": name, "year": year, "media_type": media_type})
+        rows.append({
+            "tmdb_id": tmdb_id,
+            "name": name,
+            "year": year,
+            "media_type": media_type,
+            "item_id": str(item.get("Id", "") or ""),
+        })
     return rows
 
 
-def _rebuild_inventory(rows: List[Dict[str, Any]]) -> int:
-    """全量重建 jys_inventory（先删后插，同一事务提交）。返回写入条数。"""
+def _series_tmdb_map(rows: List[Dict[str, Any]]) -> Dict[str, int]:
+    """剧条目 Id → TMDB ID。季条目只有 SeriesId，靠这张表回到剧。"""
+    mapping: Dict[str, int] = {}
+    for row in rows:
+        if row.get("media_type") != "tv":
+            continue
+        item_id = str(row.get("item_id") or "")
+        if item_id:
+            mapping[item_id] = row["tmdb_id"]
+    return mapping
+
+
+def _extract_season_rows(
+    items: List[Any], tmdb_by_series_id: Dict[str, int]
+) -> List[Dict[str, Any]]:
+    """把季条目映射成 ``(tmdb_id, season_number, episode_count)`` 行。
+
+    极影视的季条目：``SeriesId`` 指向那条「一季一个」的 Series，``IndexNumber``
+    是季号，``ChildCount`` 是该季集数（``RecursiveItemCount`` 恒为 null，别用）。
+    回连不上剧、季号缺失/越界、集数不合理的条目直接跳过——宁可少标一季。
+    """
+    rows: List[Dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("Type", "") or "") != "Season":
+            continue
+        series_id = str(item.get("SeriesId") or item.get("ParentId") or "")
+        tmdb_id = tmdb_by_series_id.get(series_id)
+        if not tmdb_id:
+            continue
+        try:
+            season_number = int(item.get("IndexNumber"))
+        except (TypeError, ValueError):
+            continue
+        if season_number <= 0 or season_number > MAX_TRUSTED_SEASON_NUMBER:
+            continue
+        episodes_raw = item.get("ChildCount")
+        try:
+            episode_count: Optional[int] = int(episodes_raw) if episodes_raw not in (None, "") else None
+        except (TypeError, ValueError):
+            episode_count = None
+        if episode_count is not None and episode_count <= 0:
+            episode_count = None
+        rows.append({
+            "tmdb_id": tmdb_id,
+            "season_number": season_number,
+            "episode_count": episode_count,
+        })
+    return rows
+
+
+def _rebuild_inventory(
+    rows: List[Dict[str, Any]], season_rows: Optional[List[Dict[str, Any]]] = None
+) -> int:
+    """全量重建 jys_inventory（先删后插，同一事务提交）。返回写入条数。
+
+    ``season_rows=None`` 表示「这次没拿到季数据」——此时**不动季表**，保留上次的
+    季标记，避免一次网络抖动把「已有哪几季」全部抹掉。
+    """
     ensure_db()
     conn = open_db()
     try:
@@ -89,6 +169,12 @@ def _rebuild_inventory(rows: List[Dict[str, Any]]) -> int:
             "INSERT OR REPLACE INTO jys_inventory (tmdb_id, name, year, media_type) VALUES (?, ?, ?, ?)",
             [(r["tmdb_id"], r["name"], r["year"], r["media_type"]) for r in rows],
         )
+        if season_rows is not None:
+            cursor.execute("DELETE FROM jys_inventory_season")
+            cursor.executemany(
+                "INSERT OR REPLACE INTO jys_inventory_season (tmdb_id, season_number, episode_count) VALUES (?, ?, ?)",
+                [(r["tmdb_id"], r["season_number"], r["episode_count"]) for r in season_rows],
+            )
         conn.commit()
         return len(rows)
     finally:
@@ -189,7 +275,42 @@ def refresh_jys_inventory(settings: Dict[str, Any] = None) -> Dict[str, Any]:
             seen.add(row["tmdb_id"])
             deduped.append(row)
 
-        indexed = _rebuild_inventory(deduped)
+        # 第二趟只拉季：极影视一季一个 Series 条目，靠 SeriesId 回连剧的 tmdb_id。
+        # 全部库都失败时 season_rows 保持 None，让 _rebuild_inventory 不动季表。
+        tmdb_by_series_id = _series_tmdb_map(all_rows)
+        season_rows: List[Dict[str, Any]] = []
+        season_failed_libs: List[str] = []
+        if tmdb_by_series_id:
+            for lib in libraries:
+                lib_id = str(lib.get("Id", "") or "")
+                if not lib_id:
+                    continue
+                query = urllib.parse.urlencode({
+                    "Recursive": "true",
+                    "ParentId": lib_id,
+                    "IncludeItemTypes": "Season",
+                })
+                status, _, payload = _aggregate_items(
+                    upstream, "/Users/%s/Items" % uid, query, headers, page_size=300
+                )
+                if status != 200 or not isinstance(payload, dict):
+                    logger.warning("jys_inventory 拉季 %s 失败（HTTP %s），跳过", lib.get("Name"), status)
+                    season_failed_libs.append(str(lib.get("Name", "") or lib_id))
+                    continue
+                season_rows.extend(_extract_season_rows(payload.get("Items") or [], tmdb_by_series_id))
+
+        deduped_seasons: Optional[List[Dict[str, Any]]] = None
+        if season_rows or not season_failed_libs:
+            seen_seasons: set = set()
+            deduped_seasons = []
+            for row in season_rows:
+                key = (row["tmdb_id"], row["season_number"])
+                if key in seen_seasons:
+                    continue
+                seen_seasons.add(key)
+                deduped_seasons.append(row)
+
+        indexed = _rebuild_inventory(deduped, deduped_seasons)
         from ..db import now_text
         _refresh_state.update({
             "running": False,
@@ -197,8 +318,12 @@ def refresh_jys_inventory(settings: Dict[str, Any] = None) -> Dict[str, Any]:
             "last_error": "",
             "last_total": len(all_rows),
             "last_indexed": indexed,
+            "last_season_indexed": len(deduped_seasons or []),
         })
-        logger.info("jys_inventory 刷新完成：拉取 %s 条，去重后索引 %s 条", len(all_rows), indexed)
+        logger.info(
+            "jys_inventory 刷新完成：拉取 %s 条，去重后索引 %s 条，季 %s 条",
+            len(all_rows), indexed, len(deduped_seasons or []),
+        )
         return {"ok": True, "msg": f"已索引 {indexed} 条", "total": len(all_rows), "indexed": indexed}
     except Exception as exc:  # noqa: BLE001 - 后台刷新不能把进程打死
         message = _explain_refresh_error(exc)
@@ -209,14 +334,16 @@ def refresh_jys_inventory(settings: Dict[str, Any] = None) -> Dict[str, Any]:
 
 
 def inventory_status() -> Dict[str, Any]:
-    """返回刷新状态与当前索引条数。"""
+    """返回刷新状态与当前索引条数（条目数 + 季数）。"""
     result = dict(_refresh_state)
     result["indexed_count"] = 0
+    result["season_count"] = 0
     try:
         ensure_db()
         conn = open_db()
         try:
             result["indexed_count"] = conn.execute("SELECT COUNT(*) FROM jys_inventory").fetchone()[0]
+            result["season_count"] = conn.execute("SELECT COUNT(*) FROM jys_inventory_season").fetchone()[0]
         finally:
             conn.close()
     except Exception as exc:  # noqa: BLE001
@@ -224,8 +351,15 @@ def inventory_status() -> Dict[str, Any]:
     return result
 
 
-def query_inventory(items: List[Dict[str, Any]]) -> Dict[int, bool]:
-    """批量判断「已有」：入参每项含 id（tmdb_id），返回 {tmdb_id: True} 命中集合。"""
+def query_inventory(items: List[Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
+    """批量判断「已有」：入参每项含 id（tmdb_id）。
+
+    返回 ``{tmdb_id: {"seasons": {"1": 12, "2": 13}}}``，只含命中的条目。
+    电影命中时 ``seasons`` 是空字典。季号用字符串键，和前端拿到的 JSON 一致。
+
+    返回结构故意是**对象**而不是 ``True``：前端 ``recommendationOwned[id]`` 的
+    truthy 判断保持可用（空字典是 falsy，会把电影角标弄丢）。
+    """
     if not items:
         return {}
     ids: List[int] = []
@@ -240,7 +374,7 @@ def query_inventory(items: List[Dict[str, Any]]) -> Dict[int, bool]:
             ids.append(tmdb_id)
     if not ids:
         return {}
-    result: Dict[int, bool] = {}
+    result: Dict[int, Dict[str, Any]] = {}
     ensure_db()
     conn = open_db()
     try:
@@ -250,7 +384,19 @@ def query_inventory(items: List[Dict[str, Any]]) -> Dict[int, bool]:
             ids,
         ).fetchall()
         for (tmdb_id,) in rows:
-            result[int(tmdb_id)] = True
+            result[int(tmdb_id)] = {"seasons": {}}
+        if result:
+            found = list(result.keys())
+            placeholders = ",".join("?" for _ in found)
+            season_rows = conn.execute(
+                "SELECT tmdb_id, season_number, episode_count FROM jys_inventory_season "
+                f"WHERE tmdb_id IN ({placeholders})",
+                found,
+            ).fetchall()
+            for tmdb_id, season_number, episode_count in season_rows:
+                entry = result.get(int(tmdb_id))
+                if entry is not None:
+                    entry["seasons"][str(int(season_number))] = episode_count
     finally:
         conn.close()
     return result
