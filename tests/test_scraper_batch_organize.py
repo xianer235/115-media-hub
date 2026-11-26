@@ -3408,6 +3408,49 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         # 明确标记的写法仍走各自的老路径（这里只测裸数字兜底函数本身）。
         self.assertEqual(scraper._extract_numeric_episode_from_filename("仙逆 第154集.mkv"), 0)
 
+    def test_extract_numeric_episode_handles_release_group_brackets(self):
+        """发布组命名：集号单独占一个方括号组（[DBD-Raws][片名][05][1080P]...）。"""
+        self.assertEqual(
+            scraper._extract_numeric_episode_from_filename(
+                "[DBD-Raws][Bleach Sennen Kessen Hen - Soukoku Tan][05][1080P][BDRip][HEVC-10bit][FLAC].mkv"
+            ),
+            5,
+        )
+        self.assertEqual(
+            scraper._extract_numeric_episode_from_filename(
+                "[VCB-Studio] Title [07][Ma10p_1080p][x265_flac].mkv"
+            ),
+            7,
+        )
+        self.assertEqual(scraper._extract_numeric_episode_from_filename("[Group] Title [1080P][12][FLAC].mkv"), 12)
+        self.assertEqual(scraper._extract_numeric_episode_from_filename("[DBD-Raws][Title][05v2][1080P].mkv"), 5)
+        self.assertEqual(scraper._extract_numeric_episode_from_filename("[Group] 片名 [05].mkv"), 5)
+        # 年份、裸分辨率、多个候选（分段/合集）都放弃，不猜。
+        self.assertEqual(scraper._extract_numeric_episode_from_filename("[Group] Movie Name [2023][1080P][x264].mkv"), 0)
+        self.assertEqual(scraper._extract_numeric_episode_from_filename("[Group] Title [1080][x265].mkv"), 0)
+        self.assertEqual(scraper._extract_numeric_episode_from_filename("[Group] Title [01][02][1080p].mkv"), 0)
+        # 圆括号里的 1 是分段号，不是第 1 集。
+        self.assertEqual(scraper._extract_numeric_episode_from_filename("Title 04(1).mkv"), 4)
+
+    def test_subscription_file_entry_recognizes_release_group_brackets(self):
+        """订阅分享扫描：`[组名][片名][05][1080P]...` 这类原始命名要能认出集数。"""
+        task = {
+            "media_type": "tv",
+            "title": "死神 千年血战篇 - 相克谭",
+            "season": 1,
+            "multi_season_mode": False,
+            "anime_mode": True,
+            "tmdb_total_episodes": 12,
+            "tmdb_total_seasons": 1,
+            "tmdb_season_episode_map": {"1": 12},
+            "tmdb_episode_mode": "season",
+        }
+        name = "[DBD-Raws][Bleach Sennen Kessen Hen - Soukoku Tan][05][1080P][BDRip][HEVC-10bit][FLAC].mkv"
+        self.assertEqual(scraper._extract_task_episodes_from_file_entry(task, name, "死神/Season 01"), {5})
+        self.assertEqual(scraper._extract_task_episodes_from_file_entry(task, name, ""), {5})
+        # 季号对不上的父目录仍要丢弃，别把别的季塞进来。
+        self.assertEqual(scraper._extract_task_episodes_from_file_entry(task, name, "死神/Season 02"), set())
+
     def test_subscription_file_entry_recognizes_title_plus_trailing_number(self):
         """订阅分享扫描：仙逆这类「片名 – 数字」文件必须能识别出集数。"""
         task = {

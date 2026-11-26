@@ -337,6 +337,16 @@ _TRAILING_SPACED_NUMERIC_EPISODE_REGEX = re.compile(
 
 _NON_EPISODE_RESOLUTION_NUMBERS = frozenset({360, 480, 540, 576, 720, 1080, 1440, 2160, 4320})
 
+# 发布组方括号命名（[DBD-Raws][Bleach Sennen Kessen Hen - Soukoku Tan][05][1080P][HEVC-10bit][FLAC].mkv）：
+# 集号单独占一个方括号组，其余组（组名 / 片名 / 画质 / 编码）都是字母开头。
+# 只认「整组纯数字」（允许 v2、END 后缀），所以 [1080P]、[x265]、[HEVC-10bit] 天然落选；
+# 裸的 [1080] / [2023] 再按通用门槛排除。只认方括号，不认圆括号——`04(1).mkv` 里的 (1)
+# 是分段号，不能被当成第 1 集。
+_BRACKETED_EPISODE_GROUP_REGEX = re.compile(
+    r"[\[【]\s*0*(\d{1,4})\s*(?:[vV]\d{1,2})?\s*(?:END|FIN)?\s*[\]】]",
+    re.IGNORECASE,
+)
+
 
 def _is_plausible_trailing_episode_number(value: int) -> bool:
     """末尾裸数字的通用门槛：排除年份、超范围值与画质分辨率。"""
@@ -345,6 +355,16 @@ def _is_plausible_trailing_episode_number(value: int) -> bool:
         and not (1900 <= value <= 2099)
         and value not in _NON_EPISODE_RESOLUTION_NUMBERS
     )
+
+
+def _extract_bracketed_episode_number(stem: str) -> int:
+    """发布组命名里的集号：唯一一个「纯数字方括号组」才算数，多个候选一律放弃。"""
+    values: Set[int] = set()
+    for matched in _BRACKETED_EPISODE_GROUP_REGEX.finditer(str(stem or "")):
+        value = max(0, int(matched.group(1) or 0))
+        if _is_plausible_trailing_episode_number(value):
+            values.add(value)
+    return next(iter(values)) if len(values) == 1 else 0
 
 
 def _extract_numeric_episode_from_filename(file_name: str) -> int:
@@ -409,6 +429,12 @@ def _extract_numeric_episode_from_filename(file_name: str) -> int:
         if suffix and not _is_subscription_numeric_episode_quality_suffix(suffix):
             continue
         return value
+
+    # 最后一档：发布组方括号命名。用未经「分段号」预处理的 stem_tail，
+    # 否则 `[Group] 片名 [05].mkv` 里当集号的 [05] 会被当成分段号先被削掉。
+    bracketed_episode = _extract_bracketed_episode_number(stem_tail)
+    if bracketed_episode > 0:
+        return bracketed_episode
     return 0
 
 
