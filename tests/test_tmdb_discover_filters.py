@@ -153,3 +153,53 @@ class RouteQueryParseTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SeasonNamesTest(unittest.TestCase):
+    """详情里的「季名称」：真实篇名保留，TMDB 自动占位名丢弃。"""
+
+    def _detail(self, seasons, media_type="tv"):
+        payload = {
+            "id": 1,
+            "name": "奔跑吧·特别篇",
+            "original_name": "Keep Running",
+            "title": "奔跑吧·特别篇",
+            "original_title": "Keep Running",
+            "release_date": "2020-01-01",
+            "first_air_date": "2020-01-01",
+            "number_of_seasons": len(seasons),
+            "number_of_episodes": sum(int(s.get("episode_count", 0)) for s in seasons),
+            "status": "Returning Series",
+            "seasons": seasons,
+        }
+        with mock.patch.object(tmdb, "tmdb_request_json", lambda *a, **k: payload):
+            return tmdb.get_tmdb_media_detail(1, media_type)
+
+    def test_real_season_names_are_kept(self):
+        detail = self._detail([
+            {"season_number": 1, "episode_count": 6, "name": "黄河篇1&2"},
+            {"season_number": 2, "episode_count": 5, "name": "共同富裕篇"},
+        ])
+        self.assertEqual(detail["season_names"], {"1": "黄河篇1&2", "2": "共同富裕篇"})
+        self.assertEqual(detail["season_episode_map"], {"1": 6, "2": 5})
+
+    def test_generic_placeholder_names_are_dropped(self):
+        detail = self._detail([
+            {"season_number": 1, "episode_count": 8, "name": "第 1 季"},
+            {"season_number": 2, "episode_count": 8, "name": "Season 2"},
+            {"season_number": 3, "episode_count": 8, "name": "第3季"},
+        ])
+        self.assertEqual(detail["season_names"], {})
+
+    def test_empty_episode_season_and_specials_are_skipped(self):
+        detail = self._detail([
+            {"season_number": 0, "episode_count": 3, "name": "特别篇"},
+            {"season_number": 1, "episode_count": 0, "name": "未定季"},
+            {"season_number": 2, "episode_count": 4, "name": "生态篇"},
+        ])
+        self.assertEqual(detail["season_names"], {"2": "生态篇"})
+        self.assertEqual(detail["season_episode_map"], {"2": 4})
+
+    def test_movie_has_empty_season_names(self):
+        detail = self._detail([], media_type="movie")
+        self.assertEqual(detail["season_names"], {})

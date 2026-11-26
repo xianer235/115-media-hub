@@ -204,5 +204,74 @@ process.stdout.write(JSON.stringify(result));
         self.assertTrue(payload["hasAny"])
 
 
+class SeasonListRenderTest(unittest.TestCase):
+    """详情弹窗的季列表：有真实篇名就显示篇名，没有就回退「第 N 季」。"""
+
+    def _render(self):
+        dom_stub = r"""
+const elements = {};
+const makeEl = () => ({
+  value: '', checked: false, innerText: '', innerHTML: '', className: '',
+  dataset: {}, style: {},
+  classList: { add() {}, remove() {}, toggle() {} },
+  addEventListener() {}, appendChild() {}, setAttribute() {}, focus() {},
+});
+"""
+        script = f"""
+const fs = require('fs');
+const vm = require('vm');
+let source = fs.readFileSync({json.dumps(str(CORE_JS_PATH))}, 'utf8');
+source = source.replace(/^export /gm, '');
+{dom_stub}
+const context = {{
+  console,
+  window: {{
+    MediaHubApi: {{ getJson: async () => ({{}}), postJson: async () => ({{}}), requestJson: async () => ({{}}) }},
+    scrollTo() {{}}, matchMedia: () => ({{ matches: false }}), innerWidth: 1440, addEventListener() {{}},
+    showToast() {{}}, showAppConfirm: async () => true,
+  }},
+  document: {{
+    body: makeEl(),
+    getElementById: (id) => {{ if (!elements[id]) elements[id] = makeEl(); return elements[id]; }},
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    createElement: makeEl,
+  }},
+  requestAnimationFrame: () => 0, setTimeout: () => 0, setInterval: () => 0, clearInterval() {{}},
+}};
+vm.createContext(context);
+vm.runInContext(source, context, {{ filename: 'recommendation-core.js' }});
+const expression = `(function () {{
+  const item = {{ id: 1, media_type: 'tv', title: '奔跑吧·特别篇', year: '2020', vote_average: 9 }};
+  const detail = {{
+    status: 'Returning Series',
+    total_seasons: 2,
+    total_episodes: 11,
+    season_episode_map: {{ '1': 6, '2': 5 }},
+    season_names: {{ '1': '黄河篇1&2' }},
+    aliases: [],
+  }};
+  renderRecDetailContent(item, detail);
+  return {{ html: document.getElementById('rec-detail-content').innerHTML }};
+}})()`;
+process.stdout.write(JSON.stringify(vm.runInContext(expression, context)));
+"""
+        completed = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True)
+        if completed.returncode != 0:
+            raise AssertionError(completed.stderr.strip())
+        return json.loads(completed.stdout)["html"]
+
+    def test_real_season_name_and_fallback_are_both_rendered(self):
+        html = self._render()
+        self.assertIn("rec-detail-seasons", html)
+        self.assertIn("黄河篇1&amp;2", html)
+        self.assertIn("rec-detail-season-no", html)
+        self.assertGreaterEqual(html.count("rec-detail-season-row"), 2)
+        # 没名字的第二季回退成占位文案并打上 is-generic
+        self.assertIn("第 2 季", html)
+        self.assertIn("is-generic", html)
+        self.assertIn("6 集", html)
+
+
 if __name__ == "__main__":
     unittest.main()

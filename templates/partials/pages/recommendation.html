@@ -72,13 +72,14 @@
                         <button type="button" class="rec-explore-panel-close" onclick="toggleExploreFiltersPanel(false)" aria-label="收起筛选">收起</button>
                     </div>
 
+                    <div class="rec-explore-fields">
                     <div id="rec-explore-section-year" class="rec-filter-section">
                         <div class="rec-filter-section-title">年份与语言</div>
-                        <label class="rec-filter-field">
-                            <span class="rec-filter-label">具体年份</span>
-                            <select id="rec-explore-year-exact" class="rec-search-select" onchange="setExploreYearExact(this.value)"></select>
-                        </label>
-                        <div class="rec-filter-grid">
+                        <div class="rec-filter-grid rec-filter-grid-3">
+                            <label class="rec-filter-field">
+                                <span class="rec-filter-label">具体年份</span>
+                                <select id="rec-explore-year-exact" class="rec-search-select" onchange="setExploreYearExact(this.value)"></select>
+                            </label>
                             <label class="rec-filter-field">
                                 <span class="rec-filter-label">起始年份</span>
                                 <input id="rec-explore-year-from" class="rec-search-input rec-input-sm" placeholder="如 2015" type="number" min="1900" max="2100" step="1">
@@ -89,12 +90,11 @@
                             </label>
                         </div>
                         <div class="rec-filter-field">
-                            <span class="rec-filter-label">快捷时间</span>
-                            <div id="rec-explore-recent-chips" class="rec-decade-chips"></div>
-                        </div>
-                        <div class="rec-filter-field">
-                            <span class="rec-filter-label">快捷年代</span>
-                            <div id="rec-explore-decade-chips" class="rec-decade-chips"></div>
+                            <span class="rec-filter-label">快捷选择</span>
+                            <div class="rec-year-quick">
+                                <div id="rec-explore-recent-chips" class="rec-decade-chips"></div>
+                                <div id="rec-explore-decade-chips" class="rec-decade-chips"></div>
+                            </div>
                         </div>
                         <label class="rec-filter-field">
                             <span class="rec-filter-label">原始语言</span>
@@ -200,6 +200,8 @@
                                 <option value="1">新闻</option>
                             </select>
                         </label>
+                    </div>
+
                     </div>
 
                     <div class="rec-explore-panel-actions">

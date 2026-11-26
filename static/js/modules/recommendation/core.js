@@ -1085,11 +1085,20 @@ function renderRecDetailContent(item, detail) {
             if (episodes > 0) episodeHtml += '<div>集数：<strong>' + episodes + '</strong></div>';
             episodeHtml += '</div>';
             const seasonMap = detail.season_episode_map || {};
+            const seasonNames = detail.season_names || {};
             const seasonKeys = Object.keys(seasonMap).sort((a, b) => Number(a) - Number(b));
             if (seasonKeys.length > 0) {
-                episodeHtml += '<div class="rec-detail-season-chips">';
+                episodeHtml += '<div class="rec-detail-seasons">';
                 seasonKeys.forEach((s) => {
-                    episodeHtml += '<span class="rec-detail-season-chip">S' + s + ': ' + seasonMap[s] + '集</span>';
+                    const rawName = typeof seasonNames[s] === 'string' ? seasonNames[s].trim() : '';
+                    const nameText = rawName || ('第 ' + s + ' 季');
+                    const nameClass = rawName ? 'rec-detail-season-name' : 'rec-detail-season-name is-generic';
+                    episodeHtml +=
+                        '<div class="rec-detail-season-row">' +
+                            '<span class="rec-detail-season-no">S' + s + '</span>' +
+                            '<span class="' + nameClass + '" title="' + escapeRecHtml(nameText) + '">' + escapeRecHtml(nameText) + '</span>' +
+                            '<span class="rec-detail-season-count">' + escapeRecHtml(String(seasonMap[s])) + ' 集</span>' +
+                        '</div>';
                 });
                 episodeHtml += '</div>';
             }

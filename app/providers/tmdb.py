@@ -706,6 +706,42 @@ def build_tmdb_task_binding(detail: Dict[str, Any], media_type: str = "") -> Dic
     return task_binding
 
 
+_GENERIC_SEASON_NAME_TEMPLATES = (
+    "第{n}季",
+    "第{n}期",
+    "第{nn}季",
+    "season{n}",
+    "season{nn}",
+    "s{n}",
+    "series{n}",
+    "temporada{n}",
+    "staffel{n}",
+    "saison{n}",
+    "stagione{n}",
+)
+
+
+def normalize_tmdb_season_name(name: Any, season_no: int) -> str:
+    """挑出「真正说了内容」的季名称，过滤 TMDB 的占位名（第 1 季 / Season 1 等）。
+
+    TMDB 对大多数剧集只给「第 N 季」这种自动占位名，中文综艺 / 特别篇会把真实篇名
+    （黄河篇、共同富裕篇…）写进 seasons[].name。占位名显示出来只会和 S1/S2 徽章重复，
+    因此这里统一返回空串，由前端决定回退文案。
+    """
+    text = re.sub(r"\s+", " ", str(name or "")).strip()
+    if not text:
+        return ""
+    normalized_no = max(0, int(season_no or 0))
+    compact = text.replace(" ", "").lower()
+    generic = {
+        template.format(n=normalized_no, nn=f"{normalized_no:02d}")
+        for template in _GENERIC_SEASON_NAME_TEMPLATES
+    }
+    if compact in generic:
+        return ""
+    return text
+
+
 def get_tmdb_media_detail(
     tmdb_id: int,
     media_type: str,
@@ -744,6 +780,7 @@ def get_tmdb_media_detail(
         "total_episodes": 0,
         "total_seasons": 0,
         "season_episode_map": {},
+        "season_names": {},
         "episode_mode": "seasonal",
     }
     if normalized_media_type == "tv":
@@ -751,6 +788,7 @@ def get_tmdb_media_detail(
         payload["total_seasons"] = max(0, parse_int(detail.get("number_of_seasons", 0), 0))
         season_records = detail.get("seasons", []) if isinstance(detail.get("seasons"), list) else []
         season_episode_map: Dict[str, int] = {}
+        season_names: Dict[str, str] = {}
         for raw_season in season_records:
             if not isinstance(raw_season, dict):
                 continue
@@ -759,7 +797,11 @@ def get_tmdb_media_detail(
             if season_no <= 0 or episode_count <= 0:
                 continue
             season_episode_map[str(season_no)] = episode_count
+            season_name = normalize_tmdb_season_name(raw_season.get("name", ""), season_no)
+            if season_name:
+                season_names[str(season_no)] = season_name
         payload["season_episode_map"] = season_episode_map
+        payload["season_names"] = season_names
         payload["episode_mode"] = infer_tmdb_episode_mode(detail)
         # 播出排期：TMDB 详情本来就返回这两个字段，用于命中后冷却推算更新周期。
         next_episode = detail.get("next_episode_to_air") if isinstance(detail.get("next_episode_to_air"), dict) else {}
