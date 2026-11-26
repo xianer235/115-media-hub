@@ -91,8 +91,10 @@
                                     <button type="button" class="scraper-compact-btn" data-scraper-action="dup-keep-best" title="每组只保留画质最高的那一份，其余勾选待删">每组保留最高画质</button>
                                     <button type="button" class="scraper-compact-btn" data-scraper-action="dup-rescan">重新扫描</button>
                                     <button id="scraper-duplicates-delete-btn" type="button" class="scraper-compact-btn scraper-danger-soft" data-scraper-action="dup-delete" disabled>清理选中 0 项</button>
-                                    <button id="scraper-duplicates-exit-btn" type="button" class="scraper-compact-btn scraper-primary-soft" data-scraper-action="close-duplicates" title="退出查重，回到文件列表">退出查重</button>
                                 </div>
+                                <!-- 退出按钮独立于操作组：手机上它要固定在标题右侧，
+                                     不能跟着「每组保留最高画质」这些按钮一起横滑到看不见的地方。 -->
+                                <button id="scraper-duplicates-exit-btn" type="button" class="scraper-compact-btn scraper-primary-soft scraper-duplicates-exit" data-scraper-action="close-duplicates" title="退出查重，回到文件列表">退出查重</button>
                             </div>
                             <div id="scraper-duplicates-summary" class="scraper-duplicates-summary"></div>
                             <div id="scraper-duplicates-list" class="scraper-duplicates-list"></div>

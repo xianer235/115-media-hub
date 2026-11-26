@@ -210,7 +210,7 @@ export function createDuplicatesController(deps = {}) {
                 const rootPath = String(result.root_path || '').trim();
                 if (rootPath) rootLabel = `扫描 ${rootPath}`;
             }
-            metaEl.textContent = [
+            const metaText = [
                 rootLabel,
                 `${Number(scanned.dirs || 0)} 个文件夹`,
                 `${Number(scanned.media_files || 0)} 个视频文件`,
@@ -220,6 +220,9 @@ export function createDuplicatesController(deps = {}) {
                     : '',
                 scanned.truncated ? '已到扫描上限，结果可能不完整' : '',
             ].filter(Boolean).join(' · ');
+            metaEl.textContent = metaText;
+            // 手机上这行按两行截断，完整内容留在 title 里（桌面端可直接悬停看）。
+            metaEl.title = metaText;
         }
 
         if (summaryEl) {

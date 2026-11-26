@@ -14342,9 +14342,9 @@
 
         .scraper-duplicates-head {
             display: flex;
-            justify-content: space-between;
+            justify-content: flex-start;
             align-items: flex-start;
-            gap: 0.75rem;
+            gap: 0.5rem;
             flex-wrap: wrap;
         }
 
@@ -14371,6 +14371,12 @@
             gap: 0.4rem;
             flex-wrap: wrap;
             justify-content: flex-end;
+            /* 操作组推住右边界，让「退出查重」始终贴在它右侧。 */
+            margin-left: auto;
+        }
+
+        .scraper-duplicates-exit {
+            flex: 0 0 auto;
         }
 
         .scraper-duplicates-summary {
@@ -16155,9 +16161,154 @@
                 min-height: 440px;
             }
 
-            /* 手机上屏幕本来就窄，查重面板别占掉半个屏幕——真要看结果时手指滚一下就行。 */
+            /* 查重模式在手机上：空间几乎全被头部吃掉——标题占三行、四颗按钮各占一行，
+               结果区只剩两三行。这里压成「标题 + 范围（最多两行）」+「按钮单行横滑」，
+               退出按钮固定在标题右侧；文件记录压成「文件名一行 + 画质/大小一行」。 */
+            #page-scraper.is-duplicates-mode .scraper-browser-heading {
+                display: none;
+            }
+
+            #page-scraper.is-duplicates-mode .scraper-browser-panel {
+                min-height: 0;
+            }
+
             .scraper-duplicates-panel {
                 max-height: min(40vh, 360px);
+                padding: 0.5rem 0.55rem;
+                gap: 0.4rem;
+            }
+
+            #page-scraper.is-duplicates-mode .scraper-duplicates-head {
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) auto;
+                grid-template-areas:
+                    "heading exit"
+                    "actions actions";
+                align-items: center;
+                gap: 0.35rem 0.4rem;
+            }
+
+            #page-scraper.is-duplicates-mode .scraper-duplicates-heading {
+                grid-area: heading;
+                display: flex;
+                align-items: flex-start;
+                gap: 0.4rem;
+                min-width: 0;
+            }
+
+            /* 手机屏幕不放「Duplicates」这种装饰性小标题，省一行。 */
+            .scraper-duplicates-heading .scraper-panel-kicker {
+                display: none;
+            }
+
+            .scraper-duplicates-title {
+                flex: 0 0 auto;
+                font-size: 0.9rem;
+            }
+
+            .scraper-duplicates-meta {
+                min-width: 0;
+                margin-top: 0;
+                font-size: 0.7rem;
+                display: -webkit-box;
+                -webkit-line-clamp: 2;
+                -webkit-box-orient: vertical;
+                overflow: hidden;
+            }
+
+            .scraper-duplicates-exit {
+                grid-area: exit;
+                padding: 0.32rem 0.5rem;
+                font-size: 0.74rem;
+            }
+
+            .scraper-duplicates-actions {
+                grid-area: actions;
+                flex-wrap: nowrap;
+                justify-content: flex-start;
+                gap: 0.3rem;
+                margin-left: 0;
+                overflow-x: auto;
+                padding-bottom: 1px;
+                scrollbar-width: none;
+            }
+
+            .scraper-duplicates-actions::-webkit-scrollbar {
+                display: none;
+            }
+
+            .scraper-duplicates-actions .scraper-compact-btn {
+                flex: 0 0 auto;
+                padding: 0.32rem 0.45rem;
+                font-size: 0.74rem;
+                white-space: nowrap;
+            }
+
+            .scraper-duplicates-summary {
+                font-size: 0.76rem;
+            }
+
+            .scraper-duplicates-list {
+                gap: 0.4rem;
+            }
+
+            .scraper-dup-group {
+                padding: 0.45rem 0.5rem;
+            }
+
+            .scraper-dup-group-head {
+                gap: 0.25rem 0.35rem;
+                margin-bottom: 0.25rem;
+            }
+
+            .scraper-dup-group-label {
+                font-size: 0.8rem;
+            }
+
+            .scraper-dup-group-hint {
+                font-size: 0.7rem;
+            }
+
+            /* 一条记录原来要三行：文件名折两行、路径一行、右侧画质/大小再挤一行。
+               手机上文件名一行（超出省略）+「画质 · 大小 · SHA1」一行；路径不显示，
+               分组标题已经写明是哪部剧哪一集。 */
+            .scraper-dup-file {
+                flex-wrap: wrap;
+                align-items: center;
+                row-gap: 0.05rem;
+                padding: 0.26rem 0.3rem;
+            }
+
+            .scraper-dup-file-main {
+                flex: 1 1 0;
+                min-width: 0;
+            }
+
+            .scraper-dup-file-name {
+                display: block;
+                max-width: 100%;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                font-size: 0.8rem;
+            }
+
+            .scraper-dup-file-path {
+                display: none;
+            }
+
+            .scraper-dup-file-meta {
+                order: 4;
+                flex: 1 1 100%;
+                padding-left: 1.55rem;
+                font-size: 0.7rem;
+                white-space: nowrap;
+                overflow: hidden;
+            }
+
+            .scraper-dup-keep {
+                order: 3;
+                font-size: 0.66rem;
             }
 
             .scraper-selection-bar {
