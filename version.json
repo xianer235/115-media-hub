@@ -1,8 +1,8 @@
 {
-  "version": "0.16.18",
-  "buildDate": "2026-11-27T07:08:00+08:00",
+  "version": "0.16.19",
+  "buildDate": "2026-11-27T07:20:00+08:00",
   "notes": [
-    "文件管理查重支持一次勾选多个文件夹/文件，结果改成独占视图，不再挤压文件列表"
+    "手机上查重结果区头部与文件条目压缩，一屏能多看好几组"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"
