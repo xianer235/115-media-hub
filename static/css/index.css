@@ -5654,6 +5654,9 @@
             font-size: 0.78rem;
             font-weight: 850;
             white-space: nowrap;
+            /* 任务弹窗父层带 backdrop-filter，移动端滚动合成时按钮的纯色底偶尔会被吞掉
+               （滚动时看得见、停手变灰）。提升成独立合成层能固定住重绘结果。 */
+            transform: translateZ(0);
         }
         .resource-job-type-tab:hover {
             color: #e0f2fe;

@@ -461,6 +461,9 @@
             if (!container) return;
 
             if (taskCenterTab === 'cross_copy') {
+                // 跨盘复制的内容由 cross_copy 模块渲染，它只调 window 上的类型标签渲染函数；
+                // 这里先同步一次高亮，避免切过去后当前标签看起来还是灰的。
+                renderTaskCenterTypeTabs();
                 if (typeof window.renderCrossCopyJobs === 'function') window.renderCrossCopyJobs();
                 return;
             }
@@ -884,6 +887,7 @@
         }
 
         Object.assign(window, {
+            renderTaskCenterTypeTabs,
             applyScraperJobsState,
             fetchScraperJobsState,
             refreshTaskCenterJobsOnly,

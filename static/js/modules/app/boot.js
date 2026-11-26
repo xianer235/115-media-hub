@@ -1052,6 +1052,75 @@
                 await switchTab(targetTab, { syncHash: false });
             });
         });
+
+        // 长文本 textarea 的滚动跟随：程序写值（一键粘贴、setSelectionRange 到末尾）时浏览器不会把
+        // 视口带到光标处，部分浏览器在点击 / 键盘移动光标时也一样，结果是光标在末尾、画面还停在开头。
+        // 这里用镜像元素量出光标所在行的位置，再把滚动位置校正到光标附近（已可见就不动）。
+        function measureTextareaCaret(el) {
+            const style = window.getComputedStyle(el);
+            const paddingLeft = parseFloat(style.paddingLeft) || 0;
+            const paddingRight = parseFloat(style.paddingRight) || 0;
+            const mirror = document.createElement('div');
+            mirror.style.position = 'absolute';
+            mirror.style.top = '0';
+            mirror.style.left = '-9999px';
+            mirror.style.visibility = 'hidden';
+            mirror.style.pointerEvents = 'none';
+            mirror.style.width = `${Math.max(1, el.clientWidth - paddingLeft - paddingRight)}px`;
+            mirror.style.fontFamily = style.fontFamily;
+            mirror.style.fontSize = style.fontSize;
+            mirror.style.fontWeight = style.fontWeight;
+            mirror.style.fontStyle = style.fontStyle;
+            mirror.style.lineHeight = style.lineHeight;
+            mirror.style.letterSpacing = style.letterSpacing;
+            mirror.style.whiteSpace = 'pre-wrap';
+            mirror.style.overflowWrap = 'break-word';
+            mirror.style.wordBreak = style.wordBreak;
+            const value = String(el.value || '');
+            const caret = Number.isFinite(el.selectionEnd) ? el.selectionEnd : value.length;
+            const marker = document.createElement('span');
+            marker.textContent = 'x';
+            mirror.appendChild(document.createTextNode(value.slice(0, caret)));
+            mirror.appendChild(marker);
+            document.body.appendChild(mirror);
+            const top = marker.offsetTop;
+            const height = marker.offsetHeight || parseFloat(style.lineHeight) || 16;
+            document.body.removeChild(mirror);
+            return { top, height, paddingTop: parseFloat(style.paddingTop) || 0, paddingBottom: parseFloat(style.paddingBottom) || 0 };
+        }
+
+        function ensureTextareaCaretVisible(el) {
+            if (!el || el.tagName !== 'TEXTAREA') return;
+            if (el.scrollHeight <= el.clientHeight + 1) return;
+            const caret = measureTextareaCaret(el);
+            const viewTop = el.scrollTop + caret.paddingTop;
+            const viewBottom = el.scrollTop + el.clientHeight - caret.paddingBottom;
+            if (caret.top < viewTop - 2 || caret.top + caret.height > viewBottom + 2) {
+                el.scrollTop = Math.max(0, caret.top - el.clientHeight / 2);
+            }
+        }
+
+        let textareaCaretRafId = 0;
+        let textareaCaretTarget = null;
+        function scheduleTextareaCaretVisible(el) {
+            textareaCaretTarget = el;
+            if (textareaCaretRafId) return;
+            textareaCaretRafId = requestAnimationFrame(() => {
+                textareaCaretRafId = 0;
+                const target = textareaCaretTarget;
+                textareaCaretTarget = null;
+                ensureTextareaCaretVisible(target);
+            });
+        }
+        window.ensureTextareaCaretVisible = ensureTextareaCaretVisible;
+        ['keyup', 'click', 'select'].forEach((type) => {
+            document.addEventListener(type, (event) => {
+                const el = event.target;
+                if (!el || el.tagName !== 'TEXTAREA') return;
+                scheduleTextareaCaretVisible(el);
+            }, true);
+        });
+
         syncViewportMetrics();
         applyThemeFromStorage();
         loadResourceQuickLinksFromStorage();

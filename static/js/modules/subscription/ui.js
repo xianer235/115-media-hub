@@ -2313,6 +2313,15 @@
             setSubscriptionLinkScanError('');
             textEl.focus();
             textEl.setSelectionRange?.(text.length, text.length);
+            // 光标落到了末尾，但赋 value + setSelectionRange 不会让视口跟过去，长文本下画面还停在开头，
+            // 用户看不到插入点。等一帧让浏览器完成布局后把滚动位置校到光标处。
+            requestAnimationFrame(() => {
+                if (typeof window.ensureTextareaCaretVisible === 'function') {
+                    window.ensureTextareaCaretVisible(textEl);
+                } else {
+                    textEl.scrollTop = textEl.scrollHeight;
+                }
+            });
             showToast('已粘贴剪贴板内容，可直接开始扫描', { tone: 'info', duration: 2200, placement: 'top-center' });
         }
 

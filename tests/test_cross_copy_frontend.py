@@ -46,6 +46,16 @@ class CrossCopyFrontendTest(unittest.TestCase):
         self.assertIn('id="cross-copy-new-btn"', job_modal_html)
         self.assertIn("openCrossCopyModal()", job_modal_html)
 
+    def test_cross_copy_tab_keeps_type_tab_highlight(self):
+        """切到「跨盘复制」后，三个类型标签的高亮要跟上。
+        cross_copy 模块通过 window 上的函数重绘标签，一旦那条链路断了，当前标签就一直是灰的。"""
+        job_modal = JOB_MODAL_JS.read_text(encoding="utf-8")
+        self.assertIn("renderTaskCenterTypeTabs,\n", job_modal)
+        anchor = "if (typeof window.renderCrossCopyJobs === 'function') window.renderCrossCopyJobs();"
+        self.assertIn(anchor, job_modal)
+        before = job_modal[: job_modal.index(anchor)][-400:]
+        self.assertIn("renderTaskCenterTypeTabs();", before)
+
     def test_boot_routes_cross_copy_tab_clicks(self):
         boot = BOOT_JS.read_text(encoding="utf-8")
         self.assertIn("['scraper', 'cross_copy'].includes(rawTab)", boot)
