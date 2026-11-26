@@ -15,7 +15,7 @@
 - **本地不入库文件**: `AGENTS.md` / `CLAUDE.md` / `.workbuddy/` / `.claude/` / `.worktrees/` 是本机开发用，**按约定不入库**。任何测试/代码读它们前必须判存在（`test_modules_doc` 已这么做），否则干净 clone 跑测试必挂。
 - **运行环境**: `docker compose` 服务名 `115-media-hub-test`（应用本体），端口 18080；`/app/storage` 已映射到宿主机 `/Users/xianer/Documents/docker/115strmxianer/storage`（virtiofs，空间读数正常）。挂载路径与端口已改为从根目录 `.env` 读取（模板 `.env.example`），本机 `.env` 写的是原来的绝对路径
 - **最近提交**: 待推送 —— 0.16.10 私有属性修复、0.16.9 设置分区拆分提交、0.16.8 排版修复提交、0.16.7 修复提交、0.16.6 发版提交（季名称 + 探索筛选多列排布）、0.16.5 的 5 个本地提交（`ea611f2` 年份三入口、`8199ede` 文档同步、`f2fbb9e` 发版 0.16.5、`dea11a3` 修排布空洞）；已推送基线 `9064ee8`（0.16.4 全量上线）；tag 停在 `v0.15.22`，0.15.23 起未打 tag / 未发 release
-- **工作区**: 干净，0.16.8 已落盘待推送。**筛选面板结构变了**：`.rec-explore-filters` 只排「panel-header / .rec-explore-fields / panel-actions」三行，五个 `.rec-filter-section` 全部收进 `.rec-explore-fields`；桌面多列靠 `column-count`（`break-inside: avoid`），别再按三列显式 `grid-column` 摆放分区（0.16.5 那套规则已删除）。`.rec-year-quick` 在 ≥900px 用 `display: contents` 把近 N 年与年代 chip 并成一行。**竖屏（≤899.98px）样式集中在文件末尾那个 `@media (max-width: 899.98px)` 块**（必须排在 `max-width: 1180/+767.98` 之后才压得住）：分区压平成细线分隔的小节、所有左缩进 0.9rem、chip 四列网格。**别再给 `.rec-explore-panel-header` 加负外边距**——面板自身 padding 是 0，负边距会把标题顶到边框外。
+- **工作区**: 干净，0.16.10 已落盘待推送。**筛选面板结构变了**：`.rec-explore-filters` 只排「panel-header / .rec-explore-fields / panel-actions」三行，五个 `.rec-filter-section` 全部收进 `.rec-explore-fields`；桌面多列靠 `column-count`（`break-inside: avoid`），别再按三列显式 `grid-column` 摆放分区（0.16.5 那套规则已删除）。`.rec-year-quick` 在 ≥900px 用 `display: contents` 把近 N 年与年代 chip 并成一行。**竖屏（≤899.98px）样式集中在文件末尾那个 `@media (max-width: 899.98px)` 块**（必须排在 `max-width: 1180/+767.98` 之后才压得住）：分区压平成细线分隔的小节、所有左缩进 0.9rem、chip 四列网格。**别再给 `.rec-explore-panel-header` 加负外边距**——面板自身 padding 是 0，负边距会把标题顶到边框外。
 
 
 
