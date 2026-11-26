@@ -518,18 +518,8 @@
                 border-color: rgba(56, 189, 248, 0.18);
                 box-shadow: 0 20px 48px rgba(2, 6, 23, 0.55);
             }
-            .rec-explore-panel-header {
-                position: sticky;
-                top: -0.95rem;
-                margin: -0.95rem -0.95rem 0.8rem;
-                padding: 0.95rem 0.95rem 0.8rem;
-                background: inherit;
-                border-bottom: 1px solid rgba(191, 219, 254, 0.7);
-                z-index: 2;
-            }
-            html:not(.theme-day) .rec-explore-panel-header {
-                border-bottom-color: rgba(51, 65, 85, 0.75);
-            }
+            /* 面板内边距统一由 #page-recommendation 的作用域规则提供，
+               这里不要再给 header 加负外边距 / sticky（会把标题顶出面板边框）。 */
             .rec-explore-panel-title {
                 font-size: 0.98rem;
             }
@@ -609,12 +599,6 @@
             }
             .rec-explore-panel-actions {
                 display: grid;
-                position: sticky;
-                bottom: 0;
-                margin: 0.4rem 0 0;
-                padding: 0.8rem 0.7rem calc(0.7rem + env(safe-area-inset-bottom, 0px));
-                background: inherit;
-                border-top: 1px solid rgba(191, 219, 254, 0.7);
                 grid-template-columns: 5.5rem minmax(0, 1fr);
             }
             html:not(.theme-day) .rec-explore-panel-actions {
@@ -17369,6 +17353,91 @@
             #page-recommendation .rec-explore-panel-apply {
                 min-height: 2.55rem !important;
                 font-size: 0.84rem !important;
+            }
+        }
+
+        /* 竖屏 / 单列（≤899.98px）：筛选面板只保留一层圆角。
+           之前每个分区都是一张 0.85rem 圆角的卡片，套在 1rem 圆角的面板里，
+           加上 header 的负外边距，标题被顶到面板边框上、三处左缩进互不相同。
+           这里把分区压平成一列「细线分隔的小节」，左右缩进与标题统一为 0.9rem。 */
+        @media (max-width: 899.98px) {
+            /* 面板嵌在工作区卡片里，内层圆角要比外层小一档，否则两层 1rem 圆角撞在一起 */
+            #page-recommendation .rec-explore-filters {
+                border-radius: 0.85rem;
+            }
+            #page-recommendation .rec-explore-panel-header {
+                position: static;
+                margin: 0;
+                padding: 0.85rem 0.9rem 0.7rem;
+                background: transparent;
+            }
+            #page-recommendation .rec-explore-panel-title {
+                font-size: 0.9rem;
+                line-height: 1.2;
+            }
+            #page-recommendation .rec-explore-panel-subtitle {
+                margin-top: 0.16rem;
+                font-size: 0.73rem;
+            }
+            #page-recommendation .rec-explore-panel-close {
+                align-self: center;
+                min-height: 1.9rem;
+                padding: 0 0.72rem;
+                font-size: 0.72rem;
+            }
+            #page-recommendation .rec-explore-fields {
+                gap: 0;
+                padding: 0.8rem 0.9rem 0.9rem;
+            }
+            #page-recommendation .rec-filter-section,
+            html.theme-day #page-recommendation .rec-filter-section {
+                margin: 0;
+                padding: 0.9rem 0;
+                border: 0;
+                border-radius: 0;
+                background: transparent;
+            }
+            #page-recommendation .rec-filter-section:first-child {
+                padding-top: 0;
+            }
+            #page-recommendation .rec-filter-section + .rec-filter-section {
+                border-top: 1px solid rgba(51, 65, 85, 0.34);
+            }
+            html.theme-day #page-recommendation .rec-filter-section + .rec-filter-section {
+                border-top-color: rgba(203, 213, 225, 0.92);
+            }
+            #page-recommendation .rec-filter-section-title {
+                font-size: 0.7rem;
+                letter-spacing: 0.04em;
+            }
+            #page-recommendation .rec-filter-label {
+                font-size: 0.7rem;
+                letter-spacing: 0.01em;
+            }
+            html.theme-day #page-recommendation .rec-filter-label {
+                color: #475569;
+            }
+            html:not(.theme-day) #page-recommendation .rec-filter-label {
+                color: #94a3b8;
+            }
+            /* 快捷选择：四列等宽。8 个年代正好两行，不再 6+2 参差；近 N 年也正好一行。 */
+            #page-recommendation .rec-decade-chips {
+                display: grid;
+                grid-template-columns: repeat(4, minmax(0, 1fr));
+                gap: 0.4rem;
+                overflow: visible;
+                padding-bottom: 0;
+            }
+            #page-recommendation .rec-decade-chips .rec-genre-chip {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                min-height: 2.1rem;
+                padding: 0 0.2rem;
+                font-size: 0.78rem;
+            }
+            #page-recommendation .rec-explore-panel-actions {
+                padding: 0.72rem 0.9rem calc(0.72rem + env(safe-area-inset-bottom, 0px));
             }
         }
 

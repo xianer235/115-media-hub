@@ -1,9 +1,9 @@
 {
-  "version": "0.16.7",
-  "buildDate": "2026-11-26T18:05:00+08:00",
+  "version": "0.16.8",
+  "buildDate": "2026-11-26T18:30:00+08:00",
   "notes": [
-    "修极影视库存刷新走公网 HTTPS 域名时报 TLS UNEXPECTED_EOF：连接类错误重试、TLS 失败自动换解析地址、分页压到 300 条",
-    "所有媒体库都拉失败时保留上次索引，不再清空「已有」角标；TLS 错误提示改为可照做的排查建议"
+    "手机竖屏筛选面板：删掉旧 header 负外边距（标题被顶出边框），分区不再套卡片，只保留一层圆角",
+    "面板标题/小节标题/字段标签/输入框左缩进统一 0.9rem；快捷年代 chip 改四列等宽两行"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"
