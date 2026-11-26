@@ -727,6 +727,8 @@ class MultiAddressConnectionTest(unittest.TestCase):
                 pass
 
         class FakeContext:
+            # 3.9 的 HTTPSConnection 会读 context.check_hostname（3.12 起不读）。
+            # 这是假 context 的属性，不是构造参数，两版都能过。
             check_hostname = True
             verify_mode = ssl_module.CERT_REQUIRED
 
@@ -739,8 +741,9 @@ class MultiAddressConnectionTest(unittest.TestCase):
             (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("2001:db8::1", 443, 0, 0)),
             (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.0.2.7", 443)),
         ]
+        # 只能传 context：Python 3.12 起 HTTPSConnection 已删除 check_hostname 参数
         conn = http_utils.MultiAddressHTTPSConnection(
-            "jys.example.com", 443, timeout=5, context=FakeContext(), check_hostname=None
+            "jys.example.com", 443, timeout=5, context=FakeContext()
         )
         with mock.patch.object(http_utils.socket, "getaddrinfo", return_value=addresses), \
                 mock.patch.object(http_utils.socket, "socket", FakeSock):
@@ -782,6 +785,36 @@ class ResilientOpenerHandlerTest(unittest.TestCase):
         opener = http_utils.build_resilient_https_opener()
         names = [type(h).__name__ for h in opener.handlers]
         self.assertIn("_MultiAddressHTTPSHandler", names)
+
+
+class Python312CompatTest(unittest.TestCase):
+    """本机 Python 是 3.9，镜像与 CI 是 3.12：用 3.12 已删除的构造参数会只在 CI 炸。
+
+    2026-11-26 就踩过一次：测试给 `HTTPSConnection` 传了 check_hostname 关键字参数，
+    3.9 收得下、3.12 直接 TypeError，本机全绿而 CI 红。这里做一条源码级守卫：
+    **只允许传 context**，属性赋值不受限制。
+    """
+
+    def test_no_source_passes_removed_connection_kwarg(self):
+        import pathlib
+        import re
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        # 关键字参数写法（紧跟等号）；`check_hostname = True` 属性赋值不会被匹配。
+        # 拼字符串是为了不让本行自己被扫到。
+        pattern = re.compile("check_hostname" + "=")
+        offenders = []
+        for base in ("app", "tests"):
+            for path in (root / base).rglob("*.py"):
+                for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                    if line.lstrip().startswith("#"):
+                        continue
+                    if pattern.search(line):
+                        offenders.append("%s:%s" % (path.relative_to(root), lineno))
+        self.assertEqual(
+            offenders, [],
+            "HTTPSConnection 自 Python 3.12 起不再接受 check_hostname 参数，构造时只传 context",
+        )
 
 
 if __name__ == "__main__":

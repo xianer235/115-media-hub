@@ -1,8 +1,8 @@
 {
-  "version": "0.16.13",
-  "buildDate": "2026-11-26T19:00:00+08:00",
+  "version": "0.16.14",
+  "buildDate": "2026-11-26T19:20:00+08:00",
   "notes": [
-    "剧集详情标到「季」：极影视库存现在记录每一季的集数，逐季显示「已有 / 部分有 / 没有」"
+    "修复 CI：测试用了 Python 3.12 已删除的构造参数，导致 0.16.13 的镜像没构建出来"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.16.14] - 2026-11-26
+
+### 修复 0.16.13 的 CI 失败（镜像没构建出来）
+
+0.16.13 的单元测试在本机全绿，但 GitHub Actions 全红，镜像因此没有构建。原因是本机 Python 是 3.9、CI 与镜像是 3.12：测试给 `HTTPSConnection` 传了 `check_hostname` 关键字参数，这个参数 3.12 已经删除，直接 `TypeError`。生产代码本来只传 `context`，所以**只是测试的写法过时，功能本身没问题**。
+
+- 测试改为只传 `context`（3.9 需要的 `context.check_hostname` 属性保留在假 context 上，两版都能跑）
+- 新增一条源码级守卫测试：`app/` 与 `tests/` 里不允许再出现 `check_hostname` 关键字参数，防止同样的坑第三次踩
+- CI 的 `actions/checkout` 4→5、`actions/setup-python` 5→6，消掉 Node 20 弃用警告
+
+无用户可见行为变化。
+
 ## [0.16.13] - 2026-11-26
 
 ### 剧集详情能看到「库里有哪几季」，不再是整部一句「已有」
