@@ -1009,7 +1009,15 @@ def _is_subscription_offline_junk_file(name: str) -> bool:
     for token in _SUBSCRIPTION_OFFLINE_JUNK_NAME_TOKENS:
         if token in stem:
             return True
-    return False
+    # 站点塞进离线包里的假视频（推广话术命名的 .mkv/.mp4）：判定口径与文件管理/接收夹
+    # 共用 scraper 的那一套，避免同一个文件在中转目录和接收夹得到两种结论。
+    # 惰性导入：scraper 会反向 import 订阅相关的少量模块，模块级导入容易成环。
+    try:
+        from .scraper import _is_scraper_ad_file
+
+        return _is_scraper_ad_file(leaf)
+    except Exception:
+        return False
 
 
 def _subscription_offline_title_tokens(task: Dict[str, Any]) -> Set[str]:

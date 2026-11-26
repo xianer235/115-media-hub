@@ -1455,7 +1455,10 @@ SCRAPER_CN_AD_PROMO_PHRASES = (
     "官方网站", "官方网址", "官网", "请访问", "访问网站", "更多剧集", "更多电影",
     "更多资源", "更多精彩", "免费下载", "在线观看",
     # 站点引流整句：真实案例是文件名/文件夹名整段只有这句推广话术，没有任何片名。
-    "更多无水印高品质资源请访问", "无水印高品质资源", "高品质资源",
+    # 2026-11-26 补 “更多高品质资源请访问”：站点把 “无水印” 去掉后，
+    # 只剩 “高品质资源” 命中，残留的 “更多” 让整句判断漏掉（真实案例见下方 `_is_scraper_promotional_only`）。
+    "更多无水印高品质资源请访问", "更多高品质资源请访问",
+    "无水印高品质资源", "高品质资源", "更多高品质资源", "更多优质资源",
     "无水印高清资源", "更多高清资源", "高清资源", "更多无水印",
     "最新域名", "备用域名", "永久域名", "更换域名", "备用网址", "永久网址",
     # 社交引流 / 版权声明式水印：词形明确，不会出现在正常片名里。
@@ -1584,6 +1587,16 @@ _SCRAPER_AD_NAME_DOMAIN_RE = re.compile(
     r"(?i)(?:[a-z0-9][a-z0-9-]*\.)+" + SCRAPER_SITE_TLD_PATTERN + r"\b"
 )
 
+# 推广整句里没被词表吃掉的连接字（“更多高清资源请访问” → 词表只吃到“高清资源”/“请访问”，
+# 剩下一个“更多”）。这些字单独留着不构成片名，判定时一并忽略；
+# 词表是白名单匹配，只有先命中推广词才会走到这里，不会把正常片名里的同字误判。
+_SCRAPER_AD_NAME_FILLER_RE = re.compile(r"更多|请|访问|收藏|本站|获取|免费|下载|观看")
+
+# 广告文件“能不能自动删”的体积门槛（30MB，2026-11-26 定）：
+# 识别广告只看名字；执行删除前再看体积——纯推广话术命名、体积却超过 30MB 的视频
+# 可能是被站点改名的大体积正片，只跳过不删，留给人工确认。
+SCRAPER_AD_VIDEO_MAX_BYTES = 30 * 1024 * 1024
+
 
 def _strip_scraper_compound_extensions(value: str) -> str:
     """剥掉叠在名字后面的已知后缀链（`.mkv` / `.mkv.strm` / `.mp4.DOC`），只剥已知后缀。"""
@@ -1615,8 +1628,9 @@ def _is_scraper_promotional_only(value: str) -> bool:
     residue = _SCRAPER_EMBEDDED_AD_URL_RE.sub(" ", residue)
     residue = _SCRAPER_AD_NAME_DOMAIN_RE.sub(" ", residue)
     residue = _SCRAPER_AD_NAME_RESIDUE_RE.sub(" ", residue)
+    residue = _SCRAPER_AD_NAME_FILLER_RE.sub(" ", residue)
     residue = re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", " ", residue)
-    # 允许残留一个连接字（如“最新地址请收藏本站”里的“请”），但片名至少要有 2 个字才算正常名字。
+    # 允许残留一个连接字，但片名至少要有 2 个字才算正常名字。
     return len(_normalize_scraper_keyword_compact(residue)) <= 1
 
 
@@ -3454,6 +3468,8 @@ def build_scraper_rename_plan(
     action_index = 1
     unchanged_count = 0
     ignored_names: List[str] = []
+    # 名字是纯推广话术、体积却很大的视频：不自动删，单独提示人工确认。
+    oversized_ad_names: List[str] = []
     unchanged_rows: List[Dict[str, Any]] = []
     delete_actions: List[Dict[str, Any]] = []
     subtitle_seen: Dict[Tuple[str, str], int] = {}
@@ -3571,8 +3587,18 @@ def build_scraper_rename_plan(
             # 整季包拆集时，广告 / NFO / 图片 / 说明等非视频文件不能原地留下：它们会让源季包
             # 目录永远非空，下一轮被反复识别成“整理失败”。默认“保留”就随季搬进
             # 片名 (年份)/Season NN/（文件名不改）；开启删除广告时仍然只删除广告类文件。
-            if _is_scraper_ad_file(entry_name, file_size) and bool(plan_options.get("delete_ad_files", False)):
+            if _is_scraper_ad_file_deletable(entry_name, file_size) and bool(plan_options.get("delete_ad_files", False)):
                 delete_actions.append(entry)
+                continue
+            if (
+                category == "video"
+                and _is_scraper_ad_file(entry_name, file_size)
+                and not _is_scraper_ad_file_deletable(entry_name, file_size)
+            ):
+                # 推广命名、体积大的视频：既不自动删，也不能搬进 Season 目录污染媒体库，留在原地。
+                # （txt/图片这类小广告照旧随季搬走，不让源目录永远非空。）
+                oversized_ad_names.append(entry_name)
+                ignored_names.append(entry_name)
                 continue
             _, _, pack_folder_title = _build_scraper_media_titles(tmdb, plan_options, "")
             pack_target_path = _canonical_scraper_mount_path(
@@ -3643,7 +3669,10 @@ def build_scraper_rename_plan(
             ignored_names.append(entry_name)
             continue
         if _is_scraper_ad_file(entry_name, file_size):
-            if bool(plan_options.get("delete_ad_files", False)):
+            if not _is_scraper_ad_file_deletable(entry_name, file_size):
+                oversized_ad_names.append(entry_name)
+                ignored_names.append(entry_name)
+            elif bool(plan_options.get("delete_ad_files", False)):
                 delete_actions.append(entry)
             else:
                 ignored_names.append(entry_name)
@@ -3826,6 +3855,12 @@ def build_scraper_rename_plan(
         action_index += 1
     if delete_actions:
         warnings.append(f"将删除 {len(delete_actions)} 个广告文件（进入网盘回收站）")
+    if oversized_ad_names:
+        oversized_preview = "、".join(oversized_ad_names[:3])
+        warnings.append(
+            f"有 {len(oversized_ad_names)} 个推广命名的视频体积较大未自动删除，请人工确认：{oversized_preview}"
+            + (" 等" if len(oversized_ad_names) > 3 else "")
+        )
     if ignored_names:
         ignored_preview = "、".join(ignored_names[:5])
         warnings.append(
@@ -5537,6 +5572,26 @@ def _is_scraper_ad_image(name: str, size: int = 0) -> bool:
     return False
 
 
+def _is_scraper_ad_file_deletable(name: str, size: int = 0) -> bool:
+    """广告文件能否**自动删除**（整理计划标记删除、接收夹清理都走这里）。
+
+    识别只看名字（见 ``_is_scraper_ad_file``）；能不能删还要再卡一道体积：
+    名字是纯推广话术、体积却超过 ``SCRAPER_AD_VIDEO_MAX_BYTES``（30MB）的视频，
+    说明这个文件可能是被站点改名的大体积正片，删了不可逆（虽然有回收站），
+    这种只跳过不删除，留给人工确认。
+
+    反过来，**不能**用“体积小”单独作为广告判据：20MB 的短片、预告、花絮都是正常存在的，
+    名字里带着完整片名的文件按正常资源走（见 test_is_scraper_ad_file_keeps_mixed_names_even_when_small）。
+    """
+    if not _is_scraper_ad_file(name, size):
+        return False
+    if _scraper_file_category(name) != "video":
+        # 广告图 / 说明网页 / txt 这类再大也是垃圾，不受体积限制。
+        return True
+    total = int(size or 0)
+    return total <= 0 or total < SCRAPER_AD_VIDEO_MAX_BYTES
+
+
 def _is_scraper_ad_file(name: str, size: int = 0) -> bool:
     """判断是否广告类文件：广告扩展名（txt/url/html 等）、广告图片、“片名全是推广话术”的伪装视频，
     以及其他扩展名（.doc / .strm 等）里整段只有推广话术的名字。
@@ -5550,6 +5605,8 @@ def _is_scraper_ad_file(name: str, size: int = 0) -> bool:
         return _is_scraper_ad_image(name, size)
     if category == "video":
         # 站点会把广告片伪装成 .mkv/.mp4；文件名去掉推广话术后没有片名残留时按广告处理。
+        # 名字里还留着片名的文件不在这里判广告——不管体积多小都当正常资源
+        # （体积只用来决定“能不能自动删”，见 `_is_scraper_ad_file_deletable`）。
         return _is_scraper_promotional_only(name)
     if category == "other":
         # 非视频扩展名同样会被拿来塞广告：同一份推广话术会配 .mkv / .mp4 / .DOC，

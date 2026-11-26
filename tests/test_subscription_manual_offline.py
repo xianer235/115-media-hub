@@ -202,6 +202,13 @@ class OfflineSelectionTest(unittest.TestCase):
         self.assertTrue(runner._is_subscription_offline_junk_file("cover.jpg"))
         self.assertTrue(runner._is_subscription_offline_junk_file("movie.nfo"))
         self.assertFalse(runner._is_subscription_offline_junk_file("测试电影.mkv"))
+        # 站点塞进离线包的假视频（推广话术整句命名）：与文件管理/接收夹共用 scraper 的判定。
+        self.assertTrue(
+            runner._is_subscription_offline_junk_file(
+                "【更多高品质资源请访问】【更多高品质资源请访问】.mkv"
+            )
+        )
+        self.assertTrue(runner._is_subscription_offline_junk_file("更多高清资源请访问.mp4"))
 
 
 class OfflineImportPipelineTest(unittest.IsolatedAsyncioTestCase):

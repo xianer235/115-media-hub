@@ -4419,7 +4419,7 @@
             setCheck('monitor_inbox_asc_rename_folders', opts.rename_selected_folders !== false);
             setCheck('monitor_inbox_asc_season_subfolder', opts.use_season_subfolder !== false);
             setCheck('monitor_inbox_asc_include_tmdb_id', opts.include_tmdb_id);
-            setCheck('monitor_inbox_asc_delete_ad_files', opts.delete_ad_files);
+            setCheck('monitor_inbox_asc_delete_ad_files', opts.delete_ad_files !== false);
             setCheck('monitor_inbox_asc_preserve_file_info', opts.preserve_file_info);
             setSelect('monitor_inbox_asc_file_name_mode', opts.file_name_mode, ['standard', 'clean', 'keep']);
             setSelect('monitor_inbox_asc_title_language', opts.title_language, ['auto', 'zh', 'en']);
@@ -4438,7 +4438,7 @@
             document.getElementById('monitor_inbox_asc_rename_folders').checked = true;
             document.getElementById('monitor_inbox_asc_season_subfolder').checked = true;
             document.getElementById('monitor_inbox_asc_include_tmdb_id').checked = false;
-            document.getElementById('monitor_inbox_asc_delete_ad_files').checked = false;
+            document.getElementById('monitor_inbox_asc_delete_ad_files').checked = true;
             document.getElementById('monitor_inbox_asc_preserve_file_info').checked = false;
             document.getElementById('monitor_inbox_asc_file_name_mode').value = 'standard';
             document.getElementById('monitor_inbox_asc_title_language').value = 'zh';

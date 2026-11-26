@@ -1395,11 +1395,15 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
             "path": f"影视/{folder_name}",
         }
         entries = []
-        for index, name in enumerate(files, start=1):
+        for index, item in enumerate(files, start=1):
+            # 允许传 {"name":..., "size":...}：广告删除要按体积卡门槛，用例需要带体积。
+            name = str(item.get("name", "")) if isinstance(item, dict) else str(item)
+            size = int(item.get("size", 0) or 0) if isinstance(item, dict) else 0
             entries.append(
                 {
                     "id": f"f{index}",
                     "name": name,
+                    "size": size,
                     "is_dir": False,
                     "parent_id": "d1",
                     "parent_path": folder_name,
@@ -1973,6 +1977,43 @@ class ScraperBatchOrganizeTest(unittest.TestCase):
         """名字里还留着正片信息时，不管体积多小都不按广告处理（只认“整段都是推广话术”）。"""
         self.assertFalse(scraper._is_scraper_ad_file("更多资源请访问官方网站.The.Matrix.1999.1080p.mkv", 5 * 1024 * 1024))
         self.assertFalse(scraper._is_scraper_ad_file("某短片.在线观看.mp4", 30 * 1024 * 1024))
+
+    def test_promo_only_without_watermark_phrase_is_recognized(self):
+        """真实案例（2026-11-26）：站点把“无水印”去掉后，残留的“更多”让整句判断漏掉。"""
+        for name in (
+            "【更多高品质资源请访问】【更多高品质资源请访问】.mkv",
+            "【更多高品质资源请访问】【更多高品质资源请访问】.mp4",
+            "【更多高品质资源请访问】【更多高品质资源请访问】.mkv.strm",
+            "【更多高品质资源请访问】.DOC",
+        ):
+            self.assertTrue(scraper._is_scraper_promotional_only(name), name)
+            self.assertTrue(scraper._is_scraper_ad_file(name, 900 * 1024), name)
+        # 词表能吃掉的连接字不应把正常片名带进去：带“更多/请”的正常片名仍能提取片名。
+        self.assertIn("请回答1988", scraper._extract_scraper_title_candidates("请回答1988.S01E01.mkv"))
+        self.assertFalse(scraper._is_scraper_ad_file("请回答1988.S01E01.mkv", 800 * 1024 * 1024))
+
+    def test_ad_delete_guard_keeps_huge_promo_named_video(self):
+        """识别只看名字；能不能自动删再看体积——30MB 以上的纯推广话术视频留给人工确认。"""
+        ad_name = "【更多高品质资源请访问】【更多高品质资源请访问】.mkv"
+        self.assertTrue(scraper._is_scraper_ad_file_deletable(ad_name, 900 * 1024))
+        self.assertTrue(scraper._is_scraper_ad_file_deletable(ad_name, 0))
+        # 大体积的纯推广话术视频仍然算广告（不整理入库），但不自动删。
+        self.assertTrue(scraper._is_scraper_ad_file(ad_name, 800 * 1024 * 1024))
+        self.assertFalse(scraper._is_scraper_ad_file_deletable(ad_name, 800 * 1024 * 1024))
+        # 广告图 / 说明网页不受体积限制。
+        self.assertTrue(scraper._is_scraper_ad_file_deletable("官方网站.jpg", 90 * 1024 * 1024))
+        self.assertTrue(scraper._is_scraper_ad_file_deletable("更多资源请访问.txt", 0))
+
+    def test_build_rename_plan_keeps_huge_promo_video_instead_of_deleting(self):
+        """开了“删除广告文件”也不删 30MB 以上的推广话术视频，只跳过并提示保留。"""
+        tmdb = self._tmdb_binding()
+        big_ad = "【更多高品质资源请访问】【更多高品质资源请访问】.mkv"
+        files = [{"name": "Skurkarnas skurk (2026).mp4", "size": 900 * 1024 * 1024},
+                 {"name": big_ad, "size": 800 * 1024 * 1024}]
+        plan = self._rename_plan_with_files(files, tmdb, options={"delete_ad_files": True})
+        delete_names = [action.get("old_name") for action in plan["actions"] if action.get("delete")]
+        self.assertNotIn(big_ad, delete_names)
+        self.assertTrue(any(big_ad in warning for warning in plan["warnings"]))
 
     def test_build_rename_plan_keeps_nfo_info_file_even_when_deleting_ads(self):
         tmdb = self._tmdb_binding(title="Show", year="2024", media_type="tv")

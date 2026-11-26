@@ -22,6 +22,7 @@ from ..db import now_text, retry_sqlite_locked
 from ..providers.registry import label_for as _provider_label
 from . import scraper as scraper_service
 from .scraper import (
+    _is_scraper_ad_file_deletable,
     _normalize_scraper_batch_preferences,
     _scraper_season_pack_seasons,
     build_scraper_plan_for_batch,
@@ -301,8 +302,12 @@ def _inbox_provider(cfg: Dict[str, Any], inbox: Optional[Dict[str, Any]] = None)
 
 
 def _inbox_scrape_options(inbox: Dict[str, Any]) -> Dict[str, Any]:
-    """接收夹整理选项：取自接收夹任务自己，缺省按中文标题 + 不删广告文件起步。"""
-    options: Dict[str, Any] = {"title_language": "zh", "delete_ad_files": False}
+    """接收夹整理选项：取自接收夹任务自己，缺省按中文标题 + 删除广告文件起步。
+
+    接收夹是中转区，广告文件（推广话术命名的假 mkv、说明网页、广告图）没有任何保留价值，
+    默认删除（进网盘回收站，可手动恢复）；用户在任务弹窗里显式关掉才会保留。
+    """
+    options: Dict[str, Any] = {"title_language": "zh", "delete_ad_files": True}
     raw_options = inbox.get("auto_scrape_options") if isinstance(inbox, dict) else None
     if isinstance(raw_options, dict) and raw_options:
         options.update(_normalize_scraper_batch_preferences(raw_options))
@@ -1004,6 +1009,74 @@ def _folder_contains_files(
     return False
 
 
+def _cleanup_inbox_ad_files(
+    provider: str,
+    base_cid: str,
+    base_rel: str,
+    *,
+    monitor_run_id: str = "",
+) -> Dict[str, Any]:
+    """整理前先清接收夹**根目录**里的广告文件（删除进网盘回收站）。
+
+    站点塞进资源里的假 mkv（如 ``【更多高品质资源请访问】.mkv``）不是影视资源：
+    留在接收夹里每轮都会被当成“待识别条目”，既白烧 TMDB / AI 调用，又让接收夹永远清不空。
+    子目录里的广告由整理计划按 ``delete_ad_files`` 处理，这里只扫根目录，避免多列一次全树。
+    """
+    stats: Dict[str, Any] = {"deleted": 0, "failed": [], "names": []}
+    normalized_provider = str(provider or "").strip() or QUICK_IMPORT_DEFAULT_PROVIDER
+    try:
+        children = _list_inbox_children(str(base_cid or "").strip() or "0", normalized_provider)
+    except Exception as exc:
+        logging.warning("接收夹广告清理列目录失败：%s", exc)
+        return stats
+    ad_entries: List[Dict[str, Any]] = []
+    for entry in children:
+        if not isinstance(entry, dict) or bool(entry.get("is_dir", False)):
+            continue
+        entry_id = str(entry.get("id", "") or "").strip()
+        name = str(entry.get("name", "") or "").strip()
+        if not entry_id or not name:
+            continue
+        if not _is_scraper_ad_file_deletable(name, int(entry.get("size", 0) or 0)):
+            continue
+        ad_entries.append(
+            {
+                "id": entry_id,
+                "name": name,
+                "is_dir": False,
+                "parent_id": str(base_cid or "").strip() or "0",
+                "path": join_relative_path(base_rel, name),
+                "size": max(0, int(entry.get("size", 0) or 0)),
+            }
+        )
+    if not ad_entries:
+        return stats
+    try:
+        scraper_service.delete_scraper_entries(
+            normalized_provider,
+            [item["id"] for item in ad_entries],
+            parent_id=str(base_cid or "").strip() or "0",
+            entries=ad_entries,
+        )
+    except Exception as exc:
+        stats["failed"] = [{"name": item["name"], "reason": str(exc)[:120]} for item in ad_entries]
+        logging.warning("接收夹广告文件删除失败：%s", exc)
+        return stats
+    stats["deleted"] = len(ad_entries)
+    stats["names"] = [item["name"] for item in ad_entries]
+    if monitor_run_id:
+        for item in ad_entries:
+            record_monitor_run_event(
+                monitor_run_id,
+                category="process",
+                operation="cleanup",
+                status="completed",
+                title=item["name"],
+                detail={"path": item["path"], "reason": "接收夹广告文件已清理（进入网盘回收站）"},
+            )
+    return stats
+
+
 def _retry_inbox_cleanup(
     leftovers: List[Dict[str, Any]],
     *,
@@ -1529,6 +1602,25 @@ def _run_inbox_quick_import(
         write_inbox_divider("任务开始", format_monitor_trigger(trigger))
         try:
             base_cid = resolve_scraper_dest_folder_id(provider, base_rel)
+            # 先清广告再识别：推广话术命名的假 mkv / 说明网页留在接收夹里，会被当成
+            # “待识别条目”反复处理（白烧 TMDB/AI 调用），也会让接收夹永远清不空。
+            if bool(_inbox_scrape_options(inbox).get("delete_ad_files", True)):
+                ad_stats = _cleanup_inbox_ad_files(
+                    provider,
+                    base_cid,
+                    base_rel,
+                    monitor_run_id=monitor_run_id,
+                )
+                if ad_stats.get("deleted"):
+                    write_monitor_log_sync(
+                        f"{task_label} · 已清理广告文件 {ad_stats['deleted']} 个（进入网盘回收站）",
+                        "info",
+                    )
+                if ad_stats.get("failed"):
+                    write_monitor_log_sync(
+                        f"{task_label} · 有 {len(ad_stats['failed'])} 个广告文件删除失败",
+                        "warn",
+                    )
             identified = identify_scraper_batch_entries(
                 provider,
                 None,

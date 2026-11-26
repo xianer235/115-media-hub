@@ -683,6 +683,51 @@ class InboxStagingGraceTest(unittest.TestCase):
         self.assertEqual(result["moved"], [])
 
 
+class InboxAdCleanupTest(unittest.TestCase):
+    """接收夹整理前先清广告文件：推广话术命名的假 mkv / 说明网页不进识别流程。"""
+
+    def test_removes_ad_files_and_keeps_real_ones(self):
+        children = [
+            {"id": "a1", "name": "【更多高品质资源请访问】【更多高品质资源请访问】.mkv", "size": 900 * 1024, "is_dir": False},
+            {"id": "a2", "name": "更多高清资源.mp4", "size": 400 * 1024, "is_dir": False},
+            {"id": "a3", "name": "官方网站.jpg", "size": 120 * 1024, "is_dir": False},
+            {"id": "r1", "name": "某电影.2024.1080p.mkv", "size": 3 * 1024 ** 3, "is_dir": False},
+            {"id": "d1", "name": "电视剧文件夹", "size": 0, "is_dir": True},
+        ]
+        with mock.patch.object(quick_import, "_list_inbox_children", return_value=children), \
+                mock.patch.object(scraper, "delete_scraper_entries", return_value={"ok": True}) as deleter:
+            stats = quick_import._cleanup_inbox_ad_files("115", "cid-inbox", "接收")
+        self.assertEqual(stats["deleted"], 3)
+        self.assertEqual(stats["failed"], [])
+        self.assertEqual(sorted(deleter.call_args.args[1]), ["a1", "a2", "a3"])
+        self.assertEqual(deleter.call_args.kwargs["parent_id"], "cid-inbox")
+
+    def test_keeps_promo_named_video_larger_than_threshold(self):
+        """纯推广话术名但体积很大：可能被站点改名的大体积正片，交给整理计划/人工，不自动删。"""
+        children = [
+            {"id": "a1", "name": "【更多高品质资源请访问】.mkv", "size": 800 * 1024 * 1024, "is_dir": False},
+        ]
+        with mock.patch.object(quick_import, "_list_inbox_children", return_value=children), \
+                mock.patch.object(scraper, "delete_scraper_entries") as deleter:
+            stats = quick_import._cleanup_inbox_ad_files("115", "cid-inbox", "接收")
+        self.assertEqual(stats["deleted"], 0)
+        deleter.assert_not_called()
+
+    def test_delete_failure_is_reported_not_raised(self):
+        children = [{"id": "a1", "name": "更多资源请访问.mp4", "size": 300 * 1024, "is_dir": False}]
+        with mock.patch.object(quick_import, "_list_inbox_children", return_value=children), \
+                mock.patch.object(scraper, "delete_scraper_entries", side_effect=RuntimeError("网盘 500")):
+            stats = quick_import._cleanup_inbox_ad_files("115", "cid-inbox", "接收")
+        self.assertEqual(stats["deleted"], 0)
+        self.assertEqual(len(stats["failed"]), 1)
+        self.assertIn("网盘 500", stats["failed"][0]["reason"])
+
+    def test_list_failure_is_swallowed(self):
+        with mock.patch.object(quick_import, "_list_inbox_children", side_effect=RuntimeError("没登录")):
+            stats = quick_import._cleanup_inbox_ad_files("115", "cid-inbox", "接收")
+        self.assertEqual(stats, {"deleted": 0, "failed": [], "names": []})
+
+
 class MonitorTaskTypeConstraintTest(unittest.TestCase):
     """同名任务类型不可更改；接收夹可以按网盘新增（每个网盘一个），扫描任务照旧。"""
 
