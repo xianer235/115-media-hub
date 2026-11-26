@@ -1,8 +1,9 @@
-"""查重前端：入口只扫「勾中的那一处」，面板渲染走主题无关的类名。
+"""查重前端：入口扫「勾中条目所在目录」（可多选），结果走独占模式渲染。
 
-两个断言点都是行为性回归，不检查源码字符串：
-1. ``open({cid})`` 必须把勾选的文件夹 id 发给扫描接口，不传时退回当前目录；
-2. 面板 meta 要带上服务端返回的实际扫描路径（用户得知道扫的是哪一层）。
+三个断言点都是行为性回归，不检查源码字符串：
+1. ``open(...)`` 必须把勾选条目的所在目录发给扫描接口，不传时退回当前目录；
+2. 多个目标要一次带上，同一 cid 只带一次；
+3. 面板 meta 要带上服务端返回的实际扫描路径（用户得知道扫的是哪一层）。
 """
 
 import json
@@ -64,11 +65,17 @@ const vm = require('vm');
 let source = fs.readFileSync({json.dumps(str(DUPLICATES_JS))}, 'utf8');
 source = source.replace('export function', 'function');
 const nodes = {{}};
+const classOps = [];
 function node(id) {{
   if (!nodes[id]) {{
     nodes[id] = {{
       id, textContent: '', innerHTML: '', disabled: false, title: '', checked: false,
-      classList: {{ add() {{}}, remove() {{}}, contains() {{ return false; }} }},
+      classList: {{
+        add(name) {{ classOps.push([id, 'add', name]); }},
+        remove(name) {{ classOps.push([id, 'remove', name]); }},
+        contains() {{ return false; }},
+        toggle(name, on) {{ classOps.push([id, 'toggle', name, !!on]); }},
+      }},
       removeAttribute() {{}}, setAttribute() {{}},
     }};
   }}
@@ -102,7 +109,7 @@ Promise.resolve((async () => {{
   const result = await ({expression});
   return {{ result, meta: node('scraper-duplicates-meta').textContent }};
 }})())
-  .then(out => process.stdout.write(JSON.stringify({{ out, calls }})))
+  .then(out => process.stdout.write(JSON.stringify({{ out, calls, classOps }})))
   .catch(error => {{ console.error(error); process.exit(1); }});
 """
     completed = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True)
@@ -118,10 +125,38 @@ class DuplicateScanTargetTest(unittest.TestCase):
         self.assertEqual(data["calls"][0]["url"], "/scraper/duplicates/scan")
         self.assertEqual(data["calls"][0]["payload"]["cid"], "777")
         self.assertEqual(data["calls"][0]["payload"]["provider"], "115")
+        self.assertEqual(data["calls"][0]["payload"]["targets"], [{"cid": "777"}])
 
     def test_open_without_cid_falls_back_to_current_folder(self):
         data = run_duplicates_js("controller.open()")
         self.assertEqual(data["calls"][0]["payload"]["cid"], "900")
+        self.assertNotIn("targets", data["calls"][0]["payload"])
+
+    def test_open_with_multiple_targets_sends_all_of_them(self):
+        data = run_duplicates_js(
+            "controller.open({ targets: [{ cid: '777' }, { cid: '888' }, { cid: '999' }] })"
+        )
+        payload = data["calls"][0]["payload"]
+        self.assertEqual([item["cid"] for item in payload["targets"]], ["777", "888", "999"])
+        self.assertEqual(payload["cid"], "777")
+
+    def test_open_dedupes_repeated_targets(self):
+        data = run_duplicates_js(
+            "controller.open({ targets: [{ cid: '777' }, { cid: '777' }, { cid: '' }] })"
+        )
+        self.assertEqual(data["calls"][0]["payload"]["targets"], [{"cid": "777"}])
+
+    def test_open_switches_page_into_duplicates_mode(self):
+        data = run_duplicates_js("controller.open({ cid: '777' })")
+        mode_ops = [op for op in data["classOps"] if op[2] == "is-duplicates-mode"]
+        self.assertIn(["page-scraper", "toggle", "is-duplicates-mode", True], mode_ops)
+
+    def test_close_leaves_duplicates_mode(self):
+        data = run_duplicates_js(
+            "controller.open({ cid: '777' }).then(() => controller.close())"
+        )
+        mode_ops = [op for op in data["classOps"] if op[2] == "is-duplicates-mode"]
+        self.assertIn(["page-scraper", "toggle", "is-duplicates-mode", False], mode_ops)
 
     def test_meta_shows_scanned_path_from_server(self):
         data = run_duplicates_js("controller.open({ cid: '777' })")
@@ -186,23 +221,52 @@ Promise.resolve(vm.runInContext({json.dumps(expression)}, context))
 
 
 class DuplicatesSelectionGuardTest(unittest.TestCase):
-    """没勾选 / 勾多个时必须拦下来，否则手滑一下就把整库扫了。"""
+    """一个都没勾时必须拦下来；多选要按目录去重后全部带上。"""
 
     def test_rejects_without_selection(self):
         data = run_core_js("openDuplicatesForSelection()")
         self.assertEqual(len(data["toasts"]), 1)
         self.assertIn("请先勾选", data["toasts"][0]["message"])
 
-    def test_rejects_multiple_selection(self):
+    def test_multiple_folders_become_multiple_targets(self):
         expression = """
-            state.cid = '900';
-            state.selected.set('1', { id: '1', name: '某剧 A', is_dir: true, parent_path: '' });
-            state.selected.set('2', { id: '2', name: '某剧 B', is_dir: true, parent_path: '' });
-            openDuplicatesForSelection()
+            buildDuplicateScanTargets([
+                { id: '1', name: '某剧 A', is_dir: true },
+                { id: '2', name: '某剧 B', is_dir: true },
+            ], '900')
         """
         data = run_core_js(expression)
-        self.assertEqual(len(data["toasts"]), 1)
-        self.assertIn("只能对一个", data["toasts"][0]["message"])
+        self.assertEqual(data["result"], [{"cid": "1"}, {"cid": "2"}])
+
+    def test_files_in_same_folder_scan_that_folder_once(self):
+        expression = """
+            buildDuplicateScanTargets([
+                { id: '11', name: 'a.mkv', is_dir: false, parent_id: '900' },
+                { id: '12', name: 'b.mkv', is_dir: false, parent_id: '900' },
+            ], '900')
+        """
+        data = run_core_js(expression)
+        self.assertEqual(data["result"], [{"cid": "900"}])
+
+    def test_file_uses_its_own_parent_dir(self):
+        # 搜索结果的 parent_id 可能不是当前浏览目录，必须按条目自己的目录扫。
+        expression = """
+            buildDuplicateScanTargets([
+                { id: '11', name: 'a.mkv', is_dir: false, parent_id: '321' },
+            ], '900')
+        """
+        data = run_core_js(expression)
+        self.assertEqual(data["result"], [{"cid": "321"}])
+
+    def test_mixed_selection_keeps_folder_and_current_dir(self):
+        expression = """
+            buildDuplicateScanTargets([
+                { id: '1', name: '某剧 A', is_dir: true },
+                { id: '11', name: 'a.mkv', is_dir: false },
+            ], '900')
+        """
+        data = run_core_js(expression)
+        self.assertEqual(data["result"], [{"cid": "1"}, {"cid": "900"}])
 
 
 if __name__ == "__main__":

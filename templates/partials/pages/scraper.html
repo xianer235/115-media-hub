@@ -68,7 +68,7 @@
                                     </button>
                                     <div id="scraper-selection-more-menu" class="scraper-selection-more-menu hidden" role="menu" aria-label="更多操作">
                                         <button type="button" class="scraper-menu-item" role="menuitem" data-scraper-action="monitor-scan" title="扫描监控/刷新 STRM（只同步 STRM，不整理文件）">扫描监控</button>
-                                        <button type="button" class="scraper-menu-item" role="menuitem" data-scraper-action="open-duplicates" disabled title="对勾选的文件夹查重（勾选文件则查它所在目录）——只扫勾中的这一处，不会扫整个根目录">查重</button>
+                                        <button type="button" class="scraper-menu-item" role="menuitem" data-scraper-action="open-duplicates" disabled title="对勾选的文件夹 / 文件所在目录查重，可多选——只扫这些目录，不会扫整个根目录">查重</button>
                                     </div>
                                 </div>
                                 <button id="scraper-reopen-batch-btn" type="button" class="scraper-compact-btn scraper-primary-soft hidden" data-scraper-action="reopen-batch" title="返回批量识别界面，可改绑或重新选词搜索">修改绑定</button>
@@ -91,7 +91,7 @@
                                     <button type="button" class="scraper-compact-btn" data-scraper-action="dup-keep-best" title="每组只保留画质最高的那一份，其余勾选待删">每组保留最高画质</button>
                                     <button type="button" class="scraper-compact-btn" data-scraper-action="dup-rescan">重新扫描</button>
                                     <button id="scraper-duplicates-delete-btn" type="button" class="scraper-compact-btn scraper-danger-soft" data-scraper-action="dup-delete" disabled>清理选中 0 项</button>
-                                    <button type="button" class="scraper-compact-btn" data-scraper-action="close-duplicates">关闭</button>
+                                    <button id="scraper-duplicates-exit-btn" type="button" class="scraper-compact-btn scraper-primary-soft" data-scraper-action="close-duplicates" title="退出查重，回到文件列表">退出查重</button>
                                 </div>
                             </div>
                             <div id="scraper-duplicates-summary" class="scraper-duplicates-summary"></div>

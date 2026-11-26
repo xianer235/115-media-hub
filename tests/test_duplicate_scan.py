@@ -238,6 +238,90 @@ class ScanEndToEndTest(unittest.TestCase):
         self.assertEqual(result["groups"], [])
 
 
+class MultiTargetScanTest(unittest.TestCase):
+    """多选目录：结果合并，但不同目标下相同相对路径的剧不能串成一组。"""
+
+    def _run(self, tree, targets, path_map=None):
+        provider = FakeProvider(tree)
+        mapping = path_map or {}
+
+        def fake_path(provider_name, cid):
+            return {"path": mapping.get(str(cid), f"库/{cid}")}
+
+        with mock.patch.object(dup, "_require_provider_cookie", return_value="cookie"), \
+             mock.patch.object(dup, "_provider_or_none", return_value=provider), \
+             mock.patch.object(dup, "resolve_scraper_folder_path", side_effect=fake_path):
+            return dup.scan_duplicate_media("115", "0", {}, targets)
+
+    def _two_series_tree(self):
+        return {
+            "0": [_folder("剧 A (2024)", "100"), _folder("剧 B (2024)", "200")],
+            "100": [_folder("Season 01", "101")],
+            "200": [_folder("Season 01", "201")],
+            "101": [
+                _file("S01E01.1080p.mkv", "a1", sha1="AAA", size=900),
+                _file("S01E01 副本.mkv", "a2", sha1="AAA", size=900),
+            ],
+            "201": [
+                _file("S01E01.1080p.mkv", "b1", sha1="BBB", size=800),
+                _file("S01E01 副本.mkv", "b2", sha1="BBB", size=800),
+            ],
+        }
+
+    def test_same_relative_path_in_different_targets_stays_separate(self):
+        result = self._run(
+            self._two_series_tree(),
+            [{"cid": "100"}, {"cid": "200"}],
+            path_map={"100": "库/剧 A (2024)", "200": "库/剧 B (2024)"},
+        )
+        self.assertEqual(result["summary"]["group_count"], 2)
+        strides = {group["group_id"].split("|")[1] for group in result["groups"]}
+        self.assertEqual(strides, {"100", "200"})
+        for group in result["groups"]:
+            self.assertEqual(len(group["files"]), 2)
+
+    def test_files_carry_their_own_root_path(self):
+        result = self._run(
+            self._two_series_tree(),
+            [{"cid": "100"}, {"cid": "200"}],
+            path_map={"100": "库/剧 A (2024)", "200": "库/剧 B (2024)"},
+        )
+        prefixes = {group["files"][0]["path"].split("/")[1] for group in result["groups"]}
+        self.assertEqual(prefixes, {"剧 A (2024)", "剧 B (2024)"})
+        self.assertEqual(len(result["roots"]), 2)
+        # 多目标时没有单一 root_path，前端按 roots 显示范围。
+        self.assertEqual(result["root_path"], "")
+
+    def test_same_file_seen_from_parent_and_child_target_counted_once(self):
+        tree = {
+            "0": [_folder("剧 A (2024)", "100")],
+            "100": [_folder("Season 01", "101")],
+            "101": [
+                _file("S01E01.1080p.mkv", "a1", sha1="AAA", size=900),
+                _file("S01E01 副本.mkv", "a2", sha1="AAA", size=900),
+            ],
+        }
+        result = self._run(tree, [{"cid": "0"}, {"cid": "101"}])
+        self.assertEqual(result["scanned"]["media_files"], 2)
+        self.assertEqual(result["summary"]["group_count"], 1)
+        self.assertEqual(result["summary"]["duplicate_files"], 2)
+
+    def test_targets_over_limit_are_dropped(self):
+        targets = [{"cid": str(index)} for index in range(1, dup.SCAN_MAX_TARGETS + 6)]
+        result = self._run({}, targets)
+        self.assertEqual(len(result["roots"]), dup.SCAN_MAX_TARGETS)
+        self.assertEqual(result["targets_skipped"], 5)
+        self.assertTrue(result["scanned"]["truncated"])
+
+    def test_cid_list_entries_are_accepted(self):
+        result = self._run(
+            self._two_series_tree(),
+            ["100", "200"],
+            path_map={"100": "库/剧 A (2024)", "200": "库/剧 B (2024)"},
+        )
+        self.assertEqual(len(result["roots"]), 2)
+
+
 class PlanDeletionTest(unittest.TestCase):
     def _groups(self):
         files = [

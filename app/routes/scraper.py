@@ -49,7 +49,10 @@ async def get_scraper_providers_endpoint() -> Dict[str, Any]:
 
 @router.post("/scraper/duplicates/scan")
 async def scan_duplicate_media_endpoint(request: Request) -> Dict[str, Any]:
-    """查重扫描：只读，不产生任何写操作。"""
+    """查重扫描：只读，不产生任何写操作。
+
+    ``targets`` 支持多选（每项 ``{"cid": "..."}`` 或 cid 字符串），不传就按单个 ``cid`` 扫。
+    """
     try:
         data = await request.json()
     except Exception:
@@ -57,13 +60,17 @@ async def scan_duplicate_media_endpoint(request: Request) -> Dict[str, Any]:
     payload = data if isinstance(data, dict) else {}
     provider = str(payload.get("provider", "115") or "115").strip() or "115"
     cid = str(payload.get("cid", "0") or "0").strip() or "0"
+    raw_targets = payload.get("targets")
+    targets = raw_targets if isinstance(raw_targets, list) else None
     options = {
         "max_depth": payload.get("max_depth"),
         "max_dirs": payload.get("max_dirs"),
         "max_entries": payload.get("max_entries"),
     }
     try:
-        return await asyncio.to_thread(duplicate_scan.scan_duplicate_media, provider, cid, options)
+        return await asyncio.to_thread(
+            duplicate_scan.scan_duplicate_media, provider, cid, options, targets
+        )
     except Exception as exc:
         return _error_response(exc)
 

@@ -21,7 +21,7 @@
 - 单次删除上限 ``MAX_DELETE_FILES``，超了要求分批；
 - 删除复用 ``delete_scraper_entries``，115 走 ``/rb/delete`` 进回收站，可恢复。
 
-扫描范围由调用方指定（前端传勾中的文件夹 cid，勾文件则传它所在目录）：
+扫描范围由调用方指定（前端传勾中的文件夹 cid 或所在目录，可多选，最多 20 处）：
 115 列目录有 0.35 秒节流，全库扫是十几分钟量级，按目录扫才能做到点了就有反馈。
 """
 
@@ -49,6 +49,8 @@ SCAN_MAX_DIRS_DEFAULT = 400
 SCAN_MAX_DIRS_LIMIT = 2000
 SCAN_MAX_ENTRIES_DEFAULT = 20000
 SCAN_MAX_ENTRIES_LIMIT = 60000
+# 一次最多扫多少个目标目录：多选是给人用的，勾几十个目录必然是误操作。
+SCAN_MAX_TARGETS = 20
 # 单次删除上限：超过就要求分批，避免一次点下去删掉几百个文件后才发现删错。
 MAX_DELETE_FILES = 200
 # 一次删除请求的批大小：网盘接口对单请求 fid 数量不敏感，但失败时批量回滚更细。
@@ -311,12 +313,21 @@ def _join_rel(left: str, right: str) -> str:
 # ============================================================
 
 
-def _build_group(key: Tuple[Any, ...], items: List[Dict[str, Any]], root_path: str) -> Optional[Dict[str, Any]]:
+def _build_group(key: Tuple[Any, ...], items: List[Dict[str, Any]], root_path: str = "") -> Optional[Dict[str, Any]]:
     if len(items) < 2:
         return None
     kind = str(key[0])
+    # key 的第 2 位是扫描目标（cid）。多选多个目录时，两个目标下都叫
+    # ``某剧/Season 01`` 的相对路径必须互不相干，否则会把不同剧的第 1 集并成一组。
+    scope = str(key[1] or "")
+    series_dir = str(key[2] or "")
+    season = int(key[3] or 0) if kind == "tv" else 0
+    episode = int(key[4] or 0) if kind == "tv" else 0
+    group_root = str(items[0].get("_root_path", "") or root_path)
     for item in items:
         item.pop("_identity", None)
+        item.pop("_scope", None)
+        item.pop("_root_path", None)
         item["resolution"] = _resolution_label(item.get("name", ""))
     ranked = sorted(items, key=_file_score, reverse=True)
     keep_id = str(ranked[0].get("id", "") or "")
@@ -332,17 +343,13 @@ def _build_group(key: Tuple[Any, ...], items: List[Dict[str, Any]], root_path: s
     tier = "exact" if exact_pairs else "episode"
 
     if kind == "tv":
-        series_dir = str(key[1] or "")
-        season = int(key[2] or 0)
-        episode = int(key[3] or 0)
         label = f"{_leaf_name(series_dir) or '（根目录）'} · S{season:02d}E{episode:02d}"
         series_name = _leaf_name(series_dir)
-        group_id = f"tv|{series_dir}|{season}|{episode}"
+        group_id = f"tv|{scope}|{series_dir}|{season}|{episode}"
     else:
-        series_dir = str(key[1] or "")
         label = _leaf_name(series_dir) or "（根目录）"
         series_name = _leaf_name(series_dir)
-        group_id = f"movie|{series_dir}"
+        group_id = f"movie|{scope}|{series_dir}"
 
     keep_size = 0
     reclaimable = 0
@@ -355,7 +362,7 @@ def _build_group(key: Tuple[Any, ...], items: List[Dict[str, Any]], root_path: s
             reclaimable += size
 
     for item in items:
-        item["path"] = _join_rel(root_path, str(item.get("path", "") or ""))
+        item["path"] = _join_rel(group_root, str(item.get("path", "") or ""))
         item["sha1_short"] = str(item.get("sha1", "") or "")[:8]
 
     return {
@@ -365,8 +372,8 @@ def _build_group(key: Tuple[Any, ...], items: List[Dict[str, Any]], root_path: s
         "label": label,
         "series": series_name,
         "series_dir": series_dir,
-        "season": int(key[2] or 0) if kind == "tv" else 0,
-        "episode": int(key[3] or 0) if kind == "tv" else 0,
+        "season": season,
+        "episode": episode,
         "files": sorted(items, key=_file_score, reverse=True),
         "exact_sha1_count": exact_pairs,
         "reclaimable_bytes": reclaimable,
@@ -390,20 +397,22 @@ def _classify_files(files: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return classified
 
 
-def _build_groups(classified: List[Dict[str, Any]], root_path: str) -> List[Dict[str, Any]]:
+def _build_groups(classified: List[Dict[str, Any]], root_path: str = "") -> List[Dict[str, Any]]:
     buckets: Dict[Tuple[Any, ...], List[Dict[str, Any]]] = {}
     for item in classified:
         identity = item.get("_identity") if isinstance(item.get("_identity"), dict) else {}
         kind = str(identity.get("kind", "") or "")
+        scope = str(item.get("_scope", "") or "")
         if kind == "tv":
             key: Tuple[Any, ...] = (
                 "tv",
+                scope,
                 str(identity.get("series_dir", "") or ""),
                 int(identity.get("season", 0) or 0),
                 int(identity.get("episode", 0) or 0),
             )
         elif kind == "movie":
-            key = ("movie", str(identity.get("series_dir", "") or ""))
+            key = ("movie", scope, str(identity.get("series_dir", "") or ""))
         else:
             continue
         buckets.setdefault(key, []).append(dict(item))
@@ -437,21 +446,28 @@ def _normalize_series_key(name: str) -> Tuple[str, str]:
 
 
 def _build_series_hints(classified: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """同一部剧出现在多个不同命名的目录 → 提示（不给批量删除）。"""
-    buckets: Dict[Tuple[str, str], Dict[str, Set[int]]] = {}
+    """同一部剧出现在多个不同命名的目录 → 提示（不给批量删除）。
+
+    多目标扫描时按目标隔离：不同目标下的同名剧不是「同一部剧存了两个目录」，
+    只是用户一次勾了两个不相关的文件夹。
+    """
+    buckets: Dict[Tuple[str, str, str], Dict[str, Set[int]]] = {}
     for item in classified:
         identity = item.get("_identity") if isinstance(item.get("_identity"), dict) else {}
         if str(identity.get("kind", "") or "") != "tv":
             continue
         series_dir = str(identity.get("series_dir", "") or "")
-        key = _normalize_series_key(_leaf_name(series_dir))
-        if not key[0] or len(key[0]) < 2:
+        name_key = _normalize_series_key(_leaf_name(series_dir))
+        if not name_key[0] or len(name_key[0]) < 2:
             continue
+        key = (str(item.get("_scope", "") or ""), name_key[0], name_key[1])
         episodes = buckets.setdefault(key, {})
-        episodes.setdefault(series_dir, set()).add(int(identity.get("episode", 0) or 0))
+        # 提示里给人看的是完整路径，否则多目标下「某剧 (2024)」两处一模一样。
+        display_path = _join_rel(str(item.get("_root_path", "") or ""), series_dir)
+        episodes.setdefault(display_path, set()).add(int(identity.get("episode", 0) or 0))
 
     hints: List[Dict[str, Any]] = []
-    for (name, year), per_dir in buckets.items():
+    for (_scope, name, year), per_dir in buckets.items():
         if len(per_dir) < 2:
             continue
         episode_sets = [sorted(values) for values in per_dir.values()]
@@ -484,10 +500,52 @@ def _clamp_int(value: Any, default: int, low: int, high: int) -> int:
 # ============================================================
 
 
-def scan_duplicate_media(provider: str, cid: str = "0", options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def _normalize_scan_targets(cid: str, targets: Optional[Sequence[Any]]) -> Tuple[List[str], int, bool]:
+    """把前端传来的目标整理成去重后的 cid 列表。
+
+    返回 (目标 cid 列表, 被丢弃的超额目标数, 是否因超额被截断)。
+    勾多个文件时，它们的所在目录常常是同一个，所以这里按 cid 去重——
+    不去重就会把同一个目录扫好几遍，白白多等几倍时间。
+    """
+    raw_items: List[Any] = []
+    if isinstance(targets, (list, tuple)):
+        raw_items = list(targets)
+    if not raw_items:
+        raw_items = [cid]
+    normalized: List[str] = []
+    seen: Set[str] = set()
+    dropped = 0
+    for raw in raw_items:
+        if isinstance(raw, dict):
+            target_cid = str(raw.get("cid", "") or "").strip()
+        else:
+            target_cid = str(raw or "").strip()
+        if not target_cid or target_cid in seen:
+            continue
+        if len(normalized) >= SCAN_MAX_TARGETS:
+            dropped += 1
+            continue
+        seen.add(target_cid)
+        normalized.append(target_cid)
+    if not normalized:
+        normalized = ["0"]
+    return normalized, dropped, dropped > 0
+
+
+def scan_duplicate_media(
+    provider: str,
+    cid: str = "0",
+    options: Optional[Dict[str, Any]] = None,
+    targets: Optional[Sequence[Any]] = None,
+) -> Dict[str, Any]:
     """扫描指定目录下的重复媒体文件。
 
     只做只读扫描，不产生任何写操作。
+
+    ``targets`` 是多选入口：每项可以是 ``{"cid": "..."}`` 或直接是 cid 字符串，
+    不传就退回单目标 ``cid``。多个目标的结果合并后一起分组，但分组键里带目标，
+    不同目标下相同相对路径的剧不会被并成一组；同一个文件被两个目标重复扫到
+    时按文件 id 去重（勾父目录又勾子目录时会发生）。
     """
     opts = options if isinstance(options, dict) else {}
     normalized = normalize_scraper_provider(provider)
@@ -499,22 +557,58 @@ def scan_duplicate_media(provider: str, cid: str = "0", options: Optional[Dict[s
     max_depth = _clamp_int(opts.get("max_depth"), SCAN_MAX_DEPTH_DEFAULT, 1, SCAN_MAX_DEPTH_LIMIT)
     max_dirs = _clamp_int(opts.get("max_dirs"), SCAN_MAX_DIRS_DEFAULT, 1, SCAN_MAX_DIRS_LIMIT)
     max_entries = _clamp_int(opts.get("max_entries"), SCAN_MAX_ENTRIES_DEFAULT, 1, SCAN_MAX_ENTRIES_LIMIT)
+    target_cids, dropped_targets, truncated_targets = _normalize_scan_targets(root_cid, targets)
+
+    roots: List[Dict[str, Any]] = []
+    all_files: List[Dict[str, Any]] = []
+    seen_file_ids: Set[str] = set()
+    total_dirs = 0
+    total_entries = 0
+    total_failed = 0
+    truncated = bool(truncated_targets)
+
+    for target_cid in target_cids:
+        remaining_dirs = max_dirs - total_dirs
+        remaining_entries = max_entries - total_entries
+        if remaining_dirs <= 0 or remaining_entries <= 0:
+            # 额度用完就停：多选不该绕过扫描上限变成「一次扫全盘」。
+            truncated = True
+            break
+        target_path = ""
+        try:
+            target_path = str(resolve_scraper_folder_path(normalized, target_cid).get("path", "") or "").strip()
+        except Exception:
+            target_path = ""
+        roots.append({"cid": target_cid, "path": target_path})
+        walk = _walk_media_tree(
+            provider_obj,
+            cookie,
+            target_cid,
+            max_depth=max_depth,
+            max_dirs=remaining_dirs,
+            max_entries=remaining_entries,
+        )
+        total_dirs += int(walk.get("scanned_dirs", 0) or 0)
+        total_entries += int(walk.get("scanned_entries", 0) or 0)
+        total_failed += int(walk.get("failed_dirs", 0) or 0)
+        truncated = truncated or bool(walk.get("truncated", False))
+        for item in walk["files"]:
+            entry_id = str(item.get("id", "") or "").strip()
+            if entry_id and entry_id in seen_file_ids:
+                continue
+            if entry_id:
+                seen_file_ids.add(entry_id)
+            item["_scope"] = target_cid
+            item["_root_path"] = target_path
+            all_files.append(item)
 
     root_path = ""
-    try:
-        root_path = str(resolve_scraper_folder_path(normalized, root_cid).get("path", "") or "").strip()
-    except Exception:
+    if len(roots) == 1:
+        root_path = str(roots[0].get("path", "") or "")
+    else:
         root_path = ""
 
-    walk = _walk_media_tree(
-        provider_obj,
-        cookie,
-        root_cid,
-        max_depth=max_depth,
-        max_dirs=max_dirs,
-        max_entries=max_entries,
-    )
-    classified = _classify_files(walk["files"])
+    classified = _classify_files(all_files)
     groups = _build_groups(classified, root_path)
     hints = _build_series_hints(classified)
 
@@ -525,14 +619,16 @@ def scan_duplicate_media(provider: str, cid: str = "0", options: Optional[Dict[s
         "provider": normalized,
         "root_cid": root_cid,
         "root_path": root_path,
+        "roots": roots,
+        "targets_skipped": dropped_targets,
         "groups": groups,
         "series_hints": hints,
         "scanned": {
-            "dirs": int(walk.get("scanned_dirs", 0) or 0),
-            "entries": int(walk.get("scanned_entries", 0) or 0),
-            "media_files": len(walk["files"]),
-            "failed_dirs": int(walk.get("failed_dirs", 0) or 0),
-            "truncated": bool(walk.get("truncated", False)),
+            "dirs": total_dirs,
+            "entries": total_entries,
+            "media_files": len(all_files),
+            "failed_dirs": total_failed,
+            "truncated": truncated,
         },
         "summary": {
             "group_count": len(groups),

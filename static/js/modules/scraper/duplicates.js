@@ -14,6 +14,10 @@ const META_ID = 'scraper-duplicates-meta';
 const SUMMARY_ID = 'scraper-duplicates-summary';
 const LIST_ID = 'scraper-duplicates-list';
 const DELETE_BTN_ID = 'scraper-duplicates-delete-btn';
+// 页面级模式标记：查重时整个浏览区切成查重视图（列表、勾选栏全收起），
+// 否则结果面板挤在勾选栏和文件列表之间，两头都只剩两三行高。
+const MODE_CLASS = 'is-duplicates-mode';
+const PAGE_ID = 'page-scraper';
 
 export function createDuplicatesController(deps = {}) {
     const {
@@ -34,8 +38,9 @@ export function createDuplicatesController(deps = {}) {
         error: '',
         picks: new Set(),
         requestId: '',
-        // 扫描目标：勾中的文件夹（或勾中文件所在目录）。空 = 退回当前浏览目录。
-        targetCid: '',
+        // 扫描目标：勾中的文件夹（或勾中文件所在目录），可多个，cid 已去重。
+        // 空数组 = 退回当前浏览目录。
+        targets: [],
     };
 
     function sizeText(bytes) {
@@ -45,6 +50,12 @@ export function createDuplicatesController(deps = {}) {
 
     function el(id) {
         return document.getElementById(id);
+    }
+
+    function setMode(on) {
+        const page = el(PAGE_ID);
+        if (page) page.classList.toggle(MODE_CLASS, !!on);
+        window.syncScraperBrowserHeight?.();
     }
 
     function groups() {
@@ -146,7 +157,8 @@ export function createDuplicatesController(deps = {}) {
         const deleteBtn = el(DELETE_BTN_ID);
 
         if (ui.loading) {
-            if (metaEl) metaEl.textContent = '正在扫描勾选的目录… 目录很大时要等一会儿';
+            const scope = ui.targets.length > 1 ? `${ui.targets.length} 处目录` : '目录';
+            if (metaEl) metaEl.textContent = `正在扫描${scope}… 目录很大时要等一会儿`;
             if (summaryEl) summaryEl.innerHTML = '';
             if (listEl) listEl.innerHTML = '<div class="scraper-dup-empty">读取目录中，请稍候。</div>';
             if (deleteBtn) {
@@ -186,12 +198,26 @@ export function createDuplicatesController(deps = {}) {
         const pickedSize = picked.reduce((total, file) => total + Math.max(0, Number(file.size || 0)), 0);
 
         if (metaEl) {
-            const rootPath = String(result.root_path || '').trim();
+            const roots = Array.isArray(result.roots) ? result.roots : [];
+            const rootPaths = roots.map((root) => String(root?.path || '').trim()).filter(Boolean);
+            let rootLabel = '已扫描';
+            if (roots.length > 1) {
+                const shown = rootPaths.slice(0, 3).join('、');
+                rootLabel = `扫描 ${roots.length} 处目录${shown ? `：${shown}${rootPaths.length > 3 ? ' 等' : ''}` : ''}`;
+            } else if (roots.length === 1 && rootPaths.length) {
+                rootLabel = `扫描 ${rootPaths[0]}`;
+            } else {
+                const rootPath = String(result.root_path || '').trim();
+                if (rootPath) rootLabel = `扫描 ${rootPath}`;
+            }
             metaEl.textContent = [
-                rootPath ? `扫描 ${rootPath}` : '已扫描',
+                rootLabel,
                 `${Number(scanned.dirs || 0)} 个文件夹`,
                 `${Number(scanned.media_files || 0)} 个视频文件`,
                 Number(scanned.failed_dirs || 0) > 0 ? `${Number(scanned.failed_dirs)} 个目录读取失败` : '',
+                Number(result.targets_skipped || 0) > 0
+                    ? `最多一次扫 20 处目录，已忽略 ${Number(result.targets_skipped)} 处`
+                    : '',
                 scanned.truncated ? '已到扫描上限，结果可能不完整' : '',
             ].filter(Boolean).join(' · ');
         }
@@ -225,9 +251,22 @@ export function createDuplicatesController(deps = {}) {
             if (invalidCount > 0) deleteBtn.title = '有分组被全部勾选，每组至少要保留一份';
             else deleteBtn.removeAttribute('title');
         }
-        // 查重面板本身也占垂直空间：开合、结果多少都会改变面板高度，
-        // 让文件列表始终留出可读的行数（core.js 里的 syncScraperBrowserHeight 负责算）。
+        // 结果多少会改变面板高度；查重模式下由 syncScraperBrowserHeight 直接给面板可用高度，
+        // 非模式（老页面结构）时退回「让文件列表留出可读行数」的算法。
         window.syncScraperBrowserHeight?.();
+    }
+
+    function scanPayload() {
+        // targets 是「勾选条目的所在目录」列表，已由调用方按 cid 去重。
+        // 老后端只认 cid：第一个目标同时作为 cid 传，保证接口向后兼容。
+        const targets = ui.targets
+            .map((target) => String(target?.cid || '').trim())
+            .filter(Boolean)
+            .map((cid) => ({ cid }));
+        const payload = { provider: getProvider() };
+        if (targets.length) payload.targets = targets;
+        payload.cid = targets.length ? targets[0].cid : String(getCid() || '0');
+        return payload;
     }
 
     async function scan() {
@@ -239,10 +278,7 @@ export function createDuplicatesController(deps = {}) {
         ui.requestId = String(buildMutationRequestId() || '');
         render();
         try {
-            const data = await window.MediaHubApi.postJson('/scraper/duplicates/scan', {
-                provider: getProvider(),
-                cid: ui.targetCid || String(getCid() || '0'),
-            });
+            const data = await window.MediaHubApi.postJson('/scraper/duplicates/scan', scanPayload());
             ui.result = data && typeof data === 'object' ? data : null;
             if (ui.result) applyDefaultPicks(ui.result);
         } catch (error) {
@@ -256,10 +292,26 @@ export function createDuplicatesController(deps = {}) {
     async function open(target = {}) {
         const panel = el(PANEL_ID);
         if (!panel) return;
-        // cid 由调用方指定（勾中的文件夹）；不传就扫当前浏览目录。
-        ui.targetCid = String(target?.cid || '').trim();
+        // 目标由调用方指定（勾中的文件夹 / 文件所在目录），可以是多个；
+        // 一个都没有就退回当前浏览目录。
+        const rawTargets = Array.isArray(target?.targets) ? target.targets : [];
+        const seen = new Set();
+        const targets = [];
+        for (const raw of rawTargets) {
+            const rawCid = raw && typeof raw === 'object' ? (raw.cid ?? raw.id) : raw;
+            const cid = String(rawCid ?? '').trim();
+            if (!cid || seen.has(cid)) continue;
+            seen.add(cid);
+            targets.push({ cid });
+        }
+        if (!targets.length) {
+            const cid = String(target?.cid || '').trim();
+            if (cid) targets.push({ cid });
+        }
+        ui.targets = targets;
         panel.classList.remove('hidden');
         ui.open = true;
+        setMode(true);
         await scan();
     }
 
@@ -271,8 +323,8 @@ export function createDuplicatesController(deps = {}) {
         ui.error = '';
         ui.result = null;
         ui.picks = new Set();
-        ui.targetCid = '';
-        window.syncScraperBrowserHeight?.();
+        ui.targets = [];
+        setMode(false);
     }
 
     function keepBest() {

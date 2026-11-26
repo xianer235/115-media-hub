@@ -14317,6 +14317,29 @@
             display: none;
         }
 
+        /* 查重模式：浏览区切成查重视图。文件列表、勾选栏、面包屑全部收起，
+           查重结果自己吃满整块面板——它们同屏只会互相抢高度，谁都不够用。 */
+        #page-scraper.is-duplicates-mode .scraper-breadcrumbs,
+        #page-scraper.is-duplicates-mode .scraper-browser-popovers,
+        #page-scraper.is-duplicates-mode .scraper-selection-bar,
+        #page-scraper.is-duplicates-mode .scraper-move-buffer,
+        #page-scraper.is-duplicates-mode .scraper-entry-table,
+        #page-scraper.is-duplicates-mode .scraper-browser-controls .scraper-icon-btn {
+            display: none !important;
+        }
+
+        #page-scraper.is-duplicates-mode .scraper-duplicates-panel {
+            flex: 1 1 auto;
+            min-height: 0;
+            max-height: none;
+            margin-bottom: 0;
+        }
+
+        #page-scraper.is-duplicates-mode .scraper-duplicates-list {
+            flex: 1 1 auto;
+            min-height: 0;
+        }
+
         .scraper-duplicates-head {
             display: flex;
             justify-content: space-between;

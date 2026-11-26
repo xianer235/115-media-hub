@@ -1,5 +1,7 @@
 const SCRAPER_JOB_ACTIVE_STATUSES = new Set(['pending', 'running', 'rollback_running']);
 const SCRAPER_ENTRY_PAGE_LIMIT = 300;
+// 查重一次最多扫多少处目录：与后端 duplicate_scan.SCAN_MAX_TARGETS 对齐，前端先拦一次。
+const DUPLICATE_SCAN_MAX_TARGETS = 20;
 
 function renderJobPageButtons(page, totalPages, maxVisible = 5) {
     const currentPage = Math.max(1, Number(page || 1) || 1);
@@ -613,6 +615,12 @@ function syncScraperBrowserHeight() {
     const rect = panel.getBoundingClientRect();
     const reservedBottom = window.matchMedia('(max-width: 1023px)').matches ? 96 : 28;
     const available = Math.max(380, Math.floor(window.innerHeight - Math.max(rect.top, 0) - reservedBottom));
+    // 查重模式：文件列表整块隐藏，查重结果自己吃满面板。这里不能再按「chrome + 列表地板」
+    // 撑高面板——列表都不在了，再加 320px 地板只会让页面多滚一屏。
+    if (page.classList.contains('is-duplicates-mode')) {
+        panel.style.setProperty('--scraper-browser-height', `${available}px`);
+        return;
+    }
     // 列表地板：搜索框、勾选栏、移动提示条、查重面板这些横条一多，列表就会被挤成两三行。
     // 这里量一遍除列表以外的实际占用，不够地板高度就让整块面板长高（页面滚动），
     // 而不是把文件列表压扁——手机上尤其明显。
@@ -923,19 +931,21 @@ function renderSelection() {
     }
     const dupScanButton = document.querySelector('[data-scraper-action="open-duplicates"]');
     if (dupScanButton) {
-        // 查重只对「勾中的那一处」生效：一次一个文件夹（勾文件则扫它所在目录）。
-        // 刻意不跟随当前浏览目录——在库根点一下会把整个大目录扫一遍，几十秒起步。
-        const canDupScan = !hasPlan && selectedEntries.length === 1;
+        // 查重扫的是「勾中条目的所在目录」，可多选：勾文件夹扫这个文件夹（含子目录），
+        // 勾文件扫它所在目录，所以一次勾多个文件通常只等于扫当前目录一次。
+        // 仍然刻意不跟随「当前浏览目录」——在库根点一下会把整个大目录扫一遍。
+        const canDupScan = !hasPlan && selectedEntries.length >= 1;
         dupScanButton.classList.toggle('hidden', hasPlan);
         dupScanButton.disabled = state.loading || !canDupScan;
         dupScanButton.classList.toggle('btn-disabled', state.loading || !canDupScan);
+        const folderCount = selectedEntries.filter(item => item.is_dir).length;
+        const fileCount = selectedEntries.length - folderCount;
         dupScanButton.title = canDupScan
-            ? (selectedEntries[0].is_dir
-                ? '对勾选的这个文件夹查重（含子目录）'
-                : '对勾选文件所在的目录查重')
-            : (hasPlan
-                ? '退出预览后再查重'
-                : (selectedEntries.length > 1 ? '一次只能对一个文件夹查重，请只勾一个' : '请先勾选要查重的文件夹'));
+            ? `查重扫描范围：${[
+                folderCount ? `${folderCount} 个文件夹（含子目录）` : '',
+                fileCount ? `${fileCount} 个文件所在目录` : '',
+            ].filter(Boolean).join(' + ')}——只扫这些目录，不会扫整个根目录`
+            : (hasPlan ? '退出预览后再查重' : '请先勾选要查重的文件夹或文件');
     }
     const batchButton = document.querySelector('[data-scraper-action="open-batch"]');
     if (batchButton) {
@@ -3814,20 +3824,43 @@ function closeDuplicatesPanelIfLoaded() {
     void withDuplicatesPanel(controller => controller.close());
 }
 
+function buildDuplicateScanTargets(selected, currentCid) {
+    // 勾文件夹扫这个文件夹，勾文件扫它所在目录（条目自带 parent_id，搜索结果也能取到真实目录）；
+    // 同一目录只保留一次。抽成纯函数是为了可测：多选后这里算错会直接变成「扫错地方」。
+    const targets = [];
+    const seen = new Set();
+    for (const item of Array.isArray(selected) ? selected : []) {
+        const targetCid = item?.is_dir
+            ? String(item.id || '0')
+            : String(item?.parent_id || currentCid || '0');
+        if (!targetCid || seen.has(targetCid)) continue;
+        seen.add(targetCid);
+        targets.push({ cid: targetCid });
+    }
+    return targets;
+}
+
 async function openDuplicatesForSelection() {
-    // 入口只在「勾选了条目」后可用：扫的是勾中的那一处，不跟随当前浏览目录。
+    // 入口只在「勾选了条目」后可用：扫的是勾中条目所在的目录，不跟随当前浏览目录。
+    // 多选是选「扫描范围」：勾文件夹扫这个文件夹，勾文件扫它所在目录，同一个目录只扫一次。
     const selected = getEffectiveSelectedEntries();
-    if (selected.length !== 1) {
+    if (!selected.length) {
+        showToast('请先勾选要查重的文件夹或文件', { tone: 'warn', duration: 2600, placement: 'top-center' });
+        return;
+    }
+    const targets = buildDuplicateScanTargets(selected, state.cid);
+    if (!targets.length) {
+        showToast('没有可扫描的目录，请重新勾选', { tone: 'warn', duration: 2600, placement: 'top-center' });
+        return;
+    }
+    if (targets.length > DUPLICATE_SCAN_MAX_TARGETS) {
         showToast(
-            selected.length > 1 ? '一次只能对一个文件夹查重，请只勾一个' : '请先勾选要查重的文件夹',
-            { tone: 'warn', duration: 2600, placement: 'top-center' },
+            `一次最多对 ${DUPLICATE_SCAN_MAX_TARGETS} 处目录查重，请少勾一些`,
+            { tone: 'warn', duration: 3000, placement: 'top-center' },
         );
         return;
     }
-    const target = selected[0];
-    // 勾文件夹 → 扫这个文件夹（含子目录）；勾文件 → 扫它所在目录。
-    const scanCid = target.is_dir ? String(target.id || '0') : String(state.cid || '0');
-    await withDuplicatesPanel(controller => controller.open({ cid: scanCid }));
+    await withDuplicatesPanel(controller => controller.open({ targets }));
 }
 
 function handleClick(event) {
@@ -4087,6 +4120,12 @@ function handleGlobalKeydown(event) {
     const moreMenu = $('scraper-selection-more-menu');
     if (moreMenu && !moreMenu.classList.contains('hidden')) {
         closeSelectionMore();
+        return;
+    }
+    // 查重是独占视图，Esc 等同于「退出查重」——列表都被收起了，退回列表最自然。
+    const page = $('page-scraper');
+    if (page && page.classList.contains('is-duplicates-mode')) {
+        closeDuplicatesPanelIfLoaded();
         return;
     }
     const batchPanel = $('scraper-batch-panel');
