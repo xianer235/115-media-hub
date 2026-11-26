@@ -2310,6 +2310,104 @@
             document.getElementById('help-modal').classList.remove('hidden');
         }
 
+        // 设置页「STRM 设置 / Seerr 与极影视」的分区说明：内容较长，收进 i 按钮，
+        // 一级界面只留字段名，不再平铺大段说明。
+        const STRM_SETTINGS_HELP_HTML = `
+            <div class="help-rich-section">
+                <div class="help-rich-title">这块管什么</div>
+                <div class="help-rich-text">给媒体服务器（极影视 / Emby / Jellyfin）生成 <code>.strm</code> 播放文件：网盘里只放这个几百字节的文本，播放器打开它时再来面板要真实播放地址。</div>
+                <div class="help-rich-text">不生成 .strm 也能用面板下载、复制、整理；这块只影响「媒体服务器能不能直接播网盘里的片」。</div>
+            </div>
+            <div class="help-rich-section">
+                <div class="help-rich-title">对外访问地址</div>
+                <div class="help-rich-text">填媒体服务器能访问到本容器的地址，例如 <code>http://192.168.1.20:18080</code>。生成的链接形如 <code>http://该地址/strm/proxy?path=...</code>。</div>
+                <div class="help-rich-text">播放器读 .strm 时先问面板，面板解析 115 下载地址后 302 跳转给播放器跟随。填 <code>localhost</code> / <code>127.0.0.1</code> 会让媒体服务器打不开。</div>
+            </div>
+            <div class="help-rich-section">
+                <div class="help-rich-title">限频与缓存</div>
+                <div class="help-rich-row">
+                    <span class="help-rich-key">115 API 最小间隔</span>
+                    <span class="help-rich-text">全局请求间隔。越大越稳、越小越快，建议 0.25~0.6 秒。</span>
+                </div>
+                <div class="help-rich-row">
+                    <span class="help-rich-key">目录缓存 TTL</span>
+                    <span class="help-rich-text">115 目录列表缓存多久。设 0 表示每次都直连 115。</span>
+                </div>
+                <div class="help-rich-row">
+                    <span class="help-rich-key">下载链接缓存 TTL</span>
+                    <span class="help-rich-text">同一个文件的下载地址缓存多久。设 0 表示每次重新解析。</span>
+                </div>
+            </div>
+            <div class="help-rich-section">
+                <div class="help-rich-title">扫描后缀名</div>
+                <div class="help-rich-text">只给这些后缀的文件生成 .strm，其它文件跳过（也会计入批量任务的跳过数）。一般只填视频后缀。</div>
+            </div>
+        `;
+
+        function showStrmHelp() {
+            showHelpHtml('STRM 设置说明', STRM_SETTINGS_HELP_HTML);
+        }
+
+        const SEERR_SETTINGS_HELP_HTML = `
+            <div class="help-rich-section">
+                <div class="help-rich-title">干什么用的</div>
+                <div class="help-rich-text">让 Seerr（Jellyseerr / Overseerr）把本面板当成一台 Radarr（电影）和一台 Sonarr（剧集）。家人在点播门户点一下，这里就自动建订阅并开始找资源。</div>
+            </div>
+            <div class="help-rich-section">
+                <div class="help-rich-title">怎么接</div>
+                <div class="help-rich-text">Seerr「设置 → 服务」里分别添加 Radarr 和 Sonarr：地址填 <code>http://面板地址</code>，API Key 填这一页生成的同一个密钥。两条都加，Radarr 管电影、Sonarr 管剧集，保存后显示连接成功即可。</div>
+                <div class="help-rich-text">密钥留空等于关闭点播接口，Seerr 会连不上。</div>
+            </div>
+            <div class="help-rich-section">
+                <div class="help-rich-title">点播之后会怎样</div>
+                <div class="help-rich-text">自动建订阅任务 → 搜索资源 → 转存 → 入库 → 生成 STRM，和手动订阅同一条链路。</div>
+                <div class="help-rich-text">只有在 Seerr 里勾选「从 Sonarr / Radarr 中删除」时才会删掉这里的订阅任务；只删点播请求不会删。</div>
+            </div>
+            <div class="help-rich-section">
+                <div class="help-rich-title">保存目录</div>
+                <div class="help-rich-text">电影与剧集各一个落点，和推荐页订阅共用。电影自动建「片名 (年份) [tmdbid-编号]」，剧集建「剧名 (年份) [tmdbid-编号]/Season NN」。留空则回退到旧版默认保存目录。</div>
+            </div>
+        `;
+
+        function showSeerrHelp() {
+            showHelpHtml('Seerr 点播说明', SEERR_SETTINGS_HELP_HTML);
+        }
+
+        const JYS_BRIDGE_HELP_HTML = `
+            <div class="help-rich-section">
+                <div class="help-rich-title">干什么用的</div>
+                <div class="help-rich-text">复用极影视已经建好的媒体库索引，做两件事：</div>
+                <div class="help-rich-row">
+                    <span class="help-rich-key">① 库存判重</span>
+                    <span class="help-rich-text">「资源推荐」页标出哪部片你库里已经有了，避免重复订阅。</span>
+                </div>
+                <div class="help-rich-row">
+                    <span class="help-rich-key">② Emby 桥</span>
+                    <span class="help-rich-text">让 Seerr 把极影视当成一台 Emby 服务器读索引判重。</span>
+                </div>
+                <div class="help-rich-text">全程只读：不写回极影视、不代理播放。</div>
+            </div>
+            <div class="help-rich-section">
+                <div class="help-rich-title">首次配置顺序</div>
+                <div class="help-rich-text">1）填极影视地址（通常 <code>http://极空间内网IP:8021</code>）与媒体库账号密码（不是极空间登录号）。</div>
+                <div class="help-rich-text">2）点「测试连通性」确认能登录并读到媒体库列表。</div>
+                <div class="help-rich-text">3）点「立即刷新库存索引」。首次启用必须点一次，之后每天自动刷新一次。</div>
+            </div>
+            <div class="help-rich-section">
+                <div class="help-rich-title">Seerr 侧怎么接</div>
+                <div class="help-rich-text">Seerr「设置 → 媒体服务器」添加一台 <code>Emby</code> 服务器：地址填本面板地址，URL Base 填 <code>emby-bridge</code>，账号密码填极影视的媒体库账号。同步后库里已有的片会显示「可获得」而不是「可请求」。</div>
+                <div class="help-rich-text">桥只负责判重，下载与补源仍走上面的 Radarr / Sonarr 点播对接；关掉总开关后桥与推荐页判重立即失效，不影响其它功能。</div>
+            </div>
+            <div class="help-rich-section">
+                <div class="help-rich-title">安全开关</div>
+                <div class="help-rich-text">默认只放行内网来源。Seerr 从公网访问时才需要打开「允许非内网来源访问」；推荐页判重不受它影响。</div>
+            </div>
+        `;
+
+        function showJysBridgeHelp() {
+            showHelpHtml('极影视接入说明', JYS_BRIDGE_HELP_HTML);
+        }
+
         // 内容为固定文案（无用户输入），因此这里用 innerHTML 渲染分节结构。
         const SCRAPER_FILTER_HELP_HTML = `
             <div class="help-rich-section">
@@ -2396,7 +2494,7 @@
             </div>
             <div class="help-rich-section">
                 <div class="help-rich-title">什么时候不会生成</div>
-                <div class="help-rich-text">后缀名不在「参数配置 → 播放与点播 → 播放地址与扫描参数」的「扫描后缀名」列表内，或文件小于任务里的「文件大小过滤 (MB)」，会被跳过并计入运行记录的跳过数。</div>
+                <div class="help-rich-text">后缀名不在「参数配置 → STRM 设置 → 播放地址与扫描参数」的「扫描后缀名」列表内，或文件小于任务里的「文件大小过滤 (MB)」，会被跳过并计入运行记录的跳过数。</div>
                 <div class="help-rich-text">没有纳入任何监控任务、任务被停用、网盘目录读取失败时也不会生成；跳过与失败原因都会写进运行记录和 Web 日志。</div>
             </div>
         `;

@@ -9,7 +9,7 @@ SETTINGS_MODULE_PATH = ROOT / "static/js/modules/tabs/settings.js"
 INDEX_SCRIPT_PATH = ROOT / "static/js/index.js"
 INDEX_CSS_PATH = ROOT / "static/css/index.css"
 
-SECTION_KEYS = ["account", "network", "proxy", "library", "sources", "metadata", "system"]
+SECTION_KEYS = ["account", "network", "proxy", "strm", "seerr", "sources", "metadata", "system"]
 
 
 class SettingsSectionLayoutFrontendTest(unittest.TestCase):
@@ -64,7 +64,7 @@ class SettingsSectionLayoutFrontendTest(unittest.TestCase):
         # 一组里装多块时必须有小标题，否则合并后又变成一坨。
         titles = re.findall(r'class="settings-subgroup-title[^"]*">([^<]+)<', self.template)
         self.assertEqual(len(titles), 12)  # 13 块里「网盘与账号」只有一块，不需要小标题
-        self.assertIn("Seerr 点播对接（家人在点播门户点一下就会自动建订阅任务）", titles)
+        self.assertIn("Seerr 点播对接", titles)
 
     def test_section_heads_control_existing_bodies(self):
         head_ids = re.findall(r'class="settings-section-head"[^>]*aria-controls="([^"]+)"', self.template)
@@ -132,6 +132,58 @@ class SettingsSectionLayoutFrontendTest(unittest.TestCase):
         self.assertIn(".settings-section-card:not(.is-open) > .settings-section-body", css)
         self.assertIn("html.theme-day .settings-section-navbar", css)
         self.assertIn(".settings-help-fold[open] > summary", css)
+
+
+class SettingsPlaybackSplitTest(unittest.TestCase):
+    """0.16.9：原「播放与点播」拆成「STRM 设置」与「Seerr 与极影视」两个一级分区。"""
+
+    def setUp(self):
+        self.template = SETTINGS_TEMPLATE_PATH.read_text(encoding="utf-8")
+        self.module = SETTINGS_MODULE_PATH.read_text(encoding="utf-8")
+        self.script = INDEX_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    def _section(self, start_key):
+        start = self.template.index(f'data-settings-section="{start_key}"')
+        end = self.template.find('<section id="settings-group-', start + 10)
+        return self.template[start:end if end != -1 else len(self.template)]
+
+    def test_two_sections_replace_the_old_playback_group(self):
+        self.assertNotIn('data-settings-section="library"', self.template)
+        self.assertIn('data-settings-section="strm" data-settings-step="4"', self.template)
+        self.assertIn('data-settings-section="seerr" data-settings-step="5"', self.template)
+        self.assertLess(
+            self.template.index('data-settings-section="strm"'),
+            self.template.index('data-settings-section="seerr"'),
+        )
+
+    def test_subgroups_live_in_the_right_section(self):
+        strm_section = self._section("strm")
+        self.assertIn('data-settings-subgroup="strm"', strm_section)
+        self.assertNotIn('data-settings-subgroup="seerr"', strm_section)
+        self.assertNotIn('data-settings-subgroup="emby-bridge"', strm_section)
+
+        seerr_section = self._section("seerr")
+        self.assertIn('data-settings-subgroup="seerr"', seerr_section)
+        self.assertIn('data-settings-subgroup="emby-bridge"', seerr_section)
+        self.assertNotIn('data-settings-subgroup="strm"', seerr_section)
+
+    def test_long_explanations_moved_into_info_buttons(self):
+        # 一级界面只留字段名：这几段长文案不能再平铺在页面上。
+        for flat_text in (
+            "对接方法：在 Seerr",
+            "① 识别已有库存",
+            "Seerr 点播与推荐页订阅的电影共用此目录",
+            "密码留空时用已保存的那份",
+        ):
+            self.assertNotIn(flat_text, self.template)
+        for helper in ("showStrmHelp()", "showSeerrHelp()", "showJysBridgeHelp()"):
+            self.assertIn(helper, self.template)
+            self.assertIn(f"function {helper[:-2]}", self.script)
+
+    def test_section_summaries_cover_new_keys(self):
+        self.assertIn("case 'strm'", self.module)
+        self.assertIn("case 'seerr'", self.module)
+        self.assertNotIn("case 'library'", self.module)
 
 
 if __name__ == "__main__":

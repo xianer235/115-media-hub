@@ -64,15 +64,15 @@
 - **不会做**：不响应 Seerr 的「仅删除请求」——Seerr 删请求默认不调 Radarr/Sonarr，只有勾「从 Sonarr / Radarr 中删除」才会调本面板 DELETE，因此删请求不会删面板任务；不实现 queue / health / rescan 类端点（`POST /command` 只认检索命令，其余只回执不动作）；`GET /episode` 恒返回空列表（按季管订阅、不维护逐集清单）；不接 TVDB 直连；不管 Seerr 用户权限；不代理播放；不新建第二套任务存储。
 - **落点**：电影任务 savepath = `servarr_movie_savepath`（空则回退 `servarr_default_savepath`），整理后是 `<电影目录>/片名 年份/`；剧集任务 savepath = `<servarr_tv_savepath>/剧名 (年份)`，整理后是 `<电视剧目录>/剧名 (年份)/Season NN/`。目录名必须过 `sanitize_115_folder_name`，不要在这里手拼字符串。
 - **默认开跨盘补源**：点播建的订阅任务 `cross_copy_mode=fallback`、源取 `core.SUBSCRIPTION_CROSS_COPY_SOURCE_PROVIDERS`（当前只有夸克），用户可在订阅页按任务关掉。
-- **相关代码**：`app/routes/servarr.py`、`app/providers/tmdb.py`（find_tmdb_id_by_tvdb_id）；设置页「后台安全管理」的「点播接口 API Key / 电影点播保存目录 / 电视剧点播保存目录」
+- **相关代码**：`app/routes/servarr.py`、`app/providers/tmdb.py`（find_tmdb_id_by_tvdb_id）；设置页「Seerr 与极影视 → Seerr 点播对接」的「点播接口 API Key / 电影保存目录 / 电视剧保存目录」
 - **细节**：`docs/superpowers/plans/2026-10-24-servarr-seerr-api.md`
 
 ### Emby 兼容桥（emby-bridge）
 - **用途**：让 Seerr（Jellyseerr）把极影视（极空间媒体库服务，Emby 兼容层）当成一台 Emby 服务器，**复用极影视已建好的媒体库索引判重**（库里已有什么片），省掉再部署一套重复扫描的 Jellyfin。目的只有一个：判重。
-- **入口**：Seerr 侧「设置 → 媒体服务器」添加 Emby 服务器（地址 = 面板地址，URL Base = `emby-bridge`，账号密码 = 极影视媒体库账号）；本侧入口是 `/emby-bridge/*` 端点，配置在设置页「播放与影视库」分区。
+- **入口**：Seerr 侧「设置 → 媒体服务器」添加 Emby 服务器（地址 = 面板地址，URL Base = `emby-bridge`，账号密码 = 极影视媒体库账号）；本侧入口是 `/emby-bridge/*` 端点，配置在设置页「Seerr 与极影视 → 极影视接入」。
 - **会做**：协议翻译（五个翻译点）——① 头改写：把 Seerr 的 `Authorization: MediaBrowser ...` 转成极影视认的 `X-Emby-Authorization` / `X-Emby-Token`；② `/Auth/Keys` 本地实现（极影视没这接口，返回稳定伪 key 糊弄 Seerr）；③ 判重请求改写：`/Items?ids=` 改成 `/Users/{uid}/Items/{id}`（极影视忽略 ids 参数，不改判重必失败）；④ 媒体库列表补 `CollectionType`（极影视全 None，按库名补 movies/tvshows）；⑤ 来源白名单（默认只放内网）；⑥ **全库扫描代翻页**：Seerr 拉库内容只发一次 `/Items?Recursive=true&ParentId=...`（`StartIndex=0`，从不翻页、也不看 `TotalRecordCount`），而极影视单次返回有条数上限，直接透传会导致每个库只扫到前一批（真机表现：手动扫描几秒跑完、只有部分片子显示「可获得」）。桥对这类请求按 `Limit=1000` / `StartIndex` 循环拉全再合并返回；**游标按上游实际返回条数推进**（`cursor += len(items)`，上游把单页压到比 Limit 小时也不会跳过中间条目），带三重护栏（同页重复即停、已达 `TotalRecordCount`、页数上限 200 = 20 万条封顶），日志写「聚合库条目：上游 total / 实际取回 / 分页数」。token 用面板存的账号密码换取并缓存，401 单飞重登一次；转发用标准库 urllib，不新增依赖。⑦ **最近添加扫描顶替**：Seerr 的「最近添加扫描」固定请求 `/Users/{uid}/Items/Latest?Limit=12`，只判重最近 12 条、其余新片要等全量扫描才轮到（表现：手动存的电影有的绿有的不绿）。桥把 `Items/Latest` 改写成按 `DateCreated` 降序拉最近 `_LATEST_ITEMS_LIMIT`(500) 条，覆盖手动新存的片；缺 `ParentId` 时保持透传。
 - **不会做**：不代理播放流；不做写操作（不建库、不删条目、不改极影视）；不替代极影视也不替代现有 Jellyfin；**不管下载/补源**（Seerr 点片后仍走上面的 servarr 点播对接，桥只管判重）。
-- **相关代码**：`app/routes/emby_bridge.py`、`app/services/emby_bridge.py`；设置页「后台安全管理」的「极影视接入」字段组（`emby_bridge_enabled` / `emby_bridge_upstream` / `emby_bridge_username` / `emby_bridge_password` / `emby_bridge_allow_public`）。其中登录 + 全库分页聚合（`_get_token` / `_aggregate_items`）同时被 `app/services/jys_inventory.py` 复用，给推荐页做库存判重；**访问自家 HTTPS 反代统一走 `http_utils.build_resilient_https_opener`**（`_urlopen`）：TLS 握手失败的地址会换下一个解析地址重试（域名同时有 A/AAAA 时 IPv6 死路很常见），并且 `SSLEOFError` / `RemoteDisconnected` 等连接类错误按瞬时错误重试 3 次
+- **相关代码**：`app/routes/emby_bridge.py`、`app/services/emby_bridge.py`；设置页「Seerr 与极影视 → 极影视接入」的字段组（`emby_bridge_enabled` / `emby_bridge_upstream` / `emby_bridge_username` / `emby_bridge_password` / `emby_bridge_allow_public`）。其中登录 + 全库分页聚合（`_get_token` / `_aggregate_items`）同时被 `app/services/jys_inventory.py` 复用，给推荐页做库存判重；**访问自家 HTTPS 反代统一走 `http_utils.build_resilient_https_opener`**（`_urlopen`）：TLS 握手失败的地址会换下一个解析地址重试（域名同时有 A/AAAA 时 IPv6 死路很常见），并且 `SSLEOFError` / `RemoteDisconnected` 等连接类错误按瞬时错误重试 3 次
 - **细节**：`docs/superpowers/specs/2026-11-17-emby-bridge-for-seerr-design.md`（含实测协议偏差）
 
 ### 文件夹监控（folder monitor）
@@ -108,6 +108,7 @@
 ### 参数配置（settings）
 - **用途**：全局配置与运维入口：认证、签到、通知、代理、安全、AI、版本。
 - **入口**：页面「参数配置」；`/get_settings`、`/save_settings`、`/settings/...`。
+- **分区**：8 个（网盘与账号 / 通知推送 / 网络代理 / **STRM 设置** / **Seerr 与极影视** / 资源来源与订阅 / 元数据与识别 / 系统与存储）。**STRM 设置在 0.16.9 从原来的「播放与点播」拆出**，只放对外访问地址、限频/缓存与扫描后缀；Seerr 点播与极影视接入同属另一个分区。一级界面只留字段名，长说明一律收进字段旁的 `i`（`showHelp` / `showHelpHtml`），不要再往页面上平铺大段文案。
 - **会做**：网盘认证（115 扫码或手动 Cookie、阿里云盘官方 OAuth、其余 Cookie / 凭证）、Cookie 体检与凭证复制、115 每日签到开关与手动签到、企业微信通知（四个场景开关：订阅更新成功、文件夹监控生成成功、跨盘复制按任务来源分订阅补源/手动复制；渠道配置共用，场景开关互不影响）、TG 代理与 PanSou / AI 连通测试、后台安全（登录密码、全局 `webhook_secret`）、本地暂存目录管理（单个容器内目录 `cross_copy_temp_dir`，空 = 默认 `/app/config/cross_copy_tmp`；保存前探测存在/可写/剩余空间；旧版「位置列表」配置读取时一次性迁移）、**夸克中转残留清理（`cross_copy_staging_retention_days`，0 = 关，默认 7 天；清理动作由 `cross_copy_staging_cleanup` 后台定时器执行，设置页只负责保存天数）**。
 - **不会做**：不改任务、不动网盘文件、不生成 STRM；换暂存目录只改配置，不碰磁盘上的实际文件。
 - **路径输入走选择器**：Seerr 电影 / 电视剧点播保存目录、磁力中转目录（`magnet_staging_root`）、各网盘「常用目录」都有「选择目录」按钮，复用文件夹监控的目录选择弹窗（`openMonitorFolderModal` 回调模式），回传不带挂载前缀的相对路径；手填入口保留，但不再要求用户自己记路径。

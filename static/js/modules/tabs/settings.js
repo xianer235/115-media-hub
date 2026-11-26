@@ -47,9 +47,14 @@ function setSettingsSectionOpen(card, open) {
     if (body) body.hidden = !nextOpen;
 }
 
+// 0.16.9 把「播放与点播」拆成「STRM 设置」和「Seerr 与极影视」，
+// 老版本记在 localStorage 里的 library 统一落到前一半，避免落到第一个分区。
+const SETTINGS_LEGACY_SECTION_KEYS = { library: 'strm' };
+
 function readRememberedSettingsSection() {
     try {
-        return String(localStorage.getItem(SETTINGS_OPEN_SECTION_STORAGE_KEY) || '').trim();
+        const raw = String(localStorage.getItem(SETTINGS_OPEN_SECTION_STORAGE_KEY) || '').trim();
+        return SETTINGS_LEGACY_SECTION_KEYS[raw] || raw;
     } catch (e) {
         return '';
     }
@@ -144,15 +149,21 @@ function buildSettingsSectionSummary(key) {
     switch (key) {
         case 'account':
             return buildAuthSectionSummary();
-        case 'library': {
+        case 'strm': {
             const base = settingsValue('strm_proxy_base_url');
             const rate = settingsValue('api_115_rate_limit_seconds');
-            const servarrConfigured = !!settingsValue('servarr_api_key') || !!latestSettingsSensitiveMeta.servarr_api_key;
             return [
                 base ? '对外地址已填' : '未填对外地址',
-                rate ? `限频 ${rate}s` : '',
+                rate ? `限频 ${rate}s` : '限频未填',
+            ].join(' · ');
+        }
+        case 'seerr': {
+            const servarrConfigured = !!settingsValue('servarr_api_key') || !!latestSettingsSensitiveMeta.servarr_api_key;
+            const bridgeOn = settingsChecked('emby_bridge_enabled');
+            return [
                 servarrConfigured ? '点播接口已开启' : '点播接口未开启',
-            ].filter(Boolean).join(' · ');
+                bridgeOn ? '极影视已启用' : '极影视未启用',
+            ].join(' · ');
         }
         case 'sources': {
             const total = String(document.getElementById('resource-source-total-count')?.textContent || '0').trim();

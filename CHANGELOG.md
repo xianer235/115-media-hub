@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.16.9] - 2026-11-26
+
+### 设置页：「播放与点播」拆成两个分区，说明文案收进 i 按钮
+
+原来「播放与点播」一个分区里塞了三种互不相干的东西：STRM 生成参数、Seerr 点播接口、极影视接入。找一个开关要在一长条里翻，而且每块都平铺一大段说明文字。
+
+- **拆成两个一级分区**（后续分区序号顺延，共 8 个）：**STRM 设置**（对外访问地址、115 限频与两个缓存 TTL、扫描后缀名）、**Seerr 与极影视**（Seerr 点播对接 + 极影视接入）。两个分区各自有摘要行：`对外地址已填 · 限频 0.3s`、`点播接口已开启 · 极影视已启用`
+- **一级界面只留字段名**：删掉「说明：容器会先解析 115 下载链接…」「对接方法：在 Seerr 的 Radarr / Sonarr…」「极影视会做两件事 ①②…」以及两个保存目录下的长注释，改成字段旁的 `i` 按钮，点开是分节说明（这块管什么 / 怎么接 / 点播之后会怎样 / 安全开关）
+- 保存目录只在 label 旁留一个 `i`，写清「和推荐页订阅共用、自动建什么目录、留空回退旧默认」
+- 测试按钮下的注释压成一句：`只读不写，不影响已保存的配置`、`首次必须点一次，之后每天自动刷新`
+- 老版本记在浏览器里的展开分区（`library`）自动映射到 **STRM 设置**，不会突然跳到第一个分区
+
+### 相关文件
+
+`templates/partials/pages/settings.html`、`static/js/modules/tabs/settings.js`（分区摘要 + 旧 key 迁移）、`static/js/index.js`（`showStrmHelp` / `showSeerrHelp` / `showJysBridgeHelp` 三段富文本说明）。
+
 ## [0.16.8] - 2026-11-26
 
 ### 修手机竖屏筛选面板的圆角与文字缩进

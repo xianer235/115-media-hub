@@ -1,9 +1,9 @@
 {
-  "version": "0.16.8",
-  "buildDate": "2026-11-26T18:30:00+08:00",
+  "version": "0.16.9",
+  "buildDate": "2026-11-26T18:40:00+08:00",
   "notes": [
-    "手机竖屏筛选面板：删掉旧 header 负外边距（标题被顶出边框），分区不再套卡片，只保留一层圆角",
-    "面板标题/小节标题/字段标签/输入框左缩进统一 0.9rem；快捷年代 chip 改四列等宽两行"
+    "设置页「播放与点播」拆成「STRM 设置」与「Seerr 与极影视」两个分区，各自带摘要行",
+    "长段说明收进字段旁的 i 按钮（分节说明），一级界面只保留字段名与一行提示"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"
