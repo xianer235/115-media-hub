@@ -1,9 +1,8 @@
 {
-  "version": "0.16.16",
-  "buildDate": "2026-11-27T04:05:00+08:00",
+  "version": "0.16.17",
+  "buildDate": "2026-11-27T04:55:00+08:00",
   "notes": [
-    "订阅任务编辑弹窗重排：保存目录上移，26 个字段收进六个折叠分区",
-    "季数可按 TMDB 季表选、自动带出集数；电影订阅也能入库后整理"
+    "集数识别新增发布组方括号兜底：[组名][片名][05][1080P] 这类命名不再被当成「认不出集数」"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"
