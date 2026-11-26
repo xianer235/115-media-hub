@@ -444,11 +444,12 @@
             .rec-tab-bar { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
             .rec-tab-bar::-webkit-scrollbar { display: none; }
             .rec-tab-btn { flex-shrink: 0; padding: 0.4rem 0.75rem; font-size: 0.75rem; }
-            /* 搜索栏堆叠 */
-            .rec-search-strip { flex-wrap: wrap; }
-            .rec-search-input-wrap { width: 100%; flex: none; order: -1; }
-            .rec-search-select { flex: 1; min-width: 0; }
-            .rec-search-btn { flex-shrink: 0; }
+            /* 搜索栏：一行排开，搜索框吃掉剩余宽度，分类下拉只用文字宽度（原来下拉 flex:1 拉满，
+               搜索框被挤到换行独占一行，看起来分类比搜索框还长）。 */
+            .rec-search-strip { flex-wrap: nowrap; gap: 0.4rem; }
+            .rec-search-input-wrap { flex: 1 1 auto; width: auto; min-width: 0; order: 0; }
+            .rec-search-select { flex: 0 0 auto; width: auto; max-width: 4.6rem; padding-left: 0.5rem; padding-right: 0.4rem; }
+            .rec-search-btn { flex: 0 0 auto; padding-left: 0.8rem; padding-right: 0.8rem; }
             .rec-explore-filters {
                 gap: 0.7rem;
                 padding: 0;
