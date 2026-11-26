@@ -248,6 +248,7 @@ async def test_notify_push(request: Request) -> JSONResponse:
             "notify_wecom_app_agent_id": incoming_payload.get("notify_wecom_app_agent_id", ""),
             "notify_wecom_app_secret": incoming_payload.get("notify_wecom_app_secret", ""),
             "notify_wecom_app_touser": incoming_payload.get("notify_wecom_app_touser", ""),
+            "notify_wecom_app_api_base": incoming_payload.get("notify_wecom_app_api_base", ""),
         },
     )
     cfg = normalize_config(merged_cfg)

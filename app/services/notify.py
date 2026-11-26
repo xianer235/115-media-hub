@@ -18,6 +18,9 @@ NOTIFY_SCENE_MONITOR_SUCCESS = "monitor_success"
 NOTIFY_CHANNEL_WECOM_BOT = "wecom_bot"
 NOTIFY_CHANNEL_WECOM_APP = "wecom_app"
 WECOM_APP_TOKEN_REFRESH_BUFFER_SECONDS = 120
+# 企业微信应用 API 的官方入口。企业要求「企业可信 IP」，家用宽带出口 IP 会变，
+# 常见做法是用一台固定 IP 的服务器把 qyapi.weixin.qq.com 反代出来，再把地址填进设置页。
+WECOM_API_DEFAULT_BASE = "https://qyapi.weixin.qq.com"
 
 MONITOR_MEDIA_EXTENSIONS = (
     ".mp4",
@@ -106,6 +109,41 @@ def _normalize_wecom_touser(value: Any) -> str:
     return "|".join(tokens)
 
 
+def _normalize_wecom_api_base(value: Any) -> str:
+    """把「API 反向代理地址」归一成不带查询串、不带尾斜杠的前缀。
+
+    返回空串表示无法识别（调用方决定是报错还是回落官方域名）。很多人会直接把
+    接口地址里的 ``/cgi-bin`` 一起抄进来，这里统一剥掉，拼接时只补一次。
+    """
+    base = str(value or "").strip()
+    if not base:
+        return ""
+    parsed = urllib.parse.urlsplit(base)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return ""
+    path = (parsed.path or "").rstrip("/")
+    if path.endswith("/cgi-bin"):
+        path = path[: -len("/cgi-bin")]
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+
+def _resolve_wecom_api_base(runtime_cfg: Dict[str, Any]) -> str:
+    """取本次请求要用的 API 前缀；填了非法值时直接报错，不要静默回落官方域名。
+
+    静默回落会让用户以为反代生效，实际仍在被企业可信 IP 拦，排查成本极高。
+    """
+    raw = str(runtime_cfg.get("wecom_app_api_base", "") or "").strip()
+    if not raw:
+        return WECOM_API_DEFAULT_BASE
+    normalized = _normalize_wecom_api_base(raw)
+    if not normalized:
+        raise RuntimeError(
+            "企业微信 API 反向代理地址格式无效：需要以 http:// 或 https:// 开头，"
+            "例如 https://qyapi.example.com（可带路径前缀）"
+        )
+    return normalized
+
+
 def build_notify_runtime_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "enabled": bool(cfg.get("notify_push_enabled", False)),
@@ -115,6 +153,7 @@ def build_notify_runtime_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "wecom_app_agent_id": _normalize_wecom_agent_id(cfg.get("notify_wecom_app_agent_id", "")),
         "wecom_app_secret": str(cfg.get("notify_wecom_app_secret", "") or "").strip(),
         "wecom_app_touser": _normalize_wecom_touser(cfg.get("notify_wecom_app_touser", "")),
+        "wecom_app_api_base": str(cfg.get("notify_wecom_app_api_base", "") or "").strip(),
     }
 
 
@@ -294,13 +333,21 @@ def _get_wecom_app_access_token(runtime_cfg: Dict[str, Any], timeout: int = 20, 
                 return cached_token
 
     query = urllib.parse.urlencode({"corpid": corp_id, "corpsecret": app_secret})
-    token_url = f"https://qyapi.weixin.qq.com/cgi-bin/gettoken?{query}"
+    # 反代地址在这里才解析：格式不对要报错，不能悄悄走官方域名。
+    api_base = _resolve_wecom_api_base(runtime_cfg)
+    token_url = f"{api_base}/cgi-bin/gettoken?{query}"
     result = http_request_json(token_url, method="GET", timeout=max(5, int(timeout or 20)))
     if not isinstance(result, dict):
         raise RuntimeError("获取企业微信 access_token 失败：返回值不是 JSON")
     errcode = int(result.get("errcode", 0) or 0)
     if errcode != 0:
         errmsg = str(result.get("errmsg", "") or "unknown error").strip()
+        if errcode == 40013:
+            raise RuntimeError(f"获取企业微信 access_token 失败：CorpID 无效（errcode=40013, errmsg={errmsg}）")
+        if errcode == 40001:
+            raise RuntimeError(
+                f"获取企业微信 access_token 失败：AppSecret 无效或已被重置（errcode=40001, errmsg={errmsg}）"
+            )
         raise RuntimeError(f"获取企业微信 access_token 失败（errcode={errcode}, errmsg={errmsg}）")
     access_token = str(result.get("access_token", "") or "").strip()
     if not access_token:
@@ -337,6 +384,7 @@ def _send_wecom_app_markdown(runtime_cfg: Dict[str, Any], content: str, timeout:
     }
 
     retriable_errcodes = {42001, 40014, 41001}
+    api_base = _resolve_wecom_api_base(runtime_cfg)
     last_error = ""
     for attempt in range(1, 3):
         access_token = _get_wecom_app_access_token(
@@ -344,7 +392,7 @@ def _send_wecom_app_markdown(runtime_cfg: Dict[str, Any], content: str, timeout:
             timeout=timeout,
             force_refresh=attempt > 1,
         )
-        url = f"https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token={urllib.parse.quote(access_token)}"
+        url = f"{api_base}/cgi-bin/message/send?access_token={urllib.parse.quote(access_token)}"
         result = http_request_json(url, method="POST", payload=payload, timeout=max(5, int(timeout or 20)))
         if not isinstance(result, dict):
             raise RuntimeError("企业微信应用消息发送失败：返回值不是 JSON")
@@ -352,6 +400,15 @@ def _send_wecom_app_markdown(runtime_cfg: Dict[str, Any], content: str, timeout:
         if errcode == 0:
             return result
         errmsg = str(result.get("errmsg", "") or "unknown error").strip()
+        if errcode == 60020:
+            # 企业可信 IP 拦截：issue #1 就是这个问题，把解决路径直接写进报错里。
+            last_error = (
+                "企业微信应用消息发送失败（errcode=60020）：当前服务器出口 IP 不在该应用的"
+                "「企业可信 IP」列表里。可到企业微信管理后台 → 应用管理 → 自建应用 → 企业可信IP "
+                "添加该 IP；若出口 IP 不固定，用固定 IP 的服务器反向代理 qyapi.weixin.qq.com，"
+                "再把地址填进「API 反向代理地址」。"
+            )
+            raise RuntimeError(last_error)
         last_error = f"企业微信应用消息发送失败（errcode={errcode}, errmsg={errmsg}）"
         if errcode in retriable_errcodes and attempt == 1:
             continue

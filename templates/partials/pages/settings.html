@@ -285,6 +285,16 @@
                                     <span class="text-xs text-slate-500">接收人 UserID（多个用 | 分隔）</span>
                                     <input id="notify_wecom_app_touser" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="zhangsan|lisi">
                                 </label>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500 inline-flex items-center gap-2">
+                                        企业微信 API 反向代理地址（可选）
+                                        <button type="button" class="info-dot" onclick="showHelp('企业微信要求调用应用接口的服务器出口 IP 在「企业可信 IP」列表里。出口 IP 不固定（家用宽带）时，可以在一台固定 IP 的服务器上用 nginx 把 https://qyapi.weixin.qq.com 反代出来，然后把反代地址填这里，程序会用它替换官方域名。只填到域名/路径前缀即可，/cgi-bin 由程序自己拼。')">i</button>
+                                    </span>
+                                    <input id="notify_wecom_app_api_base" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="留空 = 直连官方，例如 https://qyapi.example.com">
+                                </label>
+                                <div class="text-[11px] text-slate-500 leading-5">
+                                    留空时直接访问 qyapi.weixin.qq.com；报 errcode=60020 说明出口 IP 被企业可信 IP 拦了，要么在后台加白名单，要么在这里填反代地址。
+                                </div>
                             </div>
                             <div class="flex flex-wrap items-center gap-3">
                                 <button id="notify-test-btn" type="button" onclick="testNotifyPush()" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">发送测试消息</button>

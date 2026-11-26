@@ -951,6 +951,7 @@ _SETTINGS_CONFIG_KEY_ORDER_AFTER_AUTH: Tuple[str, ...] = (
     "notify_wecom_app_agent_id",
     "notify_wecom_app_secret",
     "notify_wecom_app_touser",
+    "notify_wecom_app_api_base",
     # 10. 后台安全管理
     "username",
     "password",
@@ -1048,6 +1049,7 @@ def default_config() -> Dict[str, Any]:
         "notify_wecom_app_agent_id": "",
         "notify_wecom_app_secret": "",
         "notify_wecom_app_touser": "",
+        "notify_wecom_app_api_base": "",
         "tg_channel_threads": TG_CHANNEL_THREADS_DEFAULT,
         "tg_channel_sync_limit": TG_CHANNEL_SYNC_LIMIT_DEFAULT,
         "tmdb_enabled": False,
@@ -3287,6 +3289,8 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         merged["notify_wecom_app_secret"] = ""
     if "notify_wecom_app_touser" not in merged:
         merged["notify_wecom_app_touser"] = ""
+    if "notify_wecom_app_api_base" not in merged:
+        merged["notify_wecom_app_api_base"] = ""
     if "tg_channel_threads" not in merged:
         merged["tg_channel_threads"] = TG_CHANNEL_THREADS_DEFAULT
     if "tg_channel_sync_limit" not in merged:

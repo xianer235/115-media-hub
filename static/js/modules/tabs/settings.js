@@ -579,6 +579,7 @@ function collectSettingsPayload({
         'notify_wecom_app_agent_id',
         'notify_wecom_app_secret',
         'notify_wecom_app_touser',
+        'notify_wecom_app_api_base',
         'tmdb_api_key',
         'tmdb_language',
         'tmdb_region',

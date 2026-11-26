@@ -171,7 +171,7 @@
 | `app/services/subscription_share_runtime.py` | 分享浏览与转存运行时 |
 | `app/services/subscription_state.py` | 订阅状态与追更进度持久化 |
 | `app/services/subscription_offline_cleanup.py` | 离线导入未命中文件的保留与到期清理 |
-| `app/services/notify.py` | 企业微信通知（机器人 Webhook / 自建应用两通道）：订阅成功 / 监控成功 / 跨盘复制（按任务来源分开关）三个推送场景，渠道就绪检查 `notify_channel_ready` 与场景开关解耦；**订阅补源成功并入订阅成功那一条**（`push_cross_copy_subscription_notification`，文案同「订阅更新成功」，多一行「来源：跨盘补源（夸克 → 115）」，集数去重与同盘导入共用 `notification_dedupe` 表）；`subscription_cross_copy_notify_merged(cfg)` 是两个开关都开才合并的判据 |
+| `app/services/notify.py` | 企业微信通知（机器人 Webhook / 自建应用两通道）：订阅成功 / 监控成功 / 跨盘复制（按任务来源分开关）三个推送场景，渠道就绪检查 `notify_channel_ready` 与场景开关解耦；**订阅补源成功并入订阅成功那一条**（`push_cross_copy_subscription_notification`，文案同「订阅更新成功」，多一行「来源：跨盘补源（夸克 → 115）」，集数去重与同盘导入共用 `notification_dedupe` 表）；`subscription_cross_copy_notify_merged(cfg)` 是两个开关都开才合并的判据；**应用模式支持自定义 API 反向代理地址**（`notify_wecom_app_api_base`，空=直连 qyapi.weixin.qq.com；用于企业可信 IP 场景，`_resolve_wecom_api_base` 校验非法值时直接报错不静默回落）；errcode 60020 报错里直接给出「加可信 IP / 填反代地址」的处理路径 |
 | `app/services/sign115.py` | 115 每日签到 |
 | `app/services/cross_cloud_copy.py` | 跨盘复制引擎（P0-B）：源直链下载（并行分段，`CROSS_COPY_DOWNLOAD_PARALLEL`，落盘后顺序算哈希）+ 同步 SHA1/MD5 + 内存/磁盘双通道 + 目标秒传/分片上传 + 取消/暂停/换链重试/幂等/孤儿清理；零流量路径（源端已知哈希 + 惰性 sink，秒传命中不下载）与断点续传管道（resume 状态就地更新 + on_resume_update 上报 + 失败/暂停保留临时文件） |
 | `app/services/cross_cloud_copy_folder.py` | 整文件夹跨盘复制：BFS 递归建清单（上限 2000 文件 / 20 层，超限拒绝）、目标端逐级建目录、字节加权进度、单文件失败继续并汇总 partial |

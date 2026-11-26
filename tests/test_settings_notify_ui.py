@@ -66,6 +66,15 @@ class SettingsNotifySectionFrontendTest(unittest.TestCase):
         self.assertIn("cross_copy_notify_subscription: document.getElementById('cross_copy_notify_subscription').checked,", self.index_js)
         self.assertIn("cross_copy_notify_manual: document.getElementById('cross_copy_notify_manual').checked,", self.index_js)
 
+    def test_app_proxy_field_wired(self):
+        """企业微信应用模式的反向代理地址（issue #1）：模板、保存、测试三处都要接上。"""
+        self.assertIn('id="notify_wecom_app_api_base"', self._notify_body())
+        self.assertIn("'notify_wecom_app_api_base'", self.settings_js)
+        self.assertIn(
+            "notify_wecom_app_api_base: document.getElementById('notify_wecom_app_api_base').value.trim()",
+            self.index_js,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

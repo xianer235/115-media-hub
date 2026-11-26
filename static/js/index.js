@@ -3509,7 +3509,8 @@
                 notify_wecom_app_corp_id: document.getElementById('notify_wecom_app_corp_id').value.trim(),
                 notify_wecom_app_agent_id: document.getElementById('notify_wecom_app_agent_id').value.trim(),
                 notify_wecom_app_secret: document.getElementById('notify_wecom_app_secret').value.trim(),
-                notify_wecom_app_touser: document.getElementById('notify_wecom_app_touser').value.trim()
+                notify_wecom_app_touser: document.getElementById('notify_wecom_app_touser').value.trim(),
+                notify_wecom_app_api_base: document.getElementById('notify_wecom_app_api_base').value.trim()
             };
         }
 
