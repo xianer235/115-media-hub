@@ -1,8 +1,8 @@
 {
-  "version": "0.16.17",
-  "buildDate": "2026-11-27T04:55:00+08:00",
+  "version": "0.16.18",
+  "buildDate": "2026-11-27T07:08:00+08:00",
   "notes": [
-    "集数识别新增发布组方括号兜底：[组名][片名][05][1080P] 这类命名不再被当成「认不出集数」"
+    "文件管理查重支持一次勾选多个文件夹/文件，结果改成独占视图，不再挤压文件列表"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"
