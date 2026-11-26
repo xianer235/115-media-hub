@@ -19,7 +19,8 @@
 - 只处理 ``origin='subscription'`` 的单文件成功任务；手动复制永远不动；
 - 整包文件夹补源不整理（它的落点本身就是分享文件夹，且结果里没有逐文件清单，
   递归改名会动到目标里原有的文件）；
-- 开关关 / 电影 / 没绑 TMDB → 标 ``skipped``，文件保持原名，不报错。
+- 开关关 / 没绑 TMDB → 标 ``skipped``，文件保持原名，不报错。
+- 电影也适用：补进来的单个视频文件按「片名 (年份).ext」原地改名，逻辑与剧集同一套。
 """
 
 import asyncio
@@ -66,12 +67,12 @@ ORGANIZE_STATE_FAILED = "failed"
 def organize_enabled(task: Dict[str, Any]) -> bool:
     """订阅任务是否需要「入库后整理」。
 
-    三个条件与订阅导入那边一致：电视剧 + 开关打开 + 绑定过 TMDB。任一不满足都
-    不整理（电影本来就不改名，没 TMDB 认不出集数和片名）。
+    两个条件：开关打开 + 绑定过 TMDB。没绑 TMDB 就认不出片名，改名只会更糟。
+
+    电影和电视剧都适用：剧集改成「片名 (年份) - S01E02.ext」，电影改成
+    「片名 (年份).ext」——两者都由刮削引擎的改名计划决定，这里只做开关判定。
     """
     if not isinstance(task, dict):
-        return False
-    if str(task.get("media_type", "movie") or "movie").strip().lower() != "tv":
         return False
     if not bool(task.get("organize_on_import", False)):
         return False
@@ -444,13 +445,13 @@ async def _trigger_group_monitor_refresh(provider_name: str, savepath: str, task
         )
 
 
-def _log_context(task_name: str, provider: str) -> Any:
+def _log_context(task_name: str, provider: str, media_type: str = "tv") -> Any:
     """订阅日志靠 contextvar 补任务名，定时器里得手动包一层。"""
     return set_subscription_log_context(
         {
             "task_name": str(task_name or "").strip(),
             "provider": str(provider or "").strip(),
-            "media_type": "tv",
+            "media_type": str(media_type or "tv").strip() or "tv",
             "trigger": "cross_copy",
         }
     )
@@ -474,7 +475,7 @@ async def _organize_group(
     # 目标网盘未配置时整组放弃：此时触发监控只会排一次必然失败的扫描（没有认证
     # 信息），还会在「未配置」警告后面再叠一条归因错误的提示。
     monitor_ready = True
-    token = _log_context(task_name, provider_name)
+    token = None
     try:
         cfg = get_config()
         task = find_subscription_task(cfg, task_name)
@@ -482,6 +483,8 @@ async def _organize_group(
             _finish_jobs(claimed, ORGANIZE_STATE_SKIPPED, "订阅任务已不存在，保留原名")
             stats["skipped"] += len(claimed)
             return
+        # 日志上下文要标真实媒体类型：电影任务的整理日志标成电视剧会让人以为弄错了。
+        token = _log_context(task_name, provider_name, str(task.get("media_type", "") or "tv"))
         if not organize_enabled(task):
             _finish_jobs(claimed, ORGANIZE_STATE_SKIPPED, "未开启入库后整理或缺少 TMDB，按原名保留")
             stats["skipped"] += len(claimed)
@@ -538,7 +541,8 @@ async def _organize_group(
                 await _trigger_group_monitor_refresh(provider_name, target_savepath, task_name)
             except Exception as exc:  # noqa: BLE001 - 监控触发失败不能盖掉整理结果
                 logger.info("跨盘补源监控触发失败（%s）：%s", task_name, exc)
-        reset_subscription_log_context(token)
+        if token is not None:
+            reset_subscription_log_context(token)
 
 
 async def run_pending_organize_once() -> Dict[str, Any]:

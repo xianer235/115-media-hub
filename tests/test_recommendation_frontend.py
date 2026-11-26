@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE_JS_PATH = ROOT / "static/js/modules/recommendation/core.js"
+PAGE_TEMPLATE_PATH = ROOT / "templates/partials/pages/recommendation.html"
 
 
 class RecommendationPaginationScrollTest(unittest.TestCase):
@@ -104,6 +105,93 @@ Promise.resolve(vm.runInContext({json.dumps(expression)}, context))
             "})()"
         )
         self.assertEqual(payload["scrollCalls"], [[{ "top": 0, "behavior": "smooth" }]])
+
+
+class RecommendationMediaTypeTest(unittest.TestCase):
+    """媒体类型只留一处：顶部不再拆「热门电影 / 热门剧集」，改由内容头那一个开关驱动。"""
+
+    def _eval(self, expression):
+        dom_stub = r"""
+const elements = {};
+const makeEl = () => ({
+  value: '', checked: false, innerText: '', innerHTML: '', className: '',
+  dataset: {}, style: {}, scrollTop: 0, scrollHeight: 0,
+  classList: { add() {}, remove() {}, toggle() {} },
+  addEventListener() {}, appendChild() {}, setAttribute() {}, focus() {},
+});
+const requests = [];
+"""
+        script = f"""
+const fs = require('fs');
+const vm = require('vm');
+let source = fs.readFileSync({json.dumps(str(CORE_JS_PATH))}, 'utf8');
+source = source.replace(/^export /gm, '');
+{dom_stub}
+const context = {{
+  console,
+  window: {{
+    MediaHubApi: {{
+      getJson: async (url) => {{ requests.push(url); return {{ items: [], page: 1, total_pages: 1 }}; }},
+      postJson: async () => ({{}}),
+      requestJson: async () => ({{}}),
+    }},
+    scrollTo() {{}}, matchMedia: () => ({{ matches: false }}), innerWidth: 1440, addEventListener() {{}},
+    showToast() {{}}, showAppConfirm: async () => true,
+  }},
+  document: {{
+    body: makeEl(),
+    getElementById: (id) => {{ if (!elements[id]) elements[id] = makeEl(); return elements[id]; }},
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    createElement: makeEl,
+  }},
+  requestAnimationFrame: () => 0, setTimeout: () => 0, setInterval: () => 0, clearInterval() {{}},
+}};
+context.window.__requests = requests;
+vm.createContext(context);
+vm.runInContext(source, context, {{ filename: 'recommendation-core.js' }});
+Promise.resolve(vm.runInContext({json.dumps(expression)}, context))
+  .then((result) => process.stdout.write(JSON.stringify(result)))
+  .catch((error) => {{ console.error(error); process.exit(1); }});
+"""
+        completed = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True)
+        if completed.returncode != 0:
+            raise AssertionError(completed.stderr.strip())
+        return json.loads(completed.stdout)
+
+    def test_template_has_single_popular_tab(self):
+        html = PAGE_TEMPLATE_PATH.read_text(encoding="utf-8")
+        self.assertEqual(html.count('data-rec-tab="popular"'), 1)
+        self.assertNotIn("热门电影", html)
+        self.assertNotIn("热门剧集", html)
+        # 搜索条里那套「全部/电影/剧集」下拉已删除，只剩内容头的一个开关
+        self.assertNotIn("recommendation-media-type", html)
+        self.assertEqual(html.count('id="rec-media-type"'), 1)
+
+    def test_popular_falls_back_to_movie_when_type_is_all(self):
+        urls = self._eval(
+            "(async () => {"
+            "  setRecommendationMediaType('all', false);"
+            "  await loadRecommendationPopular();"
+            "  return window.__requests;"
+            "})()"
+        )
+        self.assertEqual(len(urls), 1)
+        # TMDB 没有「全部热门片单」，全部应该落到电影而不是发出 media_type=all
+        self.assertIn("media_type=movie", urls[0])
+
+    def test_type_switch_drives_trending_popular_and_search(self):
+        urls = self._eval(
+            "(async () => {"
+            "  setRecommendationMediaType('tv', false);"
+            "  await loadRecommendationTrending('day');"
+            "  await loadRecommendationPopular();"
+            "  await searchRecommendationTmdb('dune');"
+            "  return window.__requests;"
+            "})()"
+        )
+        self.assertEqual(len(urls), 3)
+        self.assertTrue(all("media_type=tv" in url for url in urls), urls)
 
 
 class ExploreYearFilterTest(unittest.TestCase):
@@ -258,6 +346,107 @@ process.stdout.write(JSON.stringify(result));
         self.assertTrue(payload["hasNow"])
         self.assertTrue(payload["hasOld"])
         self.assertTrue(payload["hasAny"])
+
+
+class ExploreScoreRangeTest(unittest.TestCase):
+    """评分 / 投票数改成双端区间条后，仍只落到原来那对 state 字段（rating/ratingMax、voteCount/voteCountMax）。"""
+
+    _eval = ExploreYearFilterTest._eval
+
+    def test_rating_low_end_sets_only_lower_bound(self):
+        payload = self._eval(
+            "(function () {"
+            "  document.getElementById('rec-explore-rating').value = '7.5';"
+            "  document.getElementById('rec-explore-rating-max').value = '10';"
+            "  onExploreRangeInput('rating', 'lo');"
+            "  return {"
+            "    rating: exploreFilterState.rating,"
+            "    ratingMax: exploreFilterState.ratingMax,"
+            "    text: String(document.getElementById('rec-explore-rating-value').textContent),"
+            "    count: String(document.getElementById('rec-explore-filter-count').textContent || ''),"
+            "    summary: getExploreSummaryText(),"
+            "  };"
+            "})()"
+        )
+        self.assertEqual(payload["rating"], "7.5")
+        # 上端拉到顶就是「不限」，不能写成 '10'
+        self.assertEqual(payload["ratingMax"], "")
+        self.assertEqual(payload["text"], "≥ 7.5")
+        # 一条区间只算一条筛选，不能因为两端都动就 +2
+        self.assertEqual(payload["count"], "1")
+        self.assertIn("评分≥7.5", payload["summary"])
+
+    def test_rating_bounds_never_cross(self):
+        payload = self._eval(
+            "(function () {"
+            "  document.getElementById('rec-explore-rating').value = '9';"
+            "  document.getElementById('rec-explore-rating-max').value = '7';"
+            "  onExploreRangeInput('rating', 'lo');"
+            "  var afterLo = [exploreFilterState.rating, exploreFilterState.ratingMax];"
+            "  document.getElementById('rec-explore-rating').value = '8';"
+            "  document.getElementById('rec-explore-rating-max').value = '6';"
+            "  onExploreRangeInput('rating', 'hi');"
+            "  return { afterLo, afterHi: [exploreFilterState.rating, exploreFilterState.ratingMax] };"
+            "})()"
+        )
+        # 拖左端超过右端 → 左端顶到右端；拖右端低于左端 → 右端顶到左端
+        self.assertEqual(payload["afterLo"], ["7", "7"])
+        self.assertEqual(payload["afterHi"], ["8", "8"])
+
+    def test_vote_count_uses_discrete_stops(self):
+        payload = self._eval(
+            "(function () {"
+            "  document.getElementById('rec-explore-vote-count').value = '3';"
+            "  document.getElementById('rec-explore-vote-count-max').value = '8';"
+            "  onExploreRangeInput('votes', 'lo');"
+            "  var low = [exploreFilterState.voteCount, exploreFilterState.voteCountMax];"
+            "  document.getElementById('rec-explore-vote-count-max').value = '4';"
+            "  onExploreRangeInput('votes', 'hi');"
+            "  return {"
+            "    low,"
+            "    range: [exploreFilterState.voteCount, exploreFilterState.voteCountMax],"
+            "    text: String(document.getElementById('rec-explore-vote-count-value').textContent),"
+            "  };"
+            "})()"
+        )
+        # 档位 0/100/200/500/1000/2000/5000/10000/20000：下标 3 → 500，下标 4 → 1000
+        self.assertEqual(payload["low"], ["500", ""])
+        self.assertEqual(payload["range"], ["500", "1000"])
+        self.assertEqual(payload["text"], "500 – 1000")
+
+    def test_clearing_bounds_restores_idle_sliders(self):
+        payload = self._eval(
+            "(function () {"
+            "  exploreFilterState.rating = '7';"
+            "  exploreFilterState.ratingMax = '9';"
+            "  exploreFilterState.voteCount = '500';"
+            "  exploreFilterState.voteCountMax = '5000';"
+            "  syncExploreRangeUi();"
+            "  var busy = {"
+            "    rating: [document.getElementById('rec-explore-rating').value,"
+            "             document.getElementById('rec-explore-rating-max').value],"
+            "    votes: [document.getElementById('rec-explore-vote-count').value,"
+            "            document.getElementById('rec-explore-vote-count-max').value],"
+            "  };"
+            "  exploreFilterState.rating = '';"
+            "  exploreFilterState.ratingMax = '';"
+            "  exploreFilterState.voteCount = '';"
+            "  exploreFilterState.voteCountMax = '';"
+            "  syncExploreRangeUi();"
+            "  return {"
+            "    busy,"
+            "    idle: [document.getElementById('rec-explore-rating').value,"
+            "           document.getElementById('rec-explore-rating-max').value,"
+            "           document.getElementById('rec-explore-vote-count').value,"
+            "           document.getElementById('rec-explore-vote-count-max').value],"
+            "    text: String(document.getElementById('rec-explore-rating-value').textContent),"
+            "  };"
+            "})()"
+        )
+        self.assertEqual(payload["busy"]["rating"], ["7", "9"])
+        self.assertEqual(payload["busy"]["votes"], ["3", "6"])
+        self.assertEqual(payload["idle"], ["0", "10", "0", "8"])
+        self.assertEqual(payload["text"], "不限")
 
 
 class SeasonListRenderTest(unittest.TestCase):

@@ -671,15 +671,36 @@ class SubscriptionOrganizeRunnerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(entry["parent_path"], "电视剧/示例剧")
         self.assertFalse(entry["is_dir"])
 
-    async def test_movie_subscription_is_not_renamed(self):
-        with mock.patch.object(scraper_service, "build_scraper_rename_plan") as plan:
+    async def test_movie_subscription_is_renamed_too(self):
+        # 电影也走「入库后整理」：引擎本来就有 movie 分支（→「片名 (年份).ext」），
+        # 类型限制只存在于组织层的判断里，这里守住"电影不再被跳过"。
+        provider = self._provider(
+            [{"fid": "f2", "name": "示例电影.2024.1080p.mkv", "size": 2000, "is_dir": False}]
+        )
+        captured = {}
+
+        def fake_plan(payload):
+            captured["payload"] = payload
+            return {"actions": [{"ready": True, "issue": "", "entry_id": "f2"}], "ready_count": 1}
+
+        with mock.patch.object(scraper_service, "build_scraper_rename_plan", side_effect=fake_plan) as plan, \
+                mock.patch.object(scraper_service, "create_scraper_job_from_plan", return_value={"job_id": 11}), \
+                mock.patch.object(scraper_service, "submit_scraper_job", return_value=self._Future()), \
+                mock.patch.object(
+                    scraper_service,
+                    "get_scraper_jobs_state",
+                    return_value={"jobs": [{"status": "completed", "succeeded_actions": 1, "failed_actions": 0}]},
+                ):
             organized = await self._organize(
                 self._task(media_type="movie", tmdb_media_type="movie"),
-                self._provider([{"fid": "f1", "name": "示例电影.mkv", "size": 1000, "is_dir": False}]),
-                [{"name": "示例电影.mkv", "size": 1000, "is_dir": False}],
+                provider,
+                [{"name": "示例电影.2024.1080p.mkv", "size": 2000, "is_dir": False}],
             )
-        self.assertFalse(organized)
-        plan.assert_not_called()
+
+        self.assertTrue(organized)
+        plan.assert_called_once()
+        self.assertEqual(captured["payload"]["tmdb"]["tmdb_media_type"], "movie")
+        self.assertEqual(captured["payload"]["entries"][0]["id"], "f2")
 
     async def test_disabled_switch_skips_rename(self):
         with mock.patch.object(scraper_service, "build_scraper_rename_plan") as plan:

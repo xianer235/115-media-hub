@@ -237,6 +237,7 @@
         document.getElementById('subscription_season')?.addEventListener('change', () => {
             suggestSubscriptionTotalEpisodesFromTmdb({ force: true });
             renderSubscriptionTmdbBinding();
+            renderSubscriptionSeasonOptions();
         });
         document.getElementById('subscription_anime_mode')?.addEventListener('change', () => {
             syncSubscriptionTypeUI({ forceSuggestTotal: true });

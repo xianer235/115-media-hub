@@ -365,6 +365,27 @@ class SubscriptionUiFrontendTest(unittest.TestCase):
             "",
         )
 
+    def test_tmdb_season_numbers_filters_zero_and_sorts(self):
+        # TMDB 季表里可能混进第 0 季（特别篇）或空值，下拉只认正季号并按数字排序，
+        # 否则会渲染成「第 1 季、第 10 季、第 2 季」这种字典序。
+        result = run_subscription_ui("""
+        getTmdbSeasonNumbers({
+            tmdb_season_episode_map: {'3': 10, '1': 40, '0': 5, '2': 8, 'x': 4}
+        })
+        """)
+        self.assertEqual(result, [1, 2, 3])
+
+    def test_subscription_modal_keeps_manual_season_input(self):
+        html = SUBSCRIPTION_MODAL_TEMPLATE_PATH.read_text(encoding="utf-8")
+        self.assertIn('id="subscription_season_select"', html)
+        self.assertIn('onchange="onSubscriptionSeasonSelectChange()"', html)
+        # TMDB 季表不全时（例如两季被并成一季）还要能手填，数字输入框不能删。
+        self.assertIn('id="subscription_season"', html)
+        self.assertLess(
+            html.index('id="subscription_season"'),
+            html.index('id="subscription_season_select"'),
+        )
+
     def test_subscription_task_intro_mentions_season(self):
         # buildSubscriptionTaskIntro 还依赖 resource 模块的工具函数，这里只做源码断言，
         # 避免为了一个文案把整个前端依赖树搬进 vm。

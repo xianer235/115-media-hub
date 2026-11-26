@@ -181,11 +181,14 @@ class SelectionMoreStyleTest(unittest.TestCase):
         mobile_start = self.stylesheet.index("@media (max-width: 760px) {")
         mobile_end = self.stylesheet.index("html.theme-day .scraper-page", mobile_start)
         mobile_block = self.stylesheet[mobile_start:mobile_end]
-        rule_start = mobile_block.index("grid-template-columns: repeat(auto-fit")
-        rule = mobile_block[rule_start:]
-        rule = re.sub(r"/\*.*?\*/", "", rule[: rule.index("}")], flags=re.S)
+        # 手机端有两条都叫 .scraper-selection-actions 的规则（一条和 selection-state 并列
+        # 只写 width: 100%），这里要的是带 flex-wrap 的排版规则本身。
+        candidates = re.findall(r"\.scraper-selection-actions \{[^}]*\}", mobile_block)
+        rule = next(item for item in candidates if "flex-wrap" in item)
+        rule = re.sub(r"/\*.*?\*/", "", rule, flags=re.S)
         self.assertIn("overflow: visible;", rule)
         self.assertNotIn("overflow-x: auto", rule)
+        self.assertNotIn("flex-wrap: nowrap", rule)
 
 
 if __name__ == "__main__":

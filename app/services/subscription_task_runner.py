@@ -6267,25 +6267,25 @@ async def run_subscription_task(
                             job_id=success_job_id,
                         )
                         ledger_updated = True
-            if task["media_type"] == "tv":
-                # 转存完成后按「文件名 + 大小」回目标目录定位新文件，原地改名。
-                # 115 的 STRM 刷新统一在批次收口做，所以改名必须排在它之前。
-                for success_record in candidate_success_records:
-                    success_job_id = max(0, int(success_record.get("job_id", 0) or 0))
-                    if success_job_id <= 0:
-                        continue
-                    latest_job_meta = get_resource_job(success_job_id, include_private=True)
-                    if not isinstance(latest_job_meta, dict):
-                        continue
-                    await _organize_subscription_imported_files(
-                        task=task,
-                        provider_meta=provider_meta,
-                        cookie=cookie_115,
-                        provider=provider,
-                        target_cid=str(latest_job_meta.get("folder_id", "") or ""),
-                        target_savepath=str(success_record.get("savepath", "") or ""),
-                        imported_entries=latest_job_meta.get("selected_entries", []),
-                    )
+            # 转存完成后按「文件名 + 大小」回目标目录定位新文件，原地改名。
+            # 115 的 STRM 刷新统一在批次收口做，所以改名必须排在它之前。
+            # 电影同样走这里：开关打开且绑了 TMDB 就统一成「片名 (年份).ext」。
+            for success_record in candidate_success_records:
+                success_job_id = max(0, int(success_record.get("job_id", 0) or 0))
+                if success_job_id <= 0:
+                    continue
+                latest_job_meta = get_resource_job(success_job_id, include_private=True)
+                if not isinstance(latest_job_meta, dict):
+                    continue
+                await _organize_subscription_imported_files(
+                    task=task,
+                    provider_meta=provider_meta,
+                    cookie=cookie_115,
+                    provider=provider,
+                    target_cid=str(latest_job_meta.get("folder_id", "") or ""),
+                    target_savepath=str(success_record.get("savepath", "") or ""),
+                    imported_entries=latest_job_meta.get("selected_entries", []),
+                )
             if existing_episode_scan_ready:
                 existing_episode_count = len(existing_folder_episodes)
                 existing_episode_scan_stats["existing_episode_count"] = existing_episode_count

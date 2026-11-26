@@ -9,6 +9,9 @@ let recommendationActiveTab = 'trending-week';
 let recommendationPreviousTab = 'trending-week';
 let recommendationBusy = false;
 let recommendationOwned = {};
+// 热榜 / 热门 / 搜索 共用一个媒体类型：'all' | 'movie' | 'tv'。
+// 以前这个选择在搜索条里，另一套又在顶部标签页里（热门电影 / 热门剧集），同一个页面上两个说法。
+let recommendationMediaType = 'all';
 
 let recommendationPagination = {
     currentPage: 1,
@@ -128,7 +131,51 @@ function setActiveRecTab(tabKey) {
         explorePanelOpen = false;
         if (searchToolbar) searchToolbar.classList.remove('hidden');
     }
+    syncRecommendationMediaTypeUi();
     syncExploreFilterUi();
+}
+
+// 热门片单 TMDB 只有 movie / tv 两个接口，没有「全部」；选了全部就落到电影。
+function getEffectiveRecommendationMediaType() {
+    return recommendationMediaType === 'tv' ? 'tv' : 'movie';
+}
+
+function isRecommendationMediaTypeSwitchVisible(tabKey) {
+    const tab = String(tabKey || '');
+    // 想看清单混着电影和剧集、探索发现有自己的类型开关，两处都不显示
+    return tab === 'popular' || tab === 'search' || tab.indexOf('trending-') === 0;
+}
+
+function syncRecommendationMediaTypeUi() {
+    const bar = document.getElementById('rec-media-type');
+    const tab = recommendationActiveTab || '';
+    const visible = isRecommendationMediaTypeSwitchVisible(tab);
+    if (bar) bar.classList.toggle('hidden', !visible);
+    // 热门没有「全部」，按钮直接收起来，别留个点了没反应的选项
+    const allowAll = tab !== 'popular';
+    const allBtn = document.getElementById('rec-media-type-all');
+    if (allBtn) allBtn.classList.toggle('hidden', !allowAll);
+    const activeType = allowAll ? recommendationMediaType : getEffectiveRecommendationMediaType();
+    document.querySelectorAll('.rec-media-type-btn').forEach((btn) => {
+        btn.classList.toggle('is-active', btn.dataset.mediaType === activeType);
+        btn.setAttribute('aria-pressed', btn.dataset.mediaType === activeType ? 'true' : 'false');
+    });
+}
+
+async function setRecommendationMediaType(mediaType, applyNow) {
+    const normalized = mediaType === 'movie' || mediaType === 'tv' ? mediaType : 'all';
+    const changed = recommendationMediaType !== normalized;
+    recommendationMediaType = normalized;
+    syncRecommendationMediaTypeUi();
+    if (!applyNow || !changed) return;
+    const tab = recommendationActiveTab || '';
+    if (tab === 'popular') {
+        await loadRecommendationPopular(normalized);
+    } else if (tab === 'search') {
+        await searchRecommendationTmdb(undefined, normalized);
+    } else if (tab === 'trending-day' || tab === 'trending-week') {
+        await loadRecommendationTrending(tab === 'trending-day' ? 'day' : 'week');
+    }
 }
 
 function isExploreDefaultYearRange() {
@@ -141,12 +188,10 @@ function getExploreSelectedCount() {
     if (exploreFilterState.language) count += 1;
     // 默认就是「今年」，用户没动过不算一条筛选；清成「不限」也不算（那是放宽，不是收紧）
     if ((exploreFilterState.yearFrom || exploreFilterState.yearTo) && !isExploreDefaultYearRange()) count += 1;
-    if (exploreFilterState.rating) count += 1;
-    if (exploreFilterState.ratingMax) count += 1;
-    if (exploreFilterState.voteCount) count += 1;
-    if (exploreFilterState.voteCountMax) count += 1;
-    if (exploreFilterState.runtimeGte) count += 1;
-    if (exploreFilterState.runtimeLte) count += 1;
+    // 评分与投票数各自是一条「两端可拉的区间」，两端都动了也只算一条，不然清单一长串看不懂
+    if (exploreFilterState.rating || exploreFilterState.ratingMax) count += 1;
+    if (exploreFilterState.voteCount || exploreFilterState.voteCountMax) count += 1;
+    if (exploreFilterState.runtimeGte || exploreFilterState.runtimeLte) count += 1;
     if (exploreFilterState.tvStatus) count += 1;
     if (exploreFilterState.tvType) count += 1;
     if (exploreFilterState.hideOwned) count += 1;
@@ -154,6 +199,138 @@ function getExploreSelectedCount() {
     count += exploreFilterState.excludeGenres.length;
     count += exploreFilterState.keywords.length;
     return count;
+}
+
+// 投票数（热度）用离散档位：线性刻度会把 0~1000 挤进一小段，500 和 2000 几乎叠在一起
+const EXPLORE_VOTE_STOPS = Object.freeze([0, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]);
+
+// 评分 / 投票数区间条：两个 <input type="range"> 叠在一起，左端拉不动就代表「不限」
+const EXPLORE_RANGE_FIELDS = Object.freeze({
+    rating: {
+        loId: 'rec-explore-rating',
+        hiId: 'rec-explore-rating-max',
+        fillId: 'rec-explore-rating-fill',
+        valueId: 'rec-explore-rating-value',
+        min: 0,
+        max: 10,
+    },
+    votes: {
+        loId: 'rec-explore-vote-count',
+        hiId: 'rec-explore-vote-count-max',
+        fillId: 'rec-explore-vote-count-fill',
+        valueId: 'rec-explore-vote-count-value',
+        min: 0,
+        max: EXPLORE_VOTE_STOPS.length - 1,
+    },
+});
+
+function clampExploreRange(value, cfg) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return cfg.min;
+    return Math.min(cfg.max, Math.max(cfg.min, num));
+}
+
+function getExploreVoteStopIndex(raw) {
+    const text = String(raw == null ? '' : raw).trim();
+    if (!text) return 0;
+    const num = Number(text);
+    if (!Number.isFinite(num)) return 0;
+    let index = 0;
+    EXPLORE_VOTE_STOPS.forEach(function(stop, i) {
+        if (num >= stop) index = i;
+    });
+    return index;
+}
+
+function formatExploreVoteStop(index) {
+    const num = EXPLORE_VOTE_STOPS[index] || 0;
+    if (num >= 10000) {
+        const wan = num / 10000;
+        return (Number.isInteger(wan) ? String(wan) : wan.toFixed(1)) + ' 万';
+    }
+    return String(num);
+}
+
+function getExploreRangePosition(field) {
+    const cfg = EXPLORE_RANGE_FIELDS[field];
+    if (field === 'votes') {
+        return {
+            lo: exploreFilterState.voteCount === '' ? cfg.min : clampExploreRange(getExploreVoteStopIndex(exploreFilterState.voteCount), cfg),
+            hi: exploreFilterState.voteCountMax === '' ? cfg.max : clampExploreRange(getExploreVoteStopIndex(exploreFilterState.voteCountMax), cfg),
+        };
+    }
+    return {
+        lo: exploreFilterState.rating === '' ? cfg.min : clampExploreRange(exploreFilterState.rating, cfg),
+        hi: exploreFilterState.ratingMax === '' ? cfg.max : clampExploreRange(exploreFilterState.ratingMax, cfg),
+    };
+}
+
+function applyExploreRangePosition(field, lo, hi) {
+    const cfg = EXPLORE_RANGE_FIELDS[field];
+    if (field === 'votes') {
+        exploreFilterState.voteCount = lo <= cfg.min ? '' : String(EXPLORE_VOTE_STOPS[lo] || 0);
+        exploreFilterState.voteCountMax = hi >= cfg.max ? '' : String(EXPLORE_VOTE_STOPS[hi] || 0);
+        return;
+    }
+    exploreFilterState.rating = lo <= cfg.min ? '' : String(lo);
+    exploreFilterState.ratingMax = hi >= cfg.max ? '' : String(hi);
+}
+
+function getExploreRangeText(field) {
+    const cfg = EXPLORE_RANGE_FIELDS[field];
+    const pos = getExploreRangePosition(field);
+    const format = field === 'votes'
+        ? function(index) { return formatExploreVoteStop(index); }
+        : function(value) { return String(Number(value).toFixed(1)).replace(/\.0$/, ''); };
+    if (pos.lo <= cfg.min && pos.hi >= cfg.max) return '不限';
+    if (pos.lo <= cfg.min) return '≤ ' + format(pos.hi);
+    if (pos.hi >= cfg.max) return '≥ ' + format(pos.lo);
+    return format(pos.lo) + ' – ' + format(pos.hi);
+}
+
+function syncExploreRangeUi() {
+    Object.keys(EXPLORE_RANGE_FIELDS).forEach(function(field) {
+        const cfg = EXPLORE_RANGE_FIELDS[field];
+        const pos = getExploreRangePosition(field);
+        const loEl = document.getElementById(cfg.loId);
+        const hiEl = document.getElementById(cfg.hiId);
+        if (loEl) loEl.value = String(pos.lo);
+        if (hiEl) hiEl.value = String(pos.hi);
+        const span = cfg.max - cfg.min;
+        const loPct = span > 0 ? ((pos.lo - cfg.min) / span) * 100 : 0;
+        const hiPct = span > 0 ? ((pos.hi - cfg.min) / span) * 100 : 100;
+        const fillEl = document.getElementById(cfg.fillId);
+        if (fillEl) {
+            fillEl.style.left = loPct + '%';
+            fillEl.style.right = (100 - hiPct) + '%';
+            // 两端都在头尾 = 没设条件，填充压暗一档
+            fillEl.classList.toggle('is-idle', pos.lo <= cfg.min && pos.hi >= cfg.max);
+        }
+        const valueEl = document.getElementById(cfg.valueId);
+        if (valueEl) valueEl.textContent = getExploreRangeText(field);
+        // 两个滑块重合时只有压在上面那条能拖：左端不在最左时把左滑块抬上来，否则拖不回去
+        if (loEl) {
+            const overlap = pos.lo >= pos.hi;
+            loEl.style.zIndex = (overlap && pos.lo > cfg.min) ? '3' : '1';
+        }
+    });
+}
+
+function onExploreRangeInput(field, moved) {
+    const cfg = EXPLORE_RANGE_FIELDS[field];
+    const loEl = document.getElementById(cfg.loId);
+    const hiEl = document.getElementById(cfg.hiId);
+    if (!loEl || !hiEl) return;
+    let lo = clampExploreRange(loEl.value, cfg);
+    let hi = clampExploreRange(hiEl.value, cfg);
+    // 两端不许交叉：谁被拖动谁让位
+    if (moved === 'hi') {
+        if (hi < lo) hi = lo;
+    } else if (lo > hi) {
+        lo = hi;
+    }
+    applyExploreRangePosition(field, lo, hi);
+    syncExploreFilterUi();
 }
 
 function getExploreSortOptions(mediaType) {
@@ -282,10 +459,6 @@ function syncExploreFilterUi() {
         'rec-explore-language': exploreFilterState.language,
         'rec-explore-year-from': exploreFilterState.yearFrom,
         'rec-explore-year-to': exploreFilterState.yearTo,
-        'rec-explore-rating': exploreFilterState.rating,
-        'rec-explore-rating-max': exploreFilterState.ratingMax,
-        'rec-explore-vote-count': exploreFilterState.voteCount,
-        'rec-explore-vote-count-max': exploreFilterState.voteCountMax,
         'rec-explore-runtime-gte': exploreFilterState.runtimeGte,
         'rec-explore-runtime-lte': exploreFilterState.runtimeLte,
         'rec-explore-tv-status': exploreFilterState.tvStatus,
@@ -295,6 +468,9 @@ function syncExploreFilterUi() {
         const el = document.getElementById(id);
         if (el && el.value !== valueMap[id]) el.value = valueMap[id];
     });
+
+    // 评分 / 投票数是区间条，值在 state 里是字符串，得换算成滑块位置再回填
+    syncExploreRangeUi();
 
     const hideOwnedEl = document.getElementById('rec-explore-hide-owned');
     if (hideOwnedEl) hideOwnedEl.checked = !!exploreFilterState.hideOwned;
@@ -384,10 +560,6 @@ function bindExploreFilterInputs() {
         { id: 'rec-explore-language', key: 'language', event: 'change' },
         { id: 'rec-explore-year-from', key: 'yearFrom', event: 'input' },
         { id: 'rec-explore-year-to', key: 'yearTo', event: 'input' },
-        { id: 'rec-explore-rating', key: 'rating', event: 'input' },
-        { id: 'rec-explore-rating-max', key: 'ratingMax', event: 'input' },
-        { id: 'rec-explore-vote-count', key: 'voteCount', event: 'input' },
-        { id: 'rec-explore-vote-count-max', key: 'voteCountMax', event: 'input' },
         { id: 'rec-explore-runtime-gte', key: 'runtimeGte', event: 'input' },
         { id: 'rec-explore-runtime-lte', key: 'runtimeLte', event: 'input' },
         { id: 'rec-explore-tv-status', key: 'tvStatus', event: 'change' },
@@ -401,6 +573,19 @@ function bindExploreFilterInputs() {
             syncExploreFilterUi();
         });
         el.dataset.recExploreBound = '1';
+    });
+
+    // 区间条：两条滑轨各绑一次，谁被拖就由谁让位，避免两端交叉
+    Object.keys(EXPLORE_RANGE_FIELDS).forEach(function(field) {
+        const cfg = EXPLORE_RANGE_FIELDS[field];
+        [['lo', cfg.loId], ['hi', cfg.hiId]].forEach(function(pair) {
+            const el = document.getElementById(pair[1]);
+            if (!el || el.dataset.recExploreBound === '1') return;
+            el.addEventListener('input', function() {
+                onExploreRangeInput(field, pair[0]);
+            });
+            el.dataset.recExploreBound = '1';
+        });
     });
 
     const hideOwnedEl = document.getElementById('rec-explore-hide-owned');
@@ -562,7 +747,7 @@ function restorePreviousRecTab() {
     if (prefix === 'trending') {
         loadRecommendationTrending(tab.split('-')[1]);
     } else if (prefix === 'popular') {
-        loadRecommendationPopular(tab.split('-')[1]);
+        loadRecommendationPopular();
     } else if (tab === 'watchlist') {
         showRecommendationWatchlist();
     } else if (tab === 'explore') {
@@ -802,7 +987,7 @@ function renderWatchlistGrid() {
 }
 
 async function loadRecommendationTrending(timeWindow, page) {
-    const mediaType = document.getElementById('recommendation-media-type')?.value || 'all';
+    const mediaType = recommendationMediaType;
     setActiveRecTab('trending-' + timeWindow);
     setRecommendationContentHeader(
         timeWindow === 'day' ? '今日热榜' : '本周热榜',
@@ -832,21 +1017,22 @@ async function loadRecommendationTrending(timeWindow, page) {
 }
 
 async function loadRecommendationPopular(mediaType, page) {
-    setActiveRecTab('popular-' + mediaType);
+    const resolved = mediaType === 'movie' || mediaType === 'tv' ? mediaType : getEffectiveRecommendationMediaType();
+    setActiveRecTab('popular');
     setRecommendationContentHeader(
-        mediaType === 'movie' ? '热门电影' : '热门剧集',
-        mediaType === 'movie' ? '当前最受关注的电影片单。' : '当前最受关注的剧集片单。'
+        '热门',
+        resolved === 'movie' ? 'TMDB 当前最受关注的电影。' : 'TMDB 当前最受关注的剧集。'
     );
     recommendationItems = [];
     setRecommendationBusy(true);
     renderLoadingGrid();
     try {
         const p = page || 1;
-        const data = await window.MediaHubApi.getJson('/tmdb/popular?media_type=' + encodeURIComponent(mediaType) + '&page=' + p);
+        const data = await window.MediaHubApi.getJson('/tmdb/popular?media_type=' + encodeURIComponent(resolved) + '&page=' + p);
         recommendationItems = Array.isArray(data?.items) ? data.items : [];
         recommendationPagination.currentPage = data?.page || p;
         recommendationPagination.totalPages = data?.total_pages || 1;
-        recommendationPagination.currentContext = { type: 'popular', mediaType: mediaType };
+        recommendationPagination.currentContext = { type: 'popular', mediaType: resolved };
         renderRecommendationGrid(recommendationItems);
     } catch (e) {
         recommendationItems = [];
@@ -860,13 +1046,17 @@ async function loadRecommendationPopular(mediaType, page) {
     }
 }
 
+async function showRecommendationPopular() {
+    await loadRecommendationPopular(getEffectiveRecommendationMediaType());
+}
+
 async function searchRecommendationTmdb(queryOverride, mediaTypeOverride, page) {
     const query = queryOverride || document.getElementById('recommendation-search-input')?.value?.trim();
     if (!query) {
         restorePreviousRecTab();
         return;
     }
-    const mediaType = mediaTypeOverride || document.getElementById('recommendation-media-type')?.value || 'all';
+    const mediaType = mediaTypeOverride || recommendationMediaType;
     setActiveRecTab('search');
     setRecommendationContentHeader('搜索：' + query, '在 TMDB 中搜索影视名称，并可继续搜索资源或创建订阅。');
     recommendationItems = [];
@@ -1588,6 +1778,7 @@ async function initRecommendationPage() {
     bindExplorePanelDismiss();
     updateSortOptions(exploreFilterState.mediaType);
     syncExploreFilterUi();
+    syncRecommendationMediaTypeUi();
     await loadRecommendationWatchlist();
     if (!recommendationItems.length) {
         await loadRecommendationTrending('week');
@@ -1597,6 +1788,8 @@ async function initRecommendationPage() {
 Object.assign(window, {
     loadRecommendationTrending,
     loadRecommendationPopular,
+    showRecommendationPopular,
+    setRecommendationMediaType,
     searchRecommendationTmdb,
     showRecommendationWatchlist,
     toggleRecommendationWatchlist,

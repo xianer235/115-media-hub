@@ -58,7 +58,8 @@
 - **Python 一律用 `.venv/bin/python`**，不要用系统 `python3`；语法验证加 `PYTHONPYCACHEPREFIX=/tmp/115-media-hub-pycache`。
 - **JS 语法校验必须按 ES Module 跑**：`node --check foo.js` 对带 `export` 的 `.js` 会**静默放过**语法错误（Node 22 实测返回 0）；`--experimental-default-type=module` 也不能用——Node 23+ 已移除该参数，CI 的 Node 24 直接 `bad option`（2026-11-16 因此挂过一次 CI）。**唯一正确做法**：统一走 `scripts/check_js_syntax.py`（把文件复制成 `.mjs` 再 `node --check`，后缀决定解析模式，Node 10~24 行为一致），`scripts/check.sh` 与 CI 都调它，`tests/test_js_module_syntax.py` 兜底全量。**判断标准**：改完前端跑的是这套脚本，不是裸 `node --check`。2026-11-16 设置页多一个 `}` 就是裸 `--check` 放过去的，页面导航能画出来但所有分区展不开
 - **Docker 构建先设代理**：`export HTTP_PROXY/HTTPS_PROXY=http://127.0.0.1:7897`、`NO_PROXY=localhost,127.0.0.1,registry-1.docker.io`，再 `docker compose up -d --build`，否则可能用旧镜像得出错误结论。
-- **前端样式要先重新生成 Tailwind**：新增的工具类若不在 `static/css/tailwind.generated.css` 里就不生效，改模板类名后执行 `npm run build:css`。
+- **前端样式要先重新生成 Tailwind**：新增的工具类若不在 `static/css/tailwind.generated.css` 里就不生效，改模板类名后执行 `npm run build:css`。反过来说，**别在模板里加没生成的任意值类**（如 `mt-[2vh]`），写了也不生效，宁可把尺寸写进 `index.css`。
+- **`.hidden` 会被 `index.css` 的 `display:` 盖掉**：两份样式表权重都是 0,1,0，而 `index.css` 在 `tailwind.generated.css` 之后加载；只要 `index.css` 给同一个类写了 `display: flex/grid`，模板上的 `class="... hidden"` 就收不起来（实例：任务弹窗「清空」下拉 `.resource-job-clear-dropdown` 一直挂着、勾选栏「更多」菜单 `.scraper-selection-more-menu`）。给这类元素补一条 `.xxx.hidden { display: none; }`。
 - **主题必须日夜双查**：页面用到 `html.theme-day` / `html:not(.theme-day)` 两套配色，只看夜间模式容易漏掉日间可见性问题。
 - **115 相关代码偏脆弱**：下载链接解析依赖逆向出来的 RSA/加密 downurl 协议（`app/routes/strm.py`）；大目录读取可能触发 `IncompleteRead`，现有策略是断连/超时类错误重试并逐级缩小单页大小。改动这些地方要同时验证“正常路径”和“服务端掐断”路径。
 - **外部授权只能在部署环境验证**：115 扫码登录、阿里云盘 OAuth、token 过期与刷新都无法在本地沙箱验证，回复时必须把“单测通过”和“实盘待验”分开表述。

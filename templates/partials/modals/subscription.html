@@ -1,300 +1,362 @@
         <div id="subscription-modal" class="hidden fixed inset-0 bg-black/60 z-50 p-4">
-            <div class="w-full max-w-2xl mx-auto mt-[4vh] max-h-[92vh] group-card modal-card subscription-modal-shell">
-                <div class="flex items-center justify-between">
-                    <h3 id="subscription-modal-title" class="group-title mb-0">新增订阅任务</h3>
-                    <button onclick="closeSubscriptionModal()" class="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm">关闭</button>
+            <div class="w-full mx-auto mt-[4vh] max-h-[92vh] group-card modal-card subscription-modal-shell">
+                <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <h3 id="subscription-modal-title" class="group-title mb-0">新增订阅任务</h3>
+                        <div id="subscription-modal-subtitle" class="text-xs text-slate-500 mt-1 truncate">先填影视名称和保存目录，其余选项按需展开</div>
+                    </div>
+                    <div class="flex items-center gap-2 shrink-0">
+                        <label class="subscription-enabled-toggle" title="关闭后不参与定时，但仍可手动运行">
+                            <input type="checkbox" id="subscription_enabled" class="ui-checkbox" checked>
+                            <span>启用</span>
+                        </label>
+                        <button onclick="closeSubscriptionModal()" class="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm">关闭</button>
+                    </div>
                 </div>
                 <div class="subscription-modal-body space-y-4">
-                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <label class="block">
-                            <span class="text-xs text-slate-500">订阅类型</span>
-                            <select id="subscription_media_type" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" onchange="syncSubscriptionTypeUI()">
-                                <option value="tv">电视剧</option>
-                                <option value="movie">电影</option>
-                            </select>
-                        </label>
-                        <label class="block">
-                            <span class="text-xs text-slate-500">网盘提供方</span>
-                            <select id="subscription_provider" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" onchange="syncSubscriptionProviderUI()">
-                            </select>
-                        </label>
-                        <label class="block">
-                            <span class="text-xs text-slate-500">年份（可选）</span>
-                            <input id="subscription_year" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="如 2026">
-                        </label>
-                    </div>
-                    <label class="block">
-                        <span class="text-xs text-slate-500">影视名称</span>
-                        <input id="subscription_title" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：长安的荔枝">
-                        <div class="text-[11px] text-slate-500 mt-2">系统会自动把影视名称作为任务名。</div>
-                    </label>
-                    <label class="block">
-                        <span class="text-xs text-slate-500">别名（可选，逗号分隔）</span>
-                        <input id="subscription_aliases" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：The Long Night, 长夜难明">
-                    </label>
-                    <label class="block">
-                        <span class="text-xs text-slate-500">自定义排除词（可选，逗号分隔）</span>
-                        <input id="subscription_exclude_keywords" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：短剧, 解说">
-                        <div class="text-[11px] text-slate-500 mt-2">候选标题或正文包含这些词时会跳过；保存时会把中文逗号统一为英文逗号。</div>
-                    </label>
-                    <label class="block">
-                        <span class="text-xs text-slate-500">排除文件类型（可选，逗号分隔）</span>
-                        <input id="subscription_exclude_file_extensions" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：zip, rar, exe">
-                        <div class="text-[11px] text-slate-500 mt-2">只在读取分享文件清单时按文件后缀跳过；新任务默认 zip, rar，可手动删除。</div>
-                    </label>
-                    <label class="flex items-start gap-3 cursor-pointer text-sm rounded-xl border border-slate-700 bg-slate-900/50 p-3">
-                        <input type="checkbox" id="subscription_strict_title_match" class="ui-checkbox mt-0.5">
-                        <span class="min-w-0">
-                            <span class="block font-bold text-slate-100">精准匹配</span>
-                            <span class="block text-[11px] text-slate-500 mt-1 leading-5">开启后只认片名、分享目录、文件路径或 TMDB ID；简介里的片名词不算同剧证据。</span>
-                        </span>
-                    </label>
-                    <label class="block">
-                        <span class="text-xs text-slate-500">导入文件最小大小（MB）</span>
-                        <input id="subscription_min_file_size_mb" type="number" min="0" step="0.1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
-                        <div class="text-[11px] text-slate-500 mt-2">0 表示不限制；低于该大小的分享文件不会进入订阅转存。</div>
-                    </label>
-                    <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 space-y-3">
-                        <div class="flex flex-wrap items-center justify-between gap-2">
-                            <div class="text-xs text-slate-500">TMDB 绑定（可选，推荐）</div>
-                            <div class="flex items-center gap-2">
-                                <button type="button" onclick="openSubscriptionTmdbSearchModal()" class="px-3 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold">搜索 TMDB</button>
-                                <button type="button" onclick="clearSubscriptionTmdbBinding()" class="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold">清除绑定</button>
-                            </div>
-                        </div>
-                        <div id="subscription_tmdb_summary" class="text-xs text-slate-400 leading-6">未绑定 TMDB。绑定后会自动补充别名/年份/总集数并增强匹配稳定性。</div>
-                        <input id="subscription_tmdb_id" class="hidden" value="0">
-                        <input id="subscription_tmdb_media_type" class="hidden" value="">
-                        <input id="subscription_tmdb_title" class="hidden" value="">
-                        <input id="subscription_tmdb_original_title" class="hidden" value="">
-                        <input id="subscription_tmdb_year" class="hidden" value="">
-                        <input id="subscription_tmdb_aliases" class="hidden" value="">
-                        <input id="subscription_tmdb_total_episodes" class="hidden" value="0">
-                        <input id="subscription_tmdb_total_seasons" class="hidden" value="0">
-                        <input id="subscription_tmdb_season_episode_map" class="hidden" value="">
-                        <input id="subscription_tmdb_episode_mode" class="hidden" value="seasonal">
-                        <input id="subscription_tmdb_status" class="hidden" value="">
-                        <input id="subscription_tmdb_next_air_date" class="hidden" value="">
-                        <input id="subscription_tmdb_last_air_date" class="hidden" value="">
-                        <input id="subscription_tmdb_next_episode_number" class="hidden" value="0">
-                    </div>
-                    <div id="subscription-tv-fields" class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <label class="block">
-                            <span class="text-xs text-slate-500">季数（电视剧）</span>
-                            <input id="subscription_season" type="number" min="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="1">
-                        </label>
-                        <label class="block">
-                            <span class="text-xs text-slate-500">总集数（可选，0 为自动识别）</span>
-                            <input id="subscription_total_episodes" type="number" min="0" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
-                        </label>
-                    </div>
-                    <label id="subscription-anime-mode-wrap" class="flex items-center gap-3 cursor-pointer text-sm">
-                        <input type="checkbox" id="subscription_anime_mode" class="ui-checkbox">
-                        多季合一（跨季追更，关闭时按当前季订阅）
-                    </label>
-                    <div id="subscription-organize-block" class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 space-y-3">
-                        <label class="flex items-start gap-3 cursor-pointer text-sm">
-                            <input type="checkbox" id="subscription_organize_on_import" class="ui-checkbox mt-0.5" checked onchange="syncSubscriptionOrganizeUI()">
-                            <span class="min-w-0">
-                                <span class="block font-bold text-slate-100">入库后整理（电视剧）</span>
-                                <span class="block text-[11px] text-slate-500 mt-1 leading-5">只用现有刮削引擎把新集原地改名成「片名 - S01E02」这类标准名，不建目录、不移动文件；没有绑定 TMDB、或识别不出集数时保留原名。</span>
-                            </span>
-                        </label>
-                        <div id="subscription-organize-options" class="space-y-3">
-                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <label class="block">
-                                    <span class="text-xs text-slate-500">标题语言</span>
-                                    <select id="subscription_organize_title_language" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none">
-                                        <option value="zh">中文名</option>
-                                        <option value="auto">跟随 TMDB 配置</option>
-                                        <option value="en">英文名</option>
-                                    </select>
-                                </label>
-                                <label class="block">
-                                    <span class="text-xs text-slate-500">文件命名方式</span>
-                                    <select id="subscription_organize_file_name_mode" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none">
-                                        <option value="standard">按识别结果重命名</option>
-                                        <option value="clean">仅清理广告信息（保留原始命名）</option>
-                                        <option value="keep">保持原名（不重命名）</option>
-                                    </select>
-                                </label>
-                            </div>
-                            <label class="flex items-center gap-3 cursor-pointer text-sm">
-                                <input type="checkbox" id="subscription_organize_delete_ad_files" class="ui-checkbox">
-                                <span>整理时删除广告文件（图片/网页/文本，删除进入网盘回收站）</span>
-                            </label>
-                        </div>
-                    </div>
-                    <div class="space-y-2">
-                        <div id="subscription-savepath-provider-label" class="text-xs text-slate-500">115 保存目录</div>
-                        <div class="resource-save-path-grid">
-                            <input id="subscription_savepath_display" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" value="请选择保存目录" readonly>
-                            <button type="button" onclick="openSubscriptionFolderModal()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">浏览目录</button>
-                        </div>
-                        <input id="subscription_folder_id" class="hidden" value="0">
-                        <input id="subscription_savepath" class="hidden" value="">
-                        <div id="subscription-savepath-hint" class="text-[11px] text-slate-500 leading-5 px-1">电影会自动建「片名 (年份) [tmdbid-编号]」子文件夹；电视剧会自动建「剧名 (年份) [tmdbid-编号]/Season NN」。所选目录已经是这部影视的文件夹时不再嵌套。</div>
-                    </div>
-                    <div id="subscription-cross-copy-block" class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 space-y-3">
-                        <div>
-                            <div class="text-sm font-bold">跨盘补源</div>
-                            <div class="text-[11px] text-slate-500 leading-5 mt-1">自家网盘搜到新资源时走网盘转存（最快，不耗本地带宽）；只有自家网盘没有新资源时，才从夸克网盘搜索并复制到本盘（需要先下载再上传，比转存慢）。<strong class="text-slate-300">补源文件与订阅导入落在同一目录</strong>：电影进「保存目录/片名 (年份) [tmdbid-编号]」，电视剧进「保存目录/剧名 (年份) [tmdbid-编号]/Season NN」。复制完成后照常走监控刷新与刮削。</div>
-                        </div>
-                        <label class="flex items-center gap-3 cursor-pointer text-sm">
-                            <input type="checkbox" id="subscription-cross-copy-enabled" class="ui-checkbox" onchange="syncSubscriptionCrossCopyUI()">
-                            <span>启用跨盘补源（本盘没有新资源时，从夸克网盘复制）</span>
-                        </label>
-                        <div>
-                            <div class="text-xs text-slate-500">源网盘（当前仅支持夸克）</div>
-                            <div id="subscription-cross-copy-sources" class="flex flex-wrap gap-2 mt-2"></div>
-                            <div id="subscription-cross-copy-hint" class="text-[11px] text-slate-500 leading-5 mt-2"></div>
-                        </div>
-                    </div>
-                    <div id="subscription-115-fixed-link-block" class="space-y-3">
-                        <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 space-y-3">
-                            <div id="subscription-fixed-link-title" class="text-xs text-slate-500">固定分享链接（可选）</div>
-                            <div class="resource-save-path-grid">
-                                <input id="subscription_share_link_url" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" placeholder="例如：https://115.com/s/xxxxxxx?password=abcd">
-                                <button type="button" onclick="openSubscriptionShareFolderModal()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold whitespace-nowrap">浏览链接目录</button>
-                            </div>
-                            <div class="resource-save-path-grid">
-                                <input id="subscription_share_receive_code" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm font-mono uppercase tracking-[0.08em]" placeholder="可选：提取码（1-16 位字母数字）">
-                                <button type="button" onclick="openSubscriptionShareFolderModal(true)" class="px-4 py-3 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold whitespace-nowrap">应用并浏览</button>
-                            </div>
-                            <div id="subscription-fixed-link-hint" class="text-[11px] text-slate-500 leading-5">资源搜索会优先执行（TG 频道搜索，及启用时的 PanSou 搜索）；下方开关开启后，这个固定分享链接会作为备选候选排在资源搜索候选之后。</div>
-                            <label class="flex items-center gap-3 cursor-pointer text-sm">
-                                <input type="checkbox" id="subscription_fixed_link_channel_search" class="ui-checkbox">
-                                启用固定分享链接兜底
-                            </label>
-                            <div class="text-[11px] text-slate-500 leading-5">开启后会先做资源搜索，再把固定链接追加为兜底候选；关闭时即使填写固定链接，也只按资源搜索执行。</div>
-                        </div>
-                        <label class="block">
-                            <span id="subscription-share-subdir-label" class="text-xs text-slate-500">分享子目录（可选）</span>
-                            <input id="subscription_share_subdir" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：合集/剧名（留空表示从分享根目录）">
-                            <input id="subscription_share_subdir_cid" type="hidden" value="">
-                            <div class="text-[11px] text-slate-500 mt-2">可手动填写，也可先填上方固定分享链接后点击“浏览链接目录”选择。浏览选择时会自动记录 CID 锚点，优先按 CID 定位目录；配置后仅在该子目录内扫描和转存。</div>
-                        </label>
-                    </div>
-                    <div id="subscription-quark-provider-hint" class="hidden text-[11px] text-cyan-300/90 leading-5 rounded-xl border border-cyan-400/20 bg-cyan-500/10 px-3 py-2">
-                        当前网盘使用资源搜索自动匹配；也可以手动扫描单个分享链接。
-                    </div>
-                    <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 space-y-3">
-                        <div class="flex flex-wrap items-center justify-between gap-2">
-                            <div class="text-xs text-slate-500">候选精查访问策略</div>
-                            <button type="button" onclick="fillSubscriptionScanTuningDefaults()" class="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold">填入建议值</button>
-                        </div>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <label class="block">
-                                <span class="text-xs text-slate-500">候选精查上限</span>
-                                <input id="subscription_candidate_scan_prefetch_limit" type="number" min="0" max="80" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="3">
-                            </label>
-                            <label class="block">
-                                <span class="text-xs text-slate-500">候选并发</span>
-                                <input id="subscription_candidate_scan_concurrency" type="number" min="1" max="6" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="1">
-                            </label>
-                            <label class="block">
-                                <span class="text-xs text-slate-500">目录扫描并发</span>
-                                <input id="subscription_share_scan_concurrency" type="number" min="1" max="6" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="1">
-                            </label>
-                            <label class="block">
-                                <span class="text-xs text-slate-500">分享请求间隔（秒）</span>
-                                <input id="subscription_share_scan_rate_limit_seconds" type="number" min="0.05" max="5" step="0.05" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="1">
-                            </label>
-                        </div>
-                        <div id="subscription-scan-tuning-hint" class="text-[11px] text-slate-500 leading-5">建议：候选上限 3，候选并发 1，目录并发 1，请求间隔 1s。</div>
-                    </div>
-                    <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 space-y-3">
-                        <div class="text-xs text-slate-500">自动查询时段</div>
-                        <div class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2" id="subscription_schedule_weekdays">
-                            <label class="flex items-center justify-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm cursor-pointer">
-                                <input type="checkbox" data-subscription-weekday="1" class="ui-checkbox" checked>
-                                周一
-                            </label>
-                            <label class="flex items-center justify-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm cursor-pointer">
-                                <input type="checkbox" data-subscription-weekday="2" class="ui-checkbox" checked>
-                                周二
-                            </label>
-                            <label class="flex items-center justify-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm cursor-pointer">
-                                <input type="checkbox" data-subscription-weekday="3" class="ui-checkbox" checked>
-                                周三
-                            </label>
-                            <label class="flex items-center justify-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm cursor-pointer">
-                                <input type="checkbox" data-subscription-weekday="4" class="ui-checkbox" checked>
-                                周四
-                            </label>
-                            <label class="flex items-center justify-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm cursor-pointer">
-                                <input type="checkbox" data-subscription-weekday="5" class="ui-checkbox" checked>
-                                周五
-                            </label>
-                            <label class="flex items-center justify-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm cursor-pointer">
-                                <input type="checkbox" data-subscription-weekday="6" class="ui-checkbox" checked>
-                                周六
-                            </label>
-                            <label class="flex items-center justify-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm cursor-pointer">
-                                <input type="checkbox" data-subscription-weekday="7" class="ui-checkbox" checked>
-                                周日
-                            </label>
-                        </div>
+                    <div class="subscription-basic-card space-y-4">
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <label class="block">
-                                <span class="text-xs text-slate-500">开始时间</span>
-                                <input id="subscription_schedule_start_time" type="time" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="00:00">
-                            </label>
-                            <label class="block">
-                                <span class="text-xs text-slate-500">结束时间</span>
-                                <input id="subscription_schedule_end_time" type="time" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="23:59">
-                            </label>
-                            <label class="block">
-                                <span class="text-xs text-slate-500">时段内查询间隔（分钟）</span>
-                                <input id="subscription_schedule_interval_minutes" type="number" min="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="120">
-                            </label>
-                        </div>
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <label class="block">
-                                <span class="text-xs text-slate-500">命中后冷却</span>
-                                <select id="subscription_hit_cooldown_mode" onchange="syncSubscriptionHitCooldownUI()" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1">
-                                    <option value="auto">自动（按剧集播出排期）</option>
-                                    <option value="manual">手动指定</option>
-                                    <option value="off">关闭</option>
+                                <span class="text-xs text-slate-500">订阅类型</span>
+                                <select id="subscription_media_type" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" onchange="syncSubscriptionTypeUI()">
+                                    <option value="tv">电视剧</option>
+                                    <option value="movie">电影</option>
                                 </select>
                             </label>
-                            <label class="block hidden" id="subscription-hit-cooldown-hours-wrap">
-                                <span class="text-xs text-slate-500">冷却时长（小时，1-336，最长 14 天）</span>
-                                <input id="subscription_hit_cooldown_hours" type="number" min="1" max="336" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
+                            <label class="block">
+                                <span class="text-xs text-slate-500">网盘提供方</span>
+                                <select id="subscription_provider" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" onchange="syncSubscriptionProviderUI()">
+                                </select>
+                            </label>
+                            <label class="block">
+                                <span class="text-xs text-slate-500">年份（可选）</span>
+                                <input id="subscription_year" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="如 2026">
                             </label>
                         </div>
-                        <div class="text-[11px] text-slate-500 leading-5">仅在所选星期与时间段内按间隔自动查询。支持跨天时段（例如 22:00 到次日 02:00）。</div>
-                        <div class="text-[11px] text-slate-500 leading-5">
-                            命中新集后暂停自动查询，直到下一集播出前，避免重复空搜。选「自动」会读 TMDB 的下一集播出日期推算；手动值建议比更新周期短 10~15%（日更填 20、周更填 144、一周双更填 60），填成周期整数会导致每次都晚一集。手动运行不受限制。
+                        <label class="block">
+                            <span class="text-xs text-slate-500">影视名称</span>
+                            <input id="subscription_title" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：长安的荔枝">
+                            <div class="text-[11px] text-slate-500 mt-2">系统会自动把影视名称作为任务名。</div>
+                        </label>
+                        <div class="space-y-2">
+                            <div id="subscription-savepath-provider-label" class="text-xs text-slate-500">115 保存目录</div>
+                            <div class="resource-save-path-grid">
+                                <input id="subscription_savepath_display" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" value="请选择保存目录" readonly>
+                                <button type="button" onclick="openSubscriptionFolderModal()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold">浏览目录</button>
+                            </div>
+                            <input id="subscription_folder_id" class="hidden" value="0">
+                            <input id="subscription_savepath" class="hidden" value="">
+                            <div id="subscription-savepath-hint" class="text-[11px] text-slate-500 leading-5 px-1">电影会建「片名 (年份) [tmdbid-编号]」子文件夹；电视剧建「剧名 (年份) [tmdbid-编号]/Season NN」。所选目录已是这部影视的文件夹时不再嵌套。</div>
                         </div>
+                        <div class="subscription-tmdb-card">
+                            <div class="flex flex-wrap items-center justify-between gap-2">
+                                <div class="text-xs text-slate-500">TMDB 绑定（可选，推荐）</div>
+                                <div class="flex items-center gap-2">
+                                    <button type="button" onclick="openSubscriptionTmdbSearchModal()" class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold">搜索 TMDB</button>
+                                    <button type="button" onclick="clearSubscriptionTmdbBinding()" class="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold">清除绑定</button>
+                                </div>
+                            </div>
+                            <div id="subscription_tmdb_summary" class="text-xs text-slate-400 leading-6 mt-2">未绑定 TMDB。绑定后会自动补充别名/年份/总集数并增强匹配稳定性。</div>
+                            <input id="subscription_tmdb_id" class="hidden" value="0">
+                            <input id="subscription_tmdb_media_type" class="hidden" value="">
+                            <input id="subscription_tmdb_title" class="hidden" value="">
+                            <input id="subscription_tmdb_original_title" class="hidden" value="">
+                            <input id="subscription_tmdb_year" class="hidden" value="">
+                            <input id="subscription_tmdb_aliases" class="hidden" value="">
+                            <input id="subscription_tmdb_total_episodes" class="hidden" value="0">
+                            <input id="subscription_tmdb_total_seasons" class="hidden" value="0">
+                            <input id="subscription_tmdb_season_episode_map" class="hidden" value="">
+                            <input id="subscription_tmdb_episode_mode" class="hidden" value="seasonal">
+                            <input id="subscription_tmdb_status" class="hidden" value="">
+                            <input id="subscription_tmdb_next_air_date" class="hidden" value="">
+                            <input id="subscription_tmdb_last_air_date" class="hidden" value="">
+                            <input id="subscription_tmdb_next_episode_number" class="hidden" value="0">
+                        </div>
+                        <div id="subscription-tv-fields" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <label class="block">
+                                <span class="text-xs text-slate-500">季数（电视剧）</span>
+                                <div class="mt-1 flex items-center gap-2">
+                                    <input id="subscription_season" type="number" min="1" style="width:100%" class="bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" value="1">
+                                    <select id="subscription_season_select" class="hidden min-w-0 flex-1 bg-slate-900 border-slate-700 rounded-xl p-3 text-sm outline-none" onchange="onSubscriptionSeasonSelectChange()"></select>
+                                </div>
+                                <div id="subscription-season-hint" class="text-[11px] text-slate-500 mt-2 leading-5">绑定 TMDB 后可按季选择，并自动带出这一季的集数。</div>
+                            </label>
+                            <label class="block">
+                                <span class="text-xs text-slate-500">总集数（可选，0 为自动识别）</span>
+                                <input id="subscription_total_episodes" type="number" min="0" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0" oninput="updateSubscriptionTotalEpisodesHint()">
+                                <div id="subscription-total-episodes-hint" class="hidden text-[11px] text-amber-300 mt-2 leading-5"></div>
+                            </label>
+                        </div>
+                        <label id="subscription-anime-mode-wrap" class="flex items-center gap-3 cursor-pointer text-sm">
+                            <input type="checkbox" id="subscription_anime_mode" class="ui-checkbox">
+                            多季合一（跨季追更，关闭时按当前季订阅）
+                        </label>
                     </div>
-                    <label id="subscription-min-score-wrap" class="block">
-                        <span class="text-xs text-slate-500">匹配阈值（30-100）</span>
-                        <input id="subscription_min_score" type="number" min="30" max="100" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="55">
-                        <div class="text-[11px] text-slate-500 mt-2 leading-5">
-                            推荐：电影 58-68，电视剧 52-62。阈值越高越严格（更准但可能漏）；阈值越低更容易命中（更全但可能误匹配）。
+
+                    <details class="subscription-fold" data-subscription-fold="match">
+                        <summary class="subscription-fold-head">
+                            <span class="subscription-fold-arrow">▸</span>
+                            <span class="subscription-fold-title">匹配与过滤</span>
+                            <span id="subscription-fold-summary-match" class="subscription-fold-summary"></span>
+                        </summary>
+                        <div class="subscription-fold-body space-y-4">
+                            <label class="block">
+                                <span class="text-xs text-slate-500">别名（可选，逗号分隔）</span>
+                                <input id="subscription_aliases" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：The Long Night, 长夜难明">
+                            </label>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">自定义排除词（可选，逗号分隔）</span>
+                                    <input id="subscription_exclude_keywords" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：短剧, 解说">
+                                    <div class="text-[11px] text-slate-500 mt-2">候选标题或正文含这些词时跳过；保存时中文逗号会统一成英文逗号。</div>
+                                </label>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">排除文件类型（可选，逗号分隔）</span>
+                                    <input id="subscription_exclude_file_extensions" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：zip, rar, exe">
+                                    <div class="text-[11px] text-slate-500 mt-2">按后缀跳过分享里的文件；新任务默认 zip, rar，可手动删除。</div>
+                                </label>
+                            </div>
+                            <label class="flex items-start gap-3 cursor-pointer text-sm rounded-xl border border-slate-700 bg-slate-900/50 p-3">
+                                <input type="checkbox" id="subscription_strict_title_match" class="ui-checkbox mt-0.5">
+                                <span class="min-w-0">
+                                    <span class="block font-bold text-slate-100">精准匹配</span>
+                                    <span class="block text-[11px] text-slate-500 mt-1 leading-5">开启后只认片名、分享目录、文件路径或 TMDB ID；简介里的片名词不算同剧证据。</span>
+                                </span>
+                            </label>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">导入文件最小大小（MB）</span>
+                                    <input id="subscription_min_file_size_mb" type="number" min="0" step="0.1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
+                                    <div class="text-[11px] text-slate-500 mt-2">0 表示不限制；低于该大小的分享文件不会进入订阅转存。</div>
+                                </label>
+                                <label id="subscription-min-score-wrap" class="block">
+                                    <span class="text-xs text-slate-500">匹配阈值（30-100）</span>
+                                    <input id="subscription_min_score" type="number" min="30" max="100" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="55">
+                                    <div class="text-[11px] text-slate-500 mt-2 leading-5">推荐：电影 58-68，电视剧 52-62。越高越严格，越低越容易误匹配。</div>
+                                </label>
+                            </div>
+                            <label class="block">
+                                <span class="text-xs text-slate-500">清晰度优先级（常见分辨率）</span>
+                                <select id="subscription_quality_priority" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1">
+                                    <option value="ultra">超清优先（4K > 1080P > 720P）</option>
+                                    <option value="balanced">均衡（1080P > 720P > 4K > 480P）</option>
+                                    <option value="fhd">高清优先（1080P > 4K > 720P）</option>
+                                    <option value="hd">流畅优先（720P > 1080P > 4K）</option>
+                                    <option value="sd">小体积优先（480P > 720P > 1080P）</option>
+                                </select>
+                                <div class="text-[11px] text-slate-500 mt-2 leading-5">只在标题匹配成功后参与排序加分，用于同名多资源时挑选想要的清晰度。</div>
+                            </label>
                         </div>
-                    </label>
-                    <label class="block">
-                        <span class="text-xs text-slate-500">清晰度优先级（常见分辨率）</span>
-                        <select id="subscription_quality_priority" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1">
-                            <option value="ultra">超清优先（4K > 1080P > 720P）</option>
-                            <option value="balanced">均衡（1080P > 720P > 4K > 480P）</option>
-                            <option value="fhd">高清优先（1080P > 4K > 720P）</option>
-                            <option value="hd">流畅优先（720P > 1080P > 4K）</option>
-                            <option value="sd">小体积优先（480P > 720P > 1080P）</option>
-                        </select>
-                        <div class="text-[11px] text-slate-500 mt-2 leading-5">
-                            仅在标题匹配成功后参与排序加分。用于同名多资源时优先挑选你想要的清晰度。
+                    </details>
+
+                    <details class="subscription-fold" data-subscription-fold="organize">
+                        <summary class="subscription-fold-head">
+                            <span class="subscription-fold-arrow">▸</span>
+                            <span class="subscription-fold-title">入库后整理</span>
+                            <span id="subscription-fold-summary-organize" class="subscription-fold-summary"></span>
+                        </summary>
+                        <div class="subscription-fold-body">
+                            <div id="subscription-organize-block" class="space-y-3">
+                                <label class="flex items-start gap-3 cursor-pointer text-sm">
+                                    <input type="checkbox" id="subscription_organize_on_import" class="ui-checkbox mt-0.5" checked onchange="syncSubscriptionOrganizeUI()">
+                                    <span class="min-w-0">
+                                        <span class="block font-bold text-slate-100">入库后整理</span>
+                                        <span id="subscription-organize-hint" class="block text-[11px] text-slate-500 mt-1 leading-5">只用现有刮削引擎把新集原地改名成「片名 (年份) - S01E02」这类标准名，不建目录、不移动文件；没有绑定 TMDB、或识别不出集数时保留原名。</span>
+                                    </span>
+                                </label>
+                                <div id="subscription-organize-options" class="space-y-3">
+                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <label class="block">
+                                            <span class="text-xs text-slate-500">标题语言</span>
+                                            <select id="subscription_organize_title_language" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none">
+                                                <option value="zh">中文名</option>
+                                                <option value="auto">跟随 TMDB 配置</option>
+                                                <option value="en">英文名</option>
+                                            </select>
+                                        </label>
+                                        <label class="block">
+                                            <span class="text-xs text-slate-500">文件命名方式</span>
+                                            <select id="subscription_organize_file_name_mode" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1 outline-none">
+                                                <option value="standard">按识别结果重命名</option>
+                                                <option value="clean">仅清理广告信息（保留原始命名）</option>
+                                                <option value="keep">保持原名（不重命名）</option>
+                                            </select>
+                                        </label>
+                                    </div>
+                                    <label class="flex items-center gap-3 cursor-pointer text-sm">
+                                        <input type="checkbox" id="subscription_organize_delete_ad_files" class="ui-checkbox">
+                                        <span>整理时删除广告文件（图片/网页/文本，删除进入网盘回收站）</span>
+                                    </label>
+                                </div>
+                            </div>
                         </div>
-                    </label>
-                    <label class="flex items-center gap-3 cursor-pointer text-sm">
-                        <input type="checkbox" id="subscription_enabled" class="ui-checkbox" checked>
-                        启用任务（关闭后不参与定时，但仍可手动运行）
-                    </label>
-                    <div id="subscription-provider-strategy-hint" class="text-xs text-slate-500 leading-6">
-                        匹配策略：默认先执行资源搜索（TG 频道搜索，及启用时的 PanSou 搜索）；可开启固定分享链接兜底，把固定链接候选排在资源搜索候选之后。
-                    </div>
+                    </details>
+
+                    <details class="subscription-fold" data-subscription-fold="crosscopy">
+                        <summary class="subscription-fold-head">
+                            <span class="subscription-fold-arrow">▸</span>
+                            <span class="subscription-fold-title">跨盘补源</span>
+                            <span id="subscription-fold-summary-crosscopy" class="subscription-fold-summary"></span>
+                        </summary>
+                        <div class="subscription-fold-body space-y-3">
+                            <div id="subscription-cross-copy-block" class="space-y-3">
+                                <div class="text-[11px] text-slate-500 leading-5">本盘搜不到新资源时，才从夸克搜并复制到本盘（要先下载再上传，比转存慢）。补源文件与订阅导入落在同一目录，复制完照常刷新监控与刮削。</div>
+                                <label class="flex items-center gap-3 cursor-pointer text-sm">
+                                    <input type="checkbox" id="subscription-cross-copy-enabled" class="ui-checkbox" onchange="syncSubscriptionCrossCopyUI()">
+                                    <span>启用跨盘补源（本盘没有新资源时，从夸克网盘复制）</span>
+                                </label>
+                                <div>
+                                    <div class="text-xs text-slate-500">源网盘（当前仅支持夸克）</div>
+                                    <div id="subscription-cross-copy-sources" class="flex flex-wrap gap-2 mt-2"></div>
+                                    <div id="subscription-cross-copy-hint" class="text-[11px] text-slate-500 leading-5 mt-2"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </details>
+
+                    <details class="subscription-fold" data-subscription-fold="fixedlink">
+                        <summary class="subscription-fold-head">
+                            <span class="subscription-fold-arrow">▸</span>
+                            <span class="subscription-fold-title">固定分享链接兜底</span>
+                            <span id="subscription-fold-summary-fixedlink" class="subscription-fold-summary"></span>
+                        </summary>
+                        <div class="subscription-fold-body space-y-3">
+                            <div id="subscription-115-fixed-link-block" class="space-y-3">
+                                <div id="subscription-fixed-link-title" class="text-xs text-slate-500">固定分享链接（可选）</div>
+                                <div class="resource-save-path-grid">
+                                    <input id="subscription_share_link_url" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" placeholder="例如：https://115.com/s/xxxxxxx?password=abcd">
+                                    <button type="button" onclick="openSubscriptionShareFolderModal()" class="px-4 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold whitespace-nowrap">浏览链接目录</button>
+                                </div>
+                                <div class="resource-save-path-grid">
+                                    <input id="subscription_share_receive_code" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm font-mono uppercase tracking-[0.08em]" placeholder="可选：提取码（1-16 位字母数字）">
+                                    <button type="button" onclick="openSubscriptionShareFolderModal(true)" class="px-4 py-3 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold whitespace-nowrap">应用并浏览</button>
+                                </div>
+                                <label class="flex items-center gap-3 cursor-pointer text-sm">
+                                    <input type="checkbox" id="subscription_fixed_link_channel_search" class="ui-checkbox">
+                                    启用固定分享链接兜底
+                                </label>
+                                <div id="subscription-fixed-link-hint" class="text-[11px] text-slate-500 leading-5">资源搜索优先执行；开启后这个固定分享链接会作为备选候选排在搜索结果之后，关闭时即使填了链接也只按资源搜索执行。</div>
+                            </div>
+                            <label class="block">
+                                <span id="subscription-share-subdir-label" class="text-xs text-slate-500">分享子目录（可选）</span>
+                                <input id="subscription_share_subdir" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" placeholder="例如：合集/剧名（留空表示从分享根目录）">
+                                <input id="subscription_share_subdir_cid" type="hidden" value="">
+                                <div class="text-[11px] text-slate-500 mt-2">可手填，也可先填上面的链接再点「浏览链接目录」选择。选了目录会记录 CID 锚点，只在该子目录内扫描和转存。</div>
+                            </label>
+                            <div id="subscription-quark-provider-hint" class="hidden text-[11px] text-cyan-300/90 leading-5 rounded-xl border border-cyan-400/20 bg-cyan-500/10 px-3 py-2">
+                                当前网盘使用资源搜索自动匹配；也可以手动扫描单个分享链接。
+                            </div>
+                            <div id="subscription-provider-strategy-hint" class="text-xs text-slate-500 leading-6">
+                                匹配策略：默认先执行资源搜索（TG 频道搜索，及启用时的 PanSou 搜索）；可开启固定分享链接兜底，把固定链接候选排在资源搜索候选之后。
+                            </div>
+                        </div>
+                    </details>
+
+                    <details class="subscription-fold" data-subscription-fold="schedule">
+                        <summary class="subscription-fold-head">
+                            <span class="subscription-fold-arrow">▸</span>
+                            <span class="subscription-fold-title">自动查询时段</span>
+                            <span id="subscription-fold-summary-schedule" class="subscription-fold-summary"></span>
+                        </summary>
+                        <div class="subscription-fold-body space-y-3">
+                            <div class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2" id="subscription_schedule_weekdays">
+                                <label class="flex items-center justify-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm cursor-pointer">
+                                    <input type="checkbox" data-subscription-weekday="1" class="ui-checkbox" checked>
+                                    周一
+                                </label>
+                                <label class="flex items-center justify-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm cursor-pointer">
+                                    <input type="checkbox" data-subscription-weekday="2" class="ui-checkbox" checked>
+                                    周二
+                                </label>
+                                <label class="flex items-center justify-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm cursor-pointer">
+                                    <input type="checkbox" data-subscription-weekday="3" class="ui-checkbox" checked>
+                                    周三
+                                </label>
+                                <label class="flex items-center justify-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm cursor-pointer">
+                                    <input type="checkbox" data-subscription-weekday="4" class="ui-checkbox" checked>
+                                    周四
+                                </label>
+                                <label class="flex items-center justify-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm cursor-pointer">
+                                    <input type="checkbox" data-subscription-weekday="5" class="ui-checkbox" checked>
+                                    周五
+                                </label>
+                                <label class="flex items-center justify-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm cursor-pointer">
+                                    <input type="checkbox" data-subscription-weekday="6" class="ui-checkbox" checked>
+                                    周六
+                                </label>
+                                <label class="flex items-center justify-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm cursor-pointer">
+                                    <input type="checkbox" data-subscription-weekday="7" class="ui-checkbox" checked>
+                                    周日
+                                </label>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">开始时间</span>
+                                    <input id="subscription_schedule_start_time" type="time" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="00:00">
+                                </label>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">结束时间</span>
+                                    <input id="subscription_schedule_end_time" type="time" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="23:59">
+                                </label>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">时段内查询间隔（分钟）</span>
+                                    <input id="subscription_schedule_interval_minutes" type="number" min="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="120">
+                                </label>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">命中后冷却</span>
+                                    <select id="subscription_hit_cooldown_mode" onchange="syncSubscriptionHitCooldownUI()" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1">
+                                        <option value="auto">自动（按剧集播出排期）</option>
+                                        <option value="manual">手动指定</option>
+                                        <option value="off">关闭</option>
+                                    </select>
+                                </label>
+                                <label class="block hidden" id="subscription-hit-cooldown-hours-wrap">
+                                    <span class="text-xs text-slate-500">冷却时长（小时，1-336，最长 14 天）</span>
+                                    <input id="subscription_hit_cooldown_hours" type="number" min="1" max="336" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="0">
+                                </label>
+                            </div>
+                            <div class="text-[11px] text-slate-500 leading-5">仅在所选星期与时段内按间隔查询，支持跨天（如 22:00 到次日 02:00）。</div>
+                            <details class="subscription-fold-help">
+                                <summary>命中后冷却怎么算</summary>
+                                <div class="text-[11px] text-slate-500 leading-5">命中新集后暂停自动查询，直到下一集播出前，避免重复空搜。选「自动」会读 TMDB 的下一集播出日期推算；手动值建议比更新周期短 10~15%（日更填 20、周更填 144、一周双更填 60），填成周期整数会导致每次都晚一集。手动运行不受限制。</div>
+                            </details>
+                        </div>
+                    </details>
+
+                    <details class="subscription-fold" data-subscription-fold="scan">
+                        <summary class="subscription-fold-head">
+                            <span class="subscription-fold-arrow">▸</span>
+                            <span class="subscription-fold-title">高级扫描参数</span>
+                            <span id="subscription-fold-summary-scan" class="subscription-fold-summary"></span>
+                        </summary>
+                        <div class="subscription-fold-body space-y-3">
+                            <div class="flex flex-wrap items-center justify-between gap-2">
+                                <div class="text-[11px] text-slate-500">候选精查访问策略：数值越大越激进，容易触发网盘限流。</div>
+                                <button type="button" onclick="fillSubscriptionScanTuningDefaults()" class="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold">填入建议值</button>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">候选精查上限</span>
+                                    <input id="subscription_candidate_scan_prefetch_limit" type="number" min="0" max="80" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="3">
+                                </label>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">候选并发</span>
+                                    <input id="subscription_candidate_scan_concurrency" type="number" min="1" max="6" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="1">
+                                </label>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">目录扫描并发</span>
+                                    <input id="subscription_share_scan_concurrency" type="number" min="1" max="6" step="1" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="1">
+                                </label>
+                                <label class="block">
+                                    <span class="text-xs text-slate-500">分享请求间隔（秒）</span>
+                                    <input id="subscription_share_scan_rate_limit_seconds" type="number" min="0.05" max="5" step="0.05" class="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm mt-1" value="1">
+                                </label>
+                            </div>
+                            <div id="subscription-scan-tuning-hint" class="text-[11px] text-slate-500 leading-5">建议：候选上限 3，候选并发 1，目录并发 1，请求间隔 1s。</div>
+                        </div>
+                    </details>
                 </div>
                 <div class="subscription-modal-actions-inline subscription-modal-footer-shell grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
                     <button onclick="saveSubscriptionTask()" class="task-modal-save-btn subscription-modal-save-btn">保存任务</button>

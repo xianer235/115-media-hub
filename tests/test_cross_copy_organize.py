@@ -242,10 +242,11 @@ class OrganizeSelectionTest(OrganizeTestBase):
 
 
 class OrganizeGuardTest(unittest.TestCase):
-    def test_requires_tv_switch_and_tmdb(self):
+    def test_requires_switch_and_tmdb(self):
         base = {"media_type": "tv", "organize_on_import": True, "tmdb_id": 281233}
         self.assertTrue(organize.organize_enabled(base))
-        self.assertFalse(organize.organize_enabled({**base, "media_type": "movie"}))
+        # 电影也整理：改成「片名 (年份).ext」，否则同名多资源进库后文件名各是各的
+        self.assertTrue(organize.organize_enabled({**base, "media_type": "movie"}))
         self.assertFalse(organize.organize_enabled({**base, "organize_on_import": False}))
         self.assertFalse(organize.organize_enabled({**base, "tmdb_id": 0}))
         self.assertFalse(organize.organize_enabled({}))

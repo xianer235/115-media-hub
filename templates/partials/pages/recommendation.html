@@ -9,13 +9,10 @@
                         <svg viewBox="0 0 20 20" fill="currentColor" class="rec-tab-icon"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/></svg>
                         本周热榜
                     </button>
-                    <button onclick="loadRecommendationPopular('movie')" class="rec-tab-btn" data-rec-tab="popular-movie">
-                        <svg viewBox="0 0 20 20" fill="currentColor" class="rec-tab-icon"><path fill-rule="evenodd" d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm3 2h6v4H7V5zm8 8v2h1V5h-1v2h-2V5H9v2H7V5H6v10h1v-2h2v2h2v-2h2v2h1z" clip-rule="evenodd"/></svg>
-                        热门电影
-                    </button>
-                    <button onclick="loadRecommendationPopular('tv')" class="rec-tab-btn" data-rec-tab="popular-tv">
-                        <svg viewBox="0 0 20 20" fill="currentColor" class="rec-tab-icon"><path fill-rule="evenodd" d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm1 10a1 1 0 011-1h1a1 1 0 110 2H6a1 1 0 01-1-1zm5-1a1 1 0 100 2h3a1 1 0 100-2H10z" clip-rule="evenodd"/></svg>
-                        热门剧集
+                    <!-- 热门只有一份片单，电影/剧集交给内容头的类型开关，不再在顶部拆两个标签页 -->
+                    <button onclick="showRecommendationPopular()" class="rec-tab-btn" data-rec-tab="popular">
+                        <svg viewBox="0 0 20 20" fill="currentColor" class="rec-tab-icon"><path fill-rule="evenodd" d="M12 7a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0V8.414l-4.293 4.293a1 1 0 01-1.414 0L8 10.414l-4.293 4.293a1 1 0 01-1.414-1.414l5-5a1 1 0 011.414 0L11 10.586 14.586 7H12z" clip-rule="evenodd"/></svg>
+                        热门
                     </button>
                     <button onclick="showRecommendationExplore()" class="rec-tab-btn" data-rec-tab="explore">
                         <svg viewBox="0 0 20 20" fill="currentColor" class="rec-tab-icon"><path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd"/></svg>
@@ -38,11 +35,6 @@
                                 <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"/></svg>
                             </button>
                         </div>
-                        <select id="recommendation-media-type" class="rec-search-select">
-                            <option value="all">全部</option>
-                            <option value="movie">电影</option>
-                            <option value="tv">剧集</option>
-                        </select>
                         <button onclick="searchRecommendationTmdb()" class="rec-search-btn">搜索</button>
                     </div>
                 </div>
@@ -114,23 +106,29 @@
 
                     <div id="rec-explore-section-score" class="rec-filter-section">
                         <div class="rec-filter-section-title">评分与热度</div>
-                        <div class="rec-filter-grid">
-                            <label class="rec-filter-field">
-                                <span class="rec-filter-label">最低评分</span>
-                                <input id="rec-explore-rating" class="rec-search-input rec-input-sm" placeholder="如 7.5" type="number" min="0" max="10" step="0.5">
-                            </label>
-                            <label class="rec-filter-field">
-                                <span class="rec-filter-label">最高评分</span>
-                                <input id="rec-explore-rating-max" class="rec-search-input rec-input-sm" placeholder="如 9" type="number" min="0" max="10" step="0.5">
-                            </label>
-                            <label class="rec-filter-field">
-                                <span class="rec-filter-label">最低投票数</span>
-                                <input id="rec-explore-vote-count" class="rec-search-input rec-input-sm" placeholder="如 500" type="number" min="0" step="100">
-                            </label>
-                            <label class="rec-filter-field">
-                                <span class="rec-filter-label">最高投票数</span>
-                                <input id="rec-explore-vote-count-max" class="rec-search-input rec-input-sm" placeholder="如 20000" type="number" min="0" step="100">
-                            </label>
+                        <div class="rec-range-field">
+                            <div class="rec-range-field-head">
+                                <span class="rec-filter-label">评分</span>
+                                <span id="rec-explore-rating-value" class="rec-range-value">不限</span>
+                            </div>
+                            <div class="rec-dual-range">
+                                <div class="rec-dual-range-track"><div id="rec-explore-rating-fill" class="rec-dual-range-fill is-idle"></div></div>
+                                <input id="rec-explore-rating" class="rec-dual-range-input" type="range" min="0" max="10" step="0.5" value="0" aria-label="最低评分">
+                                <input id="rec-explore-rating-max" class="rec-dual-range-input" type="range" min="0" max="10" step="0.5" value="10" aria-label="最高评分">
+                            </div>
+                            <div class="rec-dual-range-ticks" aria-hidden="true"><span style="--rec-tick-at:0%">0</span><span style="--rec-tick-at:20%">2</span><span style="--rec-tick-at:40%">4</span><span style="--rec-tick-at:60%">6</span><span style="--rec-tick-at:80%">8</span><span style="--rec-tick-at:100%">10</span></div>
+                        </div>
+                        <div class="rec-range-field">
+                            <div class="rec-range-field-head">
+                                <span class="rec-filter-label">投票数（热度）</span>
+                                <span id="rec-explore-vote-count-value" class="rec-range-value">不限</span>
+                            </div>
+                            <div class="rec-dual-range">
+                                <div class="rec-dual-range-track"><div id="rec-explore-vote-count-fill" class="rec-dual-range-fill is-idle"></div></div>
+                                <input id="rec-explore-vote-count" class="rec-dual-range-input" type="range" min="0" max="8" step="1" value="0" aria-label="最低投票数">
+                                <input id="rec-explore-vote-count-max" class="rec-dual-range-input" type="range" min="0" max="8" step="1" value="8" aria-label="最高投票数">
+                            </div>
+                            <div class="rec-dual-range-ticks" aria-hidden="true"><span style="--rec-tick-at:0%">不限</span><span style="--rec-tick-at:25%">200</span><span style="--rec-tick-at:50%">1000</span><span style="--rec-tick-at:75%">5000</span><span style="--rec-tick-at:100%">2 万</span></div>
                         </div>
                         <label class="rec-filter-field">
                             <span class="rec-filter-label">片长范围（分钟）</span>
@@ -214,12 +212,21 @@
                     <section class="rec-results-panel">
                         <div id="recommendation-content-header" class="rec-content-header">
                             <div class="rec-content-heading">
-                                <h4 id="recommendation-content-title" class="rec-content-title">本周热榜</h4>
+                                <div class="rec-content-title-row">
+                                    <h4 id="recommendation-content-title" class="rec-content-title">本周热榜</h4>
+                                    <!-- 加载状态跟着标题走：放右侧会被显隐牵着分类开关左右跳 -->
+                                    <div id="recommendation-loading" class="hidden flex items-center gap-2 text-xs text-slate-500">
+                                        <svg class="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-linecap="round" class="opacity-25"/><path d="M4 12a8 8 0 018-8" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+                                        加载中...
+                                    </div>
+                                </div>
                                 <div id="recommendation-content-subtitle" class="rec-content-subtitle">过去一周热度最高的影视资源。</div>
                             </div>
-                            <div id="recommendation-loading" class="hidden flex items-center gap-2 text-xs text-slate-500">
-                                <svg class="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-linecap="round" class="opacity-25"/><path d="M4 12a8 8 0 018-8" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
-                                加载中...
+                            <!-- 全页唯一的媒体类型开关：跟着当前片单走。热门没有「全部」，那一个按钮在热门页隐藏 -->
+                            <div id="rec-media-type" class="rec-media-type hidden" role="group" aria-label="媒体类型">
+                                <button id="rec-media-type-all" type="button" class="rec-media-type-btn" data-media-type="all" onclick="setRecommendationMediaType('all', true)">全部</button>
+                                <button id="rec-media-type-movie" type="button" class="rec-media-type-btn" data-media-type="movie" onclick="setRecommendationMediaType('movie', true)">电影</button>
+                                <button id="rec-media-type-tv" type="button" class="rec-media-type-btn" data-media-type="tv" onclick="setRecommendationMediaType('tv', true)">剧集</button>
                             </div>
                         </div>
                         <div id="recommendation-grid" class="rec-grid"></div>

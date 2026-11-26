@@ -146,19 +146,25 @@ class ScraperPathSelectionIntegrationTest(unittest.TestCase):
         self.assertIn("html.theme-day .scraper-path-token", source)
         self.assertIn("overflow-wrap: anywhere", source)
 
-    def test_scraper_selection_actions_use_auto_fit_grid_on_mobile(self):
+    def test_scraper_selection_actions_stay_on_one_row_on_mobile(self):
         stylesheet = STYLESHEET_PATH.read_text(encoding="utf-8")
         start = stylesheet.index("@media (max-width: 760px) {")
         end = stylesheet.index("html.theme-day .scraper-page", start)
         mobile_block = stylesheet[start:end]
 
-        # 常驻按钮从 7 个收到 5 个（重命名/复制/删除/整理/更多），用 auto-fit 折行，
-        # 预览模式换上的四个按钮也不会挤成一条。
-        self.assertIn("repeat(auto-fit, minmax(3.6rem, 1fr))", mobile_block)
-        self.assertIn(".scraper-selection-more", mobile_block)
-        # 360px 下每列约 39px：0.66rem 字号 + 0.12rem 内边距才能让 3 字“重命名”不折行。
-        self.assertIn("padding: 0.36rem 0.12rem;", mobile_block)
-        self.assertIn("font-size: 0.66rem;", mobile_block)
+        # 七个常驻按钮（选区/重命名/复制/移动/删除/整理/更多）在手机上一行排完。
+        # auto-fit 网格每列最小 3.6rem，七列一乘 400px+，在 390 屏上必然折两行，已弃用。
+        self.assertNotIn("repeat(auto-fit, minmax(3.6rem, 1fr))", mobile_block)
+        self.assertIn(".scraper-selection-actions {\n                display: flex;\n                flex-wrap: wrap;", mobile_block)
+        # 「更多」必须跟着均分，占整列宽会把这一行顶断。
+        more_start = mobile_block.index(".scraper-selection-more {")
+        more_block = mobile_block[more_start: mobile_block.index("}", more_start)]
+        self.assertIn("flex: 1 1 auto;", more_block)
+        self.assertNotIn("width: 100%;", more_block)
+        # 一行排下靠的是短标签 + 窄内边距 + 不折行；文字一旦允许换行就会被压成两行高。
+        self.assertIn("padding: 0.36rem 0.3rem;", mobile_block)
+        self.assertIn("font-size: 0.68rem;", mobile_block)
+        self.assertIn("white-space: nowrap;", mobile_block)
 
     def test_scraper_selection_actions_swap_to_short_labels_on_mobile(self):
         template = SCRAPER_TEMPLATE_PATH.read_text(encoding="utf-8")
@@ -166,6 +172,13 @@ class ScraperPathSelectionIntegrationTest(unittest.TestCase):
             '<span class="scraper-action-label-full">批量整理</span><span class="scraper-action-label-short">整理</span>',
             template,
         )
+        # 手机一行排得下，靠的是这三个按钮换成两个字；桌面上仍是全称。
+        for full, short in (("区间选择", "选区"), ("移动到…", "移动")):
+            self.assertIn(
+                f'<span class="scraper-action-label-full">{full}</span>'
+                f'<span class="scraper-action-label-short">{short}</span>',
+                template,
+            )
         # 收进「更多」菜单的低频操作直接写全称，不再有长短标签两套。
         more_menu = template[
             template.index('id="scraper-selection-more-menu"'):template.index('id="scraper-reopen-batch-btn"')

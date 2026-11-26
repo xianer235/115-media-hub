@@ -3205,6 +3205,130 @@
             border: 2px solid transparent;
             background-clip: padding-box;
         }
+        /* 订阅编辑弹窗：常显的基础卡 + 可折叠的进阶分区 */
+        .subscription-modal-shell {
+            max-width: 56rem;
+        }
+        .subscription-basic-card {
+            border: 1px solid rgba(51, 65, 85, 0.9);
+            border-radius: 1.4rem;
+            background: rgba(15, 23, 42, 0.55);
+            padding: 1rem;
+        }
+        .subscription-tmdb-card {
+            border: 1px solid rgba(51, 65, 85, 0.55);
+            border-radius: 1.1rem;
+            background: rgba(15, 23, 42, 0.42);
+            padding: 0.85rem 1rem;
+        }
+        .subscription-enabled-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.3rem 0.6rem;
+            border-radius: 0.75rem;
+            border: 1px solid rgba(51, 65, 85, 0.9);
+            font-size: 0.8rem;
+            color: #cbd5e1;
+            cursor: pointer;
+        }
+        .subscription-fold {
+            border: 1px solid rgba(51, 65, 85, 0.9);
+            border-radius: 1.4rem;
+            background: rgba(15, 23, 42, 0.4);
+            overflow: hidden;
+        }
+        .subscription-fold-head {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            padding: 0.78rem 1.05rem;
+            cursor: pointer;
+            list-style: none;
+        }
+        .subscription-fold-head::-webkit-details-marker {
+            display: none;
+        }
+        .subscription-fold-head:hover {
+            background: rgba(30, 41, 59, 0.5);
+        }
+        .subscription-fold-arrow {
+            font-size: 0.72rem;
+            color: #94a3b8;
+            transition: transform 0.18s ease;
+        }
+        .subscription-fold[open] .subscription-fold-arrow {
+            transform: rotate(90deg);
+        }
+        .subscription-fold-title {
+            font-size: 0.9rem;
+            font-weight: 700;
+            color: #e2e8f0;
+            white-space: nowrap;
+        }
+        .subscription-fold-summary {
+            margin-left: auto;
+            font-size: 0.72rem;
+            line-height: 1.4;
+            color: #94a3b8;
+            text-align: right;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .subscription-fold-body {
+            padding: 0.95rem 1.05rem 1.05rem;
+            border-top: 1px solid rgba(51, 65, 85, 0.6);
+        }
+        .subscription-fold-help {
+            font-size: 0.72rem;
+            color: #94a3b8;
+        }
+        .subscription-fold-help > summary {
+            cursor: pointer;
+            color: #7dd3fc;
+        }
+        .subscription-fold-help > div {
+            margin-top: 0.4rem;
+        }
+        @media (max-width: 640px) {
+            .subscription-fold-head {
+                flex-wrap: wrap;
+                row-gap: 0.2rem;
+            }
+            .subscription-fold-summary {
+                width: 100%;
+                margin-left: 1.3rem;
+                text-align: left;
+            }
+        }
+        html.theme-day .subscription-basic-card,
+        html.theme-day .subscription-fold {
+            background: #ffffff;
+            border-color: rgba(203, 213, 225, 0.9);
+        }
+        html.theme-day .subscription-tmdb-card {
+            background: rgba(248, 250, 252, 0.9);
+            border-color: rgba(203, 213, 225, 0.85);
+        }
+        html.theme-day .subscription-fold-head:hover {
+            background: rgba(241, 245, 249, 0.9);
+        }
+        html.theme-day .subscription-fold-title {
+            color: #0f172a;
+        }
+        html.theme-day .subscription-fold-summary,
+        html.theme-day .subscription-fold-arrow,
+        html.theme-day .subscription-fold-help {
+            color: #64748b;
+        }
+        html.theme-day .subscription-fold-body {
+            border-top-color: rgba(226, 232, 240, 1);
+        }
+        html.theme-day .subscription-enabled-toggle {
+            color: #334155;
+            border-color: rgba(203, 213, 225, 0.95);
+        }
         .monitor-modal-footer-shell,
         .resource-import-footer-shell,
         .subscription-modal-footer-shell {
@@ -4948,6 +5072,25 @@
                 radial-gradient(circle at top right, rgba(56, 189, 248, 0.12), transparent 28%),
                 linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(2, 6, 23, 0.98));
         }
+        /* 任务列表弹窗：外壳顶到可用高度、列表自己滚。
+           原来是外层 p-4 + 外壳 mt-[4vh] + 列表自封 min(56vh, 560px)，三个上限互相打架——
+           屏幕越高底部空白越大（1080 高的屏能空出 200px+），而列表反而早早停止长高。
+           现在上下各留 0.7rem 边距 + 1.4vh 顶距，其余全给列表。 */
+        #resource-job-modal {
+            padding: 0.7rem;
+        }
+        #resource-job-modal .resource-job-modal-shell {
+            margin-top: 1.4vh;
+            max-height: calc(100vh - 1.4rem - 1.4vh);
+            /* 手机浏览器的 100vh 含地址栏区域，边距收窄后底部会被工具栏盖住几像素；
+               支持 dvh 就用动态视口高度（不支持的浏览器忽略这一行）。 */
+            max-height: calc(100dvh - 1.4rem - 1.4vh);
+        }
+        #resource-job-modal .resource-job-modal-list {
+            flex: 1 1 auto;
+            min-height: 0;
+            max-height: none;
+        }
         .resource-job-modal-header {
             display: flex;
             align-items: flex-start;
@@ -5010,6 +5153,12 @@
             flex-direction: column;
             gap: 0.24rem;
             z-index: 8;
+        }
+        /* 这条下拉是 display: flex，权重和 tailwind 的 .hidden{display:none} 相同、
+           但 index.css 在后面，所以 .hidden 收不起来——必须自己补一份，
+           否则「清空」下面的三项一直挂在弹窗里。 */
+        .resource-job-clear-dropdown.hidden {
+            display: none;
         }
         .resource-job-clear-item {
             width: 100%;
@@ -7893,9 +8042,9 @@
             .resource-quick-link-note {
                 font-size: 0.72rem;
             }
+            /* 高度与上下边距统一由基础规则里的 `#resource-job-modal` 决定，
+               手机上只把内边距收小一点。 */
             .resource-job-modal-shell {
-                margin-top: 1vh;
-                max-height: 95vh;
                 padding: 0.95rem;
             }
             .strm-cleanup-modal-shell {
@@ -9903,7 +10052,7 @@
         html.theme-day .summary-skip { color: #b45309 !important; }
         html.theme-day .summary-fail { color: #dc2626 !important; }
         html.theme-day .summary-delete { color: #0369a1 !important; }
-        html.theme-day input,
+        html.theme-day input:not([type="range"]),
         html.theme-day select,
         html.theme-day textarea {
             background: #ffffff !important;
@@ -11714,7 +11863,7 @@
             color: var(--shell-text-main);
         }
 
-        html:not(.theme-day) input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+        html:not(.theme-day) input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="range"]),
         html:not(.theme-day) select,
         html:not(.theme-day) textarea,
         html:not(.theme-day) .resource-source-manager-search,
@@ -11730,7 +11879,7 @@
             color-scheme: dark;
         }
 
-        html:not(.theme-day) input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"])::placeholder,
+        html:not(.theme-day) input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="range"])::placeholder,
         html:not(.theme-day) textarea::placeholder,
         html:not(.theme-day) .resource-search-input::placeholder,
         html:not(.theme-day) .resource-source-manager-search::placeholder,
@@ -11740,7 +11889,7 @@
             color: var(--night-field-muted) !important;
         }
 
-        html:not(.theme-day) input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):hover,
+        html:not(.theme-day) input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="range"]):hover,
         html:not(.theme-day) select:hover,
         html:not(.theme-day) textarea:hover,
         html:not(.theme-day) .resource-source-manager-search:hover,
@@ -11752,7 +11901,7 @@
             border-color: var(--night-field-stroke-hover) !important;
         }
 
-        html:not(.theme-day) input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):focus,
+        html:not(.theme-day) input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="range"]):focus,
         html:not(.theme-day) select:focus,
         html:not(.theme-day) textarea:focus,
         html:not(.theme-day) .resource-source-manager-search:focus,
@@ -15873,22 +16022,31 @@
                 width: 100%;
             }
 
+            /* 七个常驻按钮（选区/重命名/复制/移动/删除/整理/更多）要在手机上一行排完。
+               用 flex 而不是 auto-fit 网格：网格每列最小 3.6rem，七列一乘就 400px+，
+               注定折成两行。短标签 + 0.68rem 字号 + 0.3rem 内边距后整行约 290px，
+               360px 以上都是一行；320~344px 的老窄机在下面再收一档。
+               真放不下（勾了 1 个条目时多出「生成预览」、预览模式多出三个按钮）才折行兜底，
+               不会互相压字。 */
             .scraper-selection-actions {
-                display: grid;
-                /* 常驻是 区间选择/重命名/复制/移动到…/删除/整理/更多 七个，
-                   按最小宽度自动折行；预览模式下换上的按钮也能各占一格，
-                   不会挤成一长条。 */
-                grid-template-columns: repeat(auto-fit, minmax(3.6rem, 1fr));
-                gap: 0.4rem;
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.3rem;
                 /* 同桌面：绝不能裁 overflow，「更多」下拉要能溢出到列表上方。 */
                 overflow: visible;
                 padding-bottom: 0;
             }
 
-            /* 手机上「更多」是整列宽，下拉贴着右边缘展开，别顶出屏幕。 */
+            /* 「更多」跟着其他按钮一起均分宽度；整列宽会把这一行顶成两行。
+               下拉仍贴着右边缘展开，不顶出屏幕。 */
             .scraper-selection-more {
-                width: 100%;
+                flex: 1 1 auto;
                 display: flex;
+            }
+
+            .scraper-selection-more > .scraper-compact-btn {
+                flex: 1 1 auto;
+                justify-content: center;
             }
 
             .scraper-selection-more-menu {
@@ -15928,18 +16086,28 @@
             }
 
             .scraper-selection-actions .scraper-compact-btn {
-                width: 100%;
+                flex: 1 1 auto;
+                width: auto;
                 min-width: 0;
                 min-height: 34px;
-                padding: 0.36rem 0.12rem;
-                font-size: 0.66rem;
-                line-height: 1.15;
-                white-space: normal;
-                overflow-wrap: anywhere;
+                padding: 0.36rem 0.3rem;
+                font-size: 0.68rem;
+                line-height: 1.1;
+                /* 一行排下靠的是短标签（选区 / 移动 / 整理），文字本身不能再折。 */
+                white-space: nowrap;
             }
 
-            #scraper-inline-execute-btn {
-                grid-column: span 2;
+            /* 320~344px 的老窄机再收一档，七个按钮仍然排一行；
+               这是「一行」承诺的下限，再窄就只能折行了。 */
+            @media (max-width: 344px) {
+                .scraper-selection-actions {
+                    gap: 0.2rem;
+                }
+
+                .scraper-selection-actions .scraper-compact-btn {
+                    padding: 0.34rem 0.2rem;
+                    font-size: 0.62rem;
+                }
             }
 
             .scraper-browser-toolbar {
@@ -16610,13 +16778,26 @@
         }
         #page-recommendation .rec-content-header {
             display: flex;
-            align-items: flex-start;
+            flex-wrap: wrap;
+            align-items: center;
             justify-content: space-between;
-            gap: 1rem;
+            gap: 0.5rem 1rem;
             margin-bottom: 0.95rem;
         }
         #page-recommendation .rec-content-heading {
             min-width: 0;
+            flex: 1 1 auto;
+        }
+        /* 标题与加载状态同一行：加载状态若占右侧独立位置，显隐会把分类开关推来推去 */
+        #page-recommendation .rec-content-title-row {
+            display: flex;
+            align-items: center;
+            gap: 0.55rem;
+            min-width: 0;
+        }
+        #page-recommendation #recommendation-loading {
+            flex: 0 0 auto;
+            white-space: nowrap;
         }
         #page-recommendation .rec-content-title {
             color: #f8fafc;
@@ -16629,6 +16810,39 @@
             color: #94a3b8;
             font-size: 0.78rem;
             line-height: 1.45;
+        }
+        /* 内容头右侧的媒体类型开关：全页唯一一处，跟着当前片单走 */
+        #page-recommendation .rec-media-type {
+            display: inline-grid;
+            grid-auto-flow: column;
+            grid-auto-columns: minmax(2.85rem, auto);
+            flex: 0 0 auto;
+            gap: 0.2rem;
+            padding: 0.18rem;
+            border-radius: 0.72rem;
+            border: 1px solid rgba(51, 65, 85, 0.5);
+            background: rgba(2, 6, 23, 0.24);
+        }
+        #page-recommendation .rec-media-type.hidden,
+        #page-recommendation .rec-media-type-btn.hidden {
+            display: none;
+        }
+        #page-recommendation .rec-media-type-btn {
+            min-height: 1.9rem;
+            padding: 0 0.55rem;
+            border-radius: 0.58rem;
+            color: #94a3b8;
+            font-size: 0.74rem;
+            font-weight: 800;
+            white-space: nowrap;
+            transition: background-color 0.15s ease, color 0.15s ease;
+        }
+        #page-recommendation .rec-media-type-btn:hover {
+            color: #e2e8f0;
+        }
+        #page-recommendation .rec-media-type-btn.is-active {
+            background: rgba(14, 165, 233, 0.18);
+            color: #7dd3fc;
         }
         #page-recommendation .rec-workspace-card.is-explore .rec-grid {
             grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
@@ -16743,9 +16957,132 @@
         }
         #page-recommendation .rec-input-sm {
             width: 100%;
+            max-width: none;
             min-height: 2.35rem;
             padding: 0.45rem 0.7rem;
             border-radius: 0.72rem;
+        }
+        /* 筛选面板里的下拉跟同列输入框同宽，否则「具体年份 / 原始语言」只有文字宽，
+           窄屏下还会被 .rec-search-select 的 4.6rem 上限截断（「全部语言」只剩「全部语」） */
+        #page-recommendation .rec-filter-field > .rec-search-select {
+            width: 100%;
+            max-width: none;
+        }
+        /* 评分 / 投票数：双端滑动的区间条。两条 input[type=range] 叠在一起，
+           轨道本身不吃鼠标（pointer-events:none），只有滑块头能拖，这样上下两条互不挡。 */
+        #page-recommendation .rec-range-field {
+            --rec-range-thumb: 1.1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.2rem;
+            min-width: 0;
+        }
+        #page-recommendation .rec-range-field-head {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 0.5rem;
+        }
+        #page-recommendation .rec-range-value {
+            color: #7dd3fc;
+            font-size: 0.72rem;
+            font-weight: 800;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+        }
+        #page-recommendation .rec-dual-range {
+            position: relative;
+            height: 2.1rem;
+        }
+        #page-recommendation .rec-dual-range-track {
+            position: absolute;
+            top: 50%;
+            left: calc(var(--rec-range-thumb) / 2);
+            right: calc(var(--rec-range-thumb) / 2);
+            height: 0.42rem;
+            transform: translateY(-50%);
+            border-radius: 9999px;
+            background: rgba(51, 65, 85, 0.72);
+        }
+        #page-recommendation .rec-dual-range-fill {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            border-radius: 9999px;
+            background: linear-gradient(90deg, #0284c7, #38bdf8);
+        }
+        /* 两端都在头尾 = 没设条件，填充压暗，别让人以为已经筛过 */
+        #page-recommendation .rec-dual-range-fill.is-idle {
+            background: rgba(56, 189, 248, 0.35);
+        }
+        #page-recommendation .rec-dual-range-input {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            background: transparent;
+            -webkit-appearance: none;
+            appearance: none;
+            pointer-events: none;
+        }
+        #page-recommendation .rec-dual-range-input:focus {
+            outline: none;
+        }
+        #page-recommendation .rec-dual-range-input::-webkit-slider-runnable-track {
+            height: 100%;
+            background: transparent;
+        }
+        #page-recommendation .rec-dual-range-input::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            pointer-events: auto;
+            width: var(--rec-range-thumb);
+            height: var(--rec-range-thumb);
+            border-radius: 9999px;
+            border: 2px solid #0ea5e9;
+            background: #7dd3fc;
+            box-shadow: 0 2px 6px rgba(2, 6, 23, 0.55);
+            cursor: grab;
+        }
+        #page-recommendation .rec-dual-range-input:focus-visible::-webkit-slider-thumb {
+            box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.35);
+        }
+        #page-recommendation .rec-dual-range-input::-moz-range-track {
+            height: 100%;
+            background: transparent;
+            border: 0;
+        }
+        #page-recommendation .rec-dual-range-input::-moz-range-thumb {
+            pointer-events: auto;
+            width: var(--rec-range-thumb);
+            height: var(--rec-range-thumb);
+            border-radius: 9999px;
+            border: 2px solid #0ea5e9;
+            background: #7dd3fc;
+            box-shadow: 0 2px 6px rgba(2, 6, 23, 0.55);
+            cursor: grab;
+        }
+        /* 刻度用 margin 而不是 padding 收缩：绝对定位子元素的百分比是按包含块的 padding box 算的，
+           用 padding 会让刻度整体右移半个滑块。 */
+        #page-recommendation .rec-dual-range-ticks {
+            position: relative;
+            height: 0.85rem;
+            margin: 0 calc(var(--rec-range-thumb) / 2);
+            color: #64748b;
+            font-size: 0.64rem;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            line-height: 1;
+        }
+        #page-recommendation .rec-dual-range-ticks > span {
+            position: absolute;
+            top: 0;
+            left: var(--rec-tick-at, 0%);
+            transform: translateX(-50%);
+            white-space: nowrap;
         }
         #page-recommendation .rec-range-inputs {
             display: grid;
@@ -17072,6 +17409,25 @@
             border-color: rgba(182, 198, 219, 0.8);
             color: #475569;
         }
+        html.theme-day #page-recommendation .rec-dual-range-track {
+            background: rgba(148, 163, 184, 0.55);
+        }
+        html.theme-day #page-recommendation .rec-range-value {
+            color: #0369a1;
+        }
+        html.theme-day #page-recommendation .rec-dual-range-ticks {
+            color: #94a3b8;
+        }
+        html.theme-day #page-recommendation .rec-dual-range-input::-webkit-slider-thumb {
+            border-color: #0369a1;
+            background: #0284c7;
+            box-shadow: 0 2px 6px rgba(15, 23, 42, 0.22);
+        }
+        html.theme-day #page-recommendation .rec-dual-range-input::-moz-range-thumb {
+            border-color: #0369a1;
+            background: #0284c7;
+            box-shadow: 0 2px 6px rgba(15, 23, 42, 0.22);
+        }
         html.theme-day #page-recommendation .rec-segmented {
             border-color: rgba(182, 198, 219, 0.7);
             background: rgba(241, 245, 249, 0.9);
@@ -17134,6 +17490,20 @@
             color: #64748b;
         }
         html.theme-day #page-recommendation .rec-quick-type-btn.is-active {
+            background: rgba(14, 165, 233, 0.12);
+            color: #0369a1;
+        }
+        html.theme-day #page-recommendation .rec-media-type {
+            border-color: rgba(182, 198, 219, 0.65);
+            background: rgba(241, 245, 249, 0.92);
+        }
+        html.theme-day #page-recommendation .rec-media-type-btn {
+            color: #64748b;
+        }
+        html.theme-day #page-recommendation .rec-media-type-btn:hover {
+            color: #0f172a;
+        }
+        html.theme-day #page-recommendation .rec-media-type-btn.is-active {
             background: rgba(14, 165, 233, 0.12);
             color: #0369a1;
         }
@@ -17344,6 +17714,14 @@
             #page-recommendation .rec-content-subtitle {
                 font-size: 0.72rem;
             }
+            #page-recommendation .rec-media-type {
+                grid-auto-columns: minmax(2.6rem, auto);
+            }
+            #page-recommendation .rec-media-type-btn {
+                min-height: 2.05rem;
+                padding: 0 0.5rem;
+                font-size: 0.76rem;
+            }
             #page-recommendation .rec-workspace-card.is-explore .rec-grid {
                 grid-template-columns: repeat(2, minmax(0, 1fr));
                 gap: 0.65rem;
@@ -17374,6 +17752,36 @@
             #page-recommendation .rec-explore-panel-apply {
                 min-height: 2.55rem !important;
                 font-size: 0.84rem !important;
+            }
+        }
+
+        /* 窄屏（≤639.98px）：排序下拉单独占一行。
+           原来和「电影/剧集」「筛选」挤一行，被 .rec-search-select 的 4.6rem 宽度上限压到 74px，
+           「最热门」三个字都放不下（更别说「评分人数最多」），而这一格明明还有几十像素空着。 */
+        @media (max-width: 639.98px) {
+            #page-recommendation .rec-explore-quickbar {
+                grid-template-columns: minmax(0, 1fr) auto;
+            }
+            #page-recommendation .rec-quick-type {
+                grid-area: 1 / 1 / 2 / 2;
+            }
+            #page-recommendation .rec-filter-toggle-btn {
+                grid-area: 1 / 2 / 2 / 3;
+            }
+            #page-recommendation .rec-quick-sort {
+                grid-area: 2 / 1 / 3 / 3;
+                width: 100%;
+                max-width: none;
+            }
+            /* 拇指按手机触控放大一点，不然两根滑轨叠在一起时抓不准 */
+            #page-recommendation .rec-range-field {
+                --rec-range-thumb: 1.35rem;
+            }
+            #page-recommendation .rec-dual-range {
+                height: 2.5rem;
+            }
+            #page-recommendation .rec-dual-range-ticks {
+                font-size: 0.68rem;
             }
         }
 
