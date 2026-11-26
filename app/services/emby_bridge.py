@@ -26,6 +26,7 @@ import ipaddress
 import json
 import logging
 import re
+import ssl
 import time
 import urllib.error
 import urllib.parse
@@ -33,6 +34,7 @@ import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..core import get_config, normalize_http_url
+from ..http_utils import build_resilient_https_opener
 
 logger = logging.getLogger("emby_bridge")
 
@@ -43,6 +45,66 @@ _BRIDGE_DEVICE_ID = "115-media-hub-bridge"
 # 拉全库时极影视走 nginx 反代，大响应体偶发断连，重试 2~3 次通常能成功。
 _FORWARD_RETRIES = 3
 _FORWARD_RETRY_DELAY = 0.5  # 秒，随重试次数线性放大
+
+# 上游连接中断的判定：除了「读响应体时被掐断」，还要认 TLS 层错误。
+# 2026-11-26 真机：走公网 HTTPS 反代时对端不发 close_notify 就关连接，Python 抛的是
+# ``SSLEOFError: UNEXPECTED_EOF_WHILE_READING``（既不是 IncompleteRead，也不包在
+# URLError 里），原先没被识别成瞬时错误，整次拉库直接失败。
+_TRANSIENT_ERRORS: Tuple[type, ...] = (
+    http.client.IncompleteRead,
+    http.client.RemoteDisconnected,
+    ConnectionResetError,
+    ConnectionAbortedError,
+    BrokenPipeError,
+    ssl.SSLEOFError,
+    ssl.SSLZeroReturnError,
+)
+
+
+def looks_like_tls_error(exc: BaseException) -> bool:
+    """判断是不是 TLS 层问题（握手/证书/断连），设置页与库存刷新共用。"""
+    if isinstance(exc, (ssl.SSLError, ssl.SSLCertVerificationError)):
+        return True
+    if isinstance(exc, urllib.error.URLError):
+        reason = getattr(exc, "reason", None)
+        if isinstance(reason, BaseException):
+            return looks_like_tls_error(reason)
+    text = str(exc or "").lower()
+    return "ssl" in text or "unexpected_eof" in text or "eof occurred in violation of protocol" in text
+
+
+def _is_transient_network_error(exc: BaseException) -> bool:
+    """判断是不是「重发一次大概率能好」的连接类错误。
+
+    证书错误（SSLCertVerificationError）**不算**——那是配置问题，重试多少次都一样。
+    """
+    if isinstance(exc, _TRANSIENT_ERRORS):
+        return True
+    if isinstance(exc, urllib.error.URLError):
+        reason = getattr(exc, "reason", None)
+        if isinstance(reason, BaseException) and reason is not exc:
+            return _is_transient_network_error(reason)
+        return False
+    if isinstance(exc, ssl.SSLError):
+        # 老版本 / 不同 OpenSSL 会把同类断连报成 SSLError("EOF occurred in violation of protocol")
+        message = str(exc)
+        return "EOF occurred in violation of protocol" in message or "UNEXPECTED_EOF" in message
+    return False
+
+
+_opener = None
+
+
+def _get_opener():
+    """进程内复用的 opener：带「多地址 TLS 回退」，避免 IPv6 回环把整次请求打死。"""
+    global _opener
+    if _opener is None:
+        _opener = build_resilient_https_opener()
+    return _opener
+
+
+def _urlopen(req: urllib.request.Request, timeout: float):
+    return _get_opener().open(req, timeout=timeout)
 
 # T6 全库扫描分页：Seerr 拉库内容只发一次 /Items（StartIndex=0，从不翻页，也不看
 # TotalRecordCount），极影视单次返回有条数上限 → 每个库只能扫到前一批，其余条目不进
@@ -236,8 +298,12 @@ def test_connection(upstream: str, username: str, password: str) -> Dict[str, An
             return done(False, "登录被拒绝：媒体库账号或密码不对。这里要填极影视的媒体库账号，不是极空间登录号")
         return done(False, f"极影视返回 HTTP {exc.code}，地址可能不对")
     except urllib.error.URLError as exc:
+        if looks_like_tls_error(exc):
+            return done(False, f"TLS 连接被中断：{getattr(exc, 'reason', exc)}。若是公网 HTTPS 域名，检查该域名在面板所在网络是否可访问（IPv6 / NAT 回环），或改用局域网地址")
         return done(False, f"连不上极影视地址：{getattr(exc, 'reason', exc)}")
     except Exception as exc:  # noqa: BLE001 - 设置页只关心「能不能用」
+        if looks_like_tls_error(exc):
+            return done(False, f"TLS 连接被中断：{exc}。若是公网 HTTPS 域名，检查该域名在面板所在网络是否可访问（IPv6 / NAT 回环），或改用局域网地址")
         return done(False, f"登录极影视失败：{exc}")
 
     token = str(info.get("token", "") or "")
@@ -288,8 +354,26 @@ def _do_login(upstream: str, username: str, password: str) -> Dict[str, str]:
         ),
     }
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        payload = json.loads(resp.read().decode("utf-8") or "{}")
+    # 登录同样要扛 TLS 抖动：反代侧关连接时这里也会抛 SSLEOFError。
+    last_error: Optional[BaseException] = None
+    payload: Any = {}
+    for attempt in range(_FORWARD_RETRIES):
+        try:
+            with _urlopen(req, timeout=15) as resp:
+                payload = json.loads(resp.read().decode("utf-8") or "{}")
+            break
+        except Exception as exc:  # noqa: BLE001 - 只对瞬时错误重试，其余原样抛出
+            if not _is_transient_network_error(exc) or attempt + 1 >= _FORWARD_RETRIES:
+                raise
+            last_error = exc
+            logger.warning(
+                "极影视登录连接中断（%s），第 %s/%s 次重试：%s",
+                type(exc).__name__, attempt + 1, _FORWARD_RETRIES, url,
+            )
+            time.sleep(_FORWARD_RETRY_DELAY * (attempt + 1))
+    else:  # pragma: no cover - 只有循环被耗尽才会走到
+        if last_error is not None:
+            raise last_error
     user = payload.get("User") if isinstance(payload, dict) else {}
     token = str(payload.get("AccessToken", "") or "").strip()
     uid = str(user.get("Id", "") or "").strip() if isinstance(user, dict) else ""
@@ -390,13 +474,7 @@ def _forward_raw(
     if query:
         url += f"?{query}"
     url = normalize_http_url(url)
-    # 只重试「读响应体时连接被掐断」这类瞬时错误；用同一份请求原样重发（GET 幂等）。
-    _TRANSIENT = (
-        http.client.IncompleteRead,
-        http.client.RemoteDisconnected,
-        ConnectionResetError,
-        ConnectionAbortedError,
-    )
+    # 只重试连接类瞬时错误（含 TLS 层断连）；用同一份请求原样重发（GET 幂等）。
     last_exc: Optional[BaseException] = None
     for attempt in range(_FORWARD_RETRIES):
         req = urllib.request.Request(
@@ -406,7 +484,7 @@ def _forward_raw(
             method=method,
         )
         try:
-            with urllib.request.urlopen(req, timeout=read_timeout) as resp:
+            with _urlopen(req, timeout=read_timeout) as resp:
                 resp_headers = dict(resp.headers.items())
                 data = resp.read()
                 return int(resp.status or 200), resp_headers, data
@@ -415,14 +493,17 @@ def _forward_raw(
             resp_headers = dict(exc.headers.items()) if exc.headers else {}
             data = exc.read() if hasattr(exc, "read") else b""
             return int(exc.code or 500), resp_headers, data
-        except _TRANSIENT as exc:
+        except Exception as exc:  # noqa: BLE001 - 下面只挑瞬时错误重试，其余原样抛
+            if not _is_transient_network_error(exc):
+                raise
             last_exc = exc
             logger.warning(
-                "emby-bridge 上游连接中断（%s），第 %s/%s 次重试：%s %s",
+                "emby-bridge 上游连接中断（%s），第 %s/%s 次重试：%s %s%s",
                 type(exc).__name__,
                 attempt + 1,
                 _FORWARD_RETRIES,
                 method,
+                upstream,
                 path,
             )
             if attempt + 1 < _FORWARD_RETRIES:
@@ -501,6 +582,7 @@ def _aggregate_items(
     path: str,
     query: str,
     headers: Dict[str, str],
+    page_size: int = _SCAN_PAGE_SIZE,
 ) -> Tuple[int, Dict[str, str], Any]:
     """按 StartIndex/Limit 翻页拉全 Items。
 
@@ -514,15 +596,19 @@ def _aggregate_items(
     3. 页数上限 ``_SCAN_MAX_PAGES``（1000 条/页 × 200 页 = 20 万条封顶）。
 
     中途某页失败时，前面已经聚合到的条目照常返回（宁可少几条，也别让整库白扫）。
+
+    ``page_size`` 可调小：走公网 HTTPS 反代时单页响应体越大越容易被对端掐断，
+    拉库存这种「少几条也无所谓」的场景宁可用小页多跑几次。
     """
     merged: List[Any] = []
     seen: set = set()
     total = 0
     cursor = 0
+    effective_page_size = max(1, int(page_size or _SCAN_PAGE_SIZE))
     status, resp_headers, parsed = 200, {}, {}
     pages = 0
     while pages < _SCAN_MAX_PAGES:
-        page_query = _query_with_page(query, cursor, _SCAN_PAGE_SIZE)
+        page_query = _query_with_page(query, cursor, effective_page_size)
         status, resp_headers, parsed = _forward_json(
             upstream, "GET", path, page_query, b"", headers, read_timeout=120
         )

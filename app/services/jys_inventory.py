@@ -24,6 +24,7 @@ from .emby_bridge import (
     _bridge_settings,
     _build_emby_authorization,
     _get_token,
+    looks_like_tls_error,
 )
 
 logger = logging.getLogger("jys_inventory")
@@ -94,6 +95,27 @@ def _rebuild_inventory(rows: List[Dict[str, Any]]) -> int:
         conn.close()
 
 
+def _explain_refresh_error(exc: BaseException) -> str:
+    """把底层的 TLS / 连接错误翻译成能直接照着排查的提示。
+
+    2026-11-26 真机：面板用公网 HTTPS 域名访问自家极影视时刷新失败，报
+    ``[SSL: UNEXPECTED_EOF_WHILE_READING]``；同一域名在电脑浏览器里正常、局域网
+    地址也正常。对端在 TLS 阶段就掐断连接（域名同时有 AAAA 记录时，容器先连上的
+    IPv6 地址是死路最常见），用户只看到一行 SSL 错误根本不知道下一步做什么。
+    """
+    text = str(exc or "")
+    lowered = text.lower()
+    if looks_like_tls_error(exc):
+        return (
+            "连接极影视时 TLS 被中断（%s）。若地址填的是公网 HTTPS 域名，"
+            "多半是面板所在网络到该域名不通：可改用局域网地址（如 http://192.168.x.x:8021），"
+            "或确认域名没有失效的 IPv6（AAAA）记录、路由器支持 NAT 回环。" % text
+        )[:200]
+    if "timed out" in lowered or "timeout" in lowered:
+        return ("连接极影视超时（%s）：检查地址、端口与容器到该地址的网络连通性。" % text)[:200]
+    return text or "刷新失败"
+
+
 def refresh_jys_inventory(settings: Dict[str, Any] = None) -> Dict[str, Any]:
     """拉一次极影视全库并重建本地索引。同步函数（调用方自行决定放不放线程）。"""
     s = settings if settings is not None else _bridge_settings()
@@ -130,6 +152,7 @@ def refresh_jys_inventory(settings: Dict[str, Any] = None) -> Dict[str, Any]:
         libraries = [item for item in (views_payload.get("Items") or []) if isinstance(item, dict) and item.get("Id")]
 
         all_rows: List[Dict[str, Any]] = []
+        failed_libs: List[str] = []
         for lib in libraries:
             lib_id = str(lib.get("Id", "") or "")
             if not lib_id:
@@ -139,11 +162,23 @@ def refresh_jys_inventory(settings: Dict[str, Any] = None) -> Dict[str, Any]:
                 "ParentId": lib_id,
                 "IncludeItemTypes": "Movie,Series",
             })
-            status, _, payload = _aggregate_items(upstream, "/Users/%s/Items" % uid, query, headers)
+            # 页大小压到 300：公网 HTTPS 反代对大响应体更容易断连，库存少几条无所谓。
+            status, _, payload = _aggregate_items(
+                upstream, "/Users/%s/Items" % uid, query, headers, page_size=300
+            )
             if status != 200 or not isinstance(payload, dict):
                 logger.warning("jys_inventory 拉库 %s 失败（HTTP %s），跳过", lib.get("Name"), status)
+                failed_libs.append(str(lib.get("Name", "") or lib_id))
                 continue
             all_rows.extend(_extract_inventory_rows(payload.get("Items") or []))
+
+        # 一个库都没拉到就别重建：`_rebuild_inventory` 是先删后插，空结果会把整张
+        # 索引清空（表现是推荐页「已有」角标全消失），比留着上次的旧数据糟得多。
+        if not all_rows and failed_libs:
+            raise RuntimeError(
+                "所有媒体库都没拉到内容（%s），已保留上次索引；请检查极影视地址与网络"
+                % "、".join(failed_libs[:3])
+            )
 
         # 去重（同一 tmdb_id 可能出现在多个库），保留第一条
         seen: set = set()
@@ -166,10 +201,11 @@ def refresh_jys_inventory(settings: Dict[str, Any] = None) -> Dict[str, Any]:
         logger.info("jys_inventory 刷新完成：拉取 %s 条，去重后索引 %s 条", len(all_rows), indexed)
         return {"ok": True, "msg": f"已索引 {indexed} 条", "total": len(all_rows), "indexed": indexed}
     except Exception as exc:  # noqa: BLE001 - 后台刷新不能把进程打死
+        message = _explain_refresh_error(exc)
         _refresh_state["running"] = False
-        _refresh_state["last_error"] = str(exc)[:200]
-        logger.warning("jys_inventory 刷新失败：%s", exc)
-        return {"ok": False, "msg": str(exc)[:200]}
+        _refresh_state["last_error"] = message[:200]
+        logger.warning("jys_inventory 刷新失败：%s（原始错误：%s）", message, exc)
+        return {"ok": False, "msg": message[:200]}
 
 
 def inventory_status() -> Dict[str, Any]:

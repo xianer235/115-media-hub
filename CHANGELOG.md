@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file. The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.16.7] - 2026-11-26
+
+### 修「立即刷新库存索引」走公网 HTTPS 域名时失败
+
+现象：极影视地址填 `https://jys.shuxian.fun` 时点「立即刷新库存索引」报
+`<urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol>`，而在电脑浏览器里访问同一域名正常、填局域网地址（`http://192.168.x.x:8021`）也正常。
+
+排查结论不止一个坑，逐个补掉：
+
+- **TLS 层断连没被当成瞬时错误**：原重试只认 `IncompleteRead` / `RemoteDisconnected`，反代不发 close_notify 就关连接时 Python 抛的是 `SSLEOFError`，第一次失败就整次拉库结束。现在 `SSLEOFError` / `SSLError(EOF)` / `URLError` 包着上述错误一律重试 3 次；证书错误不重试（重试也没用）
+- **IPv6 死路不会回退**：域名同时有 A 与 AAAA 记录时，容器先连上的 IPv6 可能「TCP 能通、TLS 立刻被掐」，标准 `http.client` 这时直接报错，不会改用 A 记录。新增 `MultiAddressHTTPSConnection`，逐个解析地址试 TCP + TLS，任一失败换下一个，并记录实际用上的 IP
+- **单页响应体太大**：库存拉取的分页从 1000 条压到 300 条，宁可多跑几轮也别让反代在中途掐断整页
+- **拉空不能覆盖旧索引**：所有媒体库都失败时拒绝重建（重建是先删后插，空结果会把「已有」角标全清掉），并在提示里写明「已保留上次索引」
+- **错误文案变成可照做的排查**：TLS 类失败直接提示「改用局域网地址 / 检查域名是否有失效的 IPv6 记录 / 路由器是否支持 NAT 回环」，不再只给一行 OpenSSL 原文。设置页「测试连接」同样给这条提示
+
+### 相关文件
+
+`app/http_utils.py`（多地址 HTTPS 连接）、`app/services/emby_bridge.py`（统一 `_urlopen` + 瞬时错误判定 + 登录重试）、`app/services/jys_inventory.py`（小分页、空结果保护、错误翻译）。
+
 ## [0.16.6] - 2026-11-26
 
 ### 剧集详情能看到每一季的名称

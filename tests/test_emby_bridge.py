@@ -570,7 +570,7 @@ class ForwardRetryTest(unittest.TestCase):
         def fake(req, timeout=None):
             return self._resp(read)
 
-        with mock.patch.object(bridge.urllib.request, "urlopen", side_effect=fake), \
+        with mock.patch.object(bridge, "_urlopen", side_effect=fake), \
                 mock.patch.object(bridge.time, "sleep"):
             status, headers, body = bridge._forward_raw(
                 "http://up", "GET", "/Items", "", b"", {}, read_timeout=10
@@ -588,7 +588,7 @@ class ForwardRetryTest(unittest.TestCase):
         def fake(req, timeout=None):
             return self._resp(read)
 
-        with mock.patch.object(bridge.urllib.request, "urlopen", side_effect=fake), \
+        with mock.patch.object(bridge, "_urlopen", side_effect=fake), \
                 mock.patch.object(bridge.time, "sleep"):
             status, headers, body = bridge._forward_raw(
                 "http://up", "GET", "/Items", "", b"", {}, read_timeout=10
@@ -607,12 +607,147 @@ class ForwardRetryTest(unittest.TestCase):
             err = urllib.error.HTTPError("http://up", 500, "err", {}, io.BytesIO(b"boom"))
             raise err
 
-        with mock.patch.object(bridge.urllib.request, "urlopen", side_effect=fake_raise):
+        with mock.patch.object(bridge, "_urlopen", side_effect=fake_raise):
             status, headers, body = bridge._forward_raw(
                 "http://up", "GET", "/Items", "", b"", {}, read_timeout=10
             )
         self.assertEqual(status, 500)
         self.assertEqual(len(calls), 1)  # 业务错误不重试
+
+
+class TlsRetryTest(unittest.TestCase):
+    """TLS 层断连（UNEXPECTED_EOF）也要按瞬时错误重试，证书错误不重试。"""
+
+    @staticmethod
+    def _resp(body=b'{"ok": true}'):
+        class _Resp:
+            headers = {}
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return body
+
+        return _Resp()
+
+    def test_ssl_eof_retried_then_succeeds(self):
+        import ssl
+
+        calls = []
+
+        def fake(req, timeout=None):
+            calls.append(1)
+            if len(calls) == 1:
+                raise ssl.SSLEOFError(8, "EOF occurred in violation of protocol")
+            return self._resp()
+
+        with mock.patch.object(bridge, "_urlopen", side_effect=fake), \
+                mock.patch.object(bridge.time, "sleep"):
+            status, _headers, body = bridge._forward_raw(
+                "https://jys.example.com", "GET", "/Users/1/Items", "", b"", {}, read_timeout=30
+            )
+        self.assertEqual(status, 200)
+        self.assertEqual(len(calls), 2)
+
+    def test_urlerror_wrapping_ssl_eof_is_transient(self):
+        import ssl
+        import urllib.error
+
+        wrapped = urllib.error.URLError(ssl.SSLEOFError(8, "EOF occurred in violation of protocol"))
+        self.assertTrue(bridge._is_transient_network_error(wrapped))
+        self.assertTrue(bridge._is_transient_network_error(ssl.SSLEOFError(8, "x")))
+        self.assertTrue(bridge._is_transient_network_error(ssl.SSLError("EOF occurred in violation of protocol")))
+        # DNS 解析失败 / 证书问题都是确定性的，重试没意义
+        self.assertFalse(bridge._is_transient_network_error(urllib.error.URLError("Name or service not known")))
+        self.assertFalse(bridge._is_transient_network_error(ssl.SSLCertVerificationError("bad cert")))
+
+    def test_certificate_error_propagates_without_retry(self):
+        import ssl
+
+        calls = []
+
+        def fake(req, timeout=None):
+            calls.append(1)
+            raise ssl.SSLCertVerificationError(1, "certificate verify failed")
+
+        with mock.patch.object(bridge, "_urlopen", side_effect=fake), \
+                mock.patch.object(bridge.time, "sleep"):
+            with self.assertRaises(ssl.SSLCertVerificationError):
+                bridge._forward_raw(
+                    "https://jys.example.com", "GET", "/Users/1/Items", "", b"", {}, read_timeout=30
+                )
+        self.assertEqual(len(calls), 1)
+
+    def test_login_retries_once_on_ssl_eof(self):
+        import ssl
+
+        calls = []
+        fake_payload = b'{"AccessToken": "tok", "User": {"Id": "u1"}, "ServerId": "s1"}'
+
+        def fake(req, timeout=None):
+            calls.append(1)
+            if len(calls) == 1:
+                raise ssl.SSLEOFError(8, "EOF occurred in violation of protocol")
+            return self._resp(fake_payload)
+
+        with mock.patch.object(bridge, "_urlopen", side_effect=fake), \
+                mock.patch.object(bridge.time, "sleep"):
+            info = bridge._do_login("https://jys.example.com", "user", "pw")
+        self.assertEqual(info["token"], "tok")
+        self.assertEqual(len(calls), 2)
+
+
+class MultiAddressConnectionTest(unittest.TestCase):
+    """IPv6 先连上但 TLS 被掐断时，应回退到下一个地址（A 记录）。"""
+
+    def test_falls_back_to_next_address_when_tls_fails(self):
+        import socket
+        import ssl as ssl_module
+
+        from app import http_utils
+
+        attempts = []
+
+        class FakeSock:
+            def __init__(self, family, *args, **kwargs):
+                self.family = family
+
+            def settimeout(self, _timeout):
+                pass
+
+            def connect(self, addr):
+                attempts.append(addr[0])
+
+            def close(self):
+                pass
+
+        class FakeContext:
+            check_hostname = True
+            verify_mode = ssl_module.CERT_REQUIRED
+
+            def wrap_socket(self, sock, server_hostname=None):
+                if sock.family == socket.AF_INET6:
+                    raise ssl_module.SSLEOFError(8, "EOF occurred in violation of protocol")
+                return "TLS-OK"
+
+        addresses = [
+            (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("2001:db8::1", 443, 0, 0)),
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.0.2.7", 443)),
+        ]
+        conn = http_utils.MultiAddressHTTPSConnection(
+            "jys.example.com", 443, timeout=5, context=FakeContext(), check_hostname=None
+        )
+        with mock.patch.object(http_utils.socket, "getaddrinfo", return_value=addresses), \
+                mock.patch.object(http_utils.socket, "socket", FakeSock):
+            conn.connect()
+        self.assertEqual(attempts, ["2001:db8::1", "192.0.2.7"])
+        self.assertEqual(conn.connected_address, "192.0.2.7")
+        self.assertEqual(conn.sock, "TLS-OK")
 
 
 if __name__ == "__main__":

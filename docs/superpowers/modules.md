@@ -72,7 +72,7 @@
 - **入口**：Seerr 侧「设置 → 媒体服务器」添加 Emby 服务器（地址 = 面板地址，URL Base = `emby-bridge`，账号密码 = 极影视媒体库账号）；本侧入口是 `/emby-bridge/*` 端点，配置在设置页「播放与影视库」分区。
 - **会做**：协议翻译（五个翻译点）——① 头改写：把 Seerr 的 `Authorization: MediaBrowser ...` 转成极影视认的 `X-Emby-Authorization` / `X-Emby-Token`；② `/Auth/Keys` 本地实现（极影视没这接口，返回稳定伪 key 糊弄 Seerr）；③ 判重请求改写：`/Items?ids=` 改成 `/Users/{uid}/Items/{id}`（极影视忽略 ids 参数，不改判重必失败）；④ 媒体库列表补 `CollectionType`（极影视全 None，按库名补 movies/tvshows）；⑤ 来源白名单（默认只放内网）；⑥ **全库扫描代翻页**：Seerr 拉库内容只发一次 `/Items?Recursive=true&ParentId=...`（`StartIndex=0`，从不翻页、也不看 `TotalRecordCount`），而极影视单次返回有条数上限，直接透传会导致每个库只扫到前一批（真机表现：手动扫描几秒跑完、只有部分片子显示「可获得」）。桥对这类请求按 `Limit=1000` / `StartIndex` 循环拉全再合并返回；**游标按上游实际返回条数推进**（`cursor += len(items)`，上游把单页压到比 Limit 小时也不会跳过中间条目），带三重护栏（同页重复即停、已达 `TotalRecordCount`、页数上限 200 = 20 万条封顶），日志写「聚合库条目：上游 total / 实际取回 / 分页数」。token 用面板存的账号密码换取并缓存，401 单飞重登一次；转发用标准库 urllib，不新增依赖。⑦ **最近添加扫描顶替**：Seerr 的「最近添加扫描」固定请求 `/Users/{uid}/Items/Latest?Limit=12`，只判重最近 12 条、其余新片要等全量扫描才轮到（表现：手动存的电影有的绿有的不绿）。桥把 `Items/Latest` 改写成按 `DateCreated` 降序拉最近 `_LATEST_ITEMS_LIMIT`(500) 条，覆盖手动新存的片；缺 `ParentId` 时保持透传。
 - **不会做**：不代理播放流；不做写操作（不建库、不删条目、不改极影视）；不替代极影视也不替代现有 Jellyfin；**不管下载/补源**（Seerr 点片后仍走上面的 servarr 点播对接，桥只管判重）。
-- **相关代码**：`app/routes/emby_bridge.py`、`app/services/emby_bridge.py`；设置页「后台安全管理」的「极影视接入」字段组（`emby_bridge_enabled` / `emby_bridge_upstream` / `emby_bridge_username` / `emby_bridge_password` / `emby_bridge_allow_public`）。其中登录 + 全库分页聚合（`_get_token` / `_aggregate_items`）同时被 `app/services/jys_inventory.py` 复用，给推荐页做库存判重
+- **相关代码**：`app/routes/emby_bridge.py`、`app/services/emby_bridge.py`；设置页「后台安全管理」的「极影视接入」字段组（`emby_bridge_enabled` / `emby_bridge_upstream` / `emby_bridge_username` / `emby_bridge_password` / `emby_bridge_allow_public`）。其中登录 + 全库分页聚合（`_get_token` / `_aggregate_items`）同时被 `app/services/jys_inventory.py` 复用，给推荐页做库存判重；**访问自家 HTTPS 反代统一走 `http_utils.build_resilient_https_opener`**（`_urlopen`）：TLS 握手失败的地址会换下一个解析地址重试（域名同时有 A/AAAA 时 IPv6 死路很常见），并且 `SSLEOFError` / `RemoteDisconnected` 等连接类错误按瞬时错误重试 3 次
 - **细节**：`docs/superpowers/specs/2026-11-17-emby-bridge-for-seerr-design.md`（含实测协议偏差）
 
 ### 文件夹监控（folder monitor）
@@ -160,7 +160,7 @@
 | `app/services/tree.py` | 目录树 TXT → STRM 生成与增量对比 |
 | `app/services/scraper.py` | 刮削核心：识别、命名计划、批量作业执行与回滚 |
 | `app/services/ai_match.py` | OpenAI 兼容大模型辅助识别（关键词生成 + 候选选择，带缓存 / 重试 / 用量统计） |
-| `app/services/jys_inventory.py` | 极影视库存索引：复用 emby_bridge 登录+分页拉全库，抽取带 TMDB ID 的单体（过滤 BoxSet/Folder），全量重建 `jys_inventory` 表；每天一次后台刷新 + 手动刷新端点；供资源推荐页「已有」判重（两态，只精确匹配） |
+| `app/services/jys_inventory.py` | 极影视库存索引：复用 emby_bridge 登录+分页拉全库（页大小 300，公网 HTTPS 反代下大响应体易被掐断），抽取带 TMDB ID 的单体（过滤 BoxSet/Folder），全量重建 `jys_inventory` 表；每天一次后台刷新 + 手动刷新端点；供资源推荐页「已有」判重（两态，只精确匹配）。**所有媒体库都拉失败时拒绝重建**（否则先删后插会把索引清空），并把 TLS/超时错误翻成可照做排查的中文提示 |
 | `app/services/resource.py` | 资源导入任务执行（磁力离线、网盘转存 / 接收 / 保存） |
 | `app/services/subscription.py` | 订阅编排入口，聚合下列订阅子模块 |
 | `app/services/subscription_runner.py` | 订阅队列调度与并发控制（支持一次追加多条手动候选、只触发一次调度） |

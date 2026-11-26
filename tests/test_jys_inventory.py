@@ -112,5 +112,64 @@ class QueryInventoryTest(unittest.TestCase):
         self.assertEqual(owned, {7: True})
 
 
+class RefreshFailureTest(unittest.TestCase):
+    """拉库全失败时不能把索引清空，错误文案要能照着排查。"""
+
+    def setUp(self):
+        import tempfile
+        self._td = tempfile.mkdtemp(prefix="jys-inventory-test-")
+        self._patch = mock.patch.object(db_module, "DB_PATH", os.path.join(self._td, "test.db"))
+        self._patch.start()
+        db_module._DB_ENSURED = False
+
+    def tearDown(self):
+        self._patch.stop()
+        import shutil
+        shutil.rmtree(self._td, ignore_errors=True)
+
+    def _count(self):
+        db_module.ensure_db()
+        conn = db_module.open_db()
+        try:
+            return conn.execute("SELECT COUNT(*) FROM jys_inventory").fetchone()[0]
+        finally:
+            conn.close()
+
+    def test_all_libraries_failing_keeps_previous_index(self):
+        db_module.ensure_db()
+        conn = db_module.open_db()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO jys_inventory (tmdb_id, name, year, media_type) VALUES (1, '旧片', 2020, 'movie')"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        settings = {"enabled": True, "upstream": "https://jys.example.com", "username": "u", "password": "p"}
+        views = {"Items": [{"Id": "lib1", "Name": "电影"}]}
+        with mock.patch.object(jys, "_bridge_settings", return_value=settings), \
+                mock.patch.object(jys, "_get_token", return_value={"uid": "u1", "token": "t", "server_id": "s"}), \
+                mock.patch("app.services.emby_bridge._forward_json", return_value=(200, {}, views)), \
+                mock.patch.object(jys, "_aggregate_items", return_value=(502, {}, {})):
+            result = jys.refresh_jys_inventory()
+
+        self.assertFalse(result["ok"])
+        self.assertIn("保留上次索引", result["msg"])
+        self.assertEqual(self._count(), 1)  # 旧索引没被清空
+
+    def test_tls_error_message_points_at_network(self):
+        import ssl
+
+        exc = ssl.SSLEOFError(8, "EOF occurred in violation of protocol")
+        message = jys._explain_refresh_error(exc)
+        self.assertIn("TLS", message)
+        self.assertIn("局域网", message)
+
+    def test_plain_error_kept_as_is(self):
+        self.assertEqual(jys._explain_refresh_error(RuntimeError("极影视登录未返回用户 ID / token")),
+                         "极影视登录未返回用户 ID / token")
+
+
 if __name__ == "__main__":
     unittest.main()

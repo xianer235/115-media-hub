@@ -1,9 +1,9 @@
 {
-  "version": "0.16.6",
-  "buildDate": "2026-11-26T17:40:00+08:00",
+  "version": "0.16.7",
+  "buildDate": "2026-11-26T18:05:00+08:00",
   "notes": [
-    "剧集详情显示每一季的名称（黄河篇、共同富裕篇等），TMDB 没给篇名时回退「第 N 季」",
-    "探索页筛选面板桌面端改多列瀑布流排布，年份入口合并成「具体年份+起止」与「快捷选择」两行"
+    "修极影视库存刷新走公网 HTTPS 域名时报 TLS UNEXPECTED_EOF：连接类错误重试、TLS 失败自动换解析地址、分页压到 300 条",
+    "所有媒体库都拉失败时保留上次索引，不再清空「已有」角标；TLS 错误提示改为可照做的排查建议"
   ],
   "changelogUrl": "https://github.com/xianer235/115-media-hub/blob/main/CHANGELOG.md",
   "projectUrl": "https://github.com/xianer235/115-media-hub"

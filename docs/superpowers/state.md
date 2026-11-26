@@ -8,19 +8,20 @@
 
 ## 基线
 
-- **更新日期**: 2026-11-26（0.16.6：剧集详情列出每季名称 + 探索筛选多列排布）
+- **更新日期**: 2026-11-26（0.16.7：修极影视库存刷新走公网 HTTPS 的 TLS 断连）
 - **分支**: `main`，0.16.4 已推送（`9064ee8`，CI run `45660010387` success，镜像已构建）；**0.16.5 为本地发版提交**，推送由用户手动；tag 打到 `v0.15.22`，**0.15.23~0.16.5 均未打 tag / 未发 release**，Docker 镜像同版本由 GitHub Actions 自动构建（测试不绿就不构建）
-- **版本**: `0.16.6`（2026-11-26：① 剧集详情列出每季名称——`get_tmdb_media_detail` 新增 `season_names`，过滤「第 N 季 / Season N」占位名，前端 `.rec-detail-seasons` 列表显示 `S1 | 篇名 | 6 集`，无篇名回退「第 N 季」；② 探索筛选改版——模板新增 `.rec-explore-fields` 包裹五个分区，桌面端（≥900px）`column-count: 2` 瀑布流、≥1500px 三列，面板三行结构（标题/分区/按钮）；年份区从四行收成两行（具体年份+起止一行、近 N 年与年代 chip 合并「快捷选择」），内边距统一由 fields 提供；0.16.5 的年份三入口与 0.16.4 的 TMDB 条件扩展内容见 `CHANGELOG.md`）
+- **版本**: `0.16.7`（2026-11-26：极影视库存刷新走公网 HTTPS 域名报 `SSL: UNEXPECTED_EOF_WHILE_READING`——`http_utils` 新增 `MultiAddressHTTPSConnection`（TLS 失败换下一个解析地址）+ `build_resilient_https_opener`；`emby_bridge` 统一 `_urlopen`，`SSLEOFError`/`URLError(EOF)` 归入瞬时错误重试 3 次（证书错误不重试），登录也重试；库存拉取分页 1000→300，全部媒体库失败时拒绝重建索引（先删后插会清空「已有」角标），TLS 错误翻成可照做的提示。0.16.6：① 剧集详情列出每季名称——`get_tmdb_media_detail` 新增 `season_names`，过滤「第 N 季 / Season N」占位名，前端 `.rec-detail-seasons` 列表显示 `S1 | 篇名 | 6 集`，无篇名回退「第 N 季」；② 探索筛选改版——模板新增 `.rec-explore-fields` 包裹五个分区，桌面端（≥900px）`column-count: 2` 瀑布流、≥1500px 三列，面板三行结构（标题/分区/按钮）；年份区从四行收成两行（具体年份+起止一行、近 N 年与年代 chip 合并「快捷选择」），内边距统一由 fields 提供；0.16.5 的年份三入口与 0.16.4 的 TMDB 条件扩展内容见 `CHANGELOG.md`）
 - **CI**: 单一工作流 `.github/workflows/ci.yml`（`docker-release.yml` 已并入并移除），**限定 `paths: version.json`，只在发版推送时触发**：`test` job 跑 `compileall` + `scripts/check_js_syntax.py`（复制成 `.mjs` 再 `node --check`；裸 `node --check` 对 ESM 文件静默放过，`--experimental-default-type=module` 在 Node 23+ 又被移除，两条路都走过弯路）+ `scripts/run_tests.py`，`build-and-push` 用 `needs: test` 挂在后面（`workflow_dispatch` 有 `publish` 开关，关掉只跑测试）。日常开发验证只用本机 `scripts/check.sh`，不要等 CI
 - **本地不入库文件**: `AGENTS.md` / `CLAUDE.md` / `.workbuddy/` / `.claude/` / `.worktrees/` 是本机开发用，**按约定不入库**。任何测试/代码读它们前必须判存在（`test_modules_doc` 已这么做），否则干净 clone 跑测试必挂。
 - **运行环境**: `docker compose` 服务名 `115-media-hub-test`（应用本体），端口 18080；`/app/storage` 已映射到宿主机 `/Users/xianer/Documents/docker/115strmxianer/storage`（virtiofs，空间读数正常）。挂载路径与端口已改为从根目录 `.env` 读取（模板 `.env.example`），本机 `.env` 写的是原来的绝对路径
-- **最近提交**: 待推送 —— 0.16.6 发版提交（季名称 + 探索筛选多列排布）、0.16.5 的 5 个本地提交（`ea611f2` 年份三入口、`8199ede` 文档同步、`f2fbb9e` 发版 0.16.5、`dea11a3` 修排布空洞）；已推送基线 `9064ee8`（0.16.4 全量上线）；tag 停在 `v0.15.22`，0.15.23 起未打 tag / 未发 release
+- **最近提交**: 待推送 —— 0.16.7 修复提交、0.16.6 发版提交（季名称 + 探索筛选多列排布）、0.16.5 的 5 个本地提交（`ea611f2` 年份三入口、`8199ede` 文档同步、`f2fbb9e` 发版 0.16.5、`dea11a3` 修排布空洞）；已推送基线 `9064ee8`（0.16.4 全量上线）；tag 停在 `v0.15.22`，0.15.23 起未打 tag / 未发 release
 - **工作区**: 干净，0.16.6 已落盘待推送。**筛选面板结构变了**：`.rec-explore-filters` 只排「panel-header / .rec-explore-fields / panel-actions」三行，五个 `.rec-filter-section` 全部收进 `.rec-explore-fields`；桌面多列靠 `column-count`（`break-inside: avoid`），别再按三列显式 `grid-column` 摆放分区（0.16.5 那套规则已删除）。`.rec-year-quick` 在 ≥900px 用 `display: contents` 把近 N 年与年代 chip 并成一行。
 
 
 
 ## 最近一次验证
 
+- **0.16.7（2026-11-26）**：`scripts/check.sh --all` **2406 条零失败**（132.3s，handoff 预算内、`git diff --check` 干净）；新增 `tests.test_emby_bridge.TlsRetryTest` 4 条（SSLEOF 重试后成功、URLError 包裹 SSLEOF 判定为瞬时、证书错误只试 1 次就抛、登录重试 1 次）+ `MultiAddressConnectionTest` 1 条（IPv6 TLS 失败后回退 IPv4 并记录 `connected_address`）+ `tests.test_jys_inventory.RefreshFailureTest` 3 条（全失败保留旧索引、TLS 文案含「TLS/局域网」、普通错误原样透出）；用真实域名跑过 `build_resilient_https_opener`（200）。**未在用户环境复现**：需在 NAS 上重试「立即刷新库存索引」，日志里若出现「HTTPS 连接 … 经 <IP> 失败…尝试下一个地址」即命中 IPv6 回环/旧 AAAA。
 - **0.16.6（2026-11-26）**：`scripts/check.sh --changed` **24 个模块 363 条零失败**（handoff 32182/32768 字节、`git diff --check` 干净）；`scripts/check_js_syntax.py` 34 个前端文件通过；`tests.test_tmdb_discover_filters` 新增 `SeasonNamesTest` 4 条（真实篇名保留 / 占位名丢弃 / 0 集季与特别篇跳过 / 电影为空）；`tests.test_recommendation_frontend` 新增 `SeasonListRenderTest`（node vm 实跑 `renderRecDetailContent`，断言篇名与「第 N 季」回退同时出现）。**未起服务截图**：需浏览器强刷确认 ① 详情弹窗季列表两列、日间/夜间配色；② 桌面端筛选面板两列瀑布流（≥1500px 三列）无空洞、年份区两行、手机端仍是单列。
 - **探索筛选面板排布 + 年份筛选（2026-11-26，0.16.5 发版前）**：本机逐模块跑**全量 103 个测试模块，5324 条用例、失败 0、错误 0**（`git diff --check` 干净，`check_js_syntax.py` 与 `node --check` 覆盖 `index.js` / `recommendation/core.js` / `subscription/ui.js`）；`tests.test_recommendation_frontend` 含 3 条年份新用例（`setExploreYearExact('2024')` 起止同为 2024 且摘要「2024 年」、`selectRecentYears(2)` 得「今年-1 ~ 今年」且再点清空、年份下拉含当年与 1950 及「不限」）。**未起服务截图**：需浏览器强刷确认电影模式为「年份 \| 评分 \| 分类（跨两行）」+「关键词（跨两列）」，剧集模式剧集属性整行在末行，年份区三处入口互相同步。
 
